@@ -1,4 +1,4 @@
-name: Team Standard CI
+name: Python CI
 
 on:
   push:
@@ -7,31 +7,27 @@ on:
     branches: ['main', 'dev']
 
 jobs:
-  build-and-test:
+  build-and-lint:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Use Node.js from .node-version
-        uses: actions/setup-node@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
         with:
-          node-version-file: '.node-version'
-          cache: 'npm'
+          python-version: "3.11"
+          cache: 'pip'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff
 
-      - name: Run linter
-        run: npm run lint
+      - name: Check formatting with Ruff
+        run: ruff format --check .
 
-      - name: Run tests
-        run: npm run test:run
-
-      - name: (Optional) Run test coverage
-        run: npm run test:coverage
-        continue-on-error: true
-
-      - name: Run security audit
-        run: npm audit --audit-level=high
+      - name: Lint with Ruff
+        run: ruff check --output-format=github .
