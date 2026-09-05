@@ -6,8 +6,11 @@ import sys
 # Windows asyncio fix（uvicorn OAuth callback server 需要 SelectorEventLoop）
 if sys.platform == "win32":
     import asyncio
+    import warnings
 
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import asyncio
 from pathlib import Path
@@ -168,11 +171,13 @@ async def _run_cli(system_prompt: str):
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.option("--cli", is_flag=True, help="終端機模式（不開 GUI）")
+@click.option("--cli", "--console", is_flag=True, help="終端機模式（不開 GUI）")
+@click.option("--gui", is_flag=True, help="強制圖形介面模式（預設）")
 @click.option("--system", default="You are a helpful assistant.", help="System prompt（CLI 模式用）")
-def main(ctx, cli, system):
+def main(ctx, cli, gui, system):
     """Pocket Agent — 用 OpenAI 帳號登入，不需要 API Key"""
     if ctx.invoked_subcommand is None:
+        # 如果使用者指定了 --console (或 --cli)，就跑文字模式
         if cli:
             asyncio.run(_run_cli(system))
         else:

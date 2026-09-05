@@ -15,6 +15,18 @@ from tkinterdnd2 import TkinterDnD
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+# 全局替換預設字體為微軟正黑體 (提升中文易讀性)
+_original_font = ctk.CTkFont
+
+
+def _custom_font(*args, **kwargs):
+    if "family" not in kwargs:
+        kwargs["family"] = "Microsoft JhengHei"
+    return _original_font(*args, **kwargs)
+
+
+ctk.CTkFont = _custom_font
+
 
 # ── 圖片路徑設定 ──────────────────────────────────
 # 走 bundle_dir() 建立 assets 絕對路徑，避免從不同工作目錄啟動時
@@ -168,7 +180,7 @@ class App(DnDCTk):
         # ── Sidebar ───────────────────────────────
         sidebar = ctk.CTkFrame(
             self,
-            width=200,
+            width=240,
             corner_radius=0,
         )
         sidebar.grid(
