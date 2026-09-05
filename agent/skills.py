@@ -1,0 +1,223 @@
+"""Skill 系統：markdown 知識包，模型判斷相關時自行載入。
+
+Skill 是「操作手冊」而非可執行工具——一份 SKILL.md 教模型
+怎麼做某類任務（報告格式、SOP、公司術語等）。
+
+目錄結構（兩處都會掃描，同名時使用者目錄優先）：
+    <bundle>/skills/<name>/SKILL.md        # 內建，隨程式發佈（唯讀）
+    ~/.pocket-agent/skills/<name>/SKILL.md     # 使用者自訂／匯入（可寫）
+
+SKILL.md 格式：
+    ---
+    name: weekly-report
+    description: 一句話說明何時該用這個 skill
+    ---
+    （給模型的完整指示，markdown 自由發揮）
+"""
+
+import logging
+import re
+import shutil
+import tempfile
+import zipfile
+from pathlib import Path
+
+from .paths import bundle_dir, user_dir
+
+log = logging.getLogger("pocket-agent")
+
+REPO_SKILLS_DIR = bundle_dir() / "skills"  # 內建，隨程式發佈（唯讀）
+USER_SKILLS_DIR = user_dir() / "skills"  # 使用者自訂／匯入（可寫）
+
+
+# ── 解析 ─────────────────────────────────────────
+
+_FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+
+
+def _parse(text: str) -> tuple[dict, str]:
+    """回傳 (frontmatter dict, 本文)。沒有 frontmatter 時 meta 為空。"""
+    match = _FRONTMATTER.match(text)
+    if not match:
+        return {}, text
+
+    meta: dict = {}
+    for line in match.group(1).splitlines():
+        if ":" in line:
+            key, _, value = line.partition(":")
+            meta[key.strip()] = value.strip()
+
+    return meta, text[match.end() :]
+
+
+# ── 掃描與載入 ────────────────────────────────────
+
+
+def list_skills() -> list[dict]:
+    """列出所有 skill 的 {name, description, path}，使用者目錄優先。"""
+    found: dict[str, dict] = {}
+
+    for base in (REPO_SKILLS_DIR, USER_SKILLS_DIR):
+        if not base.is_dir():
+            continue
+        for skill_md in sorted(base.glob("*/SKILL.md")):
+            try:
+                meta, _ = _parse(skill_md.read_text(encoding="utf-8"))
+            except Exception:
+                log.warning("skill 解析失敗：%s", skill_md)
+                continue
+
+            name = meta.get("name") or skill_md.parent.name
+            found[name] = {
+                "name": name,
+                "description": meta.get("description", ""),
+                "path": skill_md,
+            }
+
+    return list(found.values())
+
+
+def load_skill(name: str) -> str | None:
+    """回傳指定 skill 的本文；找不到時回傳 None。"""
+    for skill in list_skills():
+        if skill["name"] == name:
+            try:
+                _, body = _parse(skill["path"].read_text(encoding="utf-8"))
+                return body.strip()
+            except Exception as e:
+                log.error("skill 讀取失敗 %s: %s", name, e)
+                return None
+    return None
+
+
+# ── ZIP 匯入（相容 ChatGPT / Claude 的 Agent Skills zip）──
+
+
+def import_skill_zip(zip_path: str | Path, overwrite: bool = False) -> list[str]:
+    """匯入 Agent Skills 格式的 zip，回傳匯入的 skill 名稱列表。
+
+    支援兩種常見結構：
+      1. <skill-name>/SKILL.md （ChatGPT 官方匯出：單一頂層資料夾）
+      2. SKILL.md 在 zip 根目錄（資料夾名取 frontmatter name 或 zip 檔名）
+    一個 zip 含多個 skill 資料夾也可以。
+
+    衝突時 raise FileExistsError（訊息含衝突名稱）；
+    格式錯誤 raise ValueError。
+    """
+    zip_path = Path(zip_path)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        # zip-slip 防護：拒絕絕對路徑與 ".."
+        for member in zf.namelist():
+            part_list = Path(member).parts
+            if Path(member).is_absolute() or ".." in part_list:
+                raise ValueError(f"zip 內含不安全路徑：{member}")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            zf.extractall(tmp_dir)
+            tmp = Path(tmp_dir)
+
+            if (tmp / "SKILL.md").exists():
+                # SKILL.md 直接在根目錄 → 整包視為一個 skill
+                skill_dirs = [tmp]
+            else:
+                # 只取「最上層」含 SKILL.md 的資料夾（略過巢狀誤判）
+                candidates = sorted(
+                    (md.parent for md in tmp.rglob("SKILL.md")),
+                    key=lambda p: len(p.parts),
+                )
+                skill_dirs = []
+                for d in candidates:
+                    if not any(a in d.parents for a in skill_dirs):
+                        skill_dirs.append(d)
+
+            if not skill_dirs:
+                raise ValueError("zip 裡找不到 SKILL.md，不是有效的 skill 包。")
+
+            # 先算目的地並檢查衝突
+            plans: list[tuple[Path, Path]] = []
+            for d in skill_dirs:
+                if d == tmp:
+                    meta, _ = _parse((d / "SKILL.md").read_text(encoding="utf-8"))
+                    name = meta.get("name") or zip_path.stem
+                else:
+                    name = d.name
+                # 匯入一律進使用者目錄：內建目錄打包後唯讀，
+                # 且會被下次程式更新覆蓋掉。
+                plans.append((d, USER_SKILLS_DIR / name))
+
+            conflicts = [t.name for _s, t in plans if t.exists()]
+            if conflicts and not overwrite:
+                raise FileExistsError("、".join(conflicts))
+
+            imported = []
+            for source, target in plans:
+                if target.exists():
+                    shutil.rmtree(target)
+                shutil.copytree(source, target)
+                imported.append(target.name)
+                log.info("skill 已匯入：%s ← %s", target.name, zip_path)
+
+            return imported
+
+
+# ── 系統提示注入 ──────────────────────────────────
+
+
+def skills_index_prompt() -> str:
+    """產生附加到 system prompt 的 skill 目錄；沒有 skill 時回傳空字串。"""
+    skills = list_skills()
+    if not skills:
+        return ""
+
+    lines = [
+        "\n\n## 可用的 Skills",
+        "以下 skill 是特定任務的操作手冊。當使用者的請求與某個",
+        "skill 的描述相關時，先呼叫 use_skill 工具載入完整指示，",
+        "再依照指示執行：",
+    ]
+    for s in skills:
+        lines.append(f"- {s['name']}：{s['description']}")
+
+    return "\n".join(lines)
+
+
+# ── use_skill 工具 ────────────────────────────────
+
+SKILL_TOOL = {
+    "type": "function",
+    "name": "use_skill",
+    "description": (
+        "載入指定 skill 的完整指示（操作手冊）。當使用者的請求符合某個 skill 的描述時呼叫，然後依照回傳的指示完成任務。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "skill 名稱（見系統提示中的清單）",
+            },
+        },
+        "required": ["name"],
+    },
+}
+
+
+def skill_tools() -> list[dict]:
+    """有 skill 才註冊工具，避免無謂佔用 context。"""
+    return [SKILL_TOOL] if list_skills() else []
+
+
+def is_skill_tool(name: str) -> bool:
+    return name == "use_skill"
+
+
+def call_skill_tool(args: dict) -> str:
+    name = str(args.get("name", "")).strip()
+    body = load_skill(name)
+
+    if body is None:
+        available = ", ".join(s["name"] for s in list_skills()) or "（無）"
+        return f"[ERROR] 找不到 skill「{name}」。可用：{available}"
+
+    return f"# Skill: {name}\n\n{body}"

@@ -1,0 +1,2311 @@
+"""聊天介面：訊息泡泡、推理展開區塊、輸入欄、附加檔案。"""
+
+import json
+import logging
+import queue
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+import customtkinter as ctk
+from PIL import Image
+from tkinterdnd2 import DND_FILES
+
+log = logging.getLogger("pocket-agent")
+
+
+class ChatView(ctk.CTkFrame):
+    def __init__(self, parent, app):
+        super().__init__(parent, fg_color="transparent")
+
+        self.app = app
+
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        self._pending_files: list[str] = []
+        self._chip_images: list = []  # 縮圖的 CTkImage 參照，防止被 GC
+
+        # 對話重建與捲動排程控制。
+        self._rendering_history = False
+        self._scroll_jobs: list[str] = []
+        self._render_generation = 0
+
+        self._build()
+
+    # ─────────────────────────────────────────────
+    # 介面建立
+    # ─────────────────────────────────────────────
+
+    def _build(self):
+
+        # 外層對話訊息捲動區
+        self.msg_frame = ctk.CTkScrollableFrame(
+            self,
+            fg_color=("gray95", "gray12"),
+            scrollbar_button_color=("gray65", "gray35"),
+            scrollbar_button_hover_color=("gray50", "gray50"),
+            corner_radius=0,
+        )
+        self.msg_frame.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+        )
+        self.msg_frame.grid_columnconfigure(0, weight=1)
+
+        # 附件顯示列
+        self.attach_bar = ctk.CTkLabel(
+            self,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            anchor="w",
+        )
+        self.attach_bar.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=14,
+            pady=(4, 0),
+        )
+
+        # 附件縮圖列（有附件時才顯示）
+        self.attach_frame = ctk.CTkFrame(
+            self,
+            fg_color="transparent",
+        )
+        self.attach_frame.grid(
+            row=2,
+            column=0,
+            sticky="w",
+            padx=14,
+            pady=(2, 0),
+        )
+        self.attach_frame.grid_remove()
+
+        # 輸入區
+        input_frame = ctk.CTkFrame(
+            self,
+            height=70,
+        )
+        input_frame.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            padx=10,
+            pady=8,
+        )
+        input_frame.grid_columnconfigure(0, weight=1)
+
+        self.input = ctk.CTkTextbox(
+            input_frame,
+            height=52,
+            wrap="word",
+            font=ctk.CTkFont(size=self._chat_font_size()),
+        )
+
+        self.input.grid(
+            row=0,
+            column=0,
+            padx=(8, 4),
+            pady=8,
+            sticky="ew",
+        )
+
+        # 微軟倉頡 Ctrl 組合鍵中文標點修正
+        tk_text = self.input._textbox
+
+        tk_text.bind(
+            "<Control-KeyPress>",
+            self._on_ctrl_ime_character,
+            add="+",
+        )
+
+        self.input.bind(
+            "<Return>",
+            self._on_enter,
+        )
+        self.input.bind(
+            "<Shift-Return>",
+            lambda event: None,
+        )
+
+        # ── IME 修正（Windows 中文輸入法）──────────
+        self._ime_state = {
+            "comp": "",
+            "base": "",
+            "pending": None,
+            "skip_until": 0.0,
+        }
+
+        for sequence in (
+            "<KeyPress-Escape>",
+            "<KeyPress-BackSpace>",
+        ):
+            self.input.bind(
+                sequence,
+                self._ime_mark_cancel,
+                add="+",
+            )
+
+        self.input.bind(
+            "<Control-space>",
+            self._on_ctrl_space,
+        )
+
+        self.after(
+            50,
+            self._ime_poll,
+        )
+
+        # Ctrl+V：剪貼簿若為圖片，直接附加
+        self.input.bind(
+            "<Control-v>",
+            self._on_paste,
+        )
+
+        icon_path = Path(__file__).parent / "assets" / "icon_attach.png"
+
+        self.attach_icon = ctk.CTkImage(
+            light_image=Image.open(icon_path),
+            dark_image=Image.open(icon_path),
+            size=(22, 22),
+        )
+
+        # 附件按鈕
+        ctk.CTkButton(
+            input_frame,
+            text="",
+            image=self.attach_icon,
+            width=40,
+            height=40,
+            fg_color="transparent",
+            hover_color=("gray70", "gray30"),
+            command=self._attach_file,
+        ).grid(
+            row=0,
+            column=1,
+            padx=2,
+            pady=8,
+        )
+
+        # 送出按鈕
+        self.send_btn = ctk.CTkButton(
+            input_frame,
+            text="送出",
+            width=72,
+            command=self._send,
+        )
+        self.send_btn.grid(
+            row=0,
+            column=2,
+            padx=(2, 8),
+            pady=8,
+        )
+
+        # ── 模型 / 推理強度快速選單 ────────────────
+        from gui.settings import MODELS, REASONING
+        from agent.auth import load_config, get_model
+
+        opts_row = ctk.CTkFrame(
+            input_frame,
+            fg_color="transparent",
+        )
+        opts_row.grid(
+            row=1,
+            column=0,
+            columnspan=3,
+            padx=8,
+            pady=(0, 6),
+            sticky="w",
+        )
+
+        cfg = load_config()
+        model = cfg.get("model") or get_model()
+        model_values = MODELS if model in MODELS else MODELS + [model]
+
+        ctk.CTkLabel(
+            opts_row,
+            text="模型",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).grid(row=0, column=0, padx=(2, 6))
+
+        self.model_var = ctk.StringVar(value=model)
+        self.model_menu = ctk.CTkOptionMenu(
+            opts_row,
+            values=model_values,
+            variable=self.model_var,
+            width=150,
+            height=26,
+            font=ctk.CTkFont(size=12),
+            command=lambda _v: self._apply_chat_options(),
+        )
+        self.model_menu.grid(row=0, column=1, padx=(0, 14))
+
+        # 推理強度用短標籤（取全名「（」之前的部分）
+        self._effort_short = [(key, label.split("（")[0]) for key, label in REASONING]
+        effort = cfg.get("reasoning_effort", "medium")
+        short = next(
+            (s for k, s in self._effort_short if k == effort),
+            "Medium",
+        )
+
+        ctk.CTkLabel(
+            opts_row,
+            text="推理",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).grid(row=0, column=2, padx=(0, 6))
+
+        self.effort_var = ctk.StringVar(value=short)
+        self.effort_menu = ctk.CTkOptionMenu(
+            opts_row,
+            values=[s for _k, s in self._effort_short],
+            variable=self.effort_var,
+            width=110,
+            height=26,
+            font=ctk.CTkFont(size=12),
+            command=lambda _v: self._apply_chat_options(),
+        )
+        self.effort_menu.grid(row=0, column=3)
+
+        # 背景抓取後端即時模型列表更新選單
+        self._fetch_models_async()
+
+        self._add_system("登入後即可開始對話。Enter 送出，Shift+Enter 換行。")
+
+        # 啟用檔案拖放。
+        self._setup_file_drop()
+
+    # ─────────────────────────────────────────────
+    # 檔案拖放
+    # ─────────────────────────────────────────────
+
+    def _setup_file_drop(self):
+        """讓聊天區、輸入框與附件列支援拖放檔案。"""
+
+        drop_targets = [
+            self.msg_frame,
+            self.input,
+            self.attach_bar,
+        ]
+
+        registered = set()
+
+        for widget in drop_targets:
+            targets = [widget]
+
+            # CustomTkinter 的事件有時由內部 Tk 元件接收。
+            for attribute in (
+                "_textbox",
+                "_canvas",
+                "_text_label",
+                "_parent_canvas",
+            ):
+                internal_widget = getattr(widget, attribute, None)
+
+                if internal_widget is not None:
+                    targets.append(internal_widget)
+
+            for target in targets:
+                target_name = str(target)
+
+                if target_name in registered:
+                    continue
+
+                try:
+                    target.drop_target_register(DND_FILES)
+                    target.dnd_bind(
+                        "<<Drop>>",
+                        self._on_file_drop,
+                    )
+                    target.dnd_bind(
+                        "<<DropEnter>>",
+                        self._on_drop_enter,
+                    )
+                    target.dnd_bind(
+                        "<<DropLeave>>",
+                        self._on_drop_leave,
+                    )
+                    registered.add(target_name)
+                except Exception:
+                    # 並非每個 CustomTkinter 內部元件都能註冊拖放。
+                    log.debug(
+                        "拖放目標註冊失敗：%s",
+                        target_name,
+                        exc_info=True,
+                    )
+
+    def _on_file_drop(self, event):
+        """接收拖入的檔案，並加入待送出的附件清單。"""
+
+        try:
+            # splitlist 能正確處理含空格與大括號的 Windows 路徑。
+            dropped_paths = self.tk.splitlist(event.data)
+            added_count = 0
+
+            for raw_path in dropped_paths:
+                file_path = Path(raw_path).expanduser()
+
+                if not file_path.is_file():
+                    continue
+
+                normalized_path = str(file_path.resolve())
+
+                if normalized_path in self._pending_files:
+                    continue
+
+                self._pending_files.append(normalized_path)
+                added_count += 1
+
+            self._restore_drop_style()
+
+            if added_count:
+                self._add_system(f"已附加 {added_count} 個檔案。")
+
+        except Exception:
+            log.exception("拖放附加檔案失敗")
+            self._restore_drop_style()
+            self._add_system("檔案拖放失敗，請重新嘗試。")
+
+        return "break"
+
+    def _on_drop_enter(self, event):
+        """檔案進入拖放區時顯示提示。"""
+
+        self.attach_bar.configure(
+            text="放開滑鼠即可附加檔案",
+            text_color=("#1a56db", "#6ea8ff"),
+        )
+
+        return getattr(event, "action", "copy")
+
+    def _on_drop_leave(self, event):
+        """檔案離開拖放區時還原附件列。"""
+
+        self._restore_drop_style()
+        return getattr(event, "action", "copy")
+
+    def _restore_drop_style(self):
+        """還原附件列的提示文字與縮圖列。"""
+
+        self.attach_bar.configure(text="", text_color="gray")
+        self._update_attachment_bar()
+
+    def _update_attachment_bar(self):
+        """重建待送出附件的縮圖列（圖片顯示縮圖，其他顯示檔名，均附移除鈕）。"""
+
+        for widget in self.attach_frame.winfo_children():
+            widget.destroy()
+        self._chip_images = []
+
+        if not self._pending_files:
+            self.attach_frame.grid_remove()
+            return
+
+        self.attach_frame.grid()
+
+        image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
+
+        for col, path in enumerate(self._pending_files):
+            file_path = Path(path)
+
+            chip = ctk.CTkFrame(
+                self.attach_frame,
+                corner_radius=8,
+            )
+            chip.grid(row=0, column=col, padx=(0, 6), pady=2)
+
+            thumb = None
+            if file_path.suffix.lower() in image_exts:
+                try:
+                    img = Image.open(file_path)
+                    w, h = img.size
+                    scale = 48 / max(w, h)
+                    thumb = ctk.CTkImage(
+                        light_image=img,
+                        dark_image=img,
+                        size=(
+                            max(1, round(w * scale)),
+                            max(1, round(h * scale)),
+                        ),
+                    )
+                    self._chip_images.append(thumb)
+                except Exception:
+                    thumb = None
+
+            if thumb is not None:
+                ctk.CTkLabel(chip, text="", image=thumb).grid(row=0, column=0, padx=(6, 2), pady=4)
+            else:
+                ctk.CTkLabel(
+                    chip,
+                    text=f"📎 {file_path.name}",
+                    font=ctk.CTkFont(size=12),
+                ).grid(row=0, column=0, padx=(8, 2), pady=4)
+
+            ctk.CTkButton(
+                chip,
+                text="✕",
+                width=22,
+                height=22,
+                corner_radius=6,
+                fg_color="transparent",
+                text_color="gray",
+                hover_color=("gray70", "gray30"),
+                command=lambda p=path: self._remove_attachment(p),
+            ).grid(row=0, column=1, padx=(0, 4))
+
+    def _remove_attachment(self, path: str):
+        """移除單一待送出附件。"""
+
+        if path in self._pending_files:
+            self._pending_files.remove(path)
+
+        self._update_attachment_bar()
+
+    def _apply_chat_options(self, _value=None):
+        """Chat 快速選單變更時寫入設定並即時更新 agent。"""
+
+        from agent.auth import load_config, save_config
+
+        cfg = load_config()
+        cfg["model"] = self.model_var.get()
+
+        short = self.effort_var.get()
+        cfg["reasoning_effort"] = next(
+            (k for k, s in self._effort_short if s == short),
+            "medium",
+        )
+        save_config(cfg)
+
+        if self.app.agent:
+            self.app.agent.model = cfg["model"]
+            self.app.agent.reasoning_effort = cfg["reasoning_effort"]
+
+    def _fetch_models_async(self):
+        """背景抓取後端即時模型列表；失敗或未登入時維持現有選單。"""
+
+        def worker():
+            from agent.auth import fetch_available_models
+
+            models = fetch_available_models()
+            if models:
+                try:
+                    self.after(0, lambda: self._apply_models(models))
+                except Exception:
+                    pass  # 視窗已關閉
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_models(self, models: list[str]):
+        current = self.model_var.get()
+        if current and current not in models:
+            models = models + [current]
+        self.model_menu.configure(values=models)
+
+    def _sync_chat_options(self):
+        """從設定檔同步選單（設定頁改過時保持一致）。"""
+
+        from agent.auth import load_config, get_model
+
+        cfg = load_config()
+        model = cfg.get("model") or get_model()
+
+        values = list(self.model_menu.cget("values"))
+        if model not in values:
+            self.model_menu.configure(values=values + [model])
+        self.model_var.set(model)
+
+        effort = cfg.get("reasoning_effort", "medium")
+        self.effort_var.set(
+            next(
+                (s for k, s in self._effort_short if k == effort),
+                "Medium",
+            )
+        )
+
+    # ─────────────────────────────────────────────
+    # 滑鼠滾輪控制
+    # ─────────────────────────────────────────────
+
+    @staticmethod
+    def _wheel_direction(event) -> int:
+        """
+        將不同作業系統的滾輪事件轉為方向。
+
+        回傳：
+        -1：向上
+         1：向下
+         0：無法判定
+        """
+
+        delta = getattr(event, "delta", 0)
+
+        # Windows 與 macOS
+        if delta:
+            return -1 if delta > 0 else 1
+
+        button_number = getattr(event, "num", None)
+
+        # Linux
+        if button_number == 4:
+            return -1
+
+        if button_number == 5:
+            return 1
+
+        return 0
+
+    def _scroll_outer_messages(self, direction: int):
+        """
+        捲動整個對話訊息區。
+
+        direction：
+        -1：向上
+         1：向下
+        """
+
+        try:
+            canvas = self.msg_frame._parent_canvas
+            canvas.yview_scroll(direction * 40, "units")
+        except Exception:
+            log.exception("無法捲動外層對話訊息區")
+
+    def _bind_outer_scroll(self, widget):
+        """
+        讓指定元件上的滑鼠滾輪控制整個對話區。
+        適用於圖片、系統訊息、檔案卡片等元件。
+        """
+
+        def on_mousewheel(event):
+            direction = self._wheel_direction(event)
+
+            if direction:
+                self._scroll_outer_messages(direction)
+
+            return "break"
+
+        targets = [widget]
+
+        # 部分 CustomTkinter 元件的事件實際由內部 Tk 元件接收
+        for attribute in (
+            "_canvas",
+            "_text_label",
+            "_textbox",
+        ):
+            internal_widget = getattr(widget, attribute, None)
+
+            if internal_widget is not None:
+                targets.append(internal_widget)
+
+        for target in targets:
+            try:
+                target.bind(
+                    "<MouseWheel>",
+                    on_mousewheel,
+                    add="+",
+                )
+                target.bind(
+                    "<Button-4>",
+                    on_mousewheel,
+                    add="+",
+                )
+                target.bind(
+                    "<Button-5>",
+                    on_mousewheel,
+                    add="+",
+                )
+            except Exception:
+                pass
+
+    def _bind_bubble_scroll(self, textbox):
+        """
+        讓訊息泡泡具有獨立滑鼠滾輪控制。
+
+        行為：
+        1. 泡泡內還有內容時，先捲動泡泡。
+        2. 泡泡已到頂端或底端時，改捲動整個對話區。
+        3. 短訊息無須捲動時，直接捲動整個對話區。
+        """
+
+        def on_mousewheel(event):
+            direction = self._wheel_direction(event)
+
+            if not direction:
+                return "break"
+
+            try:
+                first, last = textbox.yview()
+
+                can_scroll_up = direction < 0 and first > 0.0001
+
+                can_scroll_down = direction > 0 and last < 0.9999
+
+                if can_scroll_up or can_scroll_down:
+                    # 泡泡內仍有內容可捲動
+                    textbox.yview_scroll(
+                        direction * 3,
+                        "units",
+                    )
+                else:
+                    # 泡泡已到邊界，改捲動外層對話區
+                    self._scroll_outer_messages(direction)
+
+            except Exception:
+                log.exception("無法捲動訊息泡泡")
+                self._scroll_outer_messages(direction)
+
+            return "break"
+
+        targets = [textbox]
+
+        # CTkTextbox 內部實際文字元件
+        internal_textbox = getattr(
+            textbox,
+            "_textbox",
+            None,
+        )
+
+        if internal_textbox is not None:
+            targets.append(internal_textbox)
+
+        for target in targets:
+            try:
+                target.bind(
+                    "<MouseWheel>",
+                    on_mousewheel,
+                    add="+",
+                )
+                target.bind(
+                    "<Button-4>",
+                    on_mousewheel,
+                    add="+",
+                )
+                target.bind(
+                    "<Button-5>",
+                    on_mousewheel,
+                    add="+",
+                )
+            except Exception:
+                pass
+
+    # ─────────────────────────────────────────────
+    # 送出訊息
+    # ─────────────────────────────────────────────
+
+    def _on_ctrl_space(self, event):
+        """
+        Ctrl+Space 切換輸入法。
+
+        組字救援交由 _ime_poll 處理。
+        此處只處理沒在組字時，可能漏進輸入框的空白。
+        """
+
+        from gui.ime import get_composition
+
+        _comp_at_press = get_composition()
+
+        if not _comp_at_press:
+            snapshot = self.input.get(
+                "1.0",
+                "end-1c",
+            )
+
+            state = {
+                "tries": 0,
+            }
+
+            def _watch():
+                now = self.input.get(
+                    "1.0",
+                    "end-1c",
+                )
+
+                index = self._diff_single_space(
+                    snapshot,
+                    now,
+                )
+
+                if index is not None:
+                    log.debug(
+                        "IME[watch-delete] try=%d index=%d removing=%r snapshot=%r now=%r",
+                        state["tries"],
+                        index,
+                        now[index],
+                        snapshot,
+                        now,
+                    )
+                    self.input.delete(
+                        f"1.0+{index}c",
+                        f"1.0+{index + 1}c",
+                    )
+                    return
+
+                state["tries"] += 1
+
+                if state["tries"] < 10 and now == snapshot:
+                    self.after(
+                        20,
+                        _watch,
+                    )
+
+            self.after(
+                10,
+                _watch,
+            )
+
+        return "break"
+
+    # ─────────────────────────────────────────────
+    # IME 組字救援
+    # ─────────────────────────────────────────────
+
+    def _ime_mark_cancel(self, event=None):
+        import time
+
+        self._ime_state["skip_until"] = time.time() + 0.4
+
+    def _ime_poll(self):
+        try:
+            self._ime_tick()
+        except Exception:
+            pass
+        finally:
+            self.after(
+                50,
+                self._ime_poll,
+            )
+
+    def _ime_tick(self):
+        import time
+
+        from gui.ime import get_composition
+
+        state = self._ime_state
+
+        # 焦點不在聊天輸入框時重置
+        focused = self.focus_get()
+
+        if not focused or not str(focused).startswith(str(self.input)):
+            state.update(
+                comp="",
+                pending=None,
+            )
+            return
+
+        composition = get_composition()
+
+        text = self.input.get(
+            "1.0",
+            "end-1c",
+        )
+
+        if composition:
+            # 組字過程每按一鍵就變動一次，記錄它只會洗版；
+            # 真正有診斷價值的是 compose-end 與三條救援分支。
+            state.update(
+                comp=composition,
+                base=text,
+                pending=None,
+            )
+            return
+
+        if state["comp"]:
+            # 組字剛消失，等待正常文字提交
+            log.debug(
+                "IME[compose-end] comp=%r base=%r text-now=%r",
+                state["comp"],
+                state["base"],
+                text,
+            )
+            state["pending"] = {
+                "comp": state["comp"],
+                "base": state["base"],
+            }
+            state["comp"] = ""
+            return
+
+        pending = state["pending"]
+
+        if not pending:
+            return
+
+        state["pending"] = None
+
+        if time.time() < state["skip_until"]:
+            log.debug(
+                "IME rescue skipped (user cancelled) comp=%r",
+                pending["comp"],
+            )
+            return
+
+        base = pending["base"]
+
+        if text == base:
+            # 組字內容未進入輸入框，手動補回
+            log.debug(
+                "IME[rescue-insert] comp=%r base=%r cursor=%s",
+                pending["comp"],
+                base,
+                self.input.index("insert"),
+            )
+
+            self.input.insert(
+                "insert",
+                pending["comp"],
+            )
+
+        elif len(text) < len(base) and base.startswith(text):
+            # 微軟注音會把游標前的字元一併吸進組字脈絡，
+            # 組字被丟棄時那些字元也跟著消失（例：'…python' 只剩 '…pytho'）。
+            # base 是組字期間記錄的完整原文，用它把尾巴連同組字一起補回。
+            #
+            # 只在 text 是 base 的前綴時才動作——這保證消失的字元都在
+            # 尾端（也就是組字發生的位置）。若是中間被改動，startswith
+            # 不成立，就維持原本不介入的行為。
+            missing = base[len(text) :]
+
+            log.debug(
+                "IME[rescue-truncated] missing=%r comp=%r base=%r text=%r",
+                missing,
+                pending["comp"],
+                base,
+                text,
+            )
+
+            self.input.insert(
+                f"1.0+{len(text)}c",
+                missing + pending["comp"],
+            )
+
+        elif (
+            text.startswith(base)
+            and pending["comp"].startswith(text[len(base) :])
+            and len(text) - len(base) < len(pending["comp"])
+        ):
+            # 注音對標點是立即 commit，其餘組字卻被丟棄，
+            # 於是只有開頭的標點留下（例：'，然後也要給我匯入' 只剩 '，'）。
+            # 已進去的部分正好是 comp 的前綴，補上剩下的即可。
+            #
+            # 正常整串 commit 時 text[len(base):] == comp，
+            # 算出來的 missing 為空，這個分支不會成立。
+            committed = text[len(base) :]
+            missing = pending["comp"][len(committed) :]
+
+            log.debug(
+                "IME[rescue-partial] committed=%r missing=%r comp=%r base=%r",
+                committed,
+                missing,
+                pending["comp"],
+                base,
+            )
+
+            self.input.insert(
+                f"1.0+{len(text)}c",
+                missing,
+            )
+
+        else:
+            index = self._diff_single_space(
+                pending["base"],
+                text,
+            )
+
+            if index is not None:
+                # 將誤插入的空白替換成組字內容
+                log.debug(
+                    "IME[replace-space] index=%d removing=%r comp=%r base=%r text=%r cursor=%s",
+                    index,
+                    text[index],
+                    pending["comp"],
+                    pending["base"],
+                    text,
+                    self.input.index("insert"),
+                )
+
+                self.input.delete(
+                    f"1.0+{index}c",
+                    f"1.0+{index + 1}c",
+                )
+                self.input.insert(
+                    "insert",
+                    pending["comp"],
+                )
+            else:
+                log.debug(
+                    "IME[no-op] base=%r text=%r comp=%r",
+                    pending["base"],
+                    text,
+                    pending["comp"],
+                )
+
+    @staticmethod
+    def _diff_single_space(
+        previous: str,
+        current: str,
+    ) -> int | None:
+        """
+        current 若只比 previous 多一個半形或全形空白，
+        回傳空白位置；否則回傳 None。
+        """
+
+        if len(current) != len(previous) + 1:
+            return None
+
+        index = next(
+            (position for position in range(len(previous)) if previous[position] != current[position]),
+            len(previous),
+        )
+
+        if current[index] in (" ", "　") and previous == current[:index] + current[index + 1 :]:
+            return index
+
+        return None
+
+    def _on_enter(self, event):
+        from gui.ime import has_composition
+
+        if has_composition():
+            # IME 組字中，Enter 是選字而非送出
+            return "break"
+
+        self._send()
+
+        return "break"
+
+    def _send(self):
+        text = self.input.get(
+            "1.0",
+            "end-1c",
+        ).strip()
+
+        if not text:
+            return
+
+        if not self.app.is_ready:
+            self._add_system("⚠ 尚未登入，請先到「帳號」頁面登入。")
+            return
+
+        # slash command：展開成提示詞模板；未知指令則提示
+        display_text = text
+        if text.startswith("/"):
+            from agent.commands import expand_command, get_command
+
+            expanded = expand_command(text)
+            if expanded is None:
+                name = text[1:].split(" ", 1)[0]
+                if get_command(name) is None:
+                    self._add_system(f"⚠ 找不到指令 /{name}（可到 Commands 頁管理）。")
+                    return
+            else:
+                text = expanded  # 送給模型的是展開後的內容
+
+        self.input.delete(
+            "1.0",
+            "end",
+        )
+
+        files = self._pending_files
+        self._pending_files = []
+
+        self.attach_bar.configure(text="")
+        self._update_attachment_bar()
+
+        # 泡泡顯示使用者輸入的原文（/指令），實際送出的是展開內容
+        self._add_bubble(
+            display_text,
+            "user",
+        )
+
+        spinner = self._add_spinner()
+
+        # 執行期間送出鈕變成「停止」
+        self._send_btn_fg = self.send_btn.cget("fg_color")
+        self._send_btn_hover = self.send_btn.cget("hover_color")
+        self.send_btn.configure(
+            text="停止",
+            command=self._stop,
+            fg_color="#c0392b",
+            hover_color="#922b21",
+        )
+
+        # ── 串流狀態 ──────────────────────────────
+        # agent 在背景 thread 發片段 → queue → GUI 主執行緒消化
+        self._stream_q: queue.Queue = queue.Queue()
+        self._stream_row = None
+        self._stream_box = None
+        self._think_panel = None  # 本輪即時推理區塊
+        self._streamed_thinking = False  # 已即時顯示過，結束時不再補一份
+        self._tool_panels: dict = {}  # call_id -> 可折疊區塊把手
+        self.app.agent.on_stream = lambda kind, data: self._stream_q.put((kind, data))
+
+        future = self.app.run_async(
+            self.app.agent.chat(
+                text,
+                attachments=files,
+            )
+        )
+
+        self.after(
+            100,
+            lambda: self._poll(
+                future,
+                spinner,
+            ),
+        )
+
+    def _stop(self):
+        """要求 agent 停止本輪工作（在下一個安全點收尾）。"""
+
+        if self.app.agent:
+            self.app.agent.request_stop()
+
+        self.send_btn.configure(
+            text="停止中…",
+            state="disabled",
+        )
+
+    def _restore_send_btn(self):
+        self.send_btn.configure(
+            text="送出",
+            state="normal",
+            command=self._send,
+            fg_color=getattr(self, "_send_btn_fg", None) or ["#3B8ED0", "#1F6AA5"],
+            hover_color=getattr(self, "_send_btn_hover", None) or ["#36719F", "#144870"],
+        )
+
+    # 工具內容可能很長（整份檔案、查詢結果），全塞進畫面會讓
+    # Tk 變慢又沒人看得完，超過就截斷並標示原始長度。
+    _TOOL_TEXT_LIMIT = 2000
+
+    @classmethod
+    def _truncate_tool_text(cls, text: str) -> str:
+        text = str(text)
+        if len(text) <= cls._TOOL_TEXT_LIMIT:
+            return text
+        return text[: cls._TOOL_TEXT_LIMIT] + f"\n\n…（省略，共 {len(text)} 字）"
+
+    @classmethod
+    def _format_tool_args(cls, raw: str) -> str:
+        """把工具參數排版成好讀的樣子；不是 JSON 就原樣顯示。"""
+        raw = (raw or "").strip()
+        if not raw:
+            return "（無參數）"
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return cls._truncate_tool_text(raw)
+
+        return cls._truncate_tool_text(json.dumps(parsed, ensure_ascii=False, indent=2))
+
+    def _drain_stream(self, spinner):
+        """把背景送來的串流片段畫到即時泡泡上。"""
+
+        got_text = False
+
+        try:
+            while True:
+                kind, data = self._stream_q.get_nowait()
+
+                if kind == "round_start":
+                    # 工具呼叫後重跑：清掉上一輪的暫定文字，
+                    # 推理與工具區塊保留（那是本次任務的完整軌跡）
+                    if self._stream_box is not None:
+                        self._stream_box.configure(state="normal")
+                        self._stream_box.delete("1.0", "end")
+                        self._stream_box.configure(state="disabled")
+                    self._think_panel = None
+
+                elif kind == "thinking":
+                    # 推理片段即時顯示。沒有這段時，遇到長推理或連續
+                    # 工具呼叫，畫面會一直停在 spinner 完全沒有反應。
+                    if self._think_panel is None:
+                        if spinner.winfo_exists():
+                            spinner.destroy()
+                        self._think_panel = self._add_collapsible(
+                            "思考中…",
+                            expanded=True,
+                            max_lines=10,
+                        )
+                        self._streamed_thinking = True
+
+                    self._think_panel.append(data)
+
+                elif kind == "tool_start":
+                    if spinner.winfo_exists():
+                        spinner.destroy()
+
+                    # 推理告一段落，收起來讓出版面給工具
+                    if self._think_panel is not None:
+                        self._think_panel.set_title("思考過程")
+                        self._think_panel.collapse()
+                        self._think_panel = None
+
+                    panel = self._add_collapsible(
+                        f"⚙  {data['name']}  執行中…",
+                        max_lines=14,
+                    )
+                    panel.append(self._format_tool_args(data.get("arguments", "")))
+                    panel.tool_name = data["name"]
+                    self._tool_panels[data["call_id"]] = panel
+
+                elif kind == "tool_done":
+                    panel = self._tool_panels.pop(
+                        data["call_id"],
+                        None,
+                    )
+                    if panel is not None:
+                        mark = "✓" if data.get("ok") else "✕"
+                        panel.set_title(f"⚙  {data['name']}  {mark}")
+                        panel.append("\n\n── 結果 ──\n" + self._truncate_tool_text(data.get("result", "")))
+
+                elif kind == "text":
+                    if self._stream_box is None:
+                        if spinner.winfo_exists():
+                            spinner.destroy()
+
+                        # 正式回覆開始，把推理收起來
+                        if self._think_panel is not None:
+                            self._think_panel.set_title("思考過程")
+                            self._think_panel.collapse()
+                            self._think_panel = None
+
+                        self._stream_row, self._stream_box = self._add_stream_bubble()
+
+                    self._stream_box.configure(state="normal")
+                    self._stream_box.insert("end", data)
+                    self._stream_box.configure(state="disabled")
+                    got_text = True
+
+        except queue.Empty:
+            pass
+
+        if got_text and self._stream_box is not None:
+            self._fit_textbox_height(
+                self._stream_box,
+                max_lines=self._bubble_max_lines(),
+            )
+
+    def _poll(self, future, spinner):
+        # 串流繪製失敗絕不能中斷輪詢：_poll 一旦拋出，下面的
+        # self.after 就排不到，迴圈直接死掉——agent 明明跑完了，
+        # 畫面卻永遠停在思考中，要重開程式從存檔讀回才看得到回覆。
+        try:
+            self._drain_stream(spinner)
+        except Exception:
+            log.exception("串流繪製失敗（已略過該批片段，繼續輪詢）")
+
+        if future.done():
+            if spinner.winfo_exists():
+                spinner.destroy()
+
+            self._restore_send_btn()
+
+            self.app.agent.on_stream = None
+
+            # 以下收尾必須在取結果之前做：future.result() 可能拋例外，
+            # 放進 try 裡的話出錯時區塊會永遠停在「思考中…／執行中…」
+            if self._think_panel is not None:
+                self._think_panel.set_title("思考過程")
+                self._think_panel.collapse()
+                self._think_panel = None
+
+            # 中途被停止或出錯時工具不會收到 tool_done
+            for panel in self._tool_panels.values():
+                panel.set_title(f"⚙  {panel.tool_name}  ⏹ 已中斷")
+            self._tool_panels.clear()
+
+            try:
+                thinking, reply = future.result()
+
+                # 已經即時顯示過就不再補一份，否則會出現兩塊思考過程
+                if thinking and not self._streamed_thinking:
+                    self._add_reasoning(
+                        thinking,
+                        before=self._stream_row,
+                    )
+
+                if self._stream_box is not None:
+                    # 以最終文字取代串流內容（含圖片/檔案路徑附註）
+                    self._stream_box.configure(state="normal")
+                    self._stream_box.delete("1.0", "end")
+                    self._stream_box.insert("1.0", reply)
+                    self._stream_box.configure(state="disabled")
+                    self._fit_textbox_height(
+                        self._stream_box,
+                        max_lines=self._bubble_max_lines(),
+                    )
+                else:
+                    self._add_bubble(
+                        reply,
+                        "assistant",
+                    )
+
+                for image_path in getattr(
+                    self.app.agent,
+                    "last_images",
+                    [],
+                ):
+                    self._add_image(image_path)
+
+                for file_path in getattr(
+                    self.app.agent,
+                    "last_files",
+                    [],
+                ):
+                    self._add_file_link(file_path)
+
+                self.app.save_current_chat()
+
+            except Exception as error:
+                self._add_bubble(
+                    f"錯誤：{error}",
+                    "error",
+                )
+        else:
+            self.after(
+                80,
+                lambda: self._poll(
+                    future,
+                    spinner,
+                ),
+            )
+
+    # ─────────────────────────────────────────────
+    # 附加檔案
+    # ─────────────────────────────────────────────
+
+    def _on_paste(self, event):
+        """
+        剪貼簿有圖片時存成暫存 PNG 並附加；
+        若剪貼簿為文字，交由預設貼上處理。
+        """
+
+        try:
+            from PIL import ImageGrab
+
+            data = ImageGrab.grabclipboard()
+        except Exception:
+            return None
+
+        if data is None:
+            return None
+
+        import tempfile
+        import time as current_time
+
+        paths: list[str] = []
+
+        if isinstance(data, list):
+            # 從檔案總管複製的圖片檔
+            paths = [
+                path
+                for path in data
+                if Path(path).suffix.lower()
+                in {
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".gif",
+                    ".webp",
+                }
+            ]
+        else:
+            # 截圖或點陣圖
+            temporary_path = Path(tempfile.gettempdir()) / (f"pocket-agent-paste-{current_time.strftime('%H%M%S')}.png")
+
+            data.save(
+                temporary_path,
+                "PNG",
+            )
+
+            paths = [
+                str(temporary_path),
+            ]
+
+        if not paths:
+            return None
+
+        for path in paths:
+            if path not in self._pending_files:
+                self._pending_files.append(path)
+
+        self._update_attachment_bar()
+
+        return "break"
+
+    def _attach_file(self):
+        from tkinter import filedialog
+
+        paths = filedialog.askopenfilenames(
+            title="選擇要附加的檔案",
+            filetypes=[
+                (
+                    "所有檔案",
+                    "*.*",
+                ),
+                (
+                    "圖片",
+                    "*.png *.jpg *.jpeg *.gif *.webp",
+                ),
+                (
+                    "文件",
+                    "*.pdf *.txt *.md *.csv *.docx *.xlsx *.pptx",
+                ),
+            ],
+        )
+
+        for path in paths:
+            normalized_path = str(Path(path).resolve())
+
+            if normalized_path not in self._pending_files:
+                self._pending_files.append(normalized_path)
+
+        self._update_attachment_bar()
+
+    # ─────────────────────────────────────────────
+    # 訊息泡泡
+    # ─────────────────────────────────────────────
+
+    DEFAULT_BUBBLE_MAX_LINES = 15
+    DEFAULT_CHAT_FONT_SIZE = 13
+    MIN_CHAT_FONT_SIZE = 8
+    MAX_CHAT_FONT_SIZE = 32
+
+    def _bubble_max_lines(self) -> int:
+        """訊息泡泡的最大顯示行數（config.json 的 bubble_max_lines）。"""
+        from agent.auth import load_config
+
+        try:
+            return max(
+                1,
+                int(
+                    load_config().get(
+                        "bubble_max_lines",
+                        self.DEFAULT_BUBBLE_MAX_LINES,
+                    )
+                ),
+            )
+        except Exception:
+            return self.DEFAULT_BUBBLE_MAX_LINES
+
+    def _chat_font_size(self) -> int:
+        """對話視窗的基準字體大小（config.json 的 chat_font_size）。
+        套用到訊息泡泡、輸入框；思考過程面板固定小 2 號。"""
+        from agent.auth import load_config
+
+        try:
+            size = int(load_config().get("chat_font_size", self.DEFAULT_CHAT_FONT_SIZE))
+        except Exception:
+            return self.DEFAULT_CHAT_FONT_SIZE
+        return min(max(size, self.MIN_CHAT_FONT_SIZE), self.MAX_CHAT_FONT_SIZE)
+
+    def _apply_input_font(self):
+        """輸入框是常駐元件，設定變更時直接套用（不用像泡泡那樣等下一則訊息）。"""
+        self.input.configure(font=ctk.CTkFont(size=self._chat_font_size()))
+
+    def _bubble_width(self) -> int:
+        """訊息泡泡寬度：依對話區目前實際寬度按比例縮放。
+
+        以前寫死 480px，視窗放大後泡泡完全不會變寬，右側留一大片
+        空白、文字卻擠著換行。改成量 msg_frame 目前寬度的 8 成，
+        並夾在 320～1600px 之間（太窄不好讀、上限只是防超寬螢幕
+        單行字數失控，正常視窗大小都吃得到接近 8 成）。
+        """
+        try:
+            available = self.msg_frame.winfo_width()
+        except Exception:
+            available = 0
+
+        if available <= 1:
+            # 尚未完成排版（例如程式剛啟動時的第一則系統訊息），退回預設值
+            return 480
+
+        return min(max(int(available * 0.8), 320), 1600)
+
+    def _fit_textbox_height(
+        self,
+        textbox: ctk.CTkTextbox,
+        max_lines: int = 15,
+        pad: int = 26,  # CTkTextbox 圓角內距（上下各約 corner_radius）+ 餘裕
+    ):
+        """依實際換行後的顯示行數調整高度。
+
+        字數粗估對中文（全形字寬）嚴重失準，改在排版完成後
+        用 tk 的 displaylines 量真實行數。超過 max_lines 才出現
+        泡泡內捲軸。
+        """
+
+        def fit(attempt: int = 0):
+            try:
+                tk_text = textbox._textbox
+
+                # 寬度尚未確定時換行數不可信，稍後重量
+                if tk_text.winfo_width() <= 1 and attempt < 10:
+                    textbox.after(30, lambda: fit(attempt + 1))
+                    return
+
+                # displaylines 回傳的是「換行次數」，單行時為 None → 行數要 +1
+                lines = tk_text.count("1.0", "end-1c", "displaylines")
+                if isinstance(lines, (tuple, list)):
+                    lines = lines[0]
+                lines = max(1, min(int(lines or 0) + 1, max_lines))
+
+                line_height = int(tk_text.tk.call("font", "metrics", tk_text.cget("font"), "-linespace"))
+
+                textbox.configure(height=lines * line_height + pad)
+                self._scroll_bottom()
+            except Exception:
+                pass  # 元件可能已被銷毀
+
+        textbox.after_idle(fit)
+
+    def _add_bubble(
+        self,
+        text: str,
+        role: str,
+    ):
+        row = ctk.CTkFrame(
+            self.msg_frame,
+            fg_color="transparent",
+        )
+        row.pack(
+            fill="x",
+            padx=8,
+            pady=3,
+        )
+
+        background_color = {
+            "user": (
+                "#1a56db",
+                "#1a56db",
+            ),
+            "assistant": (
+                "gray82",
+                "gray22",
+            ),
+            "error": (
+                "#c0392b",
+                "#922b21",
+            ),
+        }.get(
+            role,
+            (
+                "gray80",
+                "gray20",
+            ),
+        )
+
+        text_color = {
+            "user": (
+                "white",
+                "white",
+            ),
+            "assistant": (
+                "gray10",
+                "gray95",
+            ),
+            "error": (
+                "white",
+                "white",
+            ),
+        }.get(
+            role,
+            (
+                "gray10",
+                "gray90",
+            ),
+        )
+
+        anchor = "e" if role == "user" else "w"
+
+        bubble = ctk.CTkFrame(
+            row,
+            fg_color=background_color,
+            corner_radius=14,
+        )
+        bubble.pack(
+            anchor=anchor,
+            padx=6,
+        )
+
+        # 高度先給一行，插入文字後依實際顯示行數調整
+        # （最多 15 行，超過才用泡泡內 scrollbar）
+        textbox = ctk.CTkTextbox(
+            bubble,
+            width=self._bubble_width(),
+            height=36,
+            wrap="word",
+            fg_color=background_color,
+            text_color=text_color,
+            border_width=0,
+            corner_radius=10,
+            scrollbar_button_color=(
+                "gray65",
+                "gray40",
+            ),
+            scrollbar_button_hover_color=(
+                "gray50",
+                "gray55",
+            ),
+            activate_scrollbars=True,
+            font=ctk.CTkFont(size=self._chat_font_size()),
+        )
+
+        textbox.insert(
+            "1.0",
+            text,
+        )
+
+        textbox.configure(
+            state="disabled",
+        )
+
+        textbox.pack(
+            padx=10,
+            pady=8,
+        )
+
+        # 依實際顯示行數調整高度（中文寬度粗估會失準）；
+        # 超過設定的最大行數時固定高度、泡泡內捲動
+        self._fit_textbox_height(
+            textbox,
+            max_lines=self._bubble_max_lines(),
+        )
+
+        # 每個訊息泡泡皆可使用滑鼠滾輪
+        self._bind_bubble_scroll(textbox)
+
+        # 行、泡泡空白處控制外層對話區
+        self._bind_outer_scroll(row)
+        self._bind_outer_scroll(bubble)
+
+        self._scroll_bottom()
+
+    def _add_stream_bubble(self):
+        """建立串流中的 assistant 泡泡，回傳 (row, textbox)。"""
+
+        row = ctk.CTkFrame(
+            self.msg_frame,
+            fg_color="transparent",
+        )
+        row.pack(fill="x", padx=8, pady=3)
+
+        bubble = ctk.CTkFrame(
+            row,
+            fg_color=("gray82", "gray22"),
+            corner_radius=14,
+        )
+        bubble.pack(anchor="w", padx=6)
+
+        textbox = ctk.CTkTextbox(
+            bubble,
+            width=self._bubble_width(),
+            height=36,
+            wrap="word",
+            fg_color=("gray82", "gray22"),
+            text_color=("gray10", "gray95"),
+            border_width=0,
+            corner_radius=10,
+            scrollbar_button_color=("gray65", "gray40"),
+            scrollbar_button_hover_color=("gray50", "gray55"),
+            activate_scrollbars=True,
+            font=ctk.CTkFont(size=self._chat_font_size()),
+        )
+        textbox.configure(state="disabled")
+        textbox.pack(padx=10, pady=8)
+
+        self._bind_bubble_scroll(textbox)
+        self._bind_outer_scroll(row)
+        self._bind_outer_scroll(bubble)
+
+        self._scroll_bottom()
+
+        return row, textbox
+
+    # ─────────────────────────────────────────────
+    # 推理展開區塊
+    # ─────────────────────────────────────────────
+
+    def _add_reasoning(self, thinking: str, before=None):
+        """可展開或收合的推理過程區塊（一次給完內容）。"""
+
+        panel = self._add_collapsible(
+            "思考過程",
+            before=before,
+        )
+        panel.append(thinking)
+        return panel
+
+    def _add_collapsible(
+        self,
+        title: str,
+        before=None,
+        expanded: bool = False,
+        max_lines: int = 12,
+    ):
+        """
+        可展開或收合的內容區塊，回傳可持續追加內容的把手。
+
+        把手提供 append(text) / set_title(text) / expand() / collapse()，
+        讓串流中的推理與工具呼叫可以邊跑邊長內容。
+
+        before：指定插在哪個元件之前（串流泡泡完成後補在其上方）。
+        """
+
+        container = ctk.CTkFrame(
+            self.msg_frame,
+            fg_color="transparent",
+        )
+
+        pack_kwargs = {
+            "fill": "x",
+            "padx": 8,
+            "pady": (4, 0),
+        }
+        if before is not None and before.winfo_exists():
+            pack_kwargs["before"] = before
+
+        container.pack(**pack_kwargs)
+
+        toggle_button = ctk.CTkButton(
+            container,
+            text=f"▶  {title}",
+            fg_color="transparent",
+            text_color="gray",
+            hover_color=(
+                "gray85",
+                "gray20",
+            ),
+            anchor="w",
+            height=26,
+            font=ctk.CTkFont(size=11),
+        )
+        toggle_button.pack(
+            anchor="w",
+            padx=4,
+        )
+
+        panel = ctk.CTkFrame(
+            container,
+            fg_color=(
+                "gray88",
+                "gray18",
+            ),
+            corner_radius=8,
+        )
+
+        textbox = ctk.CTkTextbox(
+            panel,
+            wrap="word",
+            height=50,  # 展開時依實際行數調整
+            fg_color=(
+                "gray88",
+                "gray18",
+            ),
+            border_width=0,
+            text_color=(
+                "gray40",
+                "gray60",
+            ),
+            scrollbar_button_color=(
+                "gray65",
+                "gray40",
+            ),
+            scrollbar_button_hover_color=(
+                "gray50",
+                "gray55",
+            ),
+            font=ctk.CTkFont(
+                size=max(9, self._chat_font_size() - 2),
+                slant="italic",
+            ),
+            activate_scrollbars=True,
+        )
+
+        textbox.configure(
+            state="disabled",
+        )
+
+        textbox.pack(
+            padx=10,
+            pady=8,
+            fill="x",
+        )
+
+        # 思考內容也使用相同的智慧滾輪行為
+        self._bind_bubble_scroll(textbox)
+        self._bind_outer_scroll(container)
+        self._bind_outer_scroll(panel)
+        self._bind_outer_scroll(toggle_button)
+
+        state = {
+            "shown": False,
+            "title": title,
+        }
+
+        def _refresh_arrow():
+            arrow = "▼" if state["shown"] else "▶"
+            toggle_button.configure(
+                text=f"{arrow}  {state['title']}",
+            )
+
+        def collapse():
+            if not state["shown"]:
+                return
+            panel.pack_forget()
+            state["shown"] = False
+            _refresh_arrow()
+
+        def expand():
+            if state["shown"]:
+                return
+            panel.pack(
+                fill="x",
+                padx=4,
+                pady=(2, 4),
+            )
+            state["shown"] = True
+            _refresh_arrow()
+
+            # 首次展開後才知道實際寬度，依顯示行數調高度
+            self._fit_textbox_height(textbox, max_lines=max_lines)
+            self._scroll_bottom()
+
+        def toggle():
+            collapse() if state["shown"] else expand()
+
+        def append(chunk: str):
+            """追加內容；展開中則同步長高並跟著捲到底。"""
+            if not chunk or not textbox.winfo_exists():
+                return
+            textbox.configure(state="normal")
+            textbox.insert("end", chunk)
+            textbox.configure(state="disabled")
+            if state["shown"]:
+                self._fit_textbox_height(textbox, max_lines=max_lines)
+                textbox.see("end")
+
+        def set_title(new_title: str):
+            state["title"] = new_title
+            _refresh_arrow()
+
+        toggle_button.configure(
+            command=toggle,
+        )
+
+        if expanded:
+            expand()
+
+        self._scroll_bottom()
+
+        return SimpleNamespace(
+            container=container,
+            textbox=textbox,
+            append=append,
+            set_title=set_title,
+            expand=expand,
+            collapse=collapse,
+        )
+
+    # ─────────────────────────────────────────────
+    # 圖片
+    # ─────────────────────────────────────────────
+
+    def _add_image(self, path):
+        """
+        在對話中顯示圖片。
+        點擊圖片後使用系統預設程式開啟。
+        """
+
+        try:
+            from PIL import Image
+
+            image = Image.open(path)
+
+            width, height = image.size
+
+            display_width = min(
+                width,
+                360,
+            )
+
+            display_height = max(
+                1,
+                round(height * display_width / width),
+            )
+
+            custom_image = ctk.CTkImage(
+                light_image=image,
+                dark_image=image,
+                size=(
+                    display_width,
+                    display_height,
+                ),
+            )
+
+            row = ctk.CTkFrame(
+                self.msg_frame,
+                fg_color="transparent",
+            )
+            row.pack(
+                fill="x",
+                padx=8,
+                pady=3,
+            )
+
+            label = ctk.CTkLabel(
+                row,
+                image=custom_image,
+                text="",
+                cursor="hand2",
+            )
+            label.pack(
+                anchor="w",
+                padx=6,
+            )
+
+            import webbrowser
+
+            label.bind(
+                "<Button-1>",
+                lambda event: webbrowser.open(Path(path).as_uri()),
+            )
+
+            self._bind_outer_scroll(row)
+            self._bind_outer_scroll(label)
+
+            self._scroll_bottom()
+
+        except Exception:
+            log.exception(
+                "無法顯示圖片：%s",
+                path,
+            )
+
+    # ─────────────────────────────────────────────
+    # 檔案連結
+    # ─────────────────────────────────────────────
+
+    def _add_file_link(self, path):
+        """
+        將產生的文件顯示成可點擊的檔案卡片。
+        """
+
+        file_path = Path(path)
+
+        icon = {
+            ".docx": "📝",
+            ".pptx": "📊",
+            ".pdf": "📄",
+        }.get(
+            file_path.suffix.lower(),
+            "📄",
+        )
+
+        row = ctk.CTkFrame(
+            self.msg_frame,
+            fg_color="transparent",
+        )
+        row.pack(
+            fill="x",
+            padx=8,
+            pady=2,
+        )
+
+        button = ctk.CTkButton(
+            row,
+            text=f"{icon}  {file_path.name}",
+            anchor="w",
+            height=34,
+            corner_radius=8,
+            fg_color=(
+                "gray80",
+                "gray25",
+            ),
+            text_color=(
+                "gray10",
+                "gray90",
+            ),
+            hover_color=(
+                "gray70",
+                "gray30",
+            ),
+            command=lambda: self._open_file(file_path),
+        )
+        button.pack(
+            anchor="w",
+            padx=6,
+        )
+
+        self._bind_outer_scroll(row)
+        self._bind_outer_scroll(button)
+
+        self._scroll_bottom()
+
+    @staticmethod
+    def _open_file(path: Path):
+        import os
+
+        try:
+            # Windows
+            os.startfile(str(path))
+        except (AttributeError, OSError):
+            import webbrowser
+
+            webbrowser.open(path.as_uri())
+
+    # ─────────────────────────────────────────────
+    # 思考中提示
+    # ─────────────────────────────────────────────
+
+    def _add_spinner(self) -> ctk.CTkFrame:
+        row = ctk.CTkFrame(
+            self.msg_frame,
+            fg_color="transparent",
+        )
+        row.pack(
+            fill="x",
+            padx=8,
+            pady=3,
+        )
+
+        bubble = ctk.CTkFrame(
+            row,
+            fg_color=(
+                "gray82",
+                "gray22",
+            ),
+            corner_radius=14,
+        )
+        bubble.pack(
+            anchor="w",
+            padx=6,
+        )
+
+        image_path = Path(__file__).parent / "assets" / "icon_agent_thinking.png"
+
+        self.thinking_icon = ctk.CTkImage(
+            light_image=Image.open(image_path),
+            dark_image=Image.open(image_path),
+            size=(48, 48),
+        )
+
+        label = ctk.CTkLabel(
+            bubble,
+            text="  思考中…",
+            image=self.thinking_icon,
+            compound="left",
+            text_color="gray",
+        )
+        label.pack(
+            padx=14,
+            pady=8,
+        )
+
+        self._bind_outer_scroll(row)
+        self._bind_outer_scroll(bubble)
+        self._bind_outer_scroll(label)
+
+        self._scroll_bottom()
+
+        return row
+
+    # ─────────────────────────────────────────────
+    # 系統訊息
+    # ─────────────────────────────────────────────
+
+    def _add_system(self, text: str, image=None):
+        label = ctk.CTkLabel(
+            self.msg_frame,
+            text=text,
+            image=image,
+            compound="left",  # 圖片顯示在文字左側
+            text_color="gray",
+            font=ctk.CTkFont(size=self._chat_font_size() + 1),
+            wraplength=520,
+        )
+        label.pack(
+            pady=12,
+        )
+
+        self._bind_outer_scroll(label)
+        self._scroll_bottom()
+
+    # ─────────────────────────────────────────────
+    # 自動捲動到底部
+    # ─────────────────────────────────────────────
+
+    def _cancel_scroll_jobs(self):
+        """取消尚未執行的捲動工作，避免切換對話後套用舊位置。"""
+
+        for job_id in self._scroll_jobs:
+            try:
+                self.after_cancel(job_id)
+            except Exception:
+                pass
+
+        self._scroll_jobs.clear()
+
+    def _refresh_scrollregion(self):
+        """強制更新 CTkScrollableFrame 內部 Canvas 的內容範圍。"""
+
+        canvas = self.msg_frame._parent_canvas
+
+        self.update_idletasks()
+        self.msg_frame.update_idletasks()
+        canvas.update_idletasks()
+
+        content_box = canvas.bbox("all")
+
+        if content_box is not None:
+            canvas.configure(scrollregion=content_box)
+
+        return canvas
+
+    def _scroll_bottom(self, force: bool = False, delay: int = 0):
+        """
+        等待訊息元件完成尺寸計算後，更新 scrollregion 並捲動到底部。
+
+        對話紀錄重建期間，個別訊息不觸發捲動；全部建立完成後，
+        由 render_history() 使用 force=True 統一處理。
+        """
+
+        if self._rendering_history and not force:
+            return
+
+        self._cancel_scroll_jobs()
+
+        generation = self._render_generation
+
+        # CustomTkinter 可能分數個事件循環才完成內部 Canvas 尺寸更新。
+        # 多階段重算可避免必須縮放視窗或手動拉 scrollbar 才顯示。
+        delays = (delay, delay + 35, delay + 100, delay + 220)
+
+        def perform_scroll(expected_generation=generation):
+            if expected_generation != self._render_generation:
+                return
+
+            try:
+                canvas = self._refresh_scrollregion()
+                canvas.yview_moveto(1.0)
+            except Exception:
+                log.exception("無法將對話區捲動到底部")
+
+        for milliseconds in delays:
+            job_id = self.after(milliseconds, perform_scroll)
+            self._scroll_jobs.append(job_id)
+
+    # ─────────────────────────────────────────────
+    # Session 載入與重置
+    # ─────────────────────────────────────────────
+
+    def reset(self):
+        """清空訊息區並開始新對話。"""
+
+        self._render_generation += 1
+        self._cancel_scroll_jobs()
+        self._rendering_history = True
+
+        try:
+            for widget in self.msg_frame.winfo_children():
+                widget.destroy()
+
+            self._pending_files = []
+            self.attach_bar.configure(text="")
+            self._update_attachment_bar()
+
+            # 先讓舊元件的刪除反映到 Canvas。
+            self.update_idletasks()
+            self.msg_frame.update_idletasks()
+
+            self._add_system("新對話開始。")
+        finally:
+            self._rendering_history = False
+
+        self._scroll_bottom(force=True, delay=30)
+
+    def render_history(
+        self,
+        history: list[dict],
+    ):
+        """將載入的 session 歷史完整重建成訊息泡泡。"""
+
+        self._render_generation += 1
+        self._cancel_scroll_jobs()
+        self._rendering_history = True
+
+        try:
+            canvas = self.msg_frame._parent_canvas
+
+            # 清除舊對話。
+            for widget in self.msg_frame.winfo_children():
+                widget.destroy()
+
+            # 立即清除舊 scrollregion，避免新對話沿用前一個對話高度。
+            self.update_idletasks()
+            self.msg_frame.update_idletasks()
+            canvas.update_idletasks()
+            canvas.configure(scrollregion=(0, 0, 0, 0))
+            canvas.yview_moveto(0.0)
+
+            # 建立新對話。重建期間 _scroll_bottom() 會被抑制，
+            # 避免每則訊息排入一個尚未完成尺寸計算的捲動工作。
+            for message in history:
+                role = message.get("role", "")
+
+                text = self._content_text(message.get("content", ""))
+
+                if not text:
+                    continue
+
+                bubble_role = "user" if role == "user" else "assistant"
+
+                self._add_bubble(text, bubble_role)
+
+                if role == "assistant":
+                    # 回覆中的圖片或文件路徑若仍存在，重新顯示。
+                    for line in text.splitlines():
+                        line = line.strip()
+
+                        if line.startswith("🖼️"):
+                            path = Path(line.lstrip("🖼️").strip())
+
+                            if path.exists():
+                                self._add_image(path)
+
+                        elif line.startswith("📄"):
+                            path = Path(line.lstrip("📄").strip())
+
+                            if path.exists():
+                                self._add_file_link(path)
+
+            # 先完成一次完整版面配置。
+            self.update_idletasks()
+            self.msg_frame.update_idletasks()
+            canvas.update_idletasks()
+
+        finally:
+            self._rendering_history = False
+
+        # 全部訊息建立完成後，再分階段更新 scrollregion 並捲到底部。
+        self._scroll_bottom(force=True, delay=30)
+
+    @staticmethod
+    def _content_text(content) -> str:
+        if isinstance(content, str):
+            return content
+
+        parts = []
+
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+
+            content_type = part.get("type")
+
+            if content_type in (
+                "input_text",
+                "text",
+            ):
+                parts.append(
+                    part.get(
+                        "text",
+                        "",
+                    )
+                )
+
+            elif content_type in (
+                "image_url",
+                "input_image",
+            ):
+                parts.append("📎 [圖片附件]")
+
+        return "\n".join(parts)
+
+    # ─────────────────────────────────────────────
+    # App callbacks
+    # ─────────────────────────────────────────────
+
+    def on_agent_ready(self):
+
+        icon_path = Path(__file__).parent / "assets" / "icon_agent_check.png"
+
+        self.check_icon = ctk.CTkImage(
+            light_image=Image.open(icon_path),
+            dark_image=Image.open(icon_path),
+            size=(56, 56),
+        )
+
+        self._add_system(
+            "    已連線，開始對話吧！",
+            image=self.check_icon,
+        )
+
+        # CLI 指令執行前的使用者確認
+        if self.app.agent:
+            self.app.agent.on_confirm = self._confirm_command
+
+        # 登入完成後再抓一次即時模型列表（啟動時可能尚未登入）
+        self._fetch_models_async()
+
+    def _confirm_command(self, command: str) -> bool:
+        """CLI 工具的確認回呼。從背景執行緒呼叫：
+        丟到主執行緒跳確認視窗，等使用者回答（最多 5 分鐘）。
+        設定「CLI 免確認」開啟時直接放行。"""
+
+        from agent.auth import load_config
+
+        if load_config().get("cli_auto_approve"):
+            return True
+
+        answer: dict = {}
+        done = threading.Event()
+
+        def ask():
+            from tkinter import messagebox
+
+            answer["ok"] = messagebox.askyesno(
+                "執行 CLI 指令",
+                f"Agent 想在你的電腦執行：\n\n{command}\n\n允許嗎？",
+                parent=self.app,
+            )
+            done.set()
+
+        self.after(0, ask)
+        done.wait(timeout=300)
+
+        return answer.get("ok", False)
+
+    def on_show(self):
+        self._sync_chat_options()
+        self._apply_input_font()
+        self.input.focus_set()
+
+    """
+    修正微軟倉頡以 Ctrl 組合鍵輸入中文標點時，
+    Tk Text 因事件仍帶有 Control 狀態而不插入字元的問題。
+    """
+
+    def _on_ctrl_ime_character(self, event):
+        ime_punctuation = {
+            "，",
+            "。",
+            "、",
+            "；",
+        }
+
+        if event.char in ime_punctuation:
+            event.widget.insert(
+                "insert",
+                event.char,
+            )
+
+            # 已由程式手動插入，阻止 Text class binding 繼續處理，
+            # 避免其他環境中出現重複插入。
+            return "break"
+
+        # char 為空的 VK_PROCESSKEY 事件，以及 Ctrl+C、Ctrl+V 等
+        # 其他快捷鍵，繼續交給原本處理流程。
+        return None

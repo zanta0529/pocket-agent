@@ -1,0 +1,35 @@
+# MCP Servers 設定範本
+# 複製此檔為 mcp_config.yaml 並填入你的設定：
+#   cp mcp_config.example.yaml mcp_config.yaml
+#
+# mcp_config.yaml 已加入 .gitignore，不會被 commit（保護你的 server 位址和 key）
+#
+# inject：自動注入到工具呼叫的參數，模型看不到也不需要填寫。
+# 適合用於 api_key、auth_token 等認證參數。
+
+servers:
+  # 範例：本機檔案系統（stdio transport）
+  # filesystem:
+  #   transport: stdio
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+  # 範例：需要認證的 MCP server（inject 自動帶入 api_key）
+  # mssql:
+  #   transport: stdio
+  #   command: python
+  #   args: ["C:\\path\\to\\server.py"]
+  #   inject:
+  #     api_key: your-secret-key-here
+
+  # 範例：遠端 SSE server
+  # my-remote:
+  #   transport: sse
+  #   url: http://localhost:3001/sse
+
+  # 瀏覽器操作（純 Python，用系統已裝的 Edge/Chrome，不需要 Node.js）
+  # 進階：設 BROWSER_CDP_URL 可連既有瀏覽器保留登入狀態，見 browser_mcp.py 註解
+  # browser:
+  #   transport: stdio
+  #   command: python
+  #   args: ["browser_mcp.py"]

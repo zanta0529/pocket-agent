@@ -1,0 +1,2 @@
+{"level":30,"time":1783049560798,"pid":39692,"hostname":"TSE105701","msg":"開始執行專案健康檢查..."}
+{"level":30,"time":1783049566504,"pid":39692,"hostname":"TSE105701","status":"ok","summary":{"totalChecks":7,"healthyChecks":7,"unhealthyChecks":0,"healthyPercentage":100},"msg":"健康檢查執行完成"}
