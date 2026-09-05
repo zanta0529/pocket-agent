@@ -10,7 +10,6 @@ import customtkinter as ctk
 from PIL import Image
 from tkinterdnd2 import TkinterDnD
 
-
 # ── 外觀設定 ──────────────────────────────────────
 
 ctk.set_appearance_mode("dark")
@@ -21,7 +20,7 @@ ctk.set_default_color_theme("blue")
 # 走 bundle_dir() 建立 assets 絕對路徑，避免從不同工作目錄啟動時
 # 找不到圖片；打包成 exe 後也能指到隨附的資源目錄。
 
-from agent.paths import bundle_dir
+from agent.paths import bundle_dir  # noqa: E402
 
 log = logging.getLogger("pocket-agent")
 
@@ -46,7 +45,7 @@ class App(DnDCTk):
         # 事後查不到。導進 log 檔，才不會出現「畫面沒反應但毫無線索」。
         self.report_callback_exception = self._log_tk_exception
 
-        self.title("My Agent")
+        self.title("Pocket Agent")
 
         self.geometry("980x660")
         self.minsize(720, 480)
@@ -123,8 +122,8 @@ class App(DnDCTk):
         assets/icon_account.png
         """
 
-        # ── My Agent 標題圖片 ─────────────────────
-        # 取代原本 text="🤖 My Agent" 中的機器人 Emoji。
+        # ── Pocket Agent 標題圖片 ─────────────────────
+        # 取代原本 text="🤖 Pocket Agent" 中的機器人 Emoji。
         agent_image = self._open_image(ASSET_DIR / "icon_agent.png")
 
         self._app_icon = ctk.CTkImage(
@@ -184,19 +183,19 @@ class App(DnDCTk):
         # row 10 是標題列，不能給 weight，否則放大視窗時標題格會被撐開。
         sidebar.grid_rowconfigure(11, weight=1)
 
-        # ── My Agent 標題 ─────────────────────────
+        # ── Pocket Agent 標題 ─────────────────────────
         # 原本：
         #
         # ctk.CTkLabel(
         #     sidebar,
-        #     text="🤖 My Agent",
+        #     text="🤖 Pocket Agent",
         # )
         #
         # 修改為使用 agent.png 取代 Emoji。
         # compound="left" 表示圖片顯示於文字左側。
         ctk.CTkLabel(
             sidebar,
-            text="  My Agent",
+            text="  Pocket Agent",
             image=self._app_icon,
             compound="left",
             font=ctk.CTkFont(
@@ -360,13 +359,13 @@ class App(DnDCTk):
         content.grid_rowconfigure(0, weight=1)
         content.grid_columnconfigure(0, weight=1)
 
+        from gui.account import AccountView
+        from gui.automation import AutomationView
         from gui.chat import ChatView
         from gui.mcp import MCPView
-        from gui.skills import SkillsView
-        from gui.automation import AutomationView
         from gui.plugins import PluginsView
         from gui.settings import SettingsView
-        from gui.account import AccountView
+        from gui.skills import SkillsView
 
         self._views = {
             "chat": ChatView(content, self),
@@ -610,9 +609,9 @@ class App(DnDCTk):
         """初始化 OpenAI client、MCP manager 與 Agent。"""
 
         from agent.auth import (
-            has_valid_token,
-            get_openai_client,
             get_model,
+            get_openai_client,
+            has_valid_token,
             load_config,
         )
 

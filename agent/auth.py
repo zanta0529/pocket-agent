@@ -236,7 +236,7 @@ def _browser_oauth(client_id: str, on_auth_url=None, cancel_event=None) -> dict:
                 "#c0392b",
                 "✗ 驗證碼不符。<br>"
                 "這通常是因為此分頁是舊的授權頁，"
-                "或同時開了兩個 My Agent。<br>"
+                "或同時開了兩個 Pocket Agent。<br>"
                 "請關閉所有相關分頁與程式，重新登入一次。",
             )
 
@@ -244,7 +244,7 @@ def _browser_oauth(client_id: str, on_auth_url=None, cancel_event=None) -> dict:
             return _page("#c0392b", "✗ 沒有收到授權碼。")
 
         bucket["code"] = code
-        return _page("#10a37f", "✓ 認證成功！請關閉此視窗回到 My Agent。")
+        return _page("#10a37f", "✓ 認證成功！請關閉此視窗回到 Pocket Agent。")
 
     # log_config=None 是必要的：uvicorn 預設的 log formatter 在初始化時
     # 執行 sys.stdout.isatty()，而可攜版用 pythonw.exe 啟動時 sys.stdout
@@ -272,8 +272,8 @@ def _browser_oauth(client_id: str, on_auth_url=None, cancel_event=None) -> dict:
         if not thread.is_alive():
             raise RuntimeError(
                 "無法在 port 1455 啟動登入用的本機服務。"
-                "多半是還有另一個 My Agent 正在執行（或前一次登入沒有正常結束）。"
-                "請關閉所有 My Agent 視窗後再試一次。"
+                "多半是還有另一個 Pocket Agent 正在執行（或前一次登入沒有正常結束）。"
+                "請關閉所有 Pocket Agent 視窗後再試一次。"
             )
         time.sleep(0.1)
     else:

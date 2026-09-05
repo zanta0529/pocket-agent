@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""My Agent — GUI（預設）或 CLI（--cli）模式"""
+"""Pocket Agent — GUI（預設）或 CLI（--cli）模式"""
 
 import sys
 
@@ -53,6 +53,7 @@ async def _run_cli(system_prompt: str):
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.prompt import Prompt
+
     from agent.auth import fetch_available_models, get_model, get_openai_client
     from agent.core import Agent
     from agent.mcp_manager import MCPManager
@@ -87,7 +88,7 @@ async def _run_cli(system_prompt: str):
 
     console.print(
         Panel(
-            f"[bold]My Agent[/bold]（{model}）\n"
+            f"[bold]Pocket Agent[/bold]（{model}）\n"
             "/file <路徑>  附加檔案    /image <描述>  生圖    /clear  清除對話    /logout  登出    /quit  離開",
             border_style="blue",
         )
@@ -160,7 +161,6 @@ async def _run_cli(system_prompt: str):
             console.print()
     finally:
         await mcp.stop()
-        await agent.files.delete_cached()
 
 
 # ── Entry point ───────────────────────────────────
@@ -171,7 +171,7 @@ async def _run_cli(system_prompt: str):
 @click.option("--cli", is_flag=True, help="終端機模式（不開 GUI）")
 @click.option("--system", default="You are a helpful assistant.", help="System prompt（CLI 模式用）")
 def main(ctx, cli, system):
-    """My Agent — 用 OpenAI 帳號登入，不需要 API Key"""
+    """Pocket Agent — 用 OpenAI 帳號登入，不需要 API Key"""
     if ctx.invoked_subcommand is None:
         if cli:
             asyncio.run(_run_cli(system))
@@ -204,6 +204,7 @@ def logout():
 def image(prompt, output, inputs, size, quality):
     """用 gpt-image-2 生圖（走 ChatGPT 訂閱配額）"""
     from rich.console import Console
+
     from agent.imagegen import generate_image
 
     console = Console()

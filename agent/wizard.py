@@ -24,7 +24,7 @@ def run_setup() -> None:
     console.print()
     console.print(
         Panel(
-            Text("My Agent 設定精靈", justify="center", style="bold cyan"),
+            Text("Pocket Agent 設定精靈", justify="center", style="bold cyan"),
             subtitle="按 Ctrl+C 隨時離開",
             border_style="cyan",
         )

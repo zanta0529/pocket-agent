@@ -203,7 +203,7 @@ async def browser_wait_for_user(message: str = "請在瀏覽器視窗完成操�
         return ctypes.windll.user32.MessageBoxW(
             0,
             f"{message}\n\n完成後按「確定」讓 AI 繼續；按「取消」中止任務。",
-            "My Agent — 需要你操作瀏覽器",
+            "Pocket Agent — 需要你操作瀏覽器",
             MB_OKCANCEL | MB_ICONINFO | MB_SETFOREGROUND | MB_TOPMOST,
         )
 
