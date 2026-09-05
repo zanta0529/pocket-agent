@@ -2,9 +2,9 @@
 
 import logging
 import threading
-import customtkinter as ctk
-
 from pathlib import Path
+
+import customtkinter as ctk
 from PIL import Image
 
 log = logging.getLogger("pocket-agent")
@@ -115,7 +115,7 @@ class AccountView(ctk.CTkFrame):
             size=(64, 64),
         )
 
-        from agent.auth import has_valid_token, get_user_info
+        from agent.auth import get_user_info, has_valid_token
 
         if has_valid_token():
             info = get_user_info()
@@ -181,7 +181,8 @@ class AccountView(ctk.CTkFrame):
                 )
                 self.app.after(0, self._on_login_ok)
             except Exception as e:
-                self.app.after(0, lambda: self.show_error(str(e)))
+                err_msg = str(e)
+                self.app.after(0, lambda m=err_msg: self.show_error(m))
 
         threading.Thread(target=_do, daemon=True).start()
 
