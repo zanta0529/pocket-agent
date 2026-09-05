@@ -15,12 +15,12 @@ from .paths import env_path as _env_path
 
 _load_dotenv(_env_path())
 
-from .auth import get_access_token, get_model, get_openai_client, logout
-from .core import Agent
-from .files import FileUploader
-from .imagegen import generate_image
-from .mcp_manager import MCPManager
-from .wizard import run_setup
+from .auth import get_access_token, get_model, get_openai_client, logout  # noqa: E402
+from .core import Agent  # noqa: E402
+from .files import FileUploader  # noqa: E402
+from .imagegen import generate_image  # noqa: E402
+from .mcp_manager import MCPManager  # noqa: E402
+from .wizard import run_setup  # noqa: E402
 
 __all__ = [
     "Agent",

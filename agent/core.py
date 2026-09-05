@@ -53,14 +53,14 @@ for _noisy in (
 
 log = logging.getLogger("pocket-agent")
 
-from .doctools import DOC_TOOLS, call_doc_tool, is_doc_tool
-from .files import FileUploader
-from .hooks import run_hooks
-from .imagegen import disable_model_param, image_tool, save_image_b64
-from .mcp_manager import MCPManager
-from .shell import SHELL_TOOLS, call_shell_tool, is_shell_tool
-from .skills import call_skill_tool, is_skill_tool, skill_tools, skills_index_prompt
-from .subagents import get_subagent, is_subagent_tool, subagent_tools
+from .doctools import DOC_TOOLS, call_doc_tool, is_doc_tool  # noqa: E402
+from .files import FileUploader  # noqa: E402
+from .hooks import run_hooks  # noqa: E402
+from .imagegen import disable_model_param, image_tool, save_image_b64  # noqa: E402
+from .mcp_manager import MCPManager  # noqa: E402
+from .shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: E402
+from .skills import call_skill_tool, is_skill_tool, skill_tools, skills_index_prompt  # noqa: E402
+from .subagents import get_subagent, is_subagent_tool, subagent_tools  # noqa: E402
 
 DEFAULT_MAX_TOOL_ROUNDS = 10
 
