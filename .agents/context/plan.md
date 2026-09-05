@@ -1,64 +1,84 @@
-# 功能修復計畫：自動跳過未配置 ESLint 的 JS/TS 專案
-
 ### 🧭 任務形狀
 
-- 任務類型：`bugfix`
-- 專案類型：`non-app`
-- 複雜度：`Lite`
-- 風險等級：`Low`
+- 任務類型：`feature`
+- 專案類型：`frontend-only`
+- 複雜度：`Full`
+- 風險等級：`Medium`
 
 ### 📂 相關檔案與既有模式
 
-- [src/auto-lint.js](file:///D:/_Personal/Repositories/Git/ai-agent-demo/src/auto-lint.js)：
-  目前在非 Python 且無 Shell 腳本的專案中，會無條件執行 ESLint 流程。若專案未安裝 ESLint 且未設定設定檔，會強制調用全域的 ESLint，導致其因無設定檔而執行失敗，並讓 AI 試圖為其產生設定檔卻又因為環境無對應套件而重新驗證失敗。
+- **GUI (`gui/chat.py`)**：目前使用 CustomTkinter 的 `CTkTextbox` 處理輸入，並有實作 `_ime_poll` 等中文輸入法組字救援機制，以及特定的按鍵綁定（如 `Enter` 送出、`Shift+Enter` 換行）。目前沒有現成的浮動選單元件，需自訂基於游標座標彈出的 `CTkFrame` 或 `CTkToplevel`。
+- **CLI (`main.py`)**：目前使用 `rich.prompt.Prompt.ask()`，由於 `rich` 的輸入元件是純文字讀取，原生缺乏互動式即時自動補完（Autocomplete）機制，通常需要依賴如 `prompt_toolkit` 等外部庫才能達到現代 CLI 的下拉選單體驗。
+- **指令來源 (`agent/commands.py`)**：系統已具備 `expand_command` 與 `get_command` 等 API 來取得指令定義，可作為補完清單的資料來源。
 
 ### 📖 使用者故事
 
-作為一個自動化 Lint 維護工具，我希望在掃描各個專案時，能夠主動跳過那些「未配置 ESLint」的 JavaScript/TypeScript 專案，避免不必要的執行失敗、自動回退與 Token 浪費。
+- 作為使用者，我想要在 GUI 聊天視窗或 CLI 終端機輸入 `/` 時，能看到可用的 Slash 指令下拉選單或自動補完提示。
+- 作為使用者，我想要在繼續輸入文字時，選單能自動過濾匹配的指令（例如輸入 `/h` 過濾出 `/help`），這樣我可以更快速選擇並完成輸入，不必硬記指令名稱。
 
 ### ✅ 驗收標準
 
-1. **未配置 ESLint 專案跳過驗收**
-   - **Given**：一個含有 `package.json` 但 `package.json` 無 `eslint` 依賴、無包含 `eslint` 的 script，且根目錄無任何 `eslint.config.*` 或 `.eslintrc.*` 設定檔的專案（如 `defi-sentinel-dashboard`）。
-   - **When**：執行 `npm run lint:auto` 掃描該專案。
-   - **Then**：工具應在日誌中顯示 `🟢 跳過 (未配置 ESLint): 專案名稱`，且狀態回傳為成功，且不應執行任何 ESLint 檢查或 AI 設定檔生成。
-2. **已配置 ESLint 專案正常執行驗收**
-   - **Given**：一個有配置 ESLint 的專案（如含有 `eslint.config.js` 或 package.json 含有 eslint 依賴）。
-   - **When**：執行 `npm run lint:auto` 掃描該專案。
-   - **Then**：工具仍會對其執行正常的 ESLint 檢查與修復流程。
+- **GUI 模式**：
+  - 在輸入框鍵入 `/`（且為行首或前有空白）時，彈出指令候選選單。
+  - 根據後續輸入的字元即時過濾選單項目。
+  - 支援使用上下方向鍵（`Up` / `Down`）選擇選單項目。
+  - 支援使用 `Enter` 或 `Tab` 鍵將選定的指令補完至輸入框中。
+  - 支援滑鼠點擊直接補完指令。
+  - 當刪除 `/` 或輸入框失去焦點時，自動隱藏選單。
+- **CLI 模式**：
+  - （視待澄清問題決定）在終端機輸入 `/` 時提供指令自動補全機制（例如按下 `Tab` 補完或提供選單）。
 
 ### 🚫 不在範圍內
 
-- 修改 `defi-sentinel-dashboard` 專案本身的內容（本次僅修復 `ai-agent-demo` 本身的工具邏輯）。
-- 修改 Python 或 Shell 腳本的偵測與修復邏輯。
+- 新增或修改實際的 Slash 指令後端處理邏輯。
+- 將自動補完擴展至 `/` 指令以外的自然語言或一般檔案路徑（除非是指令的參數補完，初期僅限於指令名稱補完）。
 
 ### 🔒 不可變條件 / Invariants
 
-- 不能影響 Python (ruff/flake8) 與 Shell (shellcheck) 專案的正常掃描。
-- 對於本來就有配置 ESLint 的專案，檢查與自動修復流程必須維持原樣。
+- **不得干擾 IME**：不得破壞 `gui/chat.py` 中既有的 Windows 中文輸入法（IME）組字修正與救援邏輯。
+- **不得干擾正常發送**：選單隱藏時，`Enter` 必須維持原有的「送出對話」行為；選單顯示時，`Enter` 才能被攔截為「選取指令」。
+- **不得影響 `Shift+Enter`**：維持其預設換行行為。
 
----
+### 🎨 前端規格
+
+**GUI (CustomTkinter) 實作方向**：
+1. **輸入綁定 (Key Bindings)**：
+   - 擴充 `self.input` (CTkTextbox) 的按鍵綁定，加入 `<KeyRelease>` 事件來偵測目前游標前方的文字，判斷是否處於 `/` 指令觸發狀態。
+   - 攔截 `<Up>`、`<Down>`、`<Return>`、`<Tab>`。若補完選單顯示中，優先交由選單處理；否則放行。
+2. **浮動選單 (Autocomplete Popup)**：
+   - 建立一個繼承自 `CTkFrame` (若在視窗範圍內) 或 `CTkToplevel` (若需跨出主視窗) 的選單元件。
+   - 利用 `self.input._textbox.bbox("insert")` 計算當前文字輸入游標的相對座標，來動態決定彈出選單的 (x, y) 位置。
+   - 選單內容動態讀取 `agent.commands` 中註冊的指令列表並支援高亮目前選定項目。
+
+**CLI (Terminal) 實作方向**：
+- 替換掉原本單純的 `rich.prompt.Prompt.ask()`，引入支援互動式選單的機制（細節取決於是否允許新增依賴）。
 
 ### 🧪 驗證策略 / Verification Strategy
 
-- **Manual verification**：
-  在本地執行 `npm run lint:auto -- -d D:\_Personal\Repositories\Git\defi-sentinel-dashboard`。
-  確認輸出日誌中 `defi-sentinel-dashboard` 被判定為「🟢 跳過 (未配置 ESLint)」，且不出現驗證失敗回滾的情況。
+- Manual verification (GUI)：
+  - 測試在各種游標位置輸入 `/` 的觸發反應。
+  - 測試輸入法（如微軟注音、倉頡）開啟時，輸入 `/` 與後續中/英文字的互動是否正常。
+  - 測試選單彈出時的方向鍵選擇與 Enter/Tab 補完。
+  - 測試滑鼠點擊選單補完。
+  - 確認普通對話中的 Enter 傳送功能不被異常攔截。
+- Manual verification (CLI)：
+  - 確保 CLI 介面載入正常，並能觸發相應的 Slash 指令補全（如 Tab）。
 
 ### 📁 預計異動檔案
 
-| 檔案路徑 | 類型 | 說明 |
-| ------------------------------------ | ---- | ---- |
-| [src/auto-lint.js](file:///D:/_Personal/Repositories/Git/ai-agent-demo/src/auto-lint.js) | 修改 | 在預設 JavaScript/TypeScript ESLint 流程前，加入 ESLint 痕跡偵測，若無任何 ESLint 痕跡則直接跳過。 |
+- `gui/chat.py` (新增綁定與 `AutocompleteMenu` 類別)
+- `main.py` (修改 CLI 的 Prompt 邏輯)
+- `requirements.txt` (如果授權引入 CLI 補完套件)
 
 ### ⚠️ 風險點
 
-- 無明顯風險。因偵測機制覆蓋了多種常見 ESLint 配置方式（設定檔、依賴、scripts），誤判率極低。
+- **CustomTkinter 事件衝突**：Tkinter 的按鍵攔截（`return "break"`）若與內部事件或現有 IME 救援事件衝突，可能導致按鍵失靈。
+- **游標座標定位**：Tkinter Text 元件在捲動後，`bbox("insert")` 可能回傳 `None` 或不準確，需處理邊界條件確保浮動選單位置正確。
 
 ### 🧯 回復策略 / Rollback Notes
 
-- 若有問題，只需使用 `git checkout -- src/auto-lint.js` 即可還原。
+- 捨棄對 `gui/chat.py` 及 `main.py` 的變更即可回退。
 
 ### ❓ 待澄清問題
 
-- 無
+1. **CLI 依賴授權**：目前 `main.py` 的 CLI 模式使用 `rich.prompt.Prompt.ask()`，而 `rich` 並不原生支援文字輸入途中的「互動式下拉選單 / 即時自動補完」。若要實作此功能，通常需要引入新的外部依賴（如業界標準的 `prompt_toolkit`）。請問是否核准在 `requirements.txt` 中新增 `prompt_toolkit`？若不核准，CLI 模式的自動補完該作何降級處理（例如忽略 CLI 模式的下拉選單實作，或僅依賴 OS 終端機原生的極基礎功能）？

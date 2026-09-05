@@ -98,10 +98,56 @@ async def _run_cli(system_prompt: str):
     )
 
     pending_files: list[str] = []
+    
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.formatted_text import HTML
+
+    class SlashCommandCompleter(Completer):
+        def __init__(self):
+            from agent.commands import list_commands
+            self.list_commands = list_commands
+            self.builtins = [
+                {"name": "file", "description": "附加檔案"},
+                {"name": "image", "description": "生圖"},
+                {"name": "clear", "description": "清除對話"},
+                {"name": "logout", "description": "登出"},
+                {"name": "quit", "description": "離開"},
+            ]
+            
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            if text.startswith('/'):
+                word_before = document.get_word_before_cursor(WORD=True)
+                if word_before.startswith('/'):
+                    prefix = word_before[1:].lower()
+                    
+                    # 內建指令
+                    for cmd in self.builtins:
+                        if cmd['name'].lower().startswith(prefix):
+                            yield Completion(
+                                cmd['name'], 
+                                start_position=-len(prefix), 
+                                display=cmd['name'], 
+                                display_meta=cmd['description']
+                            )
+                            
+                    # 自訂指令 (Skills)
+                    for cmd in self.list_commands():
+                        if cmd['name'].lower().startswith(prefix):
+                            yield Completion(
+                                cmd['name'], 
+                                start_position=-len(prefix), 
+                                display=cmd['name'], 
+                                display_meta=f"[skill] {cmd['description']}"
+                            )
+
+    session = PromptSession(completer=SlashCommandCompleter(), complete_while_typing=True)
+
     try:
         while True:
             try:
-                raw = Prompt.ask("[bold cyan]You[/bold cyan]")
+                raw = await session.prompt_async(HTML("<b><ansicyan>You: </ansicyan></b>"))
             except (EOFError, KeyboardInterrupt):
                 break
 

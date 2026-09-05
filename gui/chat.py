@@ -12,6 +12,104 @@ from tkinterdnd2 import DND_FILES
 
 log = logging.getLogger("pocket-agent")
 
+class AutocompleteMenu(ctk.CTkToplevel):
+    def __init__(self, parent, textbox, on_select):
+        super().__init__(parent)
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.textbox = textbox
+        self.on_select = on_select
+        
+        self.frame = ctk.CTkFrame(
+            self,
+            fg_color=("gray95", "gray15"),
+            corner_radius=4,
+            border_width=1,
+            border_color=("gray80", "gray30"),
+        )
+        self.frame.pack(fill="both", expand=True, padx=0, pady=0)
+        
+        self.labels = []
+        self.items = []
+        self.selected_index = 0
+        
+        self.withdraw()
+        
+    def update_items(self, items, filter_text):
+        self.items = items
+        for lbl in self.labels:
+            lbl.destroy()
+        self.labels.clear()
+        
+        if not items:
+            self.withdraw()
+            return
+            
+        for i, cmd in enumerate(items):
+            text = f"/{cmd['name']}"
+            if cmd['description']:
+                text += f" - {cmd['description']}"
+                
+            lbl = ctk.CTkLabel(
+                self.frame,
+                text=text,
+                anchor="w",
+                padx=10,
+                pady=2,
+                font=ctk.CTkFont(size=12)
+            )
+            lbl.pack(fill="x", expand=True)
+            lbl.bind("<Button-1>", lambda e, idx=i: self._click_select(idx))
+            lbl.bind("<Enter>", lambda e, idx=i: self.select_item(idx))
+            self.labels.append(lbl)
+            
+        self.select_item(0)
+        self.deiconify()
+        
+    def select_item(self, index):
+        if not self.labels:
+            return
+        if 0 <= index < len(self.labels):
+            self.selected_index = index
+            for i, lbl in enumerate(self.labels):
+                if i == index:
+                    lbl.configure(fg_color=("gray85", "gray30"))
+                else:
+                    lbl.configure(fg_color="transparent")
+                    
+    def move_selection(self, delta):
+        if not self.labels:
+            return
+        new_index = (self.selected_index + delta) % len(self.labels)
+        self.select_item(new_index)
+        
+    def get_selected(self):
+        if 0 <= self.selected_index < len(self.items):
+            return self.items[self.selected_index]
+        return None
+        
+    def _click_select(self, index):
+        self.select_item(index)
+        cmd = self.get_selected()
+        if cmd:
+            self.on_select(cmd)
+            
+    def hide(self):
+        self.withdraw()
+        
+    def show_at_cursor(self):
+        try:
+            bbox = self.textbox._textbox.bbox("insert")
+            if bbox:
+                x, y, _, h = bbox
+                root_x = self.textbox._textbox.winfo_rootx() + x
+                root_y = self.textbox._textbox.winfo_rooty() + y + h
+                self.geometry(f"+{root_x}+{root_y + 2}")
+                self.deiconify()
+                self.lift()
+        except Exception as e:
+            log.warning(f"Autocomplete positioning error: {e}")
+
 
 class ChatView(ctk.CTkFrame):
     def __init__(self, parent, app):
@@ -129,6 +227,18 @@ class ChatView(ctk.CTkFrame):
             "<Shift-Return>",
             lambda event: None,
         )
+
+        # ── Slash Command Autocomplete ──────────────
+        self.autocomplete_menu = AutocompleteMenu(
+            self.winfo_toplevel(),
+            self.input,
+            self._on_autocomplete_select
+        )
+        self.input.bind("<KeyRelease>", self._on_key_release)
+        self.input.bind("<Up>", self._on_autocomplete_up)
+        self.input.bind("<Down>", self._on_autocomplete_down)
+        self.input.bind("<Tab>", self._on_autocomplete_tab)
+        self.input.bind("<FocusOut>", lambda e: self.autocomplete_menu.hide())
 
         # ── IME 修正（Windows 中文輸入法）──────────
         self._ime_state = {
@@ -963,7 +1073,86 @@ class ChatView(ctk.CTkFrame):
 
         return None
 
+    # ── Slash Command Autocomplete ──────────────
+
+    def _on_key_release(self, event):
+        # Ignore navigation and return keys
+        if event.keysym in ("Up", "Down", "Return", "Tab", "Shift_L", "Shift_R", "Control_L", "Control_R"):
+            return
+            
+        text = self.input.get("1.0", "insert")
+        
+        # Check if we are at the beginning of the line or after a space, and typing a slash command
+        if not text:
+            self.autocomplete_menu.hide()
+            return
+            
+        # Get the last word being typed
+        lines = text.split('\n')
+        last_line = lines[-1]
+        words = last_line.split(' ')
+        last_word = words[-1]
+        
+        if last_word.startswith('/'):
+            from agent.commands import list_commands
+            cmd_prefix = last_word[1:].lower()
+            all_cmds = list_commands()
+            
+            # Filter commands
+            matched_cmds = [cmd for cmd in all_cmds if cmd['name'].lower().startswith(cmd_prefix)]
+            
+            if matched_cmds:
+                self.autocomplete_menu.update_items(matched_cmds, cmd_prefix)
+                self.autocomplete_menu.show_at_cursor()
+            else:
+                self.autocomplete_menu.hide()
+        else:
+            self.autocomplete_menu.hide()
+
+    def _on_autocomplete_up(self, event):
+        if self.autocomplete_menu.winfo_ismapped():
+            self.autocomplete_menu.move_selection(-1)
+            return "break"
+
+    def _on_autocomplete_down(self, event):
+        if self.autocomplete_menu.winfo_ismapped():
+            self.autocomplete_menu.move_selection(1)
+            return "break"
+
+    def _on_autocomplete_tab(self, event):
+        if self.autocomplete_menu.winfo_ismapped():
+            cmd = self.autocomplete_menu.get_selected()
+            if cmd:
+                self._on_autocomplete_select(cmd)
+            return "break"
+
+    def _on_autocomplete_select(self, cmd):
+        # Replace the current typing word with the full command
+        text = self.input.get("1.0", "insert")
+        last_space_idx = text.rfind(' ')
+        last_newline_idx = text.rfind('\n')
+        replace_start_idx = max(last_space_idx, last_newline_idx)
+        
+        if replace_start_idx == -1:
+            start_pos = "1.0"
+        else:
+            # We need to find the tk index for the replace_start_idx + 1
+            # But the simplest is to just search backwards for the '/'
+            start_pos = self.input.search(r"/\w*", "insert", backwards=True, regexp=True, stopindex="1.0")
+            if not start_pos:
+                start_pos = "1.0"
+        
+        self.input.delete(start_pos, "insert")
+        self.input.insert("insert", f"/{cmd['name']} ")
+        self.autocomplete_menu.hide()
+        
     def _on_enter(self, event):
+        if self.autocomplete_menu.winfo_ismapped():
+            cmd = self.autocomplete_menu.get_selected()
+            if cmd:
+                self._on_autocomplete_select(cmd)
+            return "break"
+            
         from gui.ime import has_composition
 
         if has_composition():

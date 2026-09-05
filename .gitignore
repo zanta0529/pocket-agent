@@ -13,3 +13,8 @@ venv/
 generated_images/
 generated_files/
 *.manifest
+
+# AI Agents Temporary Context and logs
+.agents/context/
+.agents/logs/
+.agents/cache/
