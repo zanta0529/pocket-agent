@@ -148,6 +148,21 @@ async def _run_cli(system_prompt: str):
                 continue
 
             atts, pending_files = pending_files, []
+
+            # 處理自訂 slash command 展開
+            if raw.startswith("/"):
+                from agent.commands import expand_command, get_command
+
+                expanded = expand_command(raw)
+                if expanded is None:
+                    name = raw[1:].split(" ", 1)[0]
+                    if get_command(name) is None:
+                        console.print(f"[yellow]⚠ 找不到指令 /{name}[/yellow]")
+                        continue
+                else:
+                    raw = expanded
+                    console.print("[dim italic]（已展開指令模板）[/dim italic]")
+
             with console.status("[dim]思考中...[/dim]", spinner="dots"):
                 try:
                     thinking, reply = await agent.chat(raw, attachments=atts)
