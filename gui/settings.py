@@ -155,6 +155,7 @@ class SettingsView(ctk.CTkFrame):
         self.font_size_entry.insert(0, str(cfg.get("chat_font_size", 13)))
 
         import os
+
         from agent.core import DEFAULT_MAX_TOOL_ROUNDS
 
         env_default = int(os.getenv("MAX_TOOL_ROUNDS", DEFAULT_MAX_TOOL_ROUNDS))
@@ -230,7 +231,7 @@ class SettingsView(ctk.CTkFrame):
                 result = check_for_update()
                 self.after(0, lambda: self._on_check_done(result))
             except Exception as e:
-                self.after(0, lambda: self._on_check_failed(e))
+                self.after(0, lambda err=e: self._on_check_failed(err))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -275,7 +276,7 @@ class SettingsView(ctk.CTkFrame):
                 apply_update(progress=progress)
                 self.after(0, self._on_update_done)
             except Exception as e:
-                self.after(0, lambda: self._on_update_failed(e))
+                self.after(0, lambda err=e: self._on_update_failed(err))
 
         threading.Thread(target=worker, daemon=True).start()
 

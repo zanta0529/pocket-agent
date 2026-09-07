@@ -1,9 +1,7 @@
 """MCP 工具頁面：顯示、新增、刪除、編輯 inject 參數。"""
 
-from pathlib import Path
-
-import yaml
 import customtkinter as ctk
+import yaml
 
 from agent.paths import mcp_config_path, mcp_example_path
 

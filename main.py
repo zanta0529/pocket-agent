@@ -55,9 +55,8 @@ async def _run_cli(system_prompt: str):
     from rich.console import Console
     from rich.markdown import Markdown
     from rich.panel import Panel
-    from rich.prompt import Prompt
 
-    from agent.auth import fetch_available_models, get_model, get_openai_client
+    from agent.auth import fetch_available_models, get_model, get_openai_client, load_config
     from agent.core import Agent
     from agent.mcp_manager import MCPManager
 
@@ -77,28 +76,34 @@ async def _run_cli(system_prompt: str):
         console.print(f"[green]✓ 已載入 {len(tools)} 個工具：{', '.join(tools)}[/green]")
 
     model = get_model()
-    available = fetch_available_models()
+    cfg = load_config()
+    provider = cfg.get("provider", "openai")
+
+    available = fetch_available_models(provider)
     if available:
-        console.print(f"[dim]✓ Codex 可用模型清單：{', '.join(available)}[/dim]")
+        console.print(f"[dim]✓ {provider.upper()} 可用模型清單：{', '.join(available)}[/dim]")
         if model not in available:
-            console.print(f"[yellow]⚠️  設定的模型 '{model}' 不在 Codex 支援清單中[/yellow]")
+            console.print(f"[yellow]⚠️  設定的模型 '{model}' 不在 {provider.upper()} 支援清單中[/yellow]")
             model = available[0]
             console.print(f"[bold green]✓ 自動為您切換至可用模型：{model}[/bold green]")
     else:
-        console.print("[dim]（無法從 Codex 後端取得可用模型清單，使用當前設定）[/dim]")
+        console.print(f"[dim]（無法從 {provider.upper()} 後端取得可用模型清單，使用當前設定）[/dim]")
 
     agent = Agent(client=client, mcp=mcp, model=model, system_prompt=system_prompt)
 
+    cmd_hints = "/file <路徑>  附加檔案    /clear  清除對話    /logout  登出    /quit  離開"
+    if provider == "openai":
+        cmd_hints = "/file <路徑>  附加檔案    /image <描述>  生圖    /clear  清除對話    /logout  登出    /quit  離開"
+
     console.print(
         Panel(
-            f"[bold]Pocket Agent[/bold]（{model}）\n"
-            "/file <路徑>  附加檔案    /image <描述>  生圖    /clear  清除對話    /logout  登出    /quit  離開",
+            f"[bold]Pocket Agent[/bold]（{model}）\n{cmd_hints}",
             border_style="blue",
         )
     )
 
     pending_files: list[str] = []
-    
+
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.formatted_text import HTML
@@ -106,40 +111,42 @@ async def _run_cli(system_prompt: str):
     class SlashCommandCompleter(Completer):
         def __init__(self):
             from agent.commands import list_commands
+
             self.list_commands = list_commands
             self.builtins = [
                 {"name": "file", "description": "附加檔案"},
-                {"name": "image", "description": "生圖"},
                 {"name": "clear", "description": "清除對話"},
                 {"name": "logout", "description": "登出"},
                 {"name": "quit", "description": "離開"},
             ]
-            
+            if provider == "openai":
+                self.builtins.insert(1, {"name": "image", "description": "生圖"})
+
         def get_completions(self, document, complete_event):
             text = document.text_before_cursor
-            if text.startswith('/'):
+            if text.startswith("/"):
                 word_before = document.get_word_before_cursor(WORD=True)
-                if word_before.startswith('/'):
+                if word_before.startswith("/"):
                     prefix = word_before[1:].lower()
-                    
+
                     # 內建指令
                     for cmd in self.builtins:
-                        if cmd['name'].lower().startswith(prefix):
+                        if cmd["name"].lower().startswith(prefix):
                             yield Completion(
-                                cmd['name'], 
-                                start_position=-len(prefix), 
-                                display=cmd['name'], 
-                                display_meta=cmd['description']
+                                cmd["name"],
+                                start_position=-len(prefix),
+                                display=cmd["name"],
+                                display_meta=cmd["description"],
                             )
-                            
+
                     # 自訂指令 (Skills)
                     for cmd in self.list_commands():
-                        if cmd['name'].lower().startswith(prefix):
+                        if cmd["name"].lower().startswith(prefix):
                             yield Completion(
-                                cmd['name'], 
-                                start_position=-len(prefix), 
-                                display=cmd['name'], 
-                                display_meta=f"[skill] {cmd['description']}"
+                                cmd["name"],
+                                start_position=-len(prefix),
+                                display=cmd["name"],
+                                display_meta=f"[skill] {cmd['description']}",
                             )
 
     session = PromptSession(completer=SlashCommandCompleter(), complete_while_typing=True)
@@ -176,6 +183,11 @@ async def _run_cli(system_prompt: str):
                 continue
 
             if raw.startswith("/image "):
+                if provider != "openai":
+                    console.print(
+                        f"[yellow]⚠ /image 指令目前僅支援 OPENAI 服務提供者（目前為 {provider.upper()}）[/yellow]"
+                    )
+                    continue
                 from agent.imagegen import generate_image
 
                 img_prompt = raw[7:].strip()

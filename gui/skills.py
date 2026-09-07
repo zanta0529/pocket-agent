@@ -6,7 +6,7 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from agent.skills import REPO_SKILLS_DIR, USER_SKILLS_DIR, _parse, list_skills
+from agent.skills import REPO_SKILLS_DIR, _parse, list_skills
 
 
 class SkillsView(ctk.CTkFrame):

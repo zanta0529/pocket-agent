@@ -12,8 +12,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 def test_core_imports():
     """測試 Agent 核心後端模組是否可匯入"""
-    import agent.core
     import agent.auth
+    import agent.core
     import agent.hooks
     import agent.skills
 

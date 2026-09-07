@@ -627,7 +627,10 @@ class App(DnDCTk):
             load_config,
         )
 
-        if not has_valid_token():
+        cfg = load_config()
+        provider = cfg.get("provider", "openai")
+
+        if provider != "ollama" and not has_valid_token(provider):
             self._queue.put(("need_login", None))
             return
 
