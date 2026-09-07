@@ -35,6 +35,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=_handlers,
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # 這些套件在 DEBUG 會把完整的 HTTP 標頭與回應主體寫進 log，
 # 其中包含 OAuth token 與 session cookie——等於在每台機器上留下
@@ -124,7 +125,13 @@ class Agent:
         thinking：模型的推理過程（可能為空字串）
         answer：最終回覆
         """
+        import time
+
+        from openai import BadRequestError
+
         self.cancel_requested = False
+        self.total_tokens = 0
+        start_time = time.time()
 
         if not self._is_subagent:
             await asyncio.to_thread(run_hooks, "before_send", {"user_input": user_input})
@@ -134,13 +141,43 @@ class Agent:
 
         self.last_images = []
         self.last_files = []
-        thinking, reply = await self._run_loop()
+
+        try:
+            thinking, reply = await self._run_loop()
+        except BadRequestError as e:
+            err_msg = str(e).lower()
+            if (
+                "context_length_exceeded" in err_msg
+                or "context length" in err_msg
+                or "too large" in err_msg
+                or "maximum context" in err_msg
+            ):
+                log.warning("Context exceeded intercepted.")
+                thinking = ""
+                reply = (
+                    "⚠️ **Context Exceeded**\n\n"
+                    "輸入的內容或附加檔案過長，已超出當前模型的上下文處理極限。\n"
+                    "建議做法：請縮小附加的檔案數量或拆分內容後再試一次。"
+                )
+                self.history.pop()  # Remove the failed user input from history
+            else:
+                raise
+
         if self.last_images:
             paths = "\n".join(f"🖼️ {p}" for p in self.last_images)
             reply = (f"{reply}\n\n" if reply.strip() else "") + f"圖片已存檔：\n{paths}"
         if self.last_files:
             paths = "\n".join(f"📄 {p}" for p in self.last_files)
             reply = (f"{reply}\n\n" if reply.strip() else "") + f"檔案已產生：\n{paths}"
+
+        elapsed = time.time() - start_time
+        if self.total_tokens:
+            usage_str = f"Thought for {elapsed:.1f}s, {self.total_tokens} tokens"
+        else:
+            usage_str = f"Thought for {elapsed:.1f}s"
+
+        reply += f"\n\n_({usage_str})_"
+
         self.history.append({"role": "assistant", "content": reply})
 
         if not self._is_subagent:
@@ -329,6 +366,12 @@ class Agent:
                             self.last_images.append(path)
                             log.info("IMAGE saved %s", path)
 
+                # ── 串流結束，提取用量 ────────────────
+                elif etype == "response.done":
+                    usage = getattr(getattr(event, "response", None), "usage", None)
+                    if usage:
+                        self.total_tokens += getattr(usage, "total_tokens", 0)
+
             thinking = "".join(thinking_chunks)
             text = "".join(text_chunks)
             fc_list = list(func_calls.values())
@@ -447,6 +490,7 @@ class Agent:
             return text
         parts: list = [{"type": "input_text", "text": text}]
         for path in attachments:
+            self._emit("read", path)
             result = await self.files.upload(path)
             # PDF 內嵌圖片時 upload() 回傳「文字+多張圖片」的 list，其餘情況是單一 dict
             if isinstance(result, list):

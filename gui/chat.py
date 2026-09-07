@@ -1575,6 +1575,11 @@ class ChatView(ctk.CTkFrame):
                     self._stream_box.configure(state="disabled")
                     got_text = True
 
+                elif kind == "system":
+                    self._add_system(data)
+                elif kind == "read":
+                    self._add_system(f"● Read ({data})")
+
         except queue.Empty:
             pass
 

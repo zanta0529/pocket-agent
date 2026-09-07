@@ -208,8 +208,24 @@ async def _run_cli(system_prompt: str):
         bottom_text = f"{left_text}{' ' * pad_len}{model_str}"
         return HTML(f'<style fg="#555555">{line}\n</style><style fg="gray">{bottom_text}</style>')
 
+    from prompt_toolkit.key_binding import KeyBindings
+
+    kb = KeyBindings()
+
+    @kb.add("tab")
+    def _(event):
+        b = event.app.current_buffer
+        if b.complete_state:
+            # 結束補齊狀態，讓游標停在選定的項目後面
+            b.complete_state = None
+        else:
+            b.start_completion(select_first=False)
+
     session = PromptSession(
-        completer=SlashCommandCompleter(), complete_while_typing=True, bottom_toolbar=get_bottom_toolbar
+        completer=SlashCommandCompleter(),
+        complete_while_typing=True,
+        bottom_toolbar=get_bottom_toolbar,
+        key_bindings=kb,
     )
 
     try:
@@ -260,11 +276,18 @@ async def _run_cli(system_prompt: str):
             import re
 
             mentions = re.findall(r"(?:^|\s)@(\S+)", raw)
+            found_mentions = False
             for m in mentions:
                 if Path(m).exists() and Path(m).is_file():
                     if m not in pending_files:
+                        if not found_mentions:
+                            console.print()
+                            found_mentions = True
                         pending_files.append(m)
                         console.print(f"[dim]✓ 已附加：{m}[/dim]")
+
+            if found_mentions:
+                console.print()
 
             if raw.startswith("/image "):
                 if provider != "openai":
@@ -305,6 +328,14 @@ async def _run_cli(system_prompt: str):
                     raw = expanded
                     console.print("[dim italic]（已展開指令模板）[/dim italic]")
 
+            def _cli_on_stream(kind, data):
+                if kind == "system":
+                    console.print(f"[dim]{data}[/dim]")
+                elif kind == "read":
+                    console.print(f"[bold green]●[/bold green] [dim]Read ({data})[/dim]")
+
+            agent.on_stream = _cli_on_stream
+
             with console.status("[dim]思考中...[/dim]", spinner="dots"):
                 try:
                     thinking, reply = await agent.chat(raw, attachments=atts)
@@ -328,13 +359,13 @@ async def _run_cli(system_prompt: str):
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.option("--cli", "--console", is_flag=True, help="終端機模式（不開 GUI）")
+@click.option("--cli", "--console", "--tui", is_flag=True, help="終端機模式（不開 GUI）")
 @click.option("--gui", is_flag=True, help="強制圖形介面模式（預設）")
 @click.option("--system", default="You are a helpful assistant.", help="System prompt（CLI 模式用）")
 def main(ctx, cli, gui, system):
     """Pocket Agent — 用 OpenAI 帳號登入，不需要 API Key"""
     if ctx.invoked_subcommand is None:
-        # 如果使用者指定了 --console (或 --cli)，就跑文字模式
+        # 如果使用者指定了 --console (或 --cli 或 --tui)，就跑文字模式
         if cli:
             asyncio.run(_run_cli(system))
         else:
