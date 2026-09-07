@@ -88,6 +88,7 @@ class Agent:
         self.cancel_requested = False  # 使用者按「停止」時設為 True（跨執行緒安全）
         self.last_images: list[Path] = []  # 本輪 chat 產生的圖片路徑（GUI 顯示用）
         self.last_files: list[Path] = []  # 本輪 chat 產生的文件路徑（GUI 顯示用）
+        self.workspace_dirs: list[str] = []  # CLI 與 GUI 共用的工作區路徑清單
 
         # 串流回呼：callable(kind, data)，從背景 asyncio thread 呼叫，
         # GUI 端需自行轉回主執行緒。kind 與 data 的對應：

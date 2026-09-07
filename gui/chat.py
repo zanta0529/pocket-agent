@@ -47,10 +47,16 @@ class AutocompleteMenu(ctk.CTkToplevel):
             self.withdraw()
             return
 
-        for i, cmd in enumerate(items):
-            text = f"/{cmd['name']}"
-            if cmd["description"]:
-                text += f" - {cmd['description']}"
+        for i, item in enumerate(items):
+            if isinstance(item, dict) and "description" in item:
+                # Command format or Path format
+                display_name = item.get("display", item.get("name", ""))
+                desc = item.get("description", "")
+                text = f"{display_name}"
+                if desc:
+                    text += f" - {desc}"
+            else:
+                text = str(item)
 
             lbl = ctk.CTkLabel(self.frame, text=text, anchor="w", padx=10, pady=2, font=ctk.CTkFont(size=12))
             lbl.pack(fill="x", expand=True)
@@ -273,6 +279,23 @@ class ChatView(ctk.CTkFrame):
             size=(22, 22),
         )
 
+        # 工作區按鈕
+        ctk.CTkButton(
+            input_frame,
+            text="📂",
+            width=40,
+            height=40,
+            font=ctk.CTkFont(size=20),
+            fg_color="transparent",
+            hover_color=("gray70", "gray30"),
+            command=self._add_workspace_dir,
+        ).grid(
+            row=0,
+            column=1,
+            padx=2,
+            pady=8,
+        )
+
         # 附件按鈕
         ctk.CTkButton(
             input_frame,
@@ -285,7 +308,7 @@ class ChatView(ctk.CTkFrame):
             command=self._attach_file,
         ).grid(
             row=0,
-            column=1,
+            column=2,
             padx=2,
             pady=8,
         )
@@ -299,7 +322,7 @@ class ChatView(ctk.CTkFrame):
         )
         self.send_btn.grid(
             row=0,
-            column=2,
+            column=3,
             padx=(2, 8),
             pady=8,
         )
@@ -500,13 +523,15 @@ class ChatView(ctk.CTkFrame):
         self._update_attachment_bar()
 
     def _update_attachment_bar(self):
-        """重建待送出附件的縮圖列（圖片顯示縮圖，其他顯示檔名，均附移除鈕）。"""
+        """重建待送出附件與工作區的縮圖列。"""
 
         for widget in self.attach_frame.winfo_children():
             widget.destroy()
         self._chip_images = []
 
-        if not self._pending_files:
+        has_workspace = self.app.agent and hasattr(self.app.agent, "workspace_dirs") and self.app.agent.workspace_dirs
+
+        if not self._pending_files and not has_workspace:
             self.attach_frame.grid_remove()
             return
 
@@ -514,7 +539,36 @@ class ChatView(ctk.CTkFrame):
 
         image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
 
-        for col, path in enumerate(self._pending_files):
+        col = 0
+
+        # 顯示工作區
+        if has_workspace:
+            for path in self.app.agent.workspace_dirs:
+                file_path = Path(path)
+                chip = ctk.CTkFrame(self.attach_frame, corner_radius=8, fg_color=("gray85", "gray30"))
+                chip.grid(row=0, column=col, padx=(0, 6), pady=2)
+
+                ctk.CTkLabel(
+                    chip,
+                    text=f"📂 {file_path.name}",
+                    font=ctk.CTkFont(size=12),
+                ).grid(row=0, column=0, padx=(8, 2), pady=4)
+
+                ctk.CTkButton(
+                    chip,
+                    text="✕",
+                    width=22,
+                    height=22,
+                    corner_radius=6,
+                    fg_color="transparent",
+                    text_color="gray",
+                    hover_color=("gray70", "gray40"),
+                    command=lambda p=path: self._remove_workspace(p),
+                ).grid(row=0, column=1, padx=(0, 4))
+                col += 1
+
+        # 顯示附件
+        for path in self._pending_files:
             file_path = Path(path)
 
             chip = ctk.CTkFrame(
@@ -561,6 +615,7 @@ class ChatView(ctk.CTkFrame):
                 hover_color=("gray70", "gray30"),
                 command=lambda p=path: self._remove_attachment(p),
             ).grid(row=0, column=1, padx=(0, 4))
+            col += 1
 
     def _remove_attachment(self, path: str):
         """移除單一待送出附件。"""
@@ -569,6 +624,23 @@ class ChatView(ctk.CTkFrame):
             self._pending_files.remove(path)
 
         self._update_attachment_bar()
+
+    def _add_workspace_dir(self):
+        from tkinter import filedialog
+
+        path = filedialog.askdirectory(title="選擇要加入工作區的資料夾")
+        if path:
+            normalized_path = str(Path(path).resolve())
+            if self.app.agent and hasattr(self.app.agent, "workspace_dirs"):
+                if normalized_path not in self.app.agent.workspace_dirs:
+                    self.app.agent.workspace_dirs.append(normalized_path)
+                    self._update_attachment_bar()
+
+    def _remove_workspace(self, path: str):
+        if self.app.agent and hasattr(self.app.agent, "workspace_dirs"):
+            if path in self.app.agent.workspace_dirs:
+                self.app.agent.workspace_dirs.remove(path)
+                self._update_attachment_bar()
 
     def _apply_chat_options(self, _value=None):
         """Chat 快速選單變更時寫入設定並即時更新 agent。"""
@@ -1081,12 +1153,10 @@ class ChatView(ctk.CTkFrame):
 
         text = self.input.get("1.0", "insert")
 
-        # Check if we are at the beginning of the line or after a space, and typing a slash command
         if not text:
             self.autocomplete_menu.hide()
             return
 
-        # Get the last word being typed
         lines = text.split("\n")
         last_line = lines[-1]
         words = last_line.split(" ")
@@ -1097,12 +1167,57 @@ class ChatView(ctk.CTkFrame):
 
             cmd_prefix = last_word[1:].lower()
             all_cmds = list_commands()
-
-            # Filter commands
-            matched_cmds = [cmd for cmd in all_cmds if cmd["name"].lower().startswith(cmd_prefix)]
+            matched_cmds = []
+            for cmd in all_cmds:
+                if cmd["name"].lower().startswith(cmd_prefix):
+                    matched_cmds.append(
+                        {
+                            "name": cmd["name"],
+                            "display": f"/{cmd['name']}",
+                            "description": cmd["description"],
+                            "insert_text": f"/{cmd['name']} ",
+                            "is_cmd": True,
+                        }
+                    )
 
             if matched_cmds:
                 self.autocomplete_menu.update_items(matched_cmds, cmd_prefix)
+                self.autocomplete_menu.show_at_cursor()
+            else:
+                self.autocomplete_menu.hide()
+
+        elif last_word.startswith("@"):
+            import os
+
+            prefix = last_word[1:]
+            dirname, basename = os.path.split(prefix)
+            search_dir = dirname if dirname else "."
+
+            matched_paths = []
+            if os.path.isdir(search_dir):
+                try:
+                    for entry in os.scandir(search_dir):
+                        if basename.lower() in entry.name.lower():
+                            is_dir = entry.is_dir()
+                            display_meta = "Directory" if is_dir else "File"
+                            insert_text = entry.name + (os.sep if is_dir else "")
+
+                            matched_paths.append(
+                                {
+                                    "name": entry.name,
+                                    "display": entry.name + (os.sep if is_dir else ""),
+                                    "description": display_meta,
+                                    "insert_text": f"@{dirname + os.sep if dirname else ''}{insert_text}"
+                                    + ("" if is_dir else " "),
+                                    "is_path": True,
+                                    "basename": basename,
+                                }
+                            )
+                except PermissionError:
+                    pass
+
+            if matched_paths:
+                self.autocomplete_menu.update_items(matched_paths, basename)
                 self.autocomplete_menu.show_at_cursor()
             else:
                 self.autocomplete_menu.hide()
@@ -1126,25 +1241,28 @@ class ChatView(ctk.CTkFrame):
                 self._on_autocomplete_select(cmd)
             return "break"
 
-    def _on_autocomplete_select(self, cmd):
-        # Replace the current typing word with the full command
-        text = self.input.get("1.0", "insert")
-        last_space_idx = text.rfind(" ")
-        last_newline_idx = text.rfind("\n")
-        replace_start_idx = max(last_space_idx, last_newline_idx)
+    def _on_autocomplete_select(self, item):
+        # Replace the current typing word with the full command or path
+        insert_text = item.get("insert_text", "")
+        if not insert_text:
+            # Fallback for old cmd format just in case
+            insert_text = f"/{item.get('name', '')} "
 
-        if replace_start_idx == -1:
-            start_pos = "1.0"
+        if item.get("is_path"):
+            search_regex = r"@\S*"
         else:
-            # We need to find the tk index for the replace_start_idx + 1
-            # But the simplest is to just search backwards for the '/'
-            start_pos = self.input.search(r"/\w*", "insert", backwards=True, regexp=True, stopindex="1.0")
-            if not start_pos:
-                start_pos = "1.0"
+            search_regex = r"/\w*"
+
+        start_pos = self.input.search(search_regex, "insert", backwards=True, regexp=True, stopindex="1.0")
+        if not start_pos:
+            start_pos = "1.0"
 
         self.input.delete(start_pos, "insert")
-        self.input.insert("insert", f"/{cmd['name']} ")
+        self.input.insert("insert", insert_text)
         self.autocomplete_menu.hide()
+
+        # If it's a file path, we probably want to trigger something later,
+        # but for now we just leave it in the input text
 
     def _on_enter(self, event):
         if self.autocomplete_menu.winfo_ismapped():
