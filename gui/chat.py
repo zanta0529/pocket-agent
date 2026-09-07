@@ -322,8 +322,13 @@ class ChatView(ctk.CTkFrame):
         )
 
         cfg = load_config()
+        provider = cfg.get("provider", "openai")
         model = cfg.get("model") or get_model()
-        model_values = MODELS if model in MODELS else MODELS + [model]
+
+        if provider == "openai":
+            model_values = MODELS if model in MODELS else MODELS + [model]
+        else:
+            model_values = [model]
 
         ctk.CTkLabel(
             opts_row,
@@ -588,9 +593,12 @@ class ChatView(ctk.CTkFrame):
         """背景抓取後端即時模型列表；失敗或未登入時維持現有選單。"""
 
         def worker():
-            from agent.auth import fetch_available_models
+            from agent.auth import fetch_available_models, load_config
 
-            models = fetch_available_models()
+            cfg = load_config()
+            provider = cfg.get("provider", "openai")
+
+            models = fetch_available_models(provider)
             if models:
                 try:
                     self.after(0, lambda: self._apply_models(models))
