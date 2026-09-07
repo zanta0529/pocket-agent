@@ -254,6 +254,13 @@ class Agent:
 
     async def _run_loop(self) -> tuple[str, str]:
         tools = self._build_tools()
+
+        # Context Overflow 保護機制 (Sliding Window)
+        history_str_len = sum(len(str(msg)) for msg in self.history)
+        if history_str_len > 120000 and len(self.history) > 14:
+            notice = {"role": "system", "content": "[System] 中間的對話歷史已被系統自動截斷以避免 Context Overflow。"}
+            self.history = self.history[:4] + [notice] + self.history[-10:]
+
         input_items: list = list(self.history)
 
         # reasoning 參數：effort 為 "none" 時不送推理

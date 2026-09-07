@@ -12,6 +12,7 @@ class AutocompleteMenu(ctk.CTkToplevel):
         self.attributes("-topmost", True)
         self.textbox = textbox
         self.on_select = on_select
+        self.is_open = False
 
         self.frame = ctk.CTkFrame(
             self,
@@ -35,7 +36,7 @@ class AutocompleteMenu(ctk.CTkToplevel):
         self.labels.clear()
 
         if not items:
-            self.withdraw()
+            self.hide()
             return
 
         for i, item in enumerate(items):
@@ -56,6 +57,7 @@ class AutocompleteMenu(ctk.CTkToplevel):
             self.labels.append(lbl)
 
         self.select_item(0)
+        self.is_open = True
         self.deiconify()
 
     def select_item(self, index):
@@ -87,6 +89,7 @@ class AutocompleteMenu(ctk.CTkToplevel):
             self.on_select(cmd)
 
     def hide(self):
+        self.is_open = False
         self.withdraw()
 
     def show_at_cursor(self):
@@ -97,6 +100,7 @@ class AutocompleteMenu(ctk.CTkToplevel):
                 root_x = self.textbox._textbox.winfo_rootx() + x
                 root_y = self.textbox._textbox.winfo_rooty() + y + h
                 self.geometry(f"+{root_x}+{root_y + 2}")
+                self.is_open = True
                 self.deiconify()
                 self.lift()
         except Exception as e:

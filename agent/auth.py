@@ -290,10 +290,19 @@ def get_openai_client(provider: str = None, model: str = None):
         cfg = load_config()
         provider = cfg.get("provider", "openai")
 
+    http_client = None
     if provider == "ollama":
-        base_url = "http://localhost:11434/v1"
+        from dotenv import load_dotenv
+
+        from agent.paths import env_path
+
+        load_dotenv(env_path(), override=True)
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
         api_key = "ollama"
         extra_headers = {}
+        http_client = httpx.AsyncClient(trust_env=False)
     else:
         # 預設 OpenAI (Codex 後端)
         base_url = CODEX_BASE_URL
@@ -310,6 +319,7 @@ def get_openai_client(provider: str = None, model: str = None):
         api_key=api_key,
         base_url=base_url,
         default_headers=extra_headers,
+        http_client=http_client,
     )
 
 
@@ -317,10 +327,22 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
     """取得可用模型列表。"""
     if provider == "ollama":
         try:
-            resp = httpx.get("http://localhost:11434/api/tags", timeout=5)
+            from dotenv import load_dotenv
+
+            from agent.paths import env_path
+
+            load_dotenv(env_path(), override=True)
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+            if base_url.endswith("/v1"):
+                base_url = base_url[:-3]
+            with httpx.Client(trust_env=False) as client:
+                resp = client.get(f"{base_url}/api/tags", timeout=10)
             if resp.status_code == 200:
                 return [m["name"] for m in resp.json().get("models", [])]
-        except Exception:
+        except Exception as e:
+            import logging
+
+            logging.getLogger("pocket-agent").error(f"Ollama fetch tags error: {e}")
             return []
         return []
 

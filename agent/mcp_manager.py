@@ -82,6 +82,21 @@ class MCPManager:
         full_args = {**entry.inject, **arguments}
         from agent.core import log
 
+        # Artifact 隔離攔截
+        if tool_name in ("write_to_file", "write_file", "create_file") and "ArtifactMetadata" in full_args:
+            artifact_meta = full_args.pop("ArtifactMetadata")
+            if artifact_meta.get("UserFacing"):
+                from .paths import user_dir
+
+                target_key = "TargetFile" if "TargetFile" in full_args else "path"
+                if target_key in full_args:
+                    original_path = Path(full_args[target_key])
+                    artifacts_dir = user_dir() / "artifacts"
+                    artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    new_path = artifacts_dir / original_path.name
+                    full_args[target_key] = str(new_path)
+                    log.info(f"Artifact redirected from {original_path} to {new_path}")
+
         log.debug("MCP call_tool name=%r full_args=%r", tool_name, full_args)
 
         result = await entry.session.call_tool(tool_name, full_args)
@@ -145,6 +160,19 @@ class MCPManager:
             # 從 schema 移除 inject 參數——模型不需要知道這些
             raw_params = tool.inputSchema or {"type": "object", "properties": {}}
             params = _strip_inject_params(raw_params, inject)
+
+            # Artifact 隔離機制：針對檔案寫入工具注入 ArtifactMetadata 定義
+            if tool.name in ("write_to_file", "write_file", "create_file"):
+                if "properties" not in params:
+                    params["properties"] = {}
+                params["properties"]["ArtifactMetadata"] = {
+                    "type": "object",
+                    "description": (
+                        "Metadata that defines artifact properties. Required when creating an artifact file."
+                    ),
+                    "properties": {"Summary": {"type": "string"}, "UserFacing": {"type": "boolean"}},
+                    "required": ["Summary", "UserFacing"],
+                }
 
             schema = {
                 "type": "function",

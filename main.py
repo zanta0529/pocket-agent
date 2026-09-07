@@ -269,6 +269,9 @@ async def _run_cli(system_prompt: str):
                     logout()
                     break
 
+            console.print()
+            console.print(Panel(raw, title="[bold cyan]User[/bold cyan]", border_style="cyan"))
+
             if raw.startswith("/file "):
                 p = raw[6:].strip()
                 if Path(p).exists():
@@ -290,9 +293,6 @@ async def _run_cli(system_prompt: str):
                     workspace_dirs.append(abs_path)
                 console.print(f"[dim]L Added {abs_path} to workspace[/dim]")
                 continue
-
-            console.print()
-            console.print(Panel(raw, title="[bold cyan]User[/bold cyan]", border_style="cyan"))
 
             import re
 

@@ -124,10 +124,27 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
 
     log.info("CLI run: %s", command)
 
+    import os
+
+    sandbox_mode = os.getenv("USE_SANDBOX", "none").lower()
+
+    cmd_args = command
+    is_shell = True
+
+    if sandbox_mode == "wsl":
+        cmd_args = ["wsl", "--", "sh", "-c", command]
+        is_shell = False
+        log.info("Using WSL Sandbox")
+    elif sandbox_mode == "docker":
+        container_name = os.getenv("SANDBOX_CONTAINER", "pocket_sandbox")
+        cmd_args = ["docker", "exec", container_name, "sh", "-c", command]
+        is_shell = False
+        log.info("Using Docker Sandbox")
+
     try:
         proc = subprocess.run(
-            command,
-            shell=True,
+            cmd_args,
+            shell=is_shell,
             cwd=args.get("cwd") or None,
             timeout=timeout,
             capture_output=True,

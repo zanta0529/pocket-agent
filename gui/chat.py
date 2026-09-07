@@ -126,22 +126,22 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
             add="+",
         )
 
-        self.input.bind(
+        tk_text.bind(
             "<Return>",
             self._on_enter,
         )
-        self.input.bind(
+        tk_text.bind(
             "<Shift-Return>",
             lambda event: None,
         )
 
         # ── Slash Command Autocomplete ──────────────
         self.autocomplete_menu = AutocompleteMenu(self.winfo_toplevel(), self.input, self._on_autocomplete_select)
-        self.input.bind("<KeyRelease>", self._on_key_release)
-        self.input.bind("<Up>", self._on_autocomplete_up)
-        self.input.bind("<Down>", self._on_autocomplete_down)
-        self.input.bind("<Tab>", self._on_autocomplete_tab)
-        self.input.bind("<FocusOut>", lambda e: self.autocomplete_menu.hide())
+        tk_text.bind("<KeyRelease>", self._on_key_release)
+        tk_text.bind("<Up>", self._on_autocomplete_up)
+        tk_text.bind("<Down>", self._on_autocomplete_down)
+        tk_text.bind("<Tab>", self._on_autocomplete_tab)
+        tk_text.bind("<FocusOut>", lambda e: self.autocomplete_menu.hide())
 
         # ── IME 修正（Windows 中文輸入法）──────────
         self._ime_state = {
@@ -701,17 +701,17 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
             self.autocomplete_menu.hide()
 
     def _on_autocomplete_up(self, event):
-        if self.autocomplete_menu.winfo_ismapped():
+        if self.autocomplete_menu.is_open:
             self.autocomplete_menu.move_selection(-1)
             return "break"
 
     def _on_autocomplete_down(self, event):
-        if self.autocomplete_menu.winfo_ismapped():
+        if self.autocomplete_menu.is_open:
             self.autocomplete_menu.move_selection(1)
             return "break"
 
     def _on_autocomplete_tab(self, event):
-        if self.autocomplete_menu.winfo_ismapped():
+        if self.autocomplete_menu.is_open:
             cmd = self.autocomplete_menu.get_selected()
             if cmd:
                 self._on_autocomplete_select(cmd)
@@ -727,7 +727,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
         if item.get("is_path"):
             search_regex = r"@\S*"
         else:
-            search_regex = r"/\w*"
+            search_regex = r"/[a-zA-Z0-9_-]*"
 
         start_pos = self.input.search(search_regex, "insert", backwards=True, regexp=True, stopindex="1.0")
         if not start_pos:
@@ -741,7 +741,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
         # but for now we just leave it in the input text
 
     def _on_enter(self, event):
-        if self.autocomplete_menu.winfo_ismapped():
+        if self.autocomplete_menu.is_open:
             cmd = self.autocomplete_menu.get_selected()
             if cmd:
                 self._on_autocomplete_select(cmd)
