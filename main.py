@@ -91,14 +91,31 @@ async def _run_cli(system_prompt: str):
 
     agent = Agent(client=client, mcp=mcp, model=model, system_prompt=system_prompt)
 
-    cmd_hints = "/file <路徑>  附加檔案    /clear  清除對話    /logout  登出    /quit  離開"
+    from rich import box
+
+    cmd_hints = (
+        "[bold #B8860B]/file[/bold #B8860B] [dim]<路徑>[/dim] 附加檔案  [dim]│[/dim]  "
+        "[bold #B8860B]/clear[/bold #B8860B] 清除對話  [dim]│[/dim]  "
+        "[bold #B8860B]/logout[/bold #B8860B] 登出  [dim]│[/dim]  "
+        "[bold #B8860B]/quit[/bold #B8860B] 離開"
+    )
     if provider == "openai":
-        cmd_hints = "/file <路徑>  附加檔案    /image <描述>  生圖    /clear  清除對話    /logout  登出    /quit  離開"
+        cmd_hints = (
+            "[bold #B8860B]/file[/bold #B8860B] [dim]<路徑>[/dim] 附加檔案  [dim]│[/dim]  "
+            "[bold #B8860B]/image[/bold #B8860B] [dim]<描述>[/dim] 生圖  [dim]│[/dim]  "
+            "[bold #B8860B]/clear[/bold #B8860B] 清除對話  [dim]│[/dim]  "
+            "[bold #B8860B]/logout[/bold #B8860B] 登出  [dim]│[/dim]  "
+            "[bold #B8860B]/quit[/bold #B8860B] 離開"
+        )
 
     console.print(
         Panel(
-            f"[bold]Pocket Agent[/bold]（{model}）\n{cmd_hints}",
-            border_style="blue",
+            cmd_hints,
+            title=f"🤖 [bold #B8860B]Pocket Agent[/bold #B8860B] [bold #D3D3D3]({model})[/bold #D3D3D3]",
+            title_align="left",
+            box=box.ROUNDED,
+            border_style="#B8860B",
+            padding=(1, 2),
         )
     )
 
@@ -226,6 +243,7 @@ async def _run_cli(system_prompt: str):
         complete_while_typing=True,
         bottom_toolbar=get_bottom_toolbar,
         key_bindings=kb,
+        erase_when_done=True,
     )
 
     try:
@@ -272,6 +290,9 @@ async def _run_cli(system_prompt: str):
                     workspace_dirs.append(abs_path)
                 console.print(f"[dim]L Added {abs_path} to workspace[/dim]")
                 continue
+
+            console.print()
+            console.print(Panel(raw, title="[bold cyan]User[/bold cyan]", border_style="cyan"))
 
             import re
 
@@ -338,7 +359,7 @@ async def _run_cli(system_prompt: str):
 
             with console.status("[dim]思考中...[/dim]", spinner="dots"):
                 try:
-                    thinking, reply = await agent.chat(raw, attachments=atts)
+                    thinking, reply, usage_str = await agent.chat(raw, attachments=atts)
                 except Exception as e:
                     console.print(f"[red]{e}[/red]")
                     continue
@@ -348,6 +369,8 @@ async def _run_cli(system_prompt: str):
             from rich.console import Console
 
             console.print()
+            if usage_str:
+                console.print(f"[bold green]▶[/bold green] [dim]{usage_str}[/dim]")
             console.print(Panel(Markdown(reply), title="[bold green]Agent[/bold green]", border_style="green"))
             console.print()
     finally:

@@ -119,11 +119,12 @@ class Agent:
         self,
         user_input: str,
         attachments: list[str] | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         """
-        回傳 (thinking, answer)。
+        回傳 (thinking, answer, usage_str)。
         thinking：模型的推理過程（可能為空字串）
         answer：最終回覆
+        usage_str：耗時與 token 數的格式化字串
         """
         import time
 
@@ -176,8 +177,6 @@ class Agent:
         else:
             usage_str = f"Thought for {elapsed:.1f}s"
 
-        reply += f"\n\n_({usage_str})_"
-
         self.history.append({"role": "assistant", "content": reply})
 
         if not self._is_subagent:
@@ -187,7 +186,7 @@ class Agent:
                 {"user_input": user_input, "reply": reply},
             )
 
-        return thinking, reply
+        return thinking, reply, usage_str
 
     def request_stop(self) -> None:
         """要求停止本輪工作（從 GUI 執行緒呼叫）。迴圈會在安全點檢查並收尾。"""
@@ -246,7 +245,7 @@ class Agent:
         log.info("SUBAGENT run %s task=%r", name, task[:80])
 
         try:
-            _thinking, reply = await sub.chat(task)
+            _thinking, reply, _usage_str = await sub.chat(task)
         except Exception as e:
             log.exception("subagent 執行失敗")
             return f"[ERROR] 子代理「{name}」執行失敗：{e}"
@@ -370,7 +369,10 @@ class Agent:
                 elif etype == "response.done":
                     usage = getattr(getattr(event, "response", None), "usage", None)
                     if usage:
-                        self.total_tokens += getattr(usage, "total_tokens", 0)
+                        if isinstance(usage, dict):
+                            self.total_tokens += usage.get("total_tokens", 0)
+                        else:
+                            self.total_tokens += getattr(usage, "total_tokens", 0)
 
             thinking = "".join(thinking_chunks)
             text = "".join(text_chunks)

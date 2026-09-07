@@ -1619,7 +1619,11 @@ class ChatView(ctk.CTkFrame):
             self._tool_panels.clear()
 
             try:
-                thinking, reply = future.result()
+                thinking, reply, usage_str = future.result()
+
+                # 在 GUI 中，依然把用量加在最尾端（比照原本的顯示方式）
+                if usage_str:
+                    reply += f"\n\n_({usage_str})_"
 
                 # 已經即時顯示過就不再補一份，否則會出現兩塊思考過程
                 if thinking and not self._streamed_thinking:
