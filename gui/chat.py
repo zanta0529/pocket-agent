@@ -13,12 +13,12 @@ from tkinterdnd2 import DND_FILES
 
 from gui.components.autocomplete import AutocompleteMenu
 from gui.components.ime_helper import IMEHelperMixin
-from gui.components.scroll_helper import ScrollHelperMixin
+from gui.components.scroll_helper import ScrollManager
 
 log = logging.getLogger("pocket-agent")
 
 
-class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
+class ChatView(ctk.CTkFrame, IMEHelperMixin):
     def __init__(self, parent, app):
         super().__init__(parent, fg_color="transparent")
 
@@ -57,6 +57,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
             sticky="nsew",
         )
         self.msg_frame.grid_columnconfigure(0, weight=1)
+        self.scroll_manager = ScrollManager(self.msg_frame)
 
         # 附件顯示列
         self.attach_bar = ctk.CTkLabel(
@@ -1055,6 +1056,8 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
                     self._add_system(data)
                 elif kind == "read":
                     self._add_system(f"● Read ({data})")
+                elif kind == "ask_question":
+                    self._show_ask_question_modal(data)
 
         except queue.Empty:
             pass
@@ -1153,6 +1156,83 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
                     spinner,
                 ),
             )
+
+    # ─────────────────────────────────────────────
+    # Modal 表單 (ask_question)
+    # ─────────────────────────────────────────────
+    def _show_ask_question_modal(self, data: dict):
+        """處理 ask_question tool，顯示 modal 表單。"""
+        questions = data.get("questions", [])
+        callback = data.get("callback")
+
+        modal = ctk.CTkToplevel(self)
+        modal.title("需要您的確認 / 選擇")
+        modal.geometry("500x600")
+        modal.transient(self.winfo_toplevel())
+        modal.grab_set()
+
+        scroll = ctk.CTkScrollableFrame(modal)
+        scroll.pack(fill="both", expand=True, padx=10, pady=10)
+
+        answers = {}
+        for idx, q in enumerate(questions):
+            q_text = q.get("question", "")
+            opts = q.get("options", [])
+            is_multi = q.get("is_multi_select", False)
+
+            ctk.CTkLabel(scroll, text=q_text, font=ctk.CTkFont(weight="bold"), wraplength=450, justify="left").pack(
+                anchor="w", pady=(10, 5)
+            )
+
+            if is_multi:
+                answers[idx] = []
+                for opt in opts:
+                    var = ctk.StringVar(value="")
+                    cb = ctk.CTkCheckBox(scroll, text=opt, variable=var, onvalue=opt, offvalue="")
+                    cb.pack(anchor="w", padx=10, pady=2)
+                    answers[idx].append(var)
+            else:
+                var = ctk.StringVar(value="")
+                if opts:
+                    var.set(opts[0])  # Default to first option
+                answers[idx] = var
+                for opt in opts:
+                    rb = ctk.CTkRadioButton(scroll, text=opt, variable=var, value=opt)
+                    rb.pack(anchor="w", padx=10, pady=2)
+
+        def submit():
+            result_dict = {"answers": []}
+            for idx, q in enumerate(questions):
+                ans = answers[idx]
+                if isinstance(ans, list):
+                    selected = [v.get() for v in ans if v.get()]
+                    result_dict["answers"].append({"question": q.get("question"), "answer": selected})
+                else:
+                    result_dict["answers"].append({"question": q.get("question"), "answer": ans.get()})
+
+            modal.destroy()
+            if callback:
+                callback(result_dict)
+
+            summary = ", ".join(str(a["answer"]) for a in result_dict["answers"] if a["answer"])
+            self._add_system(f"● 已回覆選擇：{summary}")
+
+        def skip():
+            modal.destroy()
+            if callback:
+                callback({"answers": [], "skipped": True})
+            self._add_system("● 已跳過問題")
+
+        btn_frame = ctk.CTkFrame(modal, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=10, pady=10)
+
+        ctk.CTkButton(btn_frame, text="Submit", command=submit).pack(side="right", padx=5)
+        ctk.CTkButton(btn_frame, text="Skip", fg_color="gray", command=skip).pack(side="right", padx=5)
+
+        modal.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() // 2) - (modal.winfo_width() // 2)
+        y = self.winfo_rooty() + (self.winfo_height() // 2) - (modal.winfo_height() // 2)
+        modal.geometry(f"+{x}+{y}")
 
     # ─────────────────────────────────────────────
     # 附加檔案
@@ -1343,6 +1423,12 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
 
         textbox.after_idle(fit)
 
+    # ─────────────────────────────────────────────
+    # [MessageList 重構 - 階段一]
+    # 下方所有 _add_* 相關的渲染與元件建立方法，已歸類為 MessageList 的核心職責。
+    # 將於階段三正式搬移至 gui.components.message_list.MessageList 中，
+    # 解除 ChatView 與實際 DOM 節點及 Layout 邏輯的深度耦合。
+    # ─────────────────────────────────────────────
     def _add_bubble(
         self,
         text: str,
@@ -1457,11 +1543,11 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
         )
 
         # 每個訊息泡泡皆可使用滑鼠滾輪
-        self._bind_bubble_scroll(textbox)
+        self.scroll_manager.bind_bubble(textbox)
 
         # 行、泡泡空白處控制外層對話區
-        self._bind_outer_scroll(row)
-        self._bind_outer_scroll(bubble)
+        self.scroll_manager.bind_outer(row)
+        self.scroll_manager.bind_outer(bubble)
 
         self._scroll_bottom()
 
@@ -1498,9 +1584,9 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
         textbox.configure(state="disabled")
         textbox.pack(padx=10, pady=8)
 
-        self._bind_bubble_scroll(textbox)
-        self._bind_outer_scroll(row)
-        self._bind_outer_scroll(bubble)
+        self.scroll_manager.bind_bubble(textbox)
+        self.scroll_manager.bind_outer(row)
+        self.scroll_manager.bind_outer(bubble)
 
         self._scroll_bottom()
 
@@ -1617,10 +1703,10 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
         )
 
         # 思考內容也使用相同的智慧滾輪行為
-        self._bind_bubble_scroll(textbox)
-        self._bind_outer_scroll(container)
-        self._bind_outer_scroll(panel)
-        self._bind_outer_scroll(toggle_button)
+        self.scroll_manager.bind_bubble(textbox)
+        self.scroll_manager.bind_outer(container)
+        self.scroll_manager.bind_outer(panel)
+        self.scroll_manager.bind_outer(toggle_button)
 
         state = {
             "shown": False,
@@ -1755,8 +1841,8 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
                 lambda event: webbrowser.open(Path(path).as_uri()),
             )
 
-            self._bind_outer_scroll(row)
-            self._bind_outer_scroll(label)
+            self.scroll_manager.bind_outer(row)
+            self.scroll_manager.bind_outer(label)
 
             self._scroll_bottom()
 
@@ -1821,8 +1907,8 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
             padx=6,
         )
 
-        self._bind_outer_scroll(row)
-        self._bind_outer_scroll(button)
+        self.scroll_manager.bind_outer(row)
+        self.scroll_manager.bind_outer(button)
 
         self._scroll_bottom()
 
@@ -1886,9 +1972,9 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
             pady=8,
         )
 
-        self._bind_outer_scroll(row)
-        self._bind_outer_scroll(bubble)
-        self._bind_outer_scroll(label)
+        self.scroll_manager.bind_outer(row)
+        self.scroll_manager.bind_outer(bubble)
+        self.scroll_manager.bind_outer(label)
 
         self._scroll_bottom()
 
@@ -1912,7 +1998,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin, ScrollHelperMixin):
             pady=12,
         )
 
-        self._bind_outer_scroll(label)
+        self.scroll_manager.bind_outer(label)
         self._scroll_bottom()
 
     # ─────────────────────────────────────────────

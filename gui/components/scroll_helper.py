@@ -3,8 +3,11 @@ import logging
 log = logging.getLogger("pocket-agent")
 
 
-class ScrollHelperMixin:
-    """Mixin for handling mouse wheel scrolling for outer container and inner textboxes."""
+class ScrollManager:
+    """Manages scrolling for a CTkScrollableFrame and its inner textboxes."""
+
+    def __init__(self, scrollable_frame):
+        self.scrollable_frame = scrollable_frame
 
     @staticmethod
     def _wheel_direction(event) -> int:
@@ -19,18 +22,18 @@ class ScrollHelperMixin:
             return 1
         return 0
 
-    def _scroll_outer_messages(self, direction: int):
+    def scroll_outer(self, direction: int):
         try:
-            canvas = self.msg_frame._parent_canvas
+            canvas = self.scrollable_frame._parent_canvas
             canvas.yview_scroll(direction * 40, "units")
         except Exception:
             log.exception("無法捲動外層對話訊息區")
 
-    def _bind_outer_scroll(self, widget):
+    def bind_outer(self, widget):
         def on_mousewheel(event):
             direction = self._wheel_direction(event)
             if direction:
-                self._scroll_outer_messages(direction)
+                self.scroll_outer(direction)
             return "break"
 
         targets = [widget]
@@ -47,7 +50,7 @@ class ScrollHelperMixin:
             except Exception:
                 pass
 
-    def _bind_bubble_scroll(self, textbox):
+    def bind_bubble(self, textbox):
         def on_mousewheel(event):
             direction = self._wheel_direction(event)
             if not direction:
@@ -61,10 +64,10 @@ class ScrollHelperMixin:
                 if can_scroll_up or can_scroll_down:
                     textbox.yview_scroll(direction * 3, "units")
                 else:
-                    self._scroll_outer_messages(direction)
+                    self.scroll_outer(direction)
             except Exception:
                 log.exception("無法捲動訊息泡泡")
-                self._scroll_outer_messages(direction)
+                self.scroll_outer(direction)
 
             return "break"
 

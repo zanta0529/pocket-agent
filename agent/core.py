@@ -210,6 +210,35 @@ class Agent:
         if is_openai:
             tools.insert(0, image_tool())
 
+        ask_question = {
+            "type": "function",
+            "name": "ask_question",
+            "description": (
+                "Use this tool to ask the user one or more multiple-choice questions to clarify "
+                "requirements or solicit design feedback. This will block execution and show a "
+                "modal dialog to the user."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": {"type": "string"},
+                                "options": {"type": "array", "items": {"type": "string"}},
+                                "is_multi_select": {"type": "boolean"},
+                            },
+                            "required": ["question", "options"],
+                        },
+                    }
+                },
+                "required": ["questions"],
+            },
+        }
+        tools.append(ask_question)
+
         # 子代理不能再開子代理，避免無限遞迴
         if not self._is_subagent:
             tools += subagent_tools()
@@ -419,6 +448,23 @@ class Agent:
 
                     if is_skill_tool(fc["name"]):
                         result = call_skill_tool(args)
+                    elif fc["name"] == "ask_question":
+                        loop = asyncio.get_running_loop()
+                        fut = loop.create_future()
+
+                        def set_result_threadsafe(res):
+                            loop.call_soon_threadsafe(fut.set_result, res)
+
+                        self._emit(
+                            "ask_question",
+                            {
+                                "call_id": fc["call_id"],
+                                "questions": args.get("questions", []),
+                                "callback": set_result_threadsafe,
+                            },
+                        )
+                        result_dict = await fut
+                        result = json.dumps(result_dict, ensure_ascii=False)
                     elif is_subagent_tool(fc["name"]):
                         result = await self._run_subagent(args)
                     elif is_shell_tool(fc["name"]):
