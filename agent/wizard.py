@@ -1,5 +1,7 @@
 """設定精靈 — python main.py setup"""
 
+import os
+
 import yaml
 from rich.console import Console
 from rich.panel import Panel
@@ -12,12 +14,17 @@ from .paths import mcp_config_path
 
 console = Console()
 
-MODELS = [
-    ("gpt-4o", "最強，適合複雜任務"),
-    ("gpt-4o-mini", "快速省錢，適合日常對話"),
-    ("gpt-4-turbo", "舊旗艦，支援長文"),
-    ("o1-mini", "推理型，擅長數學/程式"),
-]
+MODELS = {
+    "openai": [
+        ("gpt-6-astra", "最新旗艦"),
+        ("gpt-reserve", "高可用備用模型"),
+        ("gpt-5.6-sol", "強力推理"),
+        ("gpt-5.6-terra", "一般平衡"),
+        ("gpt-5.6-luna", "快速回應"),
+        ("gpt-5.5", "舊旗艦"),
+        ("gpt-5.4-mini", "輕量快速"),
+    ]
+}
 
 
 def run_setup() -> None:
@@ -32,8 +39,10 @@ def run_setup() -> None:
     console.print()
 
     try:
-        _step_login()
-        _step_model()
+        provider = _step_provider()
+        if provider != "ollama":
+            _step_login(provider)
+        _step_model(provider)
         _step_mcp()
     except KeyboardInterrupt:
         console.print("\n[yellow]已取消。[/yellow]")
@@ -45,65 +54,92 @@ def run_setup() -> None:
     console.print()
 
 
-# ── Step 1：登入 OpenAI ───────────────────────────
+def _step_provider() -> str:
+    console.print(Rule("① 選擇服務提供者"))
+    console.print()
+    cfg = load_config()
+    current_provider = cfg.get("provider", "openai")
+
+    providers = ["openai", "ollama"]
+    for i, p in enumerate(providers, 1):
+        tag = " [green]← 目前[/green]" if p == current_provider else ""
+        console.print(f"  [cyan]{i}[/cyan]. [bold]{p.upper()}[/bold]{tag}")
+
+    choice = Prompt.ask(
+        "選擇",
+        choices=[str(i) for i in range(1, len(providers) + 1)],
+        default=str(providers.index(current_provider) + 1 if current_provider in providers else 1),
+    )
+    selected = providers[int(choice) - 1]
+
+    cfg["provider"] = selected
+    save_config(cfg)
+    console.print(f"[green]✓ 已設定為 {selected.upper()}[/green]\n")
+    return selected
 
 
-def _step_login() -> None:
-    console.print(Rule("① 登入 OpenAI 帳號"))
+def _step_login(provider: str) -> None:
+    console.print(Rule(f"② 登入 {provider.upper()}"))
     console.print()
 
-    import os
+    if provider == "openai":
+        client_id = os.getenv("OPENAI_CLIENT_ID")
+        if not client_id:
+            # We use openclaw by default, so this might not be strictly needed, but let's keep the original logic
+            from .auth import DEFAULT_CLIENT_ID
 
-    client_id = os.getenv("OPENAI_CLIENT_ID")
-    if not client_id:
-        console.print(
-            "[yellow]⚠ 尚未設定 OPENAI_CLIENT_ID。[/yellow]\n\n"
-            "請先：\n"
-            "  1. 複製 [dim].env.example[/dim] → [dim].env[/dim]\n"
-            "  2. 前往 [link=https://platform.openai.com/settings/organization/apps]"
-            "https://platform.openai.com/settings/organization/apps[/link] 建立 OAuth App\n"
-            "  3. 把 [bold]Client ID[/bold] 填入 [dim].env[/dim] 的 OPENAI_CLIENT_ID\n"
-            "  4. Redirect URI 填 [bold]http://localhost:8899/callback[/bold]\n"
-        )
-        console.print("[dim]設定好 .env 後重新執行 python main.py setup[/dim]")
-        raise SystemExit(0)
+            client_id = DEFAULT_CLIENT_ID
 
-    # 有 client_id → 試著取得 token
     from .auth import _is_expired, _load_token
 
-    token = _load_token()
+    token = _load_token(provider)
     if token and not _is_expired(token):
-        console.print("[green]✓ 已登入（token 有效）[/green]")
+        console.print(f"[green]✓ 已登入 {provider.upper()}（token 有效）[/green]")
         if not Confirm.ask("要重新登入嗎？", default=False):
             console.print()
             return
-        logout()
+        logout(provider)
 
-    console.print("即將開啟瀏覽器，請用你的 [bold]OpenAI 帳號[/bold] 登入並授權…\n")
+    console.print(f"即將開啟瀏覽器，請用你的 [bold]{provider.upper()} 帳號[/bold] 登入並授權…\n")
     input("按 Enter 繼續…")
-    get_access_token()  # 觸發瀏覽器 OAuth
+    get_access_token(provider=provider)  # 觸發瀏覽器 OAuth
     console.print()
 
 
-# ── Step 2：模型 ──────────────────────────────────
-
-
-def _step_model() -> None:
-    console.print(Rule("② 預設模型"))
+def _step_model(provider: str) -> None:
+    console.print(Rule("③ 預設模型"))
     console.print()
 
     current = load_config().get("model", "gpt-4o")
     console.print(f"[dim]目前：{current}[/dim]\n")
 
-    for i, (name, desc) in enumerate(MODELS, 1):
-        tag = " [green]← 目前[/green]" if name == current else ""
-        console.print(f"  [cyan]{i}[/cyan]. [bold]{name}[/bold]  {desc}{tag}")
-    console.print(f"  [cyan]{len(MODELS) + 1}[/cyan]. 自訂")
-    console.print()
+    # 嘗試動態取得遠端/本地可用模型
+    fetched = []
+    try:
+        from agent.auth import fetch_available_models
 
-    choice = Prompt.ask("選擇", choices=[str(i) for i in range(1, len(MODELS) + 2)], default="1")
-    idx = int(choice) - 1
-    model = MODELS[idx][0] if idx < len(MODELS) else Prompt.ask("模型名稱").strip()
+        fetched = fetch_available_models(provider)
+    except Exception:
+        pass
+
+    if fetched:
+        provider_models = [(m, "從遠端取得") for m in fetched]
+    else:
+        provider_models = MODELS.get(provider, [])
+
+    if not provider_models:
+        console.print("[yellow]無法取得推薦模型，請手動輸入。[/yellow]")
+        model = Prompt.ask("模型名稱").strip()
+    else:
+        for i, (name, desc) in enumerate(provider_models, 1):
+            tag = " [green]← 目前[/green]" if name == current else ""
+            console.print(f"  [cyan]{i}[/cyan]. [bold]{name}[/bold]  {desc}{tag}")
+        console.print(f"  [cyan]{len(provider_models) + 1}[/cyan]. 自訂")
+        console.print()
+
+        choice = Prompt.ask("選擇", choices=[str(i) for i in range(1, len(provider_models) + 2)], default="1")
+        idx = int(choice) - 1
+        model = provider_models[idx][0] if idx < len(provider_models) else Prompt.ask("模型名稱").strip()
 
     cfg = load_config()
     cfg["model"] = model
@@ -111,11 +147,8 @@ def _step_model() -> None:
     console.print(f"[green]✓ 已設定為 {model}[/green]\n")
 
 
-# ── Step 3：MCP ───────────────────────────────────
-
-
 def _step_mcp() -> None:
-    console.print(Rule("③ MCP 工具（可略過）"))
+    console.print(Rule("④ MCP 工具（可略過）"))
     console.print()
     console.print("[dim]MCP 讓 agent 可以呼叫外部工具，例如讀寫檔案、查資料等。[/dim]\n")
 

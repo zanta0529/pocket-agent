@@ -6,11 +6,13 @@ import queue
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+
 import customtkinter as ctk
 from PIL import Image
 from tkinterdnd2 import DND_FILES
 
 log = logging.getLogger("pocket-agent")
+
 
 class AutocompleteMenu(ctk.CTkToplevel):
     def __init__(self, parent, textbox, on_select):
@@ -19,7 +21,7 @@ class AutocompleteMenu(ctk.CTkToplevel):
         self.attributes("-topmost", True)
         self.textbox = textbox
         self.on_select = on_select
-        
+
         self.frame = ctk.CTkFrame(
             self,
             fg_color=("gray95", "gray15"),
@@ -28,44 +30,37 @@ class AutocompleteMenu(ctk.CTkToplevel):
             border_color=("gray80", "gray30"),
         )
         self.frame.pack(fill="both", expand=True, padx=0, pady=0)
-        
+
         self.labels = []
         self.items = []
         self.selected_index = 0
-        
+
         self.withdraw()
-        
+
     def update_items(self, items, filter_text):
         self.items = items
         for lbl in self.labels:
             lbl.destroy()
         self.labels.clear()
-        
+
         if not items:
             self.withdraw()
             return
-            
+
         for i, cmd in enumerate(items):
             text = f"/{cmd['name']}"
-            if cmd['description']:
+            if cmd["description"]:
                 text += f" - {cmd['description']}"
-                
-            lbl = ctk.CTkLabel(
-                self.frame,
-                text=text,
-                anchor="w",
-                padx=10,
-                pady=2,
-                font=ctk.CTkFont(size=12)
-            )
+
+            lbl = ctk.CTkLabel(self.frame, text=text, anchor="w", padx=10, pady=2, font=ctk.CTkFont(size=12))
             lbl.pack(fill="x", expand=True)
             lbl.bind("<Button-1>", lambda e, idx=i: self._click_select(idx))
             lbl.bind("<Enter>", lambda e, idx=i: self.select_item(idx))
             self.labels.append(lbl)
-            
+
         self.select_item(0)
         self.deiconify()
-        
+
     def select_item(self, index):
         if not self.labels:
             return
@@ -76,27 +71,27 @@ class AutocompleteMenu(ctk.CTkToplevel):
                     lbl.configure(fg_color=("gray85", "gray30"))
                 else:
                     lbl.configure(fg_color="transparent")
-                    
+
     def move_selection(self, delta):
         if not self.labels:
             return
         new_index = (self.selected_index + delta) % len(self.labels)
         self.select_item(new_index)
-        
+
     def get_selected(self):
         if 0 <= self.selected_index < len(self.items):
             return self.items[self.selected_index]
         return None
-        
+
     def _click_select(self, index):
         self.select_item(index)
         cmd = self.get_selected()
         if cmd:
             self.on_select(cmd)
-            
+
     def hide(self):
         self.withdraw()
-        
+
     def show_at_cursor(self):
         try:
             bbox = self.textbox._textbox.bbox("insert")
@@ -229,11 +224,7 @@ class ChatView(ctk.CTkFrame):
         )
 
         # ── Slash Command Autocomplete ──────────────
-        self.autocomplete_menu = AutocompleteMenu(
-            self.winfo_toplevel(),
-            self.input,
-            self._on_autocomplete_select
-        )
+        self.autocomplete_menu = AutocompleteMenu(self.winfo_toplevel(), self.input, self._on_autocomplete_select)
         self.input.bind("<KeyRelease>", self._on_key_release)
         self.input.bind("<Up>", self._on_autocomplete_up)
         self.input.bind("<Down>", self._on_autocomplete_down)
@@ -314,8 +305,8 @@ class ChatView(ctk.CTkFrame):
         )
 
         # ── 模型 / 推理強度快速選單 ────────────────
+        from agent.auth import get_model, load_config
         from gui.settings import MODELS, REASONING
-        from agent.auth import load_config, get_model
 
         opts_row = ctk.CTkFrame(
             input_frame,
@@ -617,7 +608,7 @@ class ChatView(ctk.CTkFrame):
     def _sync_chat_options(self):
         """從設定檔同步選單（設定頁改過時保持一致）。"""
 
-        from agent.auth import load_config, get_model
+        from agent.auth import get_model, load_config
 
         cfg = load_config()
         model = cfg.get("model") or get_model()
@@ -1079,28 +1070,29 @@ class ChatView(ctk.CTkFrame):
         # Ignore navigation and return keys
         if event.keysym in ("Up", "Down", "Return", "Tab", "Shift_L", "Shift_R", "Control_L", "Control_R"):
             return
-            
+
         text = self.input.get("1.0", "insert")
-        
+
         # Check if we are at the beginning of the line or after a space, and typing a slash command
         if not text:
             self.autocomplete_menu.hide()
             return
-            
+
         # Get the last word being typed
-        lines = text.split('\n')
+        lines = text.split("\n")
         last_line = lines[-1]
-        words = last_line.split(' ')
+        words = last_line.split(" ")
         last_word = words[-1]
-        
-        if last_word.startswith('/'):
+
+        if last_word.startswith("/"):
             from agent.commands import list_commands
+
             cmd_prefix = last_word[1:].lower()
             all_cmds = list_commands()
-            
+
             # Filter commands
-            matched_cmds = [cmd for cmd in all_cmds if cmd['name'].lower().startswith(cmd_prefix)]
-            
+            matched_cmds = [cmd for cmd in all_cmds if cmd["name"].lower().startswith(cmd_prefix)]
+
             if matched_cmds:
                 self.autocomplete_menu.update_items(matched_cmds, cmd_prefix)
                 self.autocomplete_menu.show_at_cursor()
@@ -1129,10 +1121,10 @@ class ChatView(ctk.CTkFrame):
     def _on_autocomplete_select(self, cmd):
         # Replace the current typing word with the full command
         text = self.input.get("1.0", "insert")
-        last_space_idx = text.rfind(' ')
-        last_newline_idx = text.rfind('\n')
+        last_space_idx = text.rfind(" ")
+        last_newline_idx = text.rfind("\n")
         replace_start_idx = max(last_space_idx, last_newline_idx)
-        
+
         if replace_start_idx == -1:
             start_pos = "1.0"
         else:
@@ -1141,18 +1133,18 @@ class ChatView(ctk.CTkFrame):
             start_pos = self.input.search(r"/\w*", "insert", backwards=True, regexp=True, stopindex="1.0")
             if not start_pos:
                 start_pos = "1.0"
-        
+
         self.input.delete(start_pos, "insert")
         self.input.insert("insert", f"/{cmd['name']} ")
         self.autocomplete_menu.hide()
-        
+
     def _on_enter(self, event):
         if self.autocomplete_menu.winfo_ismapped():
             cmd = self.autocomplete_menu.get_selected()
             if cmd:
                 self._on_autocomplete_select(cmd)
             return "break"
-            
+
         from gui.ime import has_composition
 
         if has_composition():
@@ -1162,6 +1154,73 @@ class ChatView(ctk.CTkFrame):
         self._send()
 
         return "break"
+
+    def _show_model_selection_dialog(self):
+        from agent.auth import fetch_available_models
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("切換服務提供者與模型")
+        dialog.geometry("400x300")
+        dialog.transient(self.app)
+        dialog.grab_set()
+
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_columnconfigure(1, weight=2)
+
+        ctk.CTkLabel(dialog, text="Provider:", font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=0, padx=20, pady=(20, 10), sticky="w"
+        )
+
+        providers = ["openai", "ollama"]
+        current_provider = "openai"
+        if hasattr(self.app.agent, "client") and self.app.agent.client.base_url:
+            url_str = str(self.app.agent.client.base_url)
+            if "localhost" in url_str:
+                current_provider = "ollama"
+
+        provider_var = ctk.StringVar(value=current_provider)
+        provider_menu = ctk.CTkOptionMenu(dialog, variable=provider_var, values=providers)
+        provider_menu.grid(row=0, column=1, padx=20, pady=(20, 10), sticky="ew")
+
+        ctk.CTkLabel(dialog, text="Model:", font=ctk.CTkFont(weight="bold")).grid(
+            row=1, column=0, padx=20, pady=10, sticky="w"
+        )
+
+        model_var = ctk.StringVar(value=self.app.agent.model)
+        model_menu = ctk.CTkOptionMenu(dialog, variable=model_var, values=[self.app.agent.model])
+        model_menu.grid(row=1, column=1, padx=20, pady=10, sticky="ew")
+
+        def update_models(*args):
+            p = provider_var.get()
+            try:
+                models = fetch_available_models(p)
+                if not models:
+                    models = ["gpt-6-astra"] if p == "openai" else ["llama3"]
+            except Exception:
+                models = ["自訂"]
+            model_menu.configure(values=models)
+            if self.app.agent.model in models and p == current_provider:
+                model_var.set(self.app.agent.model)
+            else:
+                model_var.set(models[0])
+
+        provider_var.trace_add("write", update_models)
+        update_models()
+
+        def on_confirm():
+            p = provider_var.get()
+            m = model_var.get()
+            from agent.auth import get_openai_client
+
+            try:
+                self.app.agent.client = get_openai_client(provider=p, model=m)
+                self.app.agent.model = m
+                self._add_system(f"✓ 當次對話已切換為：{p.upper()} - {m}")
+            except Exception as e:
+                self._add_system(f"⚠ 切換模型失敗：{e}")
+            dialog.destroy()
+
+        ctk.CTkButton(dialog, text="確認切換", command=on_confirm).grid(row=2, column=0, columnspan=2, pady=30)
 
     def _send(self):
         text = self.input.get(
@@ -1179,6 +1238,29 @@ class ChatView(ctk.CTkFrame):
         # slash command：展開成提示詞模板；未知指令則提示
         display_text = text
         if text.startswith("/"):
+            parts = text.split()
+            if parts[0] == "/model":
+                if len(parts) >= 3:
+                    provider = parts[1].lower()
+                    model_name = parts[2]
+                    from agent.auth import get_openai_client
+
+                    try:
+                        new_client = get_openai_client(provider=provider, model=model_name)
+                        self.app.agent.client = new_client
+                        self.app.agent.model = model_name
+                        self._add_system(f"✓ 當次對話已切換為：{provider.upper()} - {model_name}")
+                        self.input.delete("1.0", "end")
+                        return
+                    except Exception as e:
+                        self._add_system(f"⚠ 切換模型失敗：{e}")
+                        self.input.delete("1.0", "end")
+                        return
+                else:
+                    self._show_model_selection_dialog()
+                    self.input.delete("1.0", "end")
+                    return
+
             from agent.commands import expand_command, get_command
 
             expanded = expand_command(text)

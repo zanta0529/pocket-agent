@@ -6,8 +6,8 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from agent.commands import REPO_COMMANDS_DIR, list_commands
-from agent.subagents import REPO_AGENTS_DIR, list_subagents
 from agent.hooks import EVENTS, load_hooks, save_hooks
+from agent.subagents import REPO_AGENTS_DIR, list_subagents
 
 
 class AutomationView(ctk.CTkFrame):

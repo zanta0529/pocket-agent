@@ -92,7 +92,7 @@ async def generate_image(
     if quality not in VALID_QUALITIES:
         raise ValueError(f"quality 必須是 {sorted(VALID_QUALITIES)}，收到：{quality}")
 
-    client = get_openai_client()
+    client = get_openai_client(provider="openai")
     wrapper_model = os.getenv(_WRAPPER_MODEL_ENV) or get_model()
 
     content: list[dict] = [{"type": "input_text", "text": prompt}]

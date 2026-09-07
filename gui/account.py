@@ -22,7 +22,6 @@ class AccountView(ctk.CTkFrame):
             row=0, column=0, padx=30, pady=(28, 6), sticky="w"
         )
 
-        # 狀態卡片
         card = ctk.CTkFrame(self)
         card.grid(row=1, column=0, padx=30, pady=10, sticky="ew")
 
@@ -32,11 +31,10 @@ class AccountView(ctk.CTkFrame):
         self.status_label = ctk.CTkLabel(card, text="檢查中…", font=ctk.CTkFont(size=14))
         self.status_label.grid(row=1, column=0, padx=20, pady=(0, 20))
 
-        # 按鈕列
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.grid(row=2, column=0, padx=30, pady=6, sticky="w")
 
-        self.login_btn = ctk.CTkButton(btn_row, text="登入 OpenAI 帳號", command=self._login, width=190, height=40)
+        self.login_btn = ctk.CTkButton(btn_row, text="登入", command=self._login, width=190, height=40)
         self.login_btn.grid(row=0, column=0, padx=(0, 10))
 
         self.logout_btn = ctk.CTkButton(
@@ -50,9 +48,6 @@ class AccountView(ctk.CTkFrame):
         )
         self.logout_btn.grid(row=0, column=1)
 
-        # 授權網址區塊：登入期間一直顯示，讓使用者能自己複製貼到瀏覽器。
-        # 自動開啟瀏覽器不見得成功（開錯瀏覽器、開到沒登入的設定檔、
-        # 公司環境的預設程式關聯異常），有網址在手就永遠有退路。
         self.url_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.url_frame.grid(row=3, column=0, padx=30, pady=(6, 0), sticky="ew")
         self.url_frame.grid_columnconfigure(0, weight=1)
@@ -66,7 +61,6 @@ class AccountView(ctk.CTkFrame):
             anchor="w",
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 2))
 
-        # 用 Textbox 而非 Label：Label 的文字選不起來，也就複製不了
         self.url_box = ctk.CTkTextbox(
             self.url_frame,
             height=58,
@@ -85,10 +79,9 @@ class AccountView(ctk.CTkFrame):
         )
         self.copy_btn.grid(row=1, column=1, sticky="n")
 
-        # 說明
         ctk.CTkLabel(
             self,
-            text="需要 ChatGPT Plus 或 Pro 訂閱才能使用。\n登入後 token 會安全存放在本機，重啟不需要再次登入。",
+            text="登入後 token 會安全存放在本機，重啟不需要再次登入。",
             text_color="gray",
             font=ctk.CTkFont(size=12),
             justify="left",
@@ -96,8 +89,6 @@ class AccountView(ctk.CTkFrame):
 
         self._auth_url = ""
         self._refresh()
-
-    # ── 狀態顯示 ─────────────────────────────────
 
     def _refresh(self):
 
@@ -115,43 +106,39 @@ class AccountView(ctk.CTkFrame):
             size=(64, 64),
         )
 
-        from agent.auth import get_user_info, has_valid_token
+        from agent.auth import get_user_info, has_valid_token, load_config
 
-        if has_valid_token():
-            info = get_user_info()
+        cfg = load_config()
+        self.provider = cfg.get("provider", "openai")
+
+        if self.provider == "ollama":
+            self.status_icon.configure(image=self.logged_in_image, text="")
+            self.status_label.configure(text="使用 Ollama 本地模型", text_color=("gray10", "gray90"))
+            self.login_btn.configure(text="無須登入", state="disabled")
+            self.logout_btn.configure(state="disabled")
+        elif has_valid_token(self.provider):
+            info = get_user_info(self.provider)
             email = info.get("email", "")
             plan = info.get("plan", "")
 
             self.status_icon.configure(image=self.logged_in_image, text="")
 
             self.status_label.configure(
-                text=f"已登入\n{email}" + (f"\nChatGPT {plan.capitalize()}" if plan else ""),
+                text=f"已登入 ({self.provider.upper()})\n{email}" + (f"\n{plan.capitalize()}" if plan else ""),
                 text_color=("gray10", "gray90"),
             )
-
-            # 一律恢復可按：_refresh 是唯一反映目前帳號狀態的地方，
-            # 只改文字不改 state 的話，登入中途失敗後按登出，
-            # 按鈕會維持反白且再也按不下去，只能重開程式。
             self.login_btn.configure(text="重新登入", state="normal")
-
+            self.logout_btn.configure(state="normal")
         else:
             self.status_icon.configure(image=self.logged_out_image, text="")
-
-            self.status_label.configure(text="尚未登入", text_color="gray")
-
-            self.login_btn.configure(
-                text="登入 OpenAI 帳號",
-                state="normal",
-            )
+            self.status_label.configure(text=f"尚未登入 ({self.provider.upper()})", text_color="gray")
+            self.login_btn.configure(text=f"登入 {self.provider.upper()} 帳號", state="normal")
+            self.logout_btn.configure(state="normal")
 
     def on_show(self):
         self._refresh()
 
-    # ── 登入 ─────────────────────────────────────
-
     def _login(self):
-        # 取消上一次還沒結束的登入，否則它的 callback server 會一直
-        # 占著 port 1455，下一次登入綁不上而整個流程走不下去。
         if getattr(self, "_login_cancel", None) is not None:
             self._login_cancel.set()
 
@@ -160,9 +147,6 @@ class AccountView(ctk.CTkFrame):
 
         self.login_btn.configure(state="disabled", text="登入中…")
         self.status_icon.configure(text="⏳")
-        # 這裡還沒真的開瀏覽器——實際結果由 on_auth_url 回報後才更新。
-        # 先寫死「瀏覽器已開啟」的話，開不起來時使用者只會看到一句
-        # 與事實不符的提示，也拿不到可以自己貼的網址。
         self.status_label.configure(
             text="正在開啟瀏覽器…",
             text_color="gray",
@@ -176,6 +160,7 @@ class AccountView(ctk.CTkFrame):
                 from agent.auth import get_access_token
 
                 get_access_token(
+                    provider=self.provider,
                     on_auth_url=_on_auth_url,
                     cancel_event=cancel,
                 )
@@ -187,20 +172,13 @@ class AccountView(ctk.CTkFrame):
         threading.Thread(target=_do, daemon=True).start()
 
     def _show_auth_url(self, url: str, opened: bool):
-        """把授權網址攤出來，不論瀏覽器有沒有自動開起來。
-
-        自動開啟成功也照樣顯示：可能開到沒登入該帳號的瀏覽器設定檔，
-        或使用者想改用無痕視窗。手上有網址就永遠有辦法完成登入。
-        """
         self._auth_url = url
-
         self.url_box.configure(state="normal")
         self.url_box.delete("1.0", "end")
         self.url_box.insert("1.0", url)
-        self.url_box.configure(state="disabled")  # 唯讀但仍可選取複製
+        self.url_box.configure(state="disabled")
         self.url_frame.grid()
 
-        # 一併放進剪貼簿，多數情況直接貼上就好
         copied = self._copy_auth_url(silent=True)
 
         if opened:
@@ -220,13 +198,12 @@ class AccountView(ctk.CTkFrame):
             log.warning("無法寫入剪貼簿，使用者需自行從輸入框選取")
 
     def _copy_auth_url(self, silent: bool = False) -> bool:
-        """複製授權網址到剪貼簿；回傳是否成功。"""
         if not getattr(self, "_auth_url", ""):
             return False
         try:
             self.clipboard_clear()
             self.clipboard_append(self._auth_url)
-            self.update_idletasks()  # 沒有這行，剪貼簿在某些情況不會生效
+            self.update_idletasks()
         except Exception:
             log.exception("複製授權網址到剪貼簿失敗")
             if not silent:
@@ -250,22 +227,18 @@ class AccountView(ctk.CTkFrame):
         self.app.reinit()
 
     def show_error(self, msg: str):
-        # 刻意不收起網址區塊：自動流程失敗時，手動貼網址往往還能成功
         self.login_btn.configure(state="normal", text="重新登入")
         self.status_icon.configure(text="❌")
         self.status_label.configure(text=f"登入失敗：\n{msg}", text_color="red")
 
-    # ── 登出 ─────────────────────────────────────
-
     def _logout(self):
         from agent.auth import logout
 
-        # 登入進行到一半就按登出：一併中止，讓 callback server 收掉
         if getattr(self, "_login_cancel", None) is not None:
             self._login_cancel.set()
             self._login_cancel = None
 
-        logout()
+        logout(self.provider)
         self._hide_auth_url()
         self.app.agent = None
         self.app.mcp = None

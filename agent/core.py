@@ -166,7 +166,13 @@ class Agent:
 
     def _build_tools(self) -> list:
         """MCP 工具 + hosted 生圖工具 + 本地文件工具 + skill / subagent 工具。"""
-        tools = list(self.mcp.openai_tools() or []) + [image_tool()] + DOC_TOOLS + SHELL_TOOLS + skill_tools()
+        tools = list(self.mcp.openai_tools() or []) + DOC_TOOLS + SHELL_TOOLS + skill_tools()
+
+        url_str = str(self.client.base_url)
+        is_openai = "openai.com" in url_str or "chatgpt.com" in url_str
+        if is_openai:
+            tools.insert(0, image_tool())
+
         # 子代理不能再開子代理，避免無限遞迴
         if not self._is_subagent:
             tools += subagent_tools()
