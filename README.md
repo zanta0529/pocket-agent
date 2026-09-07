@@ -22,10 +22,17 @@
 - **事件攔截 (Hooks)**：支援在 `before_send`、`after_response`、`before_tool`、`after_tool` 綁定並自動執行 CLI 腳本，所有上下文將透過 `$POCKETAGENT_*` 環境變數傳遞。
 - **快捷指令 (Slash Commands)**：自定義 `/指令`，快速展開預設的 Prompt 模板（支援 `$ARGUMENTS` 參數解析）。
 
-### 🔌 MCP 與內建工具 (Tools & MCP Support)
+### 🛡️ 企業級安全與防護 (Enterprise Security & Safety)
 
+- **環境沙盒 (Shell Sandbox)**：透過 `.env` 啟用 `USE_SANDBOX=wsl` 或 `docker`，將 AI 的終端機指令完全隔離在沙盒中執行，無懼群組原則限制與本機破壞風險。
+- **Artifacts 全域隔離 (Artifact Isolation)**：AI 產出的使用者文件或計畫檔會自動被攔截並集中寫入 `~/.pocket-agent/artifacts/`，嚴格防止專案原始碼被污染。
+- **Context Overflow 滑動視窗保護**：當對話字數突破 12 萬字時，會自動觸發首尾保留與系統截斷機制，確保模型不會因為 Token 爆炸而崩潰。
+
+### 🔌 MCP、內建工具與本地模型 (Tools, MCP & Local Models)
+
+- **支援 Ollama 內網連線**：完整支援切換至 `ollama` 服務提供者，並相容企業內網不安全的代理環境，透過動態捕捉 `OLLAMA_BASE_URL` 完成內網大模型橋接。
 - **完整的 MCP (Model Context Protocol)**：支援 Stdio 與 SSE，輕鬆掛載本地檔案系統、資料庫或遠端工具。
-- **本機檔案與 Shell 控制**：賦予 AI 讀寫文件、執行本機終端機指令（跳出確認視窗防護）的能力。
+- **本機檔案與互動表單 (ask_question)**：賦予 AI 讀寫文件能力，並可主動發起**多選題表單 (Modal)** 阻斷並詢問使用者需求細節，精準收斂架構設計。
 - **內建瀏覽器控制**：自帶 `browser_mcp.py`，支援自動化網頁瀏覽，甚至能掛載您現有的 Chrome/Edge 狀態（保留登入 Cookie）。
 - **進階文檔與生圖**：支援上傳 PDF 解析，並內建呼叫 `/image` 生成圖片並直接存檔。
 
@@ -41,16 +48,18 @@
 ### 啟動專案 (一鍵自動設定)
 
 我們提供了各平台專屬的一鍵啟動腳本，會自動幫您偵測 Python、建立虛擬環境 (venv)、安裝依賴並啟動應用程式。
-*(初次啟動後將自動引導開啟瀏覽器進行 ChatGPT 帳號授權，成功後即可關閉瀏覽器回到 Agent)*
+_(初次啟動後將自動引導開啟瀏覽器進行 ChatGPT 帳號授權，成功後即可關閉瀏覽器回到 Agent)_
 
 **🍎 macOS**
 初次使用需賦予執行權限，之後即可在 Finder 中直接雙擊 `agent.command` 啟動：
+
 ```bash
 chmod +x agent.command
 ./agent.command
 ```
 
 **🐧 Linux (RHEL / Ubuntu 等)**
+
 ```bash
 chmod +x agent.sh
 ./agent.sh
@@ -58,10 +67,12 @@ chmod +x agent.sh
 
 **🪟 Windows**
 直接雙擊執行或在終端機輸入：
+
 ```cmd
 agent.bat
 ```
-*(💡 若希望啟動時隱藏後台的終端機黑視窗，可將 `agent.bat` 內的 `python.exe` 替換為 `pythonw.exe`)*
+
+_(💡 若希望啟動時隱藏後台的終端機黑視窗，可將 `agent.bat` 內的 `python.exe` 替換為 `pythonw.exe`)_
 
 ### 手動啟動 (開發者模式)
 
@@ -80,6 +91,7 @@ python main.py
 
 - `/file <路徑>`：附加本機檔案（包含 PDF 等）作為上下文。
 - `/image <描述>`：呼叫 AI 進行圖像生成 (可搭配 `-i` 引入參考圖作圖生圖)。
+- `/model <provider> <model_name>`：即時切換後端 API (支援 `openai` 或 `ollama`)。
 - `/clear`：清除當前的對話歷史。
 - `/logout`：清除本機登入 Token 憑證。
 - `/quit`：關閉應用程式。
