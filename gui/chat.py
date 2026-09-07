@@ -644,6 +644,8 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
 
             cmd_prefix = last_word[1:].lower()
             all_cmds = list_commands()
+            # 加入內建指令
+            all_cmds.append({"name": "model", "description": "切換當次服務提供者與模型"})
             matched_cmds = []
             for cmd in all_cmds:
                 if cmd["name"].lower().startswith(cmd_prefix):

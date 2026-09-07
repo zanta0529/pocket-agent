@@ -137,6 +137,7 @@ async def _run_cli(system_prompt: str):
                 {"name": "clear", "description": "清除對話"},
                 {"name": "logout", "description": "登出"},
                 {"name": "quit", "description": "離開"},
+                {"name": "model", "description": "切換當次服務提供者與模型"},
             ]
             if provider == "openai":
                 self.builtins.insert(1, {"name": "image", "description": "生圖"})
@@ -309,6 +310,35 @@ async def _run_cli(system_prompt: str):
 
             if found_mentions:
                 console.print()
+
+            if raw.startswith("/model"):
+                parts = raw.split()
+                if len(parts) >= 3:
+                    p = parts[1].lower()
+                    m = parts[2]
+                    from agent.auth import get_openai_client
+
+                    try:
+                        agent.client = get_openai_client(provider=p, model=m)
+                        agent.model = m
+                        console.print(f"[green]✓ 當次對話已切換為：{p.upper()} - {m}[/green]")
+                    except Exception as e:
+                        console.print(f"[red]⚠ 切換模型失敗：{e}[/red]")
+                else:
+                    from agent.auth import fetch_available_models
+
+                    console.print("[yellow]用法: /model <provider> <model_name>[/yellow]")
+                    try:
+                        openai_models = fetch_available_models("openai") or ["gpt-4o", "gpt-4o-mini"]
+                        console.print(f"  [bold]OPENAI 模型:[/bold] {', '.join(openai_models)}")
+                    except Exception:
+                        pass
+                    try:
+                        ollama_models = fetch_available_models("ollama") or ["llama3"]
+                        console.print(f"  [bold]OLLAMA 模型:[/bold] {', '.join(ollama_models)}")
+                    except Exception:
+                        pass
+                continue
 
             if raw.startswith("/image "):
                 if provider != "openai":
