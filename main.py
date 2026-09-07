@@ -103,6 +103,7 @@ async def _run_cli(system_prompt: str):
     )
 
     pending_files: list[str] = []
+    workspace_dirs: list[str] = [str(Path.cwd())]
 
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import Completer, Completion
@@ -115,6 +116,7 @@ async def _run_cli(system_prompt: str):
             self.list_commands = list_commands
             self.builtins = [
                 {"name": "file", "description": "附加檔案"},
+                {"name": "add-dir", "description": "附加目錄內檔案"},
                 {"name": "clear", "description": "清除對話"},
                 {"name": "logout", "description": "登出"},
                 {"name": "quit", "description": "離開"},
@@ -122,8 +124,52 @@ async def _run_cli(system_prompt: str):
             if provider == "openai":
                 self.builtins.insert(1, {"name": "image", "description": "生圖"})
 
+        def _get_path_completions(self, prefix, only_directories=False):
+            import os
+
+            dirname, basename = os.path.split(prefix)
+            search_dir = dirname if dirname else "."
+
+            if not os.path.isdir(search_dir):
+                return
+
+            try:
+                for entry in os.scandir(search_dir):
+                    if basename.lower() in entry.name.lower():
+                        is_dir = entry.is_dir()
+                        if only_directories and not is_dir:
+                            continue
+
+                        display_meta = "Directory" if is_dir else "File"
+                        insert_text = entry.name + (os.sep if is_dir else "")
+
+                        yield Completion(
+                            insert_text, start_position=-len(basename), display=insert_text, display_meta=display_meta
+                        )
+            except PermissionError:
+                pass
+
         def get_completions(self, document, complete_event):
             text = document.text_before_cursor
+
+            # 路徑自動補齊：/add-dir
+            if text.startswith("/add-dir "):
+                yield from self._get_path_completions(text[9:], only_directories=True)
+                return
+
+            # 路徑自動補齊：/file
+            if text.startswith("/file "):
+                yield from self._get_path_completions(text[6:], only_directories=False)
+                return
+
+            # 路徑自動補齊：@
+            import re
+
+            m = re.search(r"(?:^|\s)@(\S*)$", text)
+            if m:
+                yield from self._get_path_completions(m.group(1), only_directories=False)
+                return
+
             if text.startswith("/"):
                 word_before = document.get_word_before_cursor(WORD=True)
                 if word_before.startswith("/"):
@@ -149,12 +195,28 @@ async def _run_cli(system_prompt: str):
                                 display_meta=f"[skill] {cmd['description']}",
                             )
 
-    session = PromptSession(completer=SlashCommandCompleter(), complete_while_typing=True)
+    def get_bottom_toolbar():
+        import shutil
+
+        term_width = shutil.get_terminal_size().columns
+
+        line = "─" * term_width
+        left_text = " ↑/↓ History · Tab Complete"
+        model_str = f" {model} "
+        pad_len = max(0, term_width - len(left_text) - len(model_str))
+
+        bottom_text = f"{left_text}{' ' * pad_len}{model_str}"
+        return HTML(f'<style fg="#555555">{line}\n</style><style fg="gray">{bottom_text}</style>')
+
+    session = PromptSession(
+        completer=SlashCommandCompleter(), complete_while_typing=True, bottom_toolbar=get_bottom_toolbar
+    )
 
     try:
         while True:
             try:
-                raw = await session.prompt_async(HTML("<b><ansicyan>You: </ansicyan></b>"))
+                console.print(f"[color(#555555)]{'─' * console.width}[/color(#555555)]")
+                raw = await session.prompt_async(HTML("<b><ansiblue>></ansiblue></b> "))
             except (EOFError, KeyboardInterrupt):
                 break
 
@@ -181,6 +243,28 @@ async def _run_cli(system_prompt: str):
                 else:
                     console.print(f"[red]找不到：{p}[/red]")
                 continue
+
+            if raw.startswith("/add-dir "):
+                d = raw[9:].strip()
+                p = Path(d)
+                if not p.is_dir():
+                    console.print(f"[red]找不到目錄：{d}[/red]")
+                    continue
+
+                abs_path = str(p.resolve())
+                if abs_path not in workspace_dirs:
+                    workspace_dirs.append(abs_path)
+                console.print(f"[dim]L Added {abs_path} to workspace[/dim]")
+                continue
+
+            import re
+
+            mentions = re.findall(r"(?:^|\s)@(\S+)", raw)
+            for m in mentions:
+                if Path(m).exists() and Path(m).is_file():
+                    if m not in pending_files:
+                        pending_files.append(m)
+                        console.print(f"[dim]✓ 已附加：{m}[/dim]")
 
             if raw.startswith("/image "):
                 if provider != "openai":
