@@ -30,9 +30,13 @@ def test_mcp_artifact_interception():
             "ArtifactMetadata": {"UserFacing": True, "Summary": "A test artifact"},
         }
 
+        import tempfile
+
+        temp_dir = Path(tempfile.mkdtemp())
+
         # 攔截 user_dir 以避免影響真實的 ~/.pocket-agent
         with patch("agent.paths.user_dir") as mock_user_dir:
-            mock_user_dir.return_value = Path("/mock/user/dir")
+            mock_user_dir.return_value = temp_dir
 
             await manager.call("write_to_file", args)
 
@@ -46,7 +50,7 @@ def test_mcp_artifact_interception():
             assert "ArtifactMetadata" not in called_args
 
             # 驗證路徑被替換成 artifacts 隔離區
-            expected_path = str(Path("/mock/user/dir/artifacts/test_doc.md"))
+            expected_path = str(temp_dir / "artifacts" / "test_doc.md")
             assert called_args["TargetFile"] == expected_path
 
     asyncio.run(run_test())
@@ -70,8 +74,12 @@ def test_mcp_artifact_interception_no_user_facing():
             "ArtifactMetadata": {"UserFacing": False, "Summary": "Temporary data"},
         }
 
+        import tempfile
+
+        temp_dir = Path(tempfile.mkdtemp())
+
         with patch("agent.paths.user_dir") as mock_user_dir:
-            mock_user_dir.return_value = Path("/mock/user/dir")
+            mock_user_dir.return_value = temp_dir
 
             await manager.call("write_to_file", args)
 
