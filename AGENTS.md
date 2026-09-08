@@ -9,18 +9,18 @@
 當代理工具載入本檔案時，必須在開始任何任務、分析或程式修改前，依序檢查並讀取以下規範：
 
 1. **專案特定規範（最高優先）**
-    - 檔案：`docs/PROJECT_INSTRUCTIONS.md`
-    - 若存在，必須優先讀取並遵守。
-    - 若不存在，直接跳過，不要臆造內容。
+   - 檔案：`docs/PROJECT_INSTRUCTIONS.md`
+   - 若存在，必須優先讀取並遵守。
+   - 若不存在，直接跳過，不要臆造內容。
 
 2. **通用工程治理規範（主體規則庫）**
-    - 檔案：`docs/AI_INSTRUCTIONS.md`
-    - 必須讀取並遵守其定義的工程開發協定、技術棧偵測、驗證與安全要求。
+   - 檔案：`docs/AI_INSTRUCTIONS.md`
+   - 必須讀取並遵守其定義的工程開發協定、技術棧偵測、驗證與安全要求。
 
 3. **工具專屬入口（僅補充工具行為，不承載實質工程規範）**
-    - Hermes / Generic agents：本檔案。
-    - Google Antigravity CLI (`agy`)：`.agents/AGENTS.md`。
-    - 若不同工具入口與 `docs/` 規範衝突，除非該工具入口只是為了滿足該工具的安全機制，否則以 `docs/PROJECT_INSTRUCTIONS.md` → `docs/AI_INSTRUCTIONS.md` 的順序為準。
+   - Hermes / Generic agents：本檔案。
+   - Google Antigravity CLI (`agy`)：`.agents/AGENTS.md`。
+   - 若不同工具入口與 `docs/` 規範衝突，除非該工具入口只是為了滿足該工具的安全機制，否則以 `docs/PROJECT_INSTRUCTIONS.md` → `docs/AI_INSTRUCTIONS.md` 的順序為準。
 
 ## 🧭 Hermes / Codex 工具層提示
 
@@ -33,6 +33,6 @@
 
 - 本檔案與 `.agents/AGENTS.md` 都應保持「薄」。
 - 不要在任一工具專屬入口複製完整工程規範；新增或修訂實質規則時，請優先更新：
-    1. `docs/PROJECT_INSTRUCTIONS.md`（專案特定覆寫）
-    2. `docs/AI_INSTRUCTIONS.md`（通用工程治理）
+  1. `docs/PROJECT_INSTRUCTIONS.md`（專案特定覆寫）
+  2. `docs/AI_INSTRUCTIONS.md`（通用工程治理）
 - 工具專屬入口只記錄該工具必要的載入路徑、工具名稱差異與安全執行方式。

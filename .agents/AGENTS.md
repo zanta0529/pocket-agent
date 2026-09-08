@@ -23,9 +23,9 @@
 
 - **嚴禁自動測試與建置 (No Automated Testing)**：本機環境受群組原則控管，**禁止**發起 `run_command` 提案來執行測試、建置或 Linter。請嚴格遵守 `docs/AI_INSTRUCTIONS.md` 第 5 節，將驗證指令純文字印出，由使用者手動執行。
 - **強制使用檔案工具與正確參數 (File Tool Rules)**：
-    - 進行任何日常檔案任務時，優先使用環境提供的原生檔案工具（如 `read_file`、`write_to_file`、`replace_file_content` 等），嚴禁透過 `run_command` 呼叫 Shell/PowerShell 腳本繞過處理。
-    - **建立專案檔案警示**：使用 `write_to_file` 建立專案代碼或設定檔時，**嚴禁**傳入 `ArtifactMetadata`，否則會被限制只能寫入 Artifact 目錄。
-    - **邊界釐清**：本機群組原則**僅限制終端機指令（run_command）**，完全不限制原生檔案工具，嚴禁將參數錯誤與群組原則混淆或擴大解釋。
+  - 進行任何日常檔案任務時，優先使用環境提供的原生檔案工具（如 `read_file`、`write_to_file`、`replace_file_content` 等），嚴禁透過 `run_command` 呼叫 Shell/PowerShell 腳本繞過處理。
+  - **建立專案檔案警示**：使用 `write_to_file` 建立專案代碼或設定檔時，**嚴禁**傳入 `ArtifactMetadata`，否則會被限制只能寫入 Artifact 目錄。
+  - **邊界釐清**：本機群組原則**僅限制終端機指令（run_command）**，完全不限制原生檔案工具，嚴禁將參數錯誤與群組原則混淆或擴大解釋。
 - **極例外狀況的提案審查 (Exception Handling)**：只有在「絕對必要且非腳本類操作」（例如純淨的 Git 狀態查詢或環境變數讀取）時，才允許透過 `run_command` 提案，並於對話中清晰說明原因，嚴禁繞過使用者的 Approve/Reject 審查機制。
 - **最小破壞 (Destructive Commands)**：絕對禁止建議或執行不可逆、破壞性或會重置版本紀錄（如強行覆寫 Git 紀錄）的指令。
 - **平台感知 (Platform Awareness)**：在提供任何終端機指令給使用者，或發起極例外提案前，必須先判斷當前作業系統（Windows）以提供正確語法。

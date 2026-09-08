@@ -1,0 +1,239 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Team Standards Tools Configuration",
+  "description": "Schema for the team-config.json file.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "ai": {
+      "type": "object",
+      "properties": {
+        "defaultProvider": {
+          "type": "string",
+          "enum": ["gemini", "openai", "ollama", "claude"]
+        },
+        "providers": {
+          "type": "object",
+          "properties": {
+            "gemini": {
+              "type": "object",
+              "properties": {
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string" },
+                      "enabled": { "type": "integer", "enum": [0, 1] }
+                    },
+                    "required": ["name", "enabled"]
+                  },
+                  "minItems": 1
+                }
+              },
+              "required": ["models"]
+            },
+            "openai": {
+              "type": "object",
+              "properties": {
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string" },
+                      "enabled": { "type": "integer", "enum": [0, 1] }
+                    },
+                    "required": ["name", "enabled"]
+                  },
+                  "minItems": 1
+                }
+              },
+              "required": ["models"]
+            },
+            "claude": {
+              "type": "object",
+              "properties": {
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string" },
+                      "enabled": { "type": "integer", "enum": [0, 1] }
+                    },
+                    "required": ["name", "enabled"]
+                  },
+                  "minItems": 1
+                }
+              },
+              "required": ["models"]
+            },
+            "ollama": {
+              "type": "object",
+              "properties": {
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string" },
+                      "enabled": { "type": "integer", "enum": [0, 1] }
+                    },
+                    "required": ["name", "enabled"]
+                  },
+                  "minItems": 1
+                }
+              },
+              "required": ["models"]
+            }
+          },
+          "required": ["gemini"]
+        },
+        "requestConfig": {
+          "type": "object",
+          "properties": {
+            "maxRetries": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "baseDelay": {
+              "type": "integer",
+              "minimum": 500
+            },
+            "maxDelay": {
+              "type": "integer",
+              "minimum": 1000
+            }
+          }
+        }
+      },
+      "required": ["defaultProvider", "providers"]
+    },
+    "git": {
+      "type": "object",
+      "properties": {
+        "conventionalCommits": {
+          "type": "object",
+          "properties": {
+            "defaultLanguage": {
+              "type": "string",
+              "enum": ["en", "zh-TW"]
+            },
+            "includeBody": {
+              "type": "boolean"
+            },
+            "includeFooter": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "docs": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "string",
+          "enum": ["zh-TW", "en"]
+        }
+      }
+    },
+    "testing": {
+      "type": "object",
+      "properties": {
+        "framework": {
+          "type": "string",
+          "enum": ["vitest"]
+        },
+        "coverageThresholds": {
+          "type": "object",
+          "properties": {
+            "branches": { "type": "number", "minimum": 0, "maximum": 100 },
+            "functions": { "type": "number", "minimum": 0, "maximum": 100 },
+            "lines": { "type": "number", "minimum": 0, "maximum": 100 },
+            "statements": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        }
+      }
+    },
+    "typescript": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "version": { "type": "string" },
+        "strict": { "type": "boolean" },
+        "strictNullChecks": { "type": "boolean" },
+        "strictFunctionTypes": { "type": "boolean" },
+        "strictPropertyInitialization": { "type": "boolean" },
+        "noImplicitAny": { "type": "boolean" },
+        "noImplicitThis": { "type": "boolean" },
+        "alwaysStrict": { "type": "boolean" },
+        "noUnusedLocals": { "type": "boolean" },
+        "noUnusedParameters": { "type": "boolean" },
+        "noImplicitReturns": { "type": "boolean" },
+        "noFallthroughCasesInSwitch": { "type": "boolean" },
+        "esModuleInterop": { "type": "boolean" },
+        "skipLibCheck": { "type": "boolean" },
+        "forceConsistentCasingInFileNames": { "type": "boolean" },
+        "declaration": { "type": "boolean" },
+        "declarationMap": { "type": "boolean" },
+        "sourceMap": { "type": "boolean" },
+        "target": { "type": "string" },
+        "module": { "type": "string" },
+        "moduleResolution": { "type": "string" }
+      }
+    },
+    "codeQuality": {
+      "type": "object",
+      "properties": {
+        "eslint": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "strictMode": { "type": "boolean" },
+            "plugins": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "prettier": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "printWidth": { "type": "integer", "minimum": 40 },
+            "tabWidth": { "type": "integer", "minimum": 1, "maximum": 8 },
+            "useTabs": { "type": "boolean" },
+            "semi": { "type": "boolean" },
+            "singleQuote": { "type": "boolean" },
+            "trailingComma": { "type": "string", "enum": ["es5", "none", "all"] },
+            "bracketSpacing": { "type": "boolean" },
+            "arrowParens": { "type": "string", "enum": ["always", "avoid"] }
+          }
+        }
+      }
+    },
+    "projectTemplates": {
+      "type": "object",
+      "properties": {
+        "recommended": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "legacy": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "required": ["version", "ai", "git", "docs", "testing"]
+}
