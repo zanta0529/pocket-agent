@@ -57,7 +57,7 @@ log = logging.getLogger("pocket-agent")
 from .doctools import DOC_TOOLS, call_doc_tool, is_doc_tool  # noqa: E402
 from .files import FileUploader  # noqa: E402
 from .hooks import run_hooks  # noqa: E402
-from .imagegen import disable_model_param, image_tool, save_image_b64  # noqa: E402
+from .imagegen import image_tool, save_image_b64  # noqa: E402
 from .mcp_manager import MCPManager  # noqa: E402
 from .shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: E402
 from .skills import call_skill_tool, is_skill_tool, skill_tools, skills_index_prompt  # noqa: E402
@@ -302,6 +302,23 @@ class Agent:
 
         consecutive_errors = 0  # 連續全錯輪次計數
 
+        url_str = str(self.client.base_url)
+        is_openai = "openai.com" in url_str or "chatgpt.com" in url_str
+        provider = "openai" if is_openai else "ollama"
+
+        from .engines import (
+            EngineFactory,
+            EventImageGenerationDone,
+            EventText,
+            EventThinking,
+            EventToolCallDelta,
+            EventToolCallDone,
+            EventToolCallStart,
+            EventUsage,
+        )
+
+        engine = EngineFactory.create(provider, self.client, self.model)
+
         for _ in range(self.max_tool_rounds):
             if self.cancel_requested:
                 return "", self._stopped_reply("")
@@ -313,102 +330,53 @@ class Agent:
             # 新一輪開始（工具呼叫後重跑時，讓 GUI 清掉上一輪的暫定文字）
             self._emit("round_start")
 
-            try:
-                stream = await self.client.responses.create(
-                    model=self.model,
-                    input=input_items,
-                    instructions=self._instructions(),
-                    tools=tools,
-                    store=False,
-                    stream=True,
-                    reasoning=reasoning_param,
-                )
-            except Exception as e:
-                # 後端可能不吃 image_generation 工具的 model 參數 → 拿掉重試一次
-                if "model" in str(e).lower() or "unknown" in str(e).lower():
-                    disable_model_param()
-                    tools = self._build_tools()
-                    stream = await self.client.responses.create(
-                        model=self.model,
-                        input=input_items,
-                        instructions=self._instructions(),
-                        tools=tools,
-                        store=False,
-                        stream=True,
-                        reasoning=reasoning_param,
-                    )
-                else:
-                    raise
+            stream = engine.stream_chat(
+                input_items=input_items,
+                instructions=self._instructions(),
+                tools=tools,
+                reasoning_param=reasoning_param,
+                cancel_check=lambda: self.cancel_requested,
+                build_tools_callback=self._build_tools,
+            )
 
             async for event in stream:
                 if self.cancel_requested:
-                    try:
-                        await stream.close()
-                    except Exception:
-                        pass
                     break
 
-                etype = getattr(event, "type", "")
+                if isinstance(event, EventThinking):
+                    thinking_chunks.append(event.delta)
+                    self._emit("thinking", event.delta)
 
-                # ── 推理摘要（思考過程）────────────────
-                if etype == "response.reasoning_summary_text.delta":
-                    delta = getattr(event, "delta", "")
-                    thinking_chunks.append(delta)
-                    self._emit("thinking", delta)
+                elif isinstance(event, EventText):
+                    text_chunks.append(event.delta)
+                    self._emit("text", event.delta)
 
-                # ── 最終回覆文字 ──────────────────────
-                elif etype == "response.output_text.delta":
-                    delta = getattr(event, "delta", "")
-                    text_chunks.append(delta)
-                    self._emit("text", delta)
+                elif isinstance(event, EventToolCallStart):
+                    func_calls[event.call_id] = {
+                        "call_id": event.call_id,
+                        "name": event.name,
+                        "arguments": "",
+                    }
+                    log.debug("TOOL item.added call_id=%s name=%s", event.call_id, event.name)
 
-                # ── 工具呼叫：開始 ────────────────────
-                elif etype == "response.output_item.added":
-                    item = getattr(event, "item", None)
-                    if item and getattr(item, "type", "") == "function_call":
-                        cid = item.call_id
-                        func_calls[cid] = {
-                            "call_id": cid,
-                            "name": item.name,
-                            "arguments": getattr(item, "arguments", "") or "",
-                        }
-                        log.debug(
-                            "TOOL item.added call_id=%s name=%s args=%r", cid, item.name, func_calls[cid]["arguments"]
-                        )
+                elif isinstance(event, EventToolCallDelta):
+                    if event.call_id in func_calls:
+                        func_calls[event.call_id]["arguments"] += event.delta
+                    log.debug("TOOL args.delta call_id=%s delta=%r", event.call_id, event.delta)
 
-                # ── 工具呼叫：參數串流 ─────────────────
-                elif etype == "response.function_call_arguments.delta":
-                    cid = getattr(event, "call_id", None)
-                    delta = getattr(event, "delta", "")
-                    log.debug("TOOL args.delta call_id=%s delta=%r", cid, delta)
-                    if cid and cid in func_calls:
-                        func_calls[cid]["arguments"] += delta
+                elif isinstance(event, EventToolCallDone):
+                    if event.call_id in func_calls:
+                        func_calls[event.call_id]["arguments"] = event.full_args
+                    log.debug("TOOL item.done call_id=%s full_args=%r", event.call_id, event.full_args)
 
-                # ── 工具呼叫：完成（以完整 arguments 覆蓋 delta 累積值）
-                elif etype == "response.output_item.done":
-                    item = getattr(event, "item", None)
-                    if item and getattr(item, "type", "") == "function_call":
-                        cid = item.call_id
-                        full_args = getattr(item, "arguments", "") or ""
-                        log.debug("TOOL item.done call_id=%s full_args=%r", cid, full_args)
-                        if cid in func_calls:
-                            func_calls[cid]["arguments"] = full_args
-                    # ── 生圖完成：base64 PNG 存檔 ──────────
-                    elif item and getattr(item, "type", "") == "image_generation_call":
-                        b64 = getattr(item, "result", None)
-                        if b64:
-                            path = save_image_b64(b64)
-                            self.last_images.append(path)
-                            log.info("IMAGE saved %s", path)
+                elif isinstance(event, EventImageGenerationDone):
+                    path = save_image_b64(event.b64)
+                    self.last_images.append(path)
+                    log.info("IMAGE saved %s", path)
 
                 # ── 串流結束，提取用量 ────────────────
-                elif etype == "response.done":
-                    usage = getattr(getattr(event, "response", None), "usage", None)
-                    if usage:
-                        if isinstance(usage, dict):
-                            self.total_tokens += usage.get("total_tokens", 0)
-                        else:
-                            self.total_tokens += getattr(usage, "total_tokens", 0)
+                elif isinstance(event, EventUsage):
+                    self.total_tokens += event.total_tokens
 
             thinking = "".join(thinking_chunks)
             text = "".join(text_chunks)

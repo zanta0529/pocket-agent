@@ -22,7 +22,11 @@ def test_fetch_available_models_ollama():
     mock_client_class = MagicMock()
     mock_client_class.return_value.__enter__.return_value = mock_client_instance
 
-    with patch("agent.auth.httpx.Client", mock_client_class):
+    with (
+        patch("agent.auth.httpx.Client", mock_client_class),
+        patch("agent.auth.load_config", return_value={}),
+        patch("dotenv.load_dotenv"),
+    ):
         with patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://192.168.1.100:11434"}):
             models = fetch_available_models(provider="ollama")
 
@@ -51,7 +55,11 @@ def test_fetch_available_models_ollama_v1_suffix():
     mock_client_class = MagicMock()
     mock_client_class.return_value.__enter__.return_value = mock_client_instance
 
-    with patch("agent.auth.httpx.Client", mock_client_class):
+    with (
+        patch("agent.auth.httpx.Client", mock_client_class),
+        patch("agent.auth.load_config", return_value={}),
+        patch("dotenv.load_dotenv"),
+    ):
         with patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://192.168.1.100:11434/v1"}):
             models = fetch_available_models(provider="ollama")
 
@@ -69,6 +77,10 @@ def test_fetch_available_models_ollama_exception():
     mock_client_class = MagicMock()
     mock_client_class.return_value.__enter__.return_value = mock_client_instance
 
-    with patch("agent.auth.httpx.Client", mock_client_class):
+    with (
+        patch("agent.auth.httpx.Client", mock_client_class),
+        patch("agent.auth.load_config", return_value={}),
+        patch("dotenv.load_dotenv"),
+    ):
         models = fetch_available_models(provider="ollama")
         assert models == []
