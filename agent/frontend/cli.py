@@ -196,10 +196,9 @@ class CliFrontend(FrontendStrategy):
         def _(event):
             b = event.app.current_buffer
             if b.complete_state:
-                # 結束補齊狀態，讓游標停在選定的項目後面
-                b.complete_state = None
+                b.complete_next()
             else:
-                b.start_completion(select_first=False)
+                b.start_completion(select_first=True)
 
         session = PromptSession(
             completer=SlashCommandCompleter(),

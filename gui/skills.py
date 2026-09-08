@@ -6,7 +6,7 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from agent.skills import REPO_SKILLS_DIR, _parse, list_skills
+from agent.skills import REPO_SKILLS_DIR, list_skills
 
 
 class SkillsView(ctk.CTkFrame):
@@ -200,7 +200,9 @@ class SkillsView(ctk.CTkFrame):
 
     def _edit(self, skill: dict):
         try:
-            meta, body = _parse(skill["path"].read_text(encoding="utf-8"))
+            from agent.registry import parse_frontmatter
+
+            meta, body = parse_frontmatter(skill["path"].read_text(encoding="utf-8"))
         except Exception as e:
             messagebox.showerror("讀取失敗", str(e))
             return

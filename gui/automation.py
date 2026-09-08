@@ -130,9 +130,9 @@ class AutomationView(ctk.CTkFrame):
         self._cmd_editor.grid()
 
     def _edit_command(self, cmd):
-        from agent.commands import _parse
+        from agent.registry import parse_frontmatter
 
-        meta, body = _parse(cmd["path"].read_text(encoding="utf-8"))
+        meta, body = parse_frontmatter(cmd["path"].read_text(encoding="utf-8"))
         self._cmd_editing = cmd["path"]
         self._cmd_name.delete(0, "end")
         self._cmd_name.insert(0, cmd["name"])
