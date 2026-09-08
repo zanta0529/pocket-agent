@@ -16,13 +16,13 @@ SKILL.md 格式：
 """
 
 import logging
-import re
 import shutil
 import tempfile
 import zipfile
 from pathlib import Path
 
 from .paths import bundle_dir, user_dir
+from .registry import MarkdownRegistry, parse_frontmatter
 
 log = logging.getLogger("pocket-agent")
 
@@ -30,24 +30,20 @@ REPO_SKILLS_DIR = bundle_dir() / "skills"  # 內建，隨程式發佈（唯讀�
 USER_SKILLS_DIR = user_dir() / "skills"  # 使用者自訂／匯入（可寫）
 
 
-# ── 解析 ─────────────────────────────────────────
+class SkillRegistry(MarkdownRegistry):
+    def get_glob_pattern(self) -> str:
+        return "*/SKILL.md"
 
-_FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+    def parse_item(self, path: Path, meta: dict, body: str) -> dict:
+        return {
+            "name": meta.get("name") or path.parent.name,
+            "description": meta.get("description", ""),
+            "path": path,
+        }
 
 
-def _parse(text: str) -> tuple[dict, str]:
-    """回傳 (frontmatter dict, 本文)。沒有 frontmatter 時 meta 為空。"""
-    match = _FRONTMATTER.match(text)
-    if not match:
-        return {}, text
-
-    meta: dict = {}
-    for line in match.group(1).splitlines():
-        if ":" in line:
-            key, _, value = line.partition(":")
-            meta[key.strip()] = value.strip()
-
-    return meta, text[match.end() :]
+# 全域實例
+_registry = SkillRegistry(REPO_SKILLS_DIR, USER_SKILLS_DIR)
 
 
 # ── 掃描與載入 ────────────────────────────────────
@@ -55,39 +51,12 @@ def _parse(text: str) -> tuple[dict, str]:
 
 def list_skills() -> list[dict]:
     """列出所有 skill 的 {name, description, path}，使用者目錄優先。"""
-    found: dict[str, dict] = {}
-
-    for base in (REPO_SKILLS_DIR, USER_SKILLS_DIR):
-        if not base.is_dir():
-            continue
-        for skill_md in sorted(base.glob("*/SKILL.md")):
-            try:
-                meta, _ = _parse(skill_md.read_text(encoding="utf-8"))
-            except Exception:
-                log.warning("skill 解析失敗：%s", skill_md)
-                continue
-
-            name = meta.get("name") or skill_md.parent.name
-            found[name] = {
-                "name": name,
-                "description": meta.get("description", ""),
-                "path": skill_md,
-            }
-
-    return list(found.values())
+    return _registry.list_all()
 
 
 def load_skill(name: str) -> str | None:
     """回傳指定 skill 的本文；找不到時回傳 None。"""
-    for skill in list_skills():
-        if skill["name"] == name:
-            try:
-                _, body = _parse(skill["path"].read_text(encoding="utf-8"))
-                return body.strip()
-            except Exception as e:
-                log.error("skill 讀取失敗 %s: %s", name, e)
-                return None
-    return None
+    return _registry.read_body(name)
 
 
 # ── ZIP 匯入（相容 ChatGPT / Claude 的 Agent Skills zip）──
@@ -138,7 +107,7 @@ def import_skill_zip(zip_path: str | Path, overwrite: bool = False) -> list[str]
             plans: list[tuple[Path, Path]] = []
             for d in skill_dirs:
                 if d == tmp:
-                    meta, _ = _parse((d / "SKILL.md").read_text(encoding="utf-8"))
+                    meta, _ = parse_frontmatter((d / "SKILL.md").read_text(encoding="utf-8"))
                     name = meta.get("name") or zip_path.stem
                 else:
                     name = d.name

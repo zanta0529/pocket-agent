@@ -15,56 +15,41 @@
 
 import logging
 import re
+from pathlib import Path
 
 from .paths import bundle_dir, user_dir
+from .registry import MarkdownRegistry
 
 log = logging.getLogger("pocket-agent")
 
 REPO_COMMANDS_DIR = bundle_dir() / "commands"  # 內建，隨程式發佈（唯讀）
 USER_COMMANDS_DIR = user_dir() / "commands"  # 使用者自訂／plugin 裝入（可寫）
 
-_FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+
+class CommandRegistry(MarkdownRegistry):
+    def get_glob_pattern(self) -> str:
+        return "*.md"
+
+    def parse_item(self, path: Path, meta: dict, body: str) -> dict:
+        return {
+            "name": path.stem,
+            "description": meta.get("description", ""),
+            "argument_hint": meta.get("argument-hint", ""),
+            "path": path,
+        }
 
 
-def _parse(text: str) -> tuple[dict, str]:
-    match = _FRONTMATTER.match(text)
-    if not match:
-        return {}, text
-    meta: dict = {}
-    for line in match.group(1).splitlines():
-        if ":" in line:
-            key, _, value = line.partition(":")
-            meta[key.strip()] = value.strip()
-    return meta, text[match.end() :]
+# 全域實例
+_registry = CommandRegistry(REPO_COMMANDS_DIR, USER_COMMANDS_DIR)
 
 
 def list_commands() -> list[dict]:
     """所有 slash command 的 {name, description, argument_hint, path}。"""
-    found: dict[str, dict] = {}
-    for base in (REPO_COMMANDS_DIR, USER_COMMANDS_DIR):
-        if not base.is_dir():
-            continue
-        for md in sorted(base.glob("*.md")):
-            try:
-                meta, _ = _parse(md.read_text(encoding="utf-8"))
-            except Exception:
-                log.warning("command 解析失敗：%s", md)
-                continue
-            name = md.stem
-            found[name] = {
-                "name": name,
-                "description": meta.get("description", ""),
-                "argument_hint": meta.get("argument-hint", ""),
-                "path": md,
-            }
-    return list(found.values())
+    return _registry.list_all()
 
 
 def get_command(name: str) -> dict | None:
-    for cmd in list_commands():
-        if cmd["name"] == name:
-            return cmd
-    return None
+    return _registry.get_item(name)
 
 
 def expand_command(text: str) -> str | None:
@@ -77,10 +62,8 @@ def expand_command(text: str) -> str | None:
     if cmd is None:
         return None
 
-    try:
-        _, template = _parse(cmd["path"].read_text(encoding="utf-8"))
-    except Exception as e:
-        log.error("command 讀取失敗 %s: %s", head, e)
+    template = _registry.read_body(cmd["name"])
+    if template is None:
         return None
 
     args = rest.strip()

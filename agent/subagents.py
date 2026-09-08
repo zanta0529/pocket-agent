@@ -15,59 +15,43 @@
 """
 
 import logging
-import re
+from pathlib import Path
 
 from .paths import bundle_dir, user_dir
+from .registry import MarkdownRegistry
 
 log = logging.getLogger("pocket-agent")
 
 REPO_AGENTS_DIR = bundle_dir() / "agents"  # 內建，隨程式發佈（唯讀）
 USER_AGENTS_DIR = user_dir() / "agents"  # 使用者自訂／plugin 裝入（可寫）
 
-_FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+
+class SubagentRegistry(MarkdownRegistry):
+    def get_glob_pattern(self) -> str:
+        return "*.md"
+
+    def parse_item(self, path: Path, meta: dict, body: str) -> dict:
+        return {
+            "name": meta.get("name") or path.stem,
+            "description": meta.get("description", ""),
+            "model": meta.get("model", "") or None,
+            "reasoning_effort": meta.get("reasoning_effort", "") or None,
+            "prompt": body.strip(),
+            "path": path,
+        }
 
 
-def _parse(text: str) -> tuple[dict, str]:
-    match = _FRONTMATTER.match(text)
-    if not match:
-        return {}, text
-    meta: dict = {}
-    for line in match.group(1).splitlines():
-        if ":" in line:
-            key, _, value = line.partition(":")
-            meta[key.strip()] = value.strip()
-    return meta, text[match.end() :]
+# 全域實例
+_registry = SubagentRegistry(REPO_AGENTS_DIR, USER_AGENTS_DIR)
 
 
 def list_subagents() -> list[dict]:
     """所有 subagent 的 {name, description, model, reasoning_effort, prompt, path}。"""
-    found: dict[str, dict] = {}
-    for base in (REPO_AGENTS_DIR, USER_AGENTS_DIR):
-        if not base.is_dir():
-            continue
-        for md in sorted(base.glob("*.md")):
-            try:
-                meta, body = _parse(md.read_text(encoding="utf-8"))
-            except Exception:
-                log.warning("subagent 解析失敗：%s", md)
-                continue
-            name = meta.get("name") or md.stem
-            found[name] = {
-                "name": name,
-                "description": meta.get("description", ""),
-                "model": meta.get("model", "") or None,
-                "reasoning_effort": meta.get("reasoning_effort", "") or None,
-                "prompt": body.strip(),
-                "path": md,
-            }
-    return list(found.values())
+    return _registry.list_all()
 
 
 def get_subagent(name: str) -> dict | None:
-    for sa in list_subagents():
-        if sa["name"] == name:
-            return sa
-    return None
+    return _registry.get_item(name)
 
 
 # ── run_subagent 工具 ─────────────────────────────
