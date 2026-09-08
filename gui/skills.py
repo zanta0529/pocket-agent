@@ -159,10 +159,10 @@ class SkillsView(ctk.CTkFrame):
                 anchor="w",
             ).grid(row=1, column=0, padx=16, pady=(0, 2), sticky="w")
 
-            source = "專案" if REPO_SKILLS_DIR in skill["path"].parents else "個人"
+            source = "內建技能" if REPO_SKILLS_DIR in skill["path"].parents else "個人技能"
             ctk.CTkLabel(
                 card,
-                text=f"[{source}] {skill['path']}",
+                text=f"[{source}]",
                 text_color=("gray55", "gray45"),
                 font=ctk.CTkFont(size=10),
                 anchor="w",

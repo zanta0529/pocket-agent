@@ -10,6 +10,8 @@ _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
     """解析 Markdown 開頭的 YAML frontmatter，回傳 (meta_dict, body)。"""
+    if text.startswith("\ufeff"):
+        text = text[1:]
     match = _FRONTMATTER.match(text)
     if not match:
         return {}, text
