@@ -1102,10 +1102,6 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
             try:
                 thinking, reply, usage_str = future.result()
 
-                # 在 GUI 中，依然把用量加在最尾端（比照原本的顯示方式）
-                if usage_str:
-                    reply += f"\n\n_({usage_str})_"
-
                 # 已經即時顯示過就不再補一份，否則會出現兩塊思考過程
                 if thinking and not self._streamed_thinking:
                     self._add_reasoning(
@@ -1128,6 +1124,8 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
                         reply,
                         "assistant",
                     )
+
+                self._add_message_footer(reply, usage_str)
 
                 for image_path in getattr(
                     self.app.agent,
@@ -1593,6 +1591,39 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
         self._scroll_bottom()
 
         return row, textbox
+
+    def _add_message_footer(self, text_to_copy: str, usage_str: str):
+        row = ctk.CTkFrame(self.msg_frame, fg_color="transparent")
+        row.pack(fill="x", padx=14, pady=(0, 10))
+
+        if usage_str:
+            ctk.CTkLabel(row, text=usage_str, text_color="gray", font=ctk.CTkFont(size=11)).pack(
+                side="left", padx=(4, 10)
+            )
+
+        def copy_text():
+            self.clipboard_clear()
+            self.clipboard_append(text_to_copy)
+            self.update_idletasks()
+            copy_btn.configure(text="已複製")
+            self.after(1500, lambda: copy_btn.configure(text="複製"))
+
+        copy_btn = ctk.CTkButton(
+            row,
+            text="複製",
+            width=50,
+            height=20,
+            corner_radius=4,
+            fg_color="transparent",
+            text_color="gray",
+            hover_color=("gray80", "gray30"),
+            font=ctk.CTkFont(size=11),
+            command=copy_text,
+        )
+        copy_btn.pack(side="left")
+
+        self.scroll_manager.bind_outer(row)
+        self._scroll_bottom()
 
     # ─────────────────────────────────────────────
     # 推理展開區塊
@@ -2135,6 +2166,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
                 self._add_bubble(text, bubble_role)
 
                 if role == "assistant":
+                    self._add_message_footer(text, "")
                     # 回覆中的圖片或文件路徑若仍存在，重新顯示。
                     for line in text.splitlines():
                         line = line.strip()

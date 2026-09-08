@@ -297,7 +297,9 @@ def get_openai_client(provider: str = None, model: str = None):
         from agent.paths import env_path
 
         load_dotenv(env_path(), override=True)
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        # 優先從 config 讀取，沒有再從 .env 讀取
+        base_url = cfg.get("ollama_base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        base_url = base_url.rstrip("/")
         if not base_url.endswith("/v1"):
             base_url = f"{base_url}/v1"
         api_key = "ollama"
@@ -332,7 +334,9 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
             from agent.paths import env_path
 
             load_dotenv(env_path(), override=True)
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+            cfg = load_config()
+            base_url = cfg.get("ollama_base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            base_url = base_url.rstrip("/")
             if base_url.endswith("/v1"):
                 base_url = base_url[:-3]
             with httpx.Client(trust_env=False) as client:
