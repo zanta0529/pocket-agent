@@ -51,3 +51,16 @@ def test_banner_narrow_and_wide():
     assert "╭──────╮" in stream_wide.getvalue()
     assert "Pocket Agent" in stream_wide.getvalue()
     assert "你的終端 AI 工作夥伴" in stream_wide.getvalue()
+
+
+def test_event_tool_classification():
+    stream = StringIO()
+    renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=80))
+    renderer.event("tool_start", {"name": "read_file"})
+    renderer.event("tool_start", {"name": "write_to_file"})
+    renderer.event("tool_start", {"name": "run_command"})
+
+    output = stream.getvalue()
+    assert "● Read(read_file)" in output
+    assert "● Write(write_to_file)" in output
+    assert "● Action(run_command)" in output

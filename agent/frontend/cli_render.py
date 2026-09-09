@@ -72,7 +72,7 @@ class CliRenderer:
     def user(self, raw: str) -> None:
         self.console.print()
         # Text keeps user markup literal while retaining intentional newlines.
-        self.console.print(Text("› " + "\n".join(plain(line) for line in raw.split("\n"))))
+        self.console.print(Text("› " + "\n".join(plain(line) for line in raw.split("\n")), style="bold blue"))
 
     def reply(self, reply: str, seconds: float, tokens: int) -> None:
         self.message("● Pocket Agent", "bold #B8860B")
@@ -83,4 +83,17 @@ class CliRenderer:
         if kind == "system":
             self.message(data)
         elif kind == "read":
-            self.message(f"讀取中：{data}")
+            self.message(f"● Read({data})", "bold yellow")
+        elif kind == "tool_start":
+            if isinstance(data, dict):
+                name = data.get("name", str(data))
+            else:
+                name = str(data)
+
+            name_lower = name.lower()
+            if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep"]):
+                self.message(f"● Read({name})", "bold yellow")
+            elif any(kw in name_lower for kw in ["write", "replace", "edit", "patch", "delete", "create"]):
+                self.message(f"● Write({name})", "bold red")
+            else:
+                self.message(f"● Action({name})", "bold cyan")
