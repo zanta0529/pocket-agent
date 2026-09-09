@@ -39,6 +39,16 @@ class OllamaChatEngine(BaseEngine):
         for item in input_items:
             # We copy to avoid mutating the original history
             msg = dict(item)
+            if isinstance(msg.get("content"), list):
+                new_content = []
+                for part in msg["content"]:
+                    if part.get("type") == "input_text":
+                        new_content.append({"type": "text", "text": part.get("text", "")})
+                    elif part.get("type") == "input_image":
+                        new_content.append({"type": "image_url", "image_url": {"url": part.get("image_url", "")}})
+                    else:
+                        new_content.append(part)
+                msg["content"] = new_content
             messages.append(msg)
 
         # Optional: formatting tools for chat completions
