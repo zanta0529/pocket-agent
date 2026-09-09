@@ -16,8 +16,10 @@ def plain(value: object) -> str:
 
 
 def clip(value: str, width: int) -> str:
+    if width <= 0:
+        return ""
     text = Text(plain(value))
-    text.truncate(max(0, width), overflow="ellipsis")
+    text.truncate(width, overflow="ellipsis")
     return text.plain
 
 
@@ -44,9 +46,26 @@ class CliRenderer:
     def message(self, value: object, style: str = "dim") -> None:
         self.console.print(Text(plain(value), style=style))
 
-    def welcome(self, state: CliState, tools: list[str]) -> None:
-        self.message("Pocket Agent", "bold #B8860B")
+    def banner(self) -> None:
+        width = self.console.width
+        if width < 40:
+            self.message("Pocket Agent", "bold #B8860B")
+        else:
+            # Pocket Agent 標誌與口號
+            self.console.print(
+                Text.assemble(
+                    ("╭──────╮\n", "dim"),
+                    ("│ >_   │  ", "dim"),
+                    ("Pocket Agent\n", "bold #B8860B"),
+                    ("│      │  ", "dim"),
+                    ("你的終端 AI 工作夥伴\n", "dim"),
+                    ("╰───╲──╯", "dim"),
+                )
+            )
         self.message(Path.cwd())
+        self.message("─" * min(width, 80), "dim")
+
+    def welcome(self, state: CliState, tools: list[str]) -> None:
         self.message(f"{state.provider} / {state.model} · {len(tools)} 個 MCP 工具 · 就緒")
         self.message("/ 指令 · @ 檔案 · Tab 補全 · Enter 送出 · Esc 後 Enter 換行")
 

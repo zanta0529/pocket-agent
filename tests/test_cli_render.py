@@ -34,3 +34,20 @@ def test_plain_output_preserves_literal_markup_and_markdown():
 def test_toolbar_strips_control_characters():
     text = fragment_list_to_text(toolbar(CliState("openai", "x\x1b[2J\ny"), 80))
     assert "\x1b" not in text and "\n" not in text
+
+
+def test_banner_narrow_and_wide():
+    # Narrow width
+    stream_narrow = StringIO()
+    renderer_narrow = CliRenderer(Console(file=stream_narrow, force_terminal=False, no_color=True, width=39))
+    renderer_narrow.banner()
+    assert "╭──────╮" not in stream_narrow.getvalue()
+    assert "Pocket Agent" in stream_narrow.getvalue()
+
+    # Wide width
+    stream_wide = StringIO()
+    renderer_wide = CliRenderer(Console(file=stream_wide, force_terminal=False, no_color=True, width=80))
+    renderer_wide.banner()
+    assert "╭──────╮" in stream_wide.getvalue()
+    assert "Pocket Agent" in stream_wide.getvalue()
+    assert "你的終端 AI 工作夥伴" in stream_wide.getvalue()

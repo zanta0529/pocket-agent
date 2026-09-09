@@ -108,6 +108,7 @@ class CliFrontend(FrontendStrategy):
         mcp = None
         agent = None
         try:
+            renderer.banner()
             client = get_openai_client()
             mcp = MCPManager()
             renderer.message("啟動 MCP servers…")
