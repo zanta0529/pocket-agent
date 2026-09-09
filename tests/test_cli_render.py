@@ -59,8 +59,10 @@ def test_event_tool_classification():
     renderer.event("tool_start", {"name": "read_file"})
     renderer.event("tool_start", {"name": "write_to_file"})
     renderer.event("tool_start", {"name": "run_command"})
+    renderer.event("read", "path.txt")
 
     output = stream.getvalue()
-    assert "● Read(read_file)" in output
-    assert "● Write(write_to_file)" in output
-    assert "● Action(run_command)" in output
+    assert "● Read (read_file)" in output
+    assert "● Write (write_to_file)" in output
+    assert "● Action (run_command)" in output
+    assert "● Read (path.txt)" in output

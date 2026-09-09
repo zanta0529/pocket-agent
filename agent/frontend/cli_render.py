@@ -83,17 +83,45 @@ class CliRenderer:
         if kind == "system":
             self.message(data)
         elif kind == "read":
-            self.message(f"● Read({data})", "bold yellow")
+            self.console.print(Text.assemble(("● ", "bold green"), ("Read", "bold yellow"), (f" ({plain(data)})", "")))
         elif kind == "tool_start":
             if isinstance(data, dict):
                 name = data.get("name", str(data))
+                args = data.get("arguments", "")
+                if isinstance(args, str) and len(args) > 50:
+                    args = args[:47] + "..."
             else:
                 name = str(data)
+                args = ""
 
             name_lower = name.lower()
+
+            danger_kws = [
+                "bash",
+                "python",
+                "node",
+                "powershell",
+                "shell",
+                "run",
+                "delete",
+                "move",
+                "rm",
+                "mv",
+                "command",
+                "cmd",
+            ]
+            bullet_color = "bold red" if any(kw in name_lower for kw in danger_kws) else "bold green"
+
             if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep"]):
-                self.message(f"● Read({name})", "bold yellow")
+                action = "Read"
+                action_color = "bold yellow"
             elif any(kw in name_lower for kw in ["write", "replace", "edit", "patch", "delete", "create"]):
-                self.message(f"● Write({name})", "bold red")
+                action = "Write"
+                action_color = "bold red"
             else:
-                self.message(f"● Action({name})", "bold cyan")
+                action = "Action"
+                action_color = "bold cyan"
+
+            arg_str = f" ({name})" if not args else f" ({name} {args})"
+
+            self.console.print(Text.assemble(("● ", bullet_color), (action, action_color), (plain(arg_str), "")))
