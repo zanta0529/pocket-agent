@@ -98,3 +98,97 @@ def test_custom_expansion_failure_retains_queue():
         with pytest.raises(ValueError):
             asyncio.run(handler.dispatch("/custom"))
     assert state.pending_files == ["pending"]
+
+
+# ── F5: /session 指令 ─────────────────────────────────
+
+
+def _make_handler(agent=None, state=None, renderer=None):
+    agent = agent or Mock()
+    state = state or CliState("openai", "model")
+    renderer = renderer or Mock()
+    return CommandHandler(agent, state, Mock(), renderer, [])
+
+
+def test_session_list_empty():
+    """空白時顯示「尚無歷史對話」。"""
+    renderer = Mock()
+    handler = _make_handler(renderer=renderer)
+    with patch("agent.sessions.list_sessions", return_value=[]):
+        asyncio.run(handler.dispatch("/session list"))
+    renderer.message.assert_called_once()
+    assert "尚無歷史對話" in renderer.message.call_args.args[0]
+
+
+def test_session_list_shows_recent():
+    """list_sessions 回傳 2 筆時，應印出 2 行摘要。"""
+    import time
+
+    renderer = Mock()
+    handler = _make_handler(renderer=renderer)
+    sessions = [
+        {"id": "20260909-120000-aabbcc", "title": "第一輪對話", "updated_at": time.time()},
+        {"id": "20260909-130000-ddeeff", "title": "第二輪對話", "updated_at": time.time()},
+    ]
+    with patch("agent.sessions.list_sessions", return_value=sessions):
+        asyncio.run(handler.dispatch("/session"))
+    assert renderer.message.call_count == 2
+    first_call = renderer.message.call_args_list[0].args[0]
+    assert "20260909-120000-aabbcc" in first_call
+    assert "第一輪對話" in first_call
+
+
+def test_session_load_ok():
+    """/session load <id> 成功時更新 agent.history 與 state.session_id。"""
+    agent = Mock()
+    agent.history = []
+    state = CliState("openai", "model")
+    renderer = Mock()
+    handler = _make_handler(agent=agent, state=state, renderer=renderer)
+    mock_data = {
+        "id": "20260909-120000-aabbcc",
+        "title": "測試對話",
+        "history": [{"role": "user", "content": "hi"}],
+    }
+    with patch("agent.sessions.load_session", return_value=mock_data):
+        asyncio.run(handler.dispatch("/session load 20260909-120000-aabbcc"))
+    assert agent.history == mock_data["history"]
+    assert state.session_id == "20260909-120000-aabbcc"
+    assert "已載入" in renderer.message.call_args.args[0]
+
+
+def test_session_load_not_found():
+    """/session load 不存在的 id 應拋 ValueError，不改 history。"""
+    agent = Mock()
+    agent.history = ["original"]
+    handler = _make_handler(agent=agent)
+    with patch("agent.sessions.load_session", return_value=None):
+        with pytest.raises(ValueError, match="找不到 session"):
+            asyncio.run(handler.dispatch("/session load nonexistent"))
+    assert agent.history == ["original"]
+
+
+def test_session_save_ok():
+    """有 history 時 /session save 呼叫 save_session。"""
+    agent = Mock()
+    agent.history = [{"role": "user", "content": "test"}]
+    state = CliState("openai", "model")
+    handler = _make_handler(agent=agent, state=state)
+    with patch("agent.sessions.save_session") as mock_save:
+        asyncio.run(handler.dispatch("/session save"))
+    mock_save.assert_called_once_with(state.session_id, agent.history)
+
+
+def test_session_delete_ok():
+    """/session delete <id> 呼叫 delete_session。"""
+    renderer = Mock()
+    handler = _make_handler(renderer=renderer)
+    mock_data = {"id": "abc", "title": "要刪除的對話"}
+    with (
+        patch("agent.sessions.load_session", return_value=mock_data),
+        patch("agent.sessions.delete_session") as mock_del,
+    ):
+        asyncio.run(handler.dispatch("/session delete abc"))
+    mock_del.assert_called_once_with("abc")
+    assert "已刪除" in renderer.message.call_args.args[0]
+    assert "要刪除的對話" in renderer.message.call_args.args[0]

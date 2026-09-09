@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import os
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING
@@ -12,6 +14,18 @@ if TYPE_CHECKING:
     from .cli_input import CliInput
     from .cli_render import CliRenderer
     from .cli_state import CliState
+
+
+def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer") -> None:
+    """對話結束時自動存檔（失敗不中斷退出）。"""
+    from agent.sessions import save_session
+
+    if not agent.history:
+        return
+    try:
+        save_session(state.session_id, agent.history)
+    except Exception:
+        pass  # 存檔失敗不中斷退出
 
 
 async def send_turn(
@@ -28,28 +42,50 @@ async def send_turn(
         snapshot = state.snapshot()
         renderer.user(raw)
         started = monotonic()
-        with renderer.console.status("處理中…", spinner="dots"):
-            if result.action == "image":
-                from agent.imagegen import generate_image
 
+        if result.action == "image":
+            # 圖片生成無串流事件，保留 status spinner
+            from agent.imagegen import generate_image
+
+            with renderer.console.status("生圖中…", spinner="dots"):
                 reply = await generate_image(
                     result.prompt,
                     output_path=Path("generated_images") / "image.png",
                     input_images=snapshot or None,
                 )
-            else:
-                _, reply, _ = await agent.chat(result.prompt, attachments=snapshot)
+        else:
+            # 串流模式：啟動思考中 spinner，等第一個 text 事件停止它
+            from rich.status import Status
+
+            status = Status("思考中…", spinner="dots", console=renderer.console)
+            renderer._active_status = status
+            status.start()
+
+            chat_task = asyncio.ensure_future(agent.chat(result.prompt, attachments=snapshot))
+            try:
+                _, reply, _ = await chat_task
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                agent.request_stop()
+                renderer._stop_status()
+                renderer.message("⏹ 已停止", "yellow")
+                state.last_failed_input = raw
+                return
+            finally:
+                # 若模型未串流任何 text（如 Ollama buffer 全量）：停止 spinner
+                renderer._stop_status()
+
     except Exception as exc:
         state.last_failed_input = raw
         renderer.message(f"本輪未完成：{exc}", "red")
         renderer.message("待送附件保留；本輪可能部分完成，重送前請檢查結果。未自動重試。", "yellow")
         return
+
     # Normal return is the boundary; the core may return error text normally.
     state.consume(snapshot)
     if result.action == "image":
         renderer.message(f"已存檔：{reply}", "green")
     else:
-        renderer.reply(reply, monotonic() - started, getattr(agent, "total_tokens", 0))
+        renderer.reply(reply, monotonic() - started, getattr(agent, "total_tokens", 0), streamed=True)
 
 
 async def conversation(
@@ -67,7 +103,7 @@ async def conversation(
         try:
             raw = await reader.read(default=state.last_failed_input)
         except EOFError:
-            return
+            break
         except KeyboardInterrupt:
             state.last_failed_input = ""
             renderer.message("輸入 /quit 或在空輸入按 Ctrl+D 離開；待送附件保留。")
@@ -81,9 +117,18 @@ async def conversation(
             renderer.message(f"指令未執行：{exc}", "red")
             continue
         if result.action == "quit":
-            return
+            break
         if result.action in ("chat", "image"):
-            await send_turn(agent, state, renderer, raw, result)
+            try:
+                await send_turn(agent, state, renderer, raw, result)
+            except KeyboardInterrupt:
+                # Ctrl+C 在 send_turn 等待期間：中止當前輪次，不退出
+                agent.request_stop()
+                state.last_failed_input = raw
+                renderer.message("⏹ 已停止", "yellow")
+
+    # 對話結束，自動存檔
+    _autosave_session(agent, state, renderer)
 
 
 class CliFrontend(FrontendStrategy):
@@ -104,6 +149,14 @@ class CliFrontend(FrontendStrategy):
         from .cli_state import CliState
 
         renderer = CliRenderer(Console())
+
+        # CLI 模式：抑制 StreamHandler INFO，避免 log 訊息干擾 terminal 輸出
+        # 若開發者明確設定 DEBUG 等級則尊重，不抑制
+        if os.getenv("MY_AGENT_LOG_LEVEL", "INFO").upper() == "INFO":
+            for h in logging.getLogger("pocket-agent").handlers:
+                if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                    h.setLevel(logging.WARNING)
+
         client = None
         mcp = None
         agent = None

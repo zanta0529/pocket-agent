@@ -19,6 +19,7 @@ BUILTINS = {
     "file": "附加一般檔案",
     "attachments": "查看／移除待送附件",
     "model": "切換當次提供者與模型",
+    "session": "查看／載入歷史對話",
     "clear": "清除對話，保留附件",
     "help": "指令說明",
     "tools": "工具清單",

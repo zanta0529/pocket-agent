@@ -42,6 +42,20 @@ def toolbar(state: CliState, width: int) -> FormattedText:
 class CliRenderer:
     def __init__(self, console: Console):
         self.console = console
+        # 串流狀態旗標：追蹤本輪是否已開始串流輸出
+        self._stream_header_printed: bool = False
+        self._stream_has_content: bool = False
+        # 思考中 spinner：由 send_turn 啟動，由 event("text") 或 send_turn 結束前停止
+        self._active_status = None
+
+    def _stop_status(self) -> None:
+        """停止思考中 spinner（若仍在執行），確保不與串流輸出衝突。"""
+        if self._active_status is not None:
+            try:
+                self._active_status.stop()
+            except Exception:
+                pass
+            self._active_status = None
 
     def message(self, value: object, style: str = "dim") -> None:
         self.console.print(Text(plain(value), style=style))
@@ -74,16 +88,51 @@ class CliRenderer:
         # Text keeps user markup literal while retaining intentional newlines.
         self.console.print(Text("› " + "\n".join(plain(line) for line in raw.split("\n")), style="bold blue"))
 
-    def reply(self, reply: str, seconds: float, tokens: int) -> None:
-        self.message("● Pocket Agent", "bold #B8860B")
-        self.console.print(Markdown(reply))
+    def reply(self, reply: str, seconds: float, tokens: int, streamed: bool = False) -> None:
+        if not streamed:
+            # 非串流模式（fallback）：印標頭 + 完整 Markdown 回答
+            self.console.print()
+            self.message("● Pocket Agent", "bold #B8860B")
+            self.console.print(Markdown(reply))
+        else:
+            # 串流模式：內容已逐字印出，確保換行後只印 footer
+            if self._stream_has_content:
+                self.console.print()  # 確保 footer 從新行開始
+
+        # 重置串流狀態
+        self._stream_header_printed = False
+        self._stream_has_content = False
         self.message(f"本輪已返回 · {seconds:.1f} 秒 · {tokens} tokens")
 
     def event(self, kind: str, data: object) -> None:
         if kind == "system":
             self.message(data)
+
+        elif kind == "round_start":
+            # 工具呼叫後重跑：若已串流了文字，換行確認，再開始新輪
+            if self._stream_has_content:
+                self.console.print()
+            self._stream_header_printed = False
+            self._stream_has_content = False
+
+        elif kind == "text":
+            if not self._stream_header_printed:
+                # 第一個 token 到來：先停止思考中 spinner，再印標頭
+                self._stop_status()
+                self.console.print()  # 與上一條訊息間隔
+                self.console.print(Text("● Pocket Agent", style="bold #B8860B"))
+                self._stream_header_printed = True
+            self.console.print(str(data), end="", highlight=False)
+            self._stream_has_content = True
+
+        elif kind == "thinking":
+            snippet = str(data).strip().split("\n")[0][:80]
+            if snippet:
+                self.console.print(Text(f"  ∴ {snippet}", style="dim italic"))
+
         elif kind == "read":
             self.console.print(Text.assemble(("● ", "bold green"), ("Read", "bold yellow"), (f" ({plain(data)})", "")))
+
         elif kind == "tool_start":
             if isinstance(data, dict):
                 name = data.get("name", str(data))
@@ -125,3 +174,11 @@ class CliRenderer:
             arg_str = f" ({name})" if not args else f" ({name} {args})"
 
             self.console.print(Text.assemble(("● ", bullet_color), (action, action_color), (plain(arg_str), "")))
+
+        elif kind == "tool_done":
+            if isinstance(data, dict):
+                name = data.get("name", "")
+                ok = data.get("ok", True)
+                icon = "✓" if ok else "✗"
+                color = "green" if ok else "red"
+                self.console.print(Text(f"  {icon} {name}", style=color))

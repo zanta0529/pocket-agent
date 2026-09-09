@@ -1,173 +1,246 @@
-# CLI 介面設計檢視與改善建議
+# CLI 介面設計檢視與改善建議（更新版）
 
-- 報告日期：2026-09-09
+- 報告日期：2026-09-09（初版）/ 更新：2026-09-09（第二版）
 - 專案：Pocket Agent
-- 性質：前次對話分析報告存檔；本次未重新檢查程式碼，亦未修改程式碼。
-- 驗證限制：尚未啟動互動終端實測。以下程式行為問題沿用前次分析，實作前應對照當時版本確認；本報告未綁定 Git commit。
-- 市場參考：Claude Code、Codex CLI、Gemini CLI、Aider 的設計方向，並非逐一核對其最新版本畫面。
+- 性質：綜合分析報告，含已完成項目追蹤與新增建議。
+- 參考工具：Antigravity CLI (`agy`)、Claude Code、Codex CLI、Gemini CLI
 
-## 一、結論
+---
 
-有改善空間。建議走「輕量、對話優先的 AI 終端介面」，而不是增加更多彩色框線。現有 Rich + prompt_toolkit 已能支援大部分第一階段改善，不需要立刻換框架。
+## 一、本輪已完成的項目
 
-前次分析涵蓋 main.py、agent/frontend/cli.py、相關依賴與核心事件介面。現有 Markdown、指令補全、路徑補全及底部工具列基礎不差；主要改善方向為資訊層級、操作回饋與狀態一致性。
+以下項目在第一版報告後均已實作，無需再列入待辦：
 
-## 二、目前主要問題
+| 項目                                          | 實作狀態                                     |
+| --------------------------------------------- | -------------------------------------------- |
+| 品牌 Banner（口袋造型 ASCII 圖示）            | ✅ 已完成，`cli_render.py banner()`          |
+| Banner 先於 MCP 啟動訊息顯示                  | ✅ 已完成，`cli.py` 調整了順序               |
+| Banner 全部文字移除 dim 效果                  | ✅ 已完成                                    |
+| 使用者輸入訊息以藍色顯示                      | ✅ 已完成，`user()` 套用 `bold blue`         |
+| 工具執行顯示彩色標記（`● Read/Write/Action`） | ✅ 已完成，`event()` 新增 `tool_start` 支援  |
+| 危險操作圓點紅色、安全操作圓點綠色            | ✅ 已完成，依關鍵字分類                      |
+| 動作名稱與路徑之間加入空白                    | ✅ 已完成                                    |
+| 路徑字串移除 dim 效果，以正常顏色顯示         | ✅ 已完成                                    |
+| Ollama 附加檔案時 400 錯誤修復                | ✅ 已完成，`ollama_engine.py` 轉換訊息格式   |
+| `PocketAgent-cli.exe` 分離打包                | ✅ 已完成，`PocketAgent.spec` 新增 `exe_cli` |
 
-| 面向     | 前次分析記錄的目前實作                          | 建議                                                 |
-| -------- | ----------------------------------------------- | ---------------------------------------------------- |
-| 啟動畫面 | 先列 MCP 工具名稱、所有可用模型，再顯示指令面板 | 首屏只保留專案、目前模型、就緒狀態；詳細清單按需查看 |
-| 對話版面 | 每則 User／Agent 都有完整彩色外框               | 改為角色標記與留白，框線集中用於輸入或確認區         |
-| 顏色     | 金色標題、青色使用者框、綠色回答框、藍色提示符  | 一個品牌主色；綠／黃／紅只表示成功／警告／錯誤       |
-| 輸入區   | 單一 >，未配置明確的多行編輯操作                | 加入輸入提示、多行策略、附件摘要及送出／換行提示     |
-| 執行過程 | 主要顯示「思考中」，CLI 回呼只處理部分事件      | 顯示實際階段，例如讀取、執行、等待、完成             |
-| 指令探索 | 首屏橫向排列部分指令，另有補全                  | 首屏只提示 / 開啟指令、@ 選擇檔案                    |
-| 語言     | 中英混用，如 User、Agent、History、Complete     | 統一繁體中文；模型與技術名稱保留原文                 |
-| 響應式   | 底列用 len() 計算寬度                           | 使用終端顯示寬度，支援中文、窄視窗與長模型名         |
+---
 
-雙方訊息都加框，短對話看起來整齊，但長時間使用時，框線比內容更搶眼、浪費垂直空間，複製內容也較不俐落。
+## 二、現況分析：與 agy 等主流 AI CLI 的差距
 
-### 比外觀更優先的問題
+### 2.1 與 Antigravity CLI (`agy`) 的對比
 
-以下為前次對 agent/frontend/cli.py 的分析記錄，尚未經互動實測：
+Pocket Agent 已在外觀層面與 agy 的設計語言有一定近似度（藍色使用者輸入、黃/紅色的工具執行標記），但以下幾個核心操作體驗仍有明顯落差：
 
-1. **切換模型後，底列可能仍顯示舊模型。** /model 更新 agent.client、agent.model，但底列仍讀取原本的區域變數 model；provider 相關指令提示與生圖判斷也未同步。
-2. **/add-dir 描述與實際行為不一致。** 補全說明寫「附加目錄內檔案」，但目前該分支只是加入 workspace_dirs，此 CLI 檔案後續沒有把它接到對話流程。這會讓使用者誤以為目錄內容已提供給模型。
-3. **附件缺少持續可見的狀態。** 附加後只印出一次訊息，不容易確認下一次送出的附件有哪些；程式亦在自訂指令驗證之前清空待送附件，遇到未知指令可能丟失待送狀態。
-4. **輸入期間按 Ctrl+C 就離開。** 更直覺的分層應是：有文字時清空輸入、執行中取消本次任務、空白輸入時再提供離開方式。取消任務需要配合核心生命週期設計，不只是加一行快捷鍵提示。
+#### ❶ 串流輸出（Streaming）
 
-這些應和視覺改版一起處理，否則介面變漂亮，仍可能顯示錯誤狀態。
+**agy 的做法：** 回答字元逐一串流顯示，使用者幾乎感受不到等待。
 
-## 三、推薦版面：輕量對話工作區
+**Pocket Agent 現況：** `send_turn()` 中使用 `console.status("處理中…")` 等待 `agent.chat()` 回傳完整字串後才一次性 `print`。`on_stream` 回呼雖有 `text` 事件，但 `cli.py` 完全未消費此事件，導致：
 
-以下是提案示意，非目前已存在的功能。模型、數量與時間皆為示例。
+- 使用者看不到任何逐字進度
+- 即使有推理中間輸出（`thinking`），CLI 也完全靜默
 
-### 1. 首次進入：乾淨的起始狀態
+**建議：** `send_turn()` 應移除 `with renderer.console.status()` 包裹 `agent.chat()`，改為在 `event()` 處理 `"text"` 事件時直接 `print` 到終端，實現逐字串流。這是操作體驗差異最大、也最應優先實作的項目。
 
-```text
- Pocket Agent
- pocket-agent · D:\…\Git\pocket-agent
- OpenAI / <目前模型>                         ● 就緒
+#### ❷ 工具執行中的即時計時顯示
 
- 試著輸入：
-   檢視這個專案的架構
-   @README.md 幫我整理使用方式
+**agy 的做法：** 工具執行旁邊顯示已耗時秒數，如 `● Read (file.py)  2.3s`。
 
- ──────────────────────────────────────────────────
- › 輸入訊息，或輸入 / 選擇指令
- ──────────────────────────────────────────────────
- / 指令   @ 檔案   Tab 補全                Enter 送出
+**Pocket Agent 現況：** `tool_start` 只顯示名稱，無執行時間；`tool_done` 事件已從核心發出但 `event()` 完全未處理。
+
+**建議：** 在 `event()` 新增對 `tool_done` 事件的處理，顯示 `✓ 完成 (工具名稱)  x.xs` 形式的結果提示。
+
+#### ❸ 對話歷史（Session）未接入 CLI
+
+**agy 的做法：** `/session` 指令可列出、切換、載入歷史對話。
+
+**Pocket Agent 現況：** `agent/sessions.py` 已有完整的 `save_session / list_sessions / load_session / delete_session` 實作，但 CLI 的 `CommandHandler` 完全沒有接入這些功能。GUI 是否已接入不在本報告範圍，但 CLI 目前是功能空白。
+
+**建議：** 新增 `/session`、`/session list`、`/session load <id>` 等指令，對接 `sessions.py`。
+
+#### ❹ 推理過程（Thinking）未顯示於 CLI
+
+**agy 的做法：** 如果模型有推理過程，會以灰色縮排方式顯示思考段落，協助使用者理解 AI 的決策邏輯。
+
+**Pocket Agent 現況：** `core.py` 確實在 `_run_loop` 中 `self._emit("thinking", event.delta)`，但 `cli_render.py` 的 `event()` 對 `thinking` 事件完全靜默。GUI 有獨立的「思考」面板；CLI 完全無法看到推理過程。
+
+**建議：** 在 `event()` 新增對 `thinking` 事件的支援，以 `dim italic` 縮排顯示，並限制顯示行數避免刷屏。
+
+#### ❺ 缺少執行中止的安全取消機制
+
+**agy / Claude Code 的做法：** 執行中可按 Ctrl+C 中止當前 AI 輪次，但不會退出程式。
+
+**Pocket Agent 現況：** `Agent.cancel_requested` 欄位存在，`Agent.request_stop()` 方法也存在，但 `conversation()` 的 Ctrl+C 只在「等待輸入期間」有效（清空輸入框）。一旦進入 `send_turn()` 的等待，Ctrl+C 就完全無法中止。
+
+**建議：** 應在 `send_turn()` 中，在啟動 `agent.chat()` 的同時設置 Ctrl+C 的處理（捕獲 `asyncio.CancelledError` 並呼叫 `agent.request_stop()`）。
+
+---
+
+### 2.2 功能對比表
+
+| 功能                     | agy | Claude Code | Pocket Agent CLI | 備注                              |
+| ------------------------ | :-: | :---------: | :--------------: | --------------------------------- |
+| 逐字串流輸出             | ✅  |     ✅      |        ❌        | 回呼已就緒，CLI 未消費            |
+| 工具執行時間顯示         | ✅  |     ✅      |        ❌        | `tool_done` 未處理                |
+| Ctrl+C 中止當前輪次      | ✅  |     ✅      |        ❌        | `cancel_requested` 存在但未串接   |
+| 推理過程（Thinking）顯示 | ✅  |     ✅      |        ❌        | 事件已發出但 CLI 未消費           |
+| 對話歷史管理             | ✅  |     ✅      |        ❌        | `sessions.py` 已實作但 CLI 無指令 |
+| 工具執行彩色標記         | ✅  |      △      |        ✅        | 本輪已完成                        |
+| 使用者輸入藍色顯示       | ✅  |     ❌      |        ✅        | 本輪已完成                        |
+| 指令 Tab 補全            | ✅  |     ❌      |        ✅        | 已有 `SlashCommandCompleter`      |
+| 路徑 Tab 補全            | ✅  |     ❌      |        ✅        | 已有                              |
+| 底部狀態列               | ✅  |     ❌      |        ✅        | 已有                              |
+| 附件管理（查看/移除）    | ✅  |     ❌      |        ✅        | `/attachments` 指令               |
+| 模型互動式切換           | ✅  |     ❌      |        ✅        | `/model` + `reader.choose()`      |
+| 沙盒執行                 |  △  |     ❌      |        ✅        | WSL/Docker sandbox                |
+| MCP 整合                 | ✅  |     ✅      |        ✅        |                                   |
+| Plugin 系統              | ✅  |     ❌      |        ✅        | `plugins.py`                      |
+| 子代理 (Subagents)       | ✅  |     ❌      |        ✅        | `subagents.py`                    |
+| 事件鉤子 (Hooks)         | ✅  |     ❌      |        ✅        | `hooks.py`                        |
+| GUI / CLI 雙模式         | ❌  |     ❌      |        ✅        | 本專案獨有優勢                    |
+
+---
+
+## 三、分層改善建議
+
+### 第一優先：核心體驗（高衝擊、低風險）
+
+#### 1. 實作 CLI 串流輸出（最高優先）
+
+這是操作感受差異最大的一項。
+
+**實作策略：**
+
+```python
+# cli_render.py - 新增 stream_start / stream_end 狀態追蹤
+class CliRenderer:
+    def __init__(self, console):
+        self.console = console
+        self._streaming = False  # 串流中時不能重繪
+
+# event() 新增對 text 事件的處理：
+elif kind == "text":
+    if not self._streaming:
+        # 第一個 text 事件：先印 "● Pocket Agent" 標頭
+        self.console.print(Text("● Pocket Agent", style="bold #B8860B"))
+        self._streaming = True
+    self.console.print(data, end="", highlight=False)
 ```
 
-- 不使用大型 ASCII Logo，不浪費首屏。
-- 正常啟動只顯示摘要，異常才顯示具體問題。
-- 把「可以做什麼」放在空白狀態，開始對話後不再重複。
-- 完整工具與模型列表移到擬新增的 /tools、模型選擇器。
+**相應地，`send_turn()` 需要移除 `with renderer.console.status("處理中…")` 的包裹。**
 
-### 2. 對話中：內容為主，過程為輔
+#### 2. 接入執行中止（Ctrl+C）
 
-```text
- › 請檢視這個專案 CLI 的介面
-
- ● Pocket Agent
-   ✓ 已讀取 agent/frontend/cli.py
-   ✓ 已讀取 requirements.in
-   ◌ 正在整理介面建議…                         4.2s
-
-   目前已有指令補全與 Markdown 顯示，
-   建議優先改善以下三項：
-
-   1. 簡化對話框線
-   2. 保持模型與附件狀態一致
-   3. 改善多行輸入與取消操作
-
-   完成 · 8.4 秒
-
-   附件：README.md                         /attachments
- ──────────────────────────────────────────────────
- ›
- ──────────────────────────────────────────────────
- OpenAI / <目前模型> · pocket-agent        / 指令  @ 檔案
+```python
+# cli.py send_turn() 改寫思路
+async def send_turn(...):
+    task = asyncio.create_task(agent.chat(result.prompt, attachments=snapshot))
+    try:
+        _, reply, _ = await task
+    except asyncio.CancelledError:
+        agent.request_stop()
+        renderer.message("⏹ 已停止", "yellow")
+        return
 ```
 
-助手回答不再整段包外框。Markdown、程式碼區塊仍保留；工具過程使用較淡、簡短的獨立列。
+同時在 `conversation()` 的 Ctrl+C 處理中，偵測若正在執行任務則呼叫停止，而非只印提示訊息。
 
-正常情況顯示「讀取了什麼、是否成功、花多久」，完整參數與長輸出按需查看。不要把內部推理片段當成主要進度回饋。
+#### 3. 處理 `tool_done` 事件
 
-### 3. 指令與模型：選擇，不考驗記憶
+在 `event()` 新增：
 
-輸入 / 時：
-
-```text
- › /
-
-   常用
-   /file         附加檔案
-   /model        切換提供者與模型
-   /clear        開始新對話
-
-   工作流程
-   /<自訂指令>   指令說明
-
-   ↑↓ 選擇   Tab 補全   Esc 關閉
+```python
+elif kind == "tool_done":
+    if isinstance(data, dict):
+        name = data.get("name", "")
+        ok = data.get("ok", True)
+        status_icon = "✓" if ok else "✗"
+        status_color = "green" if ok else "red"
+        self.console.print(Text(f"  {status_icon} {name}", style=status_color))
 ```
 
-/model 應提供互動選擇，同時保留原本的快速輸入語法，兼顧新手與熟手。
+---
 
-附件管理應能查看、移除，並明確區別：
+### 第二優先：對話操作體驗
 
-- 本次訊息附件。
-- 可存取的工作目錄。
-- 已經實際讀取的檔案。
+#### 4. 接入 CLI 對話歷史管理
 
-這三種狀態不能混成一句「已附加」。
+`sessions.py` 已有完整實作，只需在 `CommandHandler` 新增以下指令：
 
-## 四、與同類工具接軌，應學什麼？
+| 指令                   | 說明                               |
+| ---------------------- | ---------------------------------- |
+| `/session`             | 列出最近對話（同 `/session list`） |
+| `/session list`        | 列出最近 10 筆對話，顯示 ID 與標題 |
+| `/session load <id>`   | 載入歷史對話，恢復 `agent.history` |
+| `/session save`        | 手動存檔（正常結束時應自動存）     |
+| `/session delete <id>` | 刪除歷史對話                       |
 
-不建議直接複製特定產品的外觀，應採用符合 AI CLI 工作方式的模式。下表是設計參考方向，不是最新版本功能比較。
+同時建議 `_run_cli()` 結束前自動呼叫 `save_session()`，對齊 agy 的行為。
 
-| 參考方向                          | Pocket Agent 適合吸收的部分                    |
-| --------------------------------- | ---------------------------------------------- |
-| Claude Code／Codex CLI 類對話流程 | 簡潔訊息流、可理解的工具活動、明確的中斷與確認 |
-| Gemini CLI 類互動終端             | 指令探索、模型與執行狀態的清晰呈現             |
-| Aider 類專案工作流                | 清楚標示目前處理的檔案、工作範圍與操作結果     |
+#### 5. 顯示推理過程（Thinking）
 
-共同重點不是「炫」，而是使用者隨時能回答：
+在 `event()` 新增：
 
-> 我在哪個專案？正在用哪個模型？它現在做什麼？會使用哪些檔案？我怎麼停止？
+```python
+elif kind == "thinking":
+    # 不要全量顯示，只顯示首行或摘要
+    snippet = str(data).strip().split("\n")[0][:80]
+    if snippet:
+        self.console.print(Text(f"  ∴ {snippet}…", style="dim italic"))
+```
 
-不建議第一版就增加常駐側欄、滿版儀表板或大量狀態指標。Pocket Agent 已有 GUI，CLI 更應保留終端的優勢：快速、鍵盤優先、好捲動、好複製。
+---
 
-## 五、實作路線建議
+### 第三優先：資訊可見性提升
 
-### 第一階段：低風險整理，最值得先做
+#### 6. 歡迎畫面新增「入門提示」
 
-保留 Rich + prompt_toolkit：
+對齊 agy 在空白狀態顯示示範輸入的設計。在 `welcome()` 中新增建議輸入範例：
 
-1. 修正模型／提供者與附件狀態一致性。
-2. 簡化啟動畫面及對話框線。
-3. 統一色彩、語言及錯誤訊息格式。
-4. 改善底部資訊列與窄視窗截斷。
-5. 增加明確的指令說明與附件查看入口。
+```
+/ 指令 · @ 檔案 · Tab 補全 · Enter 送出 · Esc 後 Enter 換行
 
-### 第二階段：改善操作體驗
+試著輸入：
+  @README.md 幫我整理使用方式
+  /session list 查看歷史對話
+```
 
-- 多行輸入與貼上行為。
-- 模型選擇器、附件移除。
-- 統一工具事件顯示與實際取消機制。
-- 若核心事件支援，接入回答串流。
-- 任務失敗時保留可重試的輸入與附件。
+#### 7. 工具日誌輸出干擾問題
 
-Rich 輸出與 prompt_toolkit 動態介面需要協調重繪，避免串流時把輸入列打亂；不宜只是額外疊加一個 Live 區域。
+**現況問題：** `agent.log` 中的 `[INFO] Using OllamaChatEngine for gemma4:e2b` 等訊息直接寫入 `sys.stderr` 並顯示在終端，與 `處理中…` spinner 交錯，視覺混亂。
 
-### 第三階段：確認需求後才考慮全螢幕 TUI
+**建議：** 在 CLI 啟動時，把 `pocket-agent` 的 `StreamHandler` 過濾掉或提升其等級至 `WARNING`，確保只有使用者操作相關訊息顯示於終端，詳細 log 僅寫 `agent.log`。
 
-只有真的需要可捲動獨立窗格、常駐任務清單、互動展開工具詳情時，再評估全螢幕 prompt_toolkit Application 或 Textual。這會增加選取複製、終端相容性與維護成本。
+---
 
-前次分析記錄 cli.py 已超過 300 行；後續改版適合拆成輸入、呈現、狀態與指令處理模組，避免全部繼續塞進 \_run_cli()。
+## 四、現有優勢，不應輕易改動
 
-## 六、建議決策
+Pocket Agent 相比 agy 等工具，有幾個值得保留的獨特優勢：
 
-優先執行「第一階段＋第二階段的輸入與附件管理」：保留金色品牌點綴，但移除雙方訊息的大框線，把視覺重心放回內容與可信的即時狀態。這比直接改成大型 TUI 更符合本專案目前的定位。
+1. **GUI / CLI 雙模式**：對非技術使用者有極大意義，應持續投資。
+2. **Plugin zip 系統**：一鍵安裝 Skill + MCP 配置，是非常務實的分發機制。
+3. **事件鉤子（Hooks）**：`before_tool / after_tool` 鉤子允許企業注入審計、安全過濾，是 agy 目前沒有的能力。
+4. **Shell Sandbox（WSL/Docker）**：對企業內網部署場景是重要的安全機制。
+5. **OAuth PKCE 直連**：免 API Key 的 ChatGPT Plus 串接，是本工具的核心競爭差異。
 
-本文件僅供設計檢視與後續實作規劃，不代表上述功能已實作或相關問題已經測試確認。
+---
+
+## 五、快速行動清單
+
+按優先順序列出可獨立實作的改善項目：
+
+- [ ] **P0** `cli.py` 移除 `console.status()` wrapper，改用 `event(text)` 串流顯示回答
+- [ ] **P0** `cli_render.py event()` 新增 `text` / `round_start` 事件處理
+- [ ] **P1** `cli.py send_turn()` 接入 Ctrl+C 中止機制
+- [ ] **P1** `cli_render.py event()` 新增 `tool_done` 處理，顯示 `✓/✗` 結果
+- [ ] **P1** `cli_commands.py` 新增 `/session` 指令族群，對接 `sessions.py`
+- [ ] **P2** 自動在 CLI 對話結束時呼叫 `save_session()`
+- [ ] **P2** `cli_render.py event()` 新增 `thinking` 事件縮排顯示
+- [ ] **P2** `welcome()` 新增入門示範提示
+- [ ] **P3** 過濾 `StreamHandler` 的 INFO log，避免干擾終端輸出
+- [ ] **P3** Banner 考慮加入目前版本號（VERSION 檔）
+
+---
+
+_本文件為設計分析，不代表上述功能已實作。實作前請對照當時程式碼確認。_

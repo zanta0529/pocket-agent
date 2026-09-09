@@ -97,6 +97,60 @@ class CommandHandler:
         else:
             raise ValueError("用法：/attachments [clear|remove <編號>]")
 
+    def session(self, args: str) -> None:
+        from agent.sessions import (
+            delete_session,
+            list_sessions,
+            load_session,
+            save_session,
+        )
+
+        parts = args.split(maxsplit=1)
+        sub = parts[0] if parts else "list"
+        sub_arg = parts[1] if len(parts) > 1 else ""
+
+        if sub in ("", "list"):
+            sessions = list_sessions()[:10]
+            if not sessions:
+                self.renderer.message("尚無歷史對話。")
+                return
+            import time
+
+            for i, s in enumerate(sessions, 1):
+                dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["updated_at"]))
+                self.renderer.message(f"{i:2}. [{s['id']}]  {s['title']}  ({dt})")
+
+        elif sub == "load":
+            if not sub_arg:
+                raise ValueError("用法：/session load <id>")
+            data = load_session(sub_arg)
+            if data is None:
+                raise ValueError(f"找不到 session：{sub_arg}")
+            self.agent.history = data["history"]
+            self.state.session_id = data["id"]
+            self.renderer.message(
+                f"已載入：{data.get('title', '（無標題）')} · {len(data['history'])} 則訊息",
+                "green",
+            )
+
+        elif sub == "save":
+            if not self.agent.history:
+                self.renderer.message("對話歷史為空，略過儲存。")
+            else:
+                save_session(self.state.session_id, self.agent.history)
+                self.renderer.message(f"已存檔：{self.state.session_id}", "green")
+
+        elif sub == "delete":
+            if not sub_arg:
+                raise ValueError("用法：/session delete <id>")
+            data = load_session(sub_arg)
+            title = data.get("title", sub_arg) if data else sub_arg
+            delete_session(sub_arg)
+            self.renderer.message(f"已刪除：{title}")
+
+        else:
+            raise ValueError("用法：/session [list | load <id> | save | delete <id>]")
+
     async def dispatch(self, raw: str) -> CommandResult:
         text = raw.strip()
         if not text.startswith("/"):
@@ -124,6 +178,8 @@ class CommandHandler:
             self.renderer.message("目錄工作範圍尚未接入，不會讀取目錄；請用 /file 或 @ 附加檔案。", "yellow")
         elif name == "model":
             await self.model(args)
+        elif name == "session":
+            self.session(args)
         elif name == "tools":
             self.renderer.message("MCP 工具：" + (", ".join(self.tools) or "無"))
         elif name == "help":

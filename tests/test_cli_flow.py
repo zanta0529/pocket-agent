@@ -26,7 +26,7 @@ def test_send_transaction(tmp_path, action, fails):
     if fails:
         chat.side_effect = RuntimeError("offline")
         image.side_effect = RuntimeError("offline")
-    agent = SimpleNamespace(chat=chat, total_tokens=0)
+    agent = SimpleNamespace(chat=chat, total_tokens=0, on_stream=None, request_stop=Mock())
     with patch("agent.imagegen.generate_image", image):
         asyncio.run(send_turn(agent, state, renderer, "original", CommandResult(action, "prompt")))
     assert bool(state.pending_files) == fails
@@ -41,12 +41,39 @@ def test_send_transaction(tmp_path, action, fails):
         assert "可能部分完成" in output.getvalue()
 
 
+def test_send_turn_ctrl_c_stops_agent():
+    """Ctrl+C（CancelledError）在 send_turn 執行期間應呼叫 request_stop 並保留 last_failed_input。"""
+    state = CliState("openai", "model")
+    output = StringIO()
+    renderer = CliRenderer(Console(file=output, force_terminal=False))
+
+    async def cancellable_chat(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    agent = SimpleNamespace(
+        chat=cancellable_chat,
+        total_tokens=0,
+        on_stream=None,
+        request_stop=Mock(),
+    )
+    asyncio.run(send_turn(agent, state, renderer, "hello", CommandResult("chat", "hello")))
+    agent.request_stop.assert_called_once()
+    assert state.last_failed_input == "hello"
+    assert "已停止" in output.getvalue()
+
+
 def test_failed_input_prefilled_without_auto_retry():
     reader = SimpleNamespace(read=AsyncMock(side_effect=["hello", "/quit"]))
-    agent = SimpleNamespace(chat=AsyncMock(side_effect=RuntimeError("offline")))
+    agent = SimpleNamespace(
+        chat=AsyncMock(side_effect=RuntimeError("offline")),
+        on_stream=None,
+        request_stop=Mock(),
+        history=[],
+    )
     state = CliState("openai", "model")
     renderer = CliRenderer(Console(file=StringIO()))
-    asyncio.run(conversation(agent, state, reader, renderer, []))
+    with patch("agent.sessions.save_session"):
+        asyncio.run(conversation(agent, state, reader, renderer, []))
     assert reader.read.call_args_list[1].kwargs["default"] == "hello"
     agent.chat.assert_awaited_once()
 
@@ -57,7 +84,7 @@ def test_frontend_cleans_up_clients_and_mcp(startup_fails):
     mcp = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), list_tools=Mock(return_value=[]))
     if startup_fails:
         mcp.start.side_effect = RuntimeError("startup")
-    agent = SimpleNamespace(client=client)
+    agent = SimpleNamespace(client=client, on_stream=None, history=[])
     reader = SimpleNamespace(read=AsyncMock(side_effect=EOFError))
     with (
         patch("agent.auth.get_openai_client", return_value=client),
@@ -68,6 +95,7 @@ def test_frontend_cleans_up_clients_and_mcp(startup_fails):
         patch("agent.core.Agent", return_value=agent),
         patch("agent.frontend.cli_input.CliInput", return_value=reader),
         patch("rich.console.Console", return_value=Console(file=StringIO())),
+        patch("agent.sessions.save_session"),
     ):
         asyncio.run(CliFrontend()._run_cli("system"))
     client.close.assert_awaited_once()

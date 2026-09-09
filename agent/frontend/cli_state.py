@@ -5,12 +5,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _new_session_id() -> str:
+    from agent.sessions import new_session_id
+
+    return new_session_id()
+
+
 @dataclass
 class CliState:
     provider: str
     model: str
     pending_files: list[str] = field(default_factory=list)
     last_failed_input: str = ""
+    session_id: str = field(default_factory=_new_session_id)
 
     def add_files(self, paths: list[str]) -> list[str]:
         # Validate the whole batch before committing, including readability.
