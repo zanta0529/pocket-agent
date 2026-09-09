@@ -286,8 +286,8 @@ def get_openai_client(provider: str = None, model: str = None):
     """建立 OpenAI 相容的 client，根據 provider 切換 Base URL 與 Auth。"""
     from openai import AsyncOpenAI
 
+    cfg = load_config()
     if provider is None:
-        cfg = load_config()
         provider = cfg.get("provider", "openai")
 
     http_client = None

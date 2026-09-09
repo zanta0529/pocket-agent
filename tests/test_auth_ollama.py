@@ -84,3 +84,62 @@ def test_fetch_available_models_ollama_exception():
     ):
         models = fetch_available_models(provider="ollama")
         assert models == []
+
+
+def test_explicit_ollama_client_uses_config_once():
+    from agent.auth import get_openai_client
+
+    with (
+        patch("agent.auth.load_config", return_value={"ollama_base_url": "http://configured:11434/v1/"}) as cfg,
+        patch("dotenv.load_dotenv"),
+        patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://environment:11434"}),
+        patch("agent.auth.httpx.AsyncClient") as http,
+        patch("openai.AsyncOpenAI") as client,
+    ):
+        result = get_openai_client(provider="ollama", model="test-model")
+        cfg.assert_called_once_with()
+        http.assert_called_once_with(trust_env=False)
+        client.assert_called_once_with(
+            api_key="ollama",
+            base_url="http://configured:11434/v1",
+            default_headers={},
+            http_client=http.return_value,
+        )
+        assert result is client.return_value
+
+
+def test_explicit_openai_client_preserves_headers():
+    from agent.auth import CODEX_BASE_URL, get_openai_client
+
+    with (
+        patch("agent.auth.load_config", return_value={}),
+        patch("agent.auth.get_access_token", return_value="mock-token") as token,
+        patch("agent.auth._extract_account_id", return_value="mock-account"),
+        patch("openai.AsyncOpenAI") as client,
+    ):
+        get_openai_client(provider="openai")
+        token.assert_called_once_with(provider="openai")
+        client.assert_called_once_with(
+            api_key="mock-token",
+            base_url=CODEX_BASE_URL,
+            http_client=None,
+            default_headers={
+                "originator": "pocket-agent",
+                "OpenAI-Beta": "responses=experimental",
+                "chatgpt-account-id": "mock-account",
+            },
+        )
+
+
+def test_explicit_ollama_environment_fallback():
+    from agent.auth import get_openai_client
+
+    with (
+        patch("agent.auth.load_config", return_value={}),
+        patch("dotenv.load_dotenv"),
+        patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://environment:11434/"}),
+        patch("agent.auth.httpx.AsyncClient"),
+        patch("openai.AsyncOpenAI") as client,
+    ):
+        get_openai_client(provider="ollama")
+        assert client.call_args.kwargs["base_url"] == "http://environment:11434/v1"
