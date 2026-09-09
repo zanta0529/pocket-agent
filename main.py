@@ -34,8 +34,16 @@ load_dotenv(env_path())
 def main(ctx, cli, gui, system):
     """Pocket Agent — 用 OpenAI 帳號登入，不需要 API Key"""
     if ctx.invoked_subcommand is None:
-        # 根據參數選擇前端策略
-        strategy = CliFrontend() if cli else GuiFrontend()
+        # 根據參數或執行檔名稱選擇前端策略
+        is_cli_exe = "cli.exe" in sys.executable.lower() or "cli" in sys.argv[0].lower()
+
+        if gui:
+            strategy = GuiFrontend()
+        elif cli or is_cli_exe:
+            strategy = CliFrontend()
+        else:
+            strategy = GuiFrontend()
+
         strategy.run(system)
 
 

@@ -67,8 +67,21 @@ exe = EXE(
     icon=str(ROOT / "gui" / "assets" / "ico_agent.ico"),
 )
 
+exe_cli = EXE(
+    pyz,
+    a.scripts,
+    exclude_binaries=True,
+    name="PocketAgent-cli",
+    debug=False,
+    strip=False,
+    upx=False,
+    console=True,       # CLI 程式，需要黑窗
+    icon=str(ROOT / "gui" / "assets" / "ico_agent.ico"),
+)
+
 coll = COLLECT(
     exe,
+    exe_cli,
     a.binaries,
     a.datas,
     strip=False,

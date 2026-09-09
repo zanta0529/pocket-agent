@@ -54,16 +54,16 @@ class CliRenderer:
             # Pocket Agent 標誌與口號
             self.console.print(
                 Text.assemble(
-                    ("╭──────╮\n", "dim"),
-                    ("│ >_   │  ", "dim"),
+                    ("╭──────╮\n", ""),
+                    ("│ >_   │  ", ""),
                     ("Pocket Agent\n", "bold #B8860B"),
-                    ("│      │  ", "dim"),
-                    ("你的終端 AI 工作夥伴\n", "dim"),
-                    ("╰───╲──╯", "dim"),
+                    ("│      │  ", ""),
+                    ("你的終端 AI 工作夥伴\n", ""),
+                    ("╰───╲──╯", ""),
                 )
             )
-        self.message(Path.cwd())
-        self.message("─" * min(width, 80), "dim")
+        self.message(Path.cwd(), "")
+        self.message("─" * min(width, 80), "")
 
     def welcome(self, state: CliState, tools: list[str]) -> None:
         self.message(f"{state.provider} / {state.model} · {len(tools)} 個 MCP 工具 · 就緒")
