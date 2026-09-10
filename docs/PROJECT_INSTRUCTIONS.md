@@ -17,24 +17,72 @@
 
 ## 2. 目錄與責任邊界
 
-| 路徑 | 用途與修改原則 |
-| --- | --- |
-| `main.py` | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。 |
-| `agent/core.py` | Agent 核心協調；修改前追蹤引擎、工具與前端的呼叫關係。 |
-| `agent/engines/` | BaseEngine、事件資料型別、factory 與 provider 實作。 |
-| `agent/frontend/` | GUI／CLI 策略；CLI 拆分為 input、render、state、commands 等模組。 |
-| `gui/` | 圖形介面、元件與 assets；不得將 GUI 依賴無條件引入無頭 CLI 路徑。 |
-| `agent/auth.py` | 認證與 provider 設定；避免暴露憑證或觸發真實登入。 |
-| `agent/mcp_manager.py` | MCP 連線與生命週期。 |
-| `agent/shell.py` | 命令執行、確認、逾時與編碼處理；屬安全敏感區域。 |
-| `agent/paths.py` | 開發／PyInstaller／portable 路徑與使用者資料位置。 |
-| `agent/sessions.py` | JSON 對話持久化。 |
-| `agent/registry.py`、`agent/skills.py`、`agent/plugins.py` | 擴充註冊、技能載入與匯入。 |
-| `skills/`、`agents/`、`commands/` | 產品隨附的技能、子代理與命令，不等同開發代理規範。 |
-| `.agents/skills/` | 開發代理技能；維持通用性，專案差異放在本指南。 |
-| `tests/` | pytest 回歸測試。 |
-| `build_portable.py`、`PocketAgent.spec` | portable 與 PyInstaller 包裝設定。 |
-| `docs/` | 工程規範與文件；代理入口見根目錄 `AGENTS.md`、`.agents/AGENTS.md` 與 `.github/copilot-instructions.md`。 |
+| 路徑                                                       | 用途與修改原則                                                                                           |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `main.py`                                                  | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                             |
+| `agent/core.py`                                            | Agent 核心協調；修改前追蹤引擎、工具與前端的呼叫關係。                                                   |
+| `agent/engines/`                                           | BaseEngine、事件資料型別、factory 與 provider 實作。                                                     |
+| `agent/frontend/`                                          | GUI／CLI 策略；CLI 拆分為 input、render、state、commands 等模組。                                        |
+| `gui/`                                                     | 圖形介面、元件與 assets；不得將 GUI 依賴無條件引入無頭 CLI 路徑。                                        |
+| `agent/auth.py`                                            | 認證與 provider 設定；避免暴露憑證或觸發真實登入。                                                       |
+| `agent/mcp_manager.py`                                     | MCP 連線與生命週期。                                                                                     |
+| `agent/shell.py`                                           | 命令執行、確認、逾時與編碼處理；屬安全敏感區域。                                                         |
+| `agent/paths.py`                                           | 開發／PyInstaller／portable 路徑與使用者資料位置。                                                       |
+| `agent/sessions.py`                                        | JSON 對話持久化。                                                                                        |
+| `agent/registry.py`、`agent/skills.py`、`agent/plugins.py` | 擴充註冊、技能載入與匯入。                                                                               |
+| `skills/`、`agents/`、`commands/`                          | 產品隨附的技能、子代理與命令，不等同開發代理規範。                                                       |
+| `.agents/skills/`                                          | 開發代理技能；維持通用性，專案差異放在本指南。                                                           |
+| `tests/`                                                   | pytest 回歸測試。                                                                                        |
+| `build_portable.py`、`PocketAgent.spec`                    | portable 與 PyInstaller 包裝設定。                                                                       |
+| `docs/`                                                    | 工程規範與文件；代理入口見根目錄 `AGENTS.md`、`.agents/AGENTS.md` 與 `.github/copilot-instructions.md`。 |
+
+### 2.1 架構設計原則：Adapter／Strategy／Factory
+
+本專案同時支援 Ollama／Cloud AI 與 CLI／GUI，這是兩個應獨立變動的維度。設計目標是讓模型供應商與操作介面可替換，而不是為每一種組合各自維護一套 Agent 流程。
+
+**後續開發必須遵循「依賴抽象、封裝差異、共用流程集中維護」的設計風格。**
+
+#### 設計模式與責任邊界
+
+| 模式／邊界        | 現有對應                                                  | 修改原則                                                                             |
+| ----------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Adapter（轉接器） | `BaseEngine`、`OpenAIResponsesEngine`、`OllamaChatEngine` | 將供應商的請求格式、SDK 呼叫與串流回應轉換為統一的 `stream_chat` 與 `Event*` 契約。  |
+| Strategy（策略）  | `FrontendStrategy`、`CliFrontend`、`GuiFrontend`          | 封裝不同前端的啟動與互動方式；介面差異留在前端，共同業務流程交由核心處理。           |
+| Factory（工廠）   | `EngineFactory.create(provider, client, model)`           | 集中選擇及建立引擎，避免各呼叫端自行判斷供應商並建構具體實作。                       |
+| 共用流程協調      | `agent/core.py` 與既有共用模組                            | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依前端或供應商複製流程。 |
+
+以上描述為現有抽象的設計角色與後續修改準則，不代表所有歷史程式碼均已完全解耦。修改前仍須確認實際呼叫路徑與契約，不得只依類別名稱推定行為。
+
+#### 依賴方向與統一契約
+
+- 前端透過共用核心／服務使用能力；核心透過 `BaseEngine` 契約呼叫模型引擎。具體實作的選擇集中在既有入口與 factory。
+- 引擎不得依賴 GUI 元件、Rich 或終端機輸入；共用核心不得為呈現需求直接操作視窗或終端機。
+- GUI 專用依賴維持延遲載入，不得因新增共用模組而讓無頭 CLI 路徑依賴 Tkinter。
+- 供應商的 SDK 回應、訊息與工具參數格式、串流協定差異，應封裝於引擎或其專用轉換模組；不得交由 CLI／GUI 各自解析。
+- `BaseEngine.stream_chat` 的參數、非同步串流及 `Event*` 語意屬於共用契約。修改時必須同步檢查各引擎、核心及受影響的前端消費路徑。
+- 取消、錯誤傳遞、工具呼叫識別碼、參數分片、完成事件與資源清理也是契約的一部分，不得因替換實作而遺失。
+- 不同模型不必支援完全相同的能力；不支援時須明確回報或採用已定義的降級行為，不得偽造成功、默默忽略請求，或偷偷重試可能產生副作用的操作。
+
+#### 避免重複與過度耦合
+
+- 修改前先搜尋既有核心、helper、service 與擴充點。相同業務規則應有單一維護來源，不得將另一個引擎或前端整段複製後分別修改。
+- 隨供應商變動的行為留在 Adapter；隨操作介面變動的輸入、呈現與排程留在前端 Strategy；不隨兩者變動的規則留在共用層。
+- 供應商／模式判斷並非全面禁止，但應集中於選擇、組裝或真正的差異邊界，不得在核心、工具與各前端反覆增加相同的 `if provider ...`／`if gui ...`。
+- 若存在跨層能力差異，先確認既有擴充點，再採最小必要的能力描述或策略；不要以散落的具體類別判斷取代抽象契約。
+- GUI 與 CLI 不必逐行共用呈現程式碼，也不得以共用為由將 UI 依賴拉入核心。
+- Design Patterns 是管理變動與重複的手段，不是目的。優先沿用既有抽象，避免不必要的繼承階層、工廠或同時包辦認證、SDK、UI 與工具執行的巨型管理類別。
+
+#### AI 代理的擴充與檢閱要求
+
+1. **先辨識修改位置**：追蹤入口、前端、核心、factory、引擎與事件消費路徑，說明需求屬於共用流程、供應商差異或介面差異。
+2. **新增供應商**：實作符合 `BaseEngine` 的 Adapter，接入既有 factory 及必要的設定／認證邊界；不得另建 CLI／GUI 專用版本或複製 Agent 迴圈。
+3. **新增前端**：沿用 `FrontendStrategy` 與共用核心，再接入入口選擇；不得複製模型呼叫、工具執行、session 持久化或安全確認規則。
+4. **新增跨模式功能**：先在共用層實作共同規則，再分別接上 CLI／GUI 的互動呈現；部分組合不支援時，明列限制及處理方式。
+5. **檢查契約相容性**：確認抽象與具體實作的參數、回傳值、事件及生命週期一致。既有差異須明確記錄，不假定所有實作已完全可替換，也不藉機擴大無關重構。
+6. **規劃差異邊界測試**：使用 fake／mock 隔離外部依賴，檢查 Ollama／Cloud AI × CLI／GUI 四種組合的影響，涵蓋取消、失敗、工具呼叫與清理。不必重複測試相同內部細節，但須涵蓋各差異邊界及必要整合路徑。
+7. **交付設計依據**：列出重用的抽象、差異封裝位置、重複流程的處理方式，以及契約與相容性影響。需要偏離上述原則時，先說明理由、影響與替代方案。
+
+測試執行仍須遵守本指南第 5、7 節，不因架構調整而自動執行測試、Lint 或建置。
 
 ## 3. 編碼與相容性要求
 
@@ -87,7 +135,7 @@
 - `requirements.in` 為直接依賴來源，`requirements.txt` 是 pip-compile 產出的鎖定結果；不要手改鎖定版本。
 - 依賴異動先說明必要性、相容性與影響，再由使用者於授權環境重新產生並檢閱鎖定檔。
 - 不直接重播鎖定檔註記的 `--no-index` 指令；該選項是否可用取決於本機套件來源。
-- 發布 workflow 在 Windows／Python 3.11 執行 `build_portable.py`，v* tag 會觸發 release。
+- 發布 workflow 在 Windows／Python 3.11 執行 `build_portable.py`，v\* tag 會觸發 release。
 - 修改打包或資源路徑時須考慮原始碼、portable 與 PyInstaller 模式；不直接修改 dist 成品。
 
 ## 7. 驗證方式與手動命令

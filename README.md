@@ -33,11 +33,16 @@
 
 ### 4. 企業級安全治理 (Enterprise Governance)
 
-- **指令沙盒 (Shell Sandbox)**：透過啟用 `.env` 中的 `USE_SANDBOX=wsl` 或 `docker`，徹底隔離 AI 的終端機執行權限，規避不可逆的本機破壞。
+- **CLI 指令執行確認**：在終端機模式下，當 AI 嘗試呼叫 Shell 工具執行系統指令時，會強制暫停並提示使用者輸入 `[y/N]` 進行確認，防止不可逆的危險操作。
+- **指令沙盒 (Shell Sandbox)**：透過啟用 `.env` 中的 `USE_SANDBOX=wsl` 或 `docker`，徹底隔離 AI 的終端機執行權限。
 - **Artifacts 全域隔離**：強制將 AI 自動生成的專案計畫與文檔寫入 `~/.pocket-agent/artifacts/`，避免污染既有專案程式碼。
 - **Context Overflow 滑動視窗**：當上下文超過 12 萬字元時，自動觸發首尾保留截斷機制，防止 Token 上限導致的模型崩潰。
 
-### 5. 深入架構與實作文件 (Deep Dive Documentation)
+### 5. 工作區環境規範 (Workspace Context)
+
+支援在專案目錄下放置 `.pocket-agent.md` 檔案。CLI 啟動時會自動偵測該檔案，並將其內容注入為 System Prompt 的一部分。此設計讓開發者可針對不同專案設定專屬的程式碼風格、架構限制與 AI 規範，而無需修改全域設定。
+
+### 6. 深入架構與實作文件 (Deep Dive Documentation)
 
 為了幫助開發者深入了解 Pocket Agent 底層的實作細節與設計模式，我們準備了以下視覺化說明文件：
 
@@ -100,34 +105,37 @@ python main.py
 - `/file <路徑>`：附加本機檔案（支援程式碼、PDF 等）作為上下文。
 - `/image <描述>`：呼叫模型進行圖像生成 (可搭配 `-i` 參數引入參考圖，進行圖生圖)。
 - `/model <provider> <model_name>`：即時切換後端 API (支援 `openai` 或 `ollama`)。
-- `/session [list | load <id> | save | delete <id>]`：管理歷史對話 (Session)，支援儲存與讀取持久化紀錄。
+- `/session [list | load <id> | save | delete <id>]`：管理歷史對話 (Session)。無參數時啟動互動式光棒選單，支援儲存與讀取持久化紀錄。
+- `/compact`：讓 AI 自動摘要並壓縮中間的對話歷史，快速回收 Context 上限空間。
 - `/clear`：清除當前記憶體的對話歷史。
 - `/logout`：清除本機端的 OAuth Token 憑證。
 - `/quit`：關閉應用程式。
 
 ### 終端機模式 (CLI Mode)
 
-若您習慣於無頭 (Headless) 或純文字環境中工作，請加上 `--cli` 參數啟動：
+若您習慣於無頭 (Headless) 或純文字環境中工作，請加上 `--cli` 參數啟動。若想自動載入前一次未完成的對話，可附加 `--resume`：
 
 ```bash
-python main.py --cli
+python main.py --cli --resume
 ```
 
-CLI 採可捲動對話版面；首屏只列目前專案、模型與 MCP 工具數，詳細清單按需查看。
+CLI 採可捲動對話版面；首屏只列目前專案、模型與 MCP 工具數，詳細清單按需查看。底端狀態列（Toolbar）會即時顯示當次對話累計的 Token 用量。
 
-| 操作                       | 說明                                                     |
-| -------------------------- | -------------------------------------------------------- |
-| Enter                      | 送出整段輸入                                             |
-| Esc 後 Enter（Meta+Enter） | 插入換行；多行貼上先保留於編輯器                         |
-| Tab／方向鍵                | 補全與選擇；輸入歷史保留                                 |
-| Ctrl+C（輸入期間）         | 有文字時清空輸入，空白時提示退出方式；不清附件           |
-| Ctrl+D（空輸入）或 /quit   | 離開                                                     |
-| /help、/tools              | 查看指令、MCP 工具清單                                   |
-| /model                     | 分步輸入／補全提供者與模型，Esc 返回；也保留完整參數語法 |
-| /session                   | 管理歷史對話 (list / load / save / delete)               |
-| /attachments               | 列出本次待送附件與編號                                   |
-| /attachments remove <編號> | 移除單一待送附件，不刪除檔案                             |
-| /attachments clear         | 清空待送佇列，不刪除檔案                                 |
+| 操作                       | 說明                                           |
+| -------------------------- | ---------------------------------------------- |
+| Enter                      | 送出整段輸入                                   |
+| Esc 後 Enter（Meta+Enter） | 插入換行；多行貼上先保留於編輯器               |
+| Tab／方向鍵                | 補全與選擇光棒選單；輸入歷史保留               |
+| Ctrl+L                     | 清除終端機畫面顯示，但不清除對話歷史           |
+| Ctrl+C（輸入期間）         | 有文字時清空輸入，空白時提示退出方式；不清附件 |
+| Ctrl+D（空輸入）或 /quit   | 離開                                           |
+| /help、/tools              | 查看指令、MCP 工具清單                         |
+| /model                     | 互動式光棒選單切換提供者與模型，Esc 返回       |
+| /session                   | 互動式光棒選單分頁瀏覽並管理歷史對話           |
+| /compact                   | 自動摘要並壓縮對話紀錄                         |
+| /attachments               | 列出本次待送附件與編號                         |
+| /attachments remove <編號> | 移除單一待送附件，不刪除檔案                   |
+| /attachments clear         | 清空待送佇列，不刪除檔案                       |
 
 使用 `/file <完整路徑>` 附加一般檔案，路徑可加雙引號。訊息內也可使用 `@README.md`；
 含空白的 @ 路徑必須加雙引號，例如 `@"D:\my project\說明.txt" 請整理`。

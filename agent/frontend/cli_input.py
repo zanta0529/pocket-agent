@@ -140,6 +140,24 @@ def key_bindings(selecting: Callable[[], bool], on_clear_screen: Callable[[], No
         if on_clear_screen is not None:
             on_clear_screen()
 
+    @bindings.add("up", filter=Condition(selecting))
+    def up_completer(event: KeyPressEvent) -> None:
+        buffer = event.current_buffer
+        if not buffer.complete_state:
+            buffer.start_completion(select_first=True)
+            if buffer.complete_state:
+                buffer.complete_previous()
+        else:
+            buffer.complete_previous()
+
+    @bindings.add("down", filter=Condition(selecting))
+    def down_completer(event: KeyPressEvent) -> None:
+        buffer = event.current_buffer
+        if not buffer.complete_state:
+            buffer.start_completion(select_first=True)
+        else:
+            buffer.complete_next()
+
     return bindings
 
 
@@ -169,13 +187,19 @@ class CliInput:
         from prompt_toolkit.completion import WordCompleter
 
         self.selecting = True
+
+        def pre_run():
+            # 自動展開光棒並選取第一項，不需使用者手動按方向鍵
+            self.session.app.current_buffer.start_completion(select_first=True)
+
         try:
             return (
                 await self.session.prompt_async(
-                    label + "（Esc 返回）：",
+                    label + "：",
                     completer=WordCompleter(choices, sentence=True),
                     default="",
                     multiline=False,
+                    pre_run=pre_run,
                 )
             ).strip()
         except (KeyboardInterrupt, EOFError):

@@ -97,7 +97,7 @@ class CommandHandler:
         else:
             raise ValueError("用法：/attachments [clear|remove <編號>]")
 
-    def session(self, args: str) -> None:
+    async def session(self, args: str) -> None:
         from agent.sessions import (
             delete_session,
             list_sessions,
@@ -106,19 +106,83 @@ class CommandHandler:
         )
 
         parts = args.split(maxsplit=1)
-        sub = parts[0] if parts else "list"
+        sub = parts[0] if parts else ""
         sub_arg = parts[1] if len(parts) > 1 else ""
 
         if sub in ("", "list"):
-            sessions = list_sessions()[:10]
+            import time
+
+            sessions = list_sessions()
             if not sessions:
                 self.renderer.message("尚無歷史對話。")
                 return
-            import time
 
-            for i, s in enumerate(sessions, 1):
-                dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["updated_at"]))
-                self.renderer.message(f"{i:2}. [{s['id']}]  {s['title']}  ({dt})")
+            if sub == "list":
+                # 文字清單模式（/session list）：維持原有輸出
+                for i, s in enumerate(sessions, 1):
+                    dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["updated_at"]))
+                    self.renderer.message(f"{i:2}. [{s['id']}]  {s['title']}  ({dt})")
+                return
+
+            # 互動模式（/session，無參數）：直接以光棒選取對話（分頁顯示）
+            page = 0
+            page_size = 5
+            selected = None
+
+            while True:
+                start = page * page_size
+                end = start + page_size
+                chunk = sessions[start:end]
+
+                choices = []
+                for s in chunk:
+                    dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["updated_at"]))
+                    choices.append(f"{dt}  {s['title'][:40]}")
+
+                more_label = "↓ 載入更多歷史紀錄..."
+                if end < len(sessions):
+                    choices.append(more_label)
+
+                selected_label = await self.reader.choose("選擇對話（↑↓ 移動光棒，Enter 確認，Esc 取消）", choices)
+
+                if not selected_label:
+                    return  # 使用者 Esc 取消
+
+                if selected_label == more_label:
+                    page += 1
+                    continue
+
+                if selected_label in choices:
+                    idx_in_chunk = choices.index(selected_label)
+                    selected = chunk[idx_in_chunk]
+                    break
+                else:
+                    return  # 輸入了不匹配的字串
+
+            # ── 第三段：選取動作 ──────────────────────────
+            action = await self.reader.choose(
+                f"「{selected['title'][:30]}」→ 選擇動作",
+                ["載入", "刪除", "取消"],
+            )
+            if not action or action == "取消":
+                return
+
+            if action == "載入":
+                data = load_session(selected["id"])
+                if data is None:
+                    raise ValueError(f"找不到 session：{selected['id']}")
+                self.agent.history = data["history"]
+                self.state.session_id = data["id"]
+                self.renderer.message(
+                    f"已載入：{data.get('title', '（無標題）')} · {len(data['history'])} 則訊息",
+                    "green",
+                )
+
+            elif action == "刪除":
+                data = load_session(selected["id"])
+                title = data.get("title", selected["id"]) if data else selected["id"]
+                delete_session(selected["id"])
+                self.renderer.message(f"已刪除：{title}")
 
         elif sub == "load":
             if not sub_arg:
@@ -165,20 +229,26 @@ class CommandHandler:
 
         self.renderer.message("壓縮中…（正在向模型請求摘要）", "dim")
         try:
-            # 使用 responses.create 輕量呼叫，與引擎一致，不污染 agent.history
-            response = await self.agent.client.responses.create(
+            from agent.core import Agent
+
+            # 採用 Adapter 精神：建立一個輕量的子代理專門做摘要，
+            # 讓底層 EngineFactory 去處理 OpenAI 或 Ollama 的 API 差異。
+            summarizer = Agent(
+                client=self.agent.client,
+                mcp=self.agent.mcp,
                 model=self.agent.model,
-                input=summary_prompt,
+                system_prompt=(
+                    "你是一個精準的對話摘要助手。請直接輸出摘要結果，不要加上任何解釋、問候語或 Markdown 標籤。"
+                ),
+                is_subagent=True,
+                reasoning_effort="none",  # 摘要任務不需深度推理
             )
-            # 取得回覆文字（相容 Responses API 的回傳結構）
-            summary = ""
-            for item in getattr(response, "output", []):
-                for part in getattr(item, "content", []):
-                    if getattr(part, "type", "") == "output_text":
-                        summary += getattr(part, "text", "")
-            if not summary:
-                # fallback：嘗試直接取 output_text 屬性
-                summary = getattr(response, "output_text", "") or str(response)
+
+            # 使用標準的 chat() 介面，它會回傳 (thinking, reply, usage_str)
+            _, summary, _ = await summarizer.chat(summary_prompt)
+
+            if not summary or not summary.strip():
+                raise ValueError("模型未回傳有效的摘要內容")
         except Exception as e:
             self.renderer.message(f"壓縮失敗：{e}", "red")
             return
@@ -223,7 +293,7 @@ class CommandHandler:
         elif name == "model":
             await self.model(args)
         elif name == "session":
-            self.session(args)
+            await self.session(args)
         elif name == "compact":
             await self.compact()
         elif name == "tools":
