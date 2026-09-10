@@ -275,13 +275,39 @@ class CliFrontend(FrontendStrategy):
             # F3：讓 renderer 能取得 model 名稱顯示在標頭
             renderer._state = state
 
-            # F1：CLI 工具確認機制（同步阻塞，由 asyncio.to_thread 包裝呼叫）
+            # F1：CLI 工具確認機制（三重授權）
             def _cli_confirm(command: str) -> bool:
+                from agent.auth import load_config, save_config
+
+                # 1. 檢查全域「永遠信任」
+                config = load_config()
+                if config.get("always_allow_shell") is True:
+                    return True
+
+                # 2. 檢查「本次 Session 信任」
+                if state.session_approved_commands:
+                    return True
+
                 renderer._ensure_newline()
-                renderer.message(f"⚠ 即將執行：{command}", "yellow")
+                # 簡化警告：不再重複印出完整的 command，因為上方 Action 已經顯示過
+                renderer.message("⚠ 系統要求執行上述指令，是否允許？", "yellow")
                 try:
-                    ans = input("允許？[y/N] ").strip().lower()
-                    return ans in ("y", "yes")
+                    ans = input("允許？[y: 單次 | a: 本次對話 | A: 永遠 | N: 拒絕] ").strip()
+                    if ans == "y" or ans == "Y":
+                        return True
+                    elif ans == "a":
+                        state.session_approved_commands = True
+                        renderer.message("✓ 已同意本次對話中自動執行指令", "green")
+                        return True
+                    elif ans == "A":
+                        renderer._ensure_newline()
+                        renderer.message(
+                            "[警告] 您選擇了「永遠允許」，未來所有指令將自動執行。此設定已存於設定檔。", "red"
+                        )
+                        config["always_allow_shell"] = True
+                        save_config(config)
+                        return True
+                    return False
                 except (EOFError, KeyboardInterrupt):
                     return False
 

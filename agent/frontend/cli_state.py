@@ -19,6 +19,7 @@ class CliState:
     last_failed_input: str = ""
     session_id: str = field(default_factory=_new_session_id)
     session_tokens: int = 0  # 本 session 累計 token 用量（供 toolbar 顯示）
+    session_approved_commands: bool = False  # 是否同意本次對話中自動執行指令
 
     def add_files(self, paths: list[str]) -> list[str]:
         # Validate the whole batch before committing, including readability.

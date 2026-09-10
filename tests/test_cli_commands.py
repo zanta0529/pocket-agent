@@ -131,7 +131,7 @@ def test_session_list_shows_recent():
         {"id": "20260909-130000-ddeeff", "title": "第二輪對話", "updated_at": time.time()},
     ]
     with patch("agent.sessions.list_sessions", return_value=sessions):
-        asyncio.run(handler.dispatch("/session"))
+        asyncio.run(handler.dispatch("/session list"))
     assert renderer.message.call_count == 2
     first_call = renderer.message.call_args_list[0].args[0]
     assert "20260909-120000-aabbcc" in first_call
