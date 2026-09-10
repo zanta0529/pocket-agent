@@ -12,8 +12,8 @@ class EngineFactory:
     @staticmethod
     def create(provider: str, client: Any, model: str) -> BaseEngine:
         if provider.lower() == "ollama":
-            log.info("Using OllamaChatEngine for %s", model)
+            log.debug("Using OllamaChatEngine for %s", model)
             return OllamaChatEngine(client=client, model=model)
         else:
-            log.info("Using OpenAIResponsesEngine for %s", model)
+            log.debug("Using OpenAIResponsesEngine for %s", model)
             return OpenAIResponsesEngine(client=client, model=model)

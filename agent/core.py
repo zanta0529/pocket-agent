@@ -98,6 +98,7 @@ class Agent:
         #   text         data=回覆片段（str）
         #   tool_start   data={call_id, name, arguments}
         #   tool_done    data={call_id, name, result, ok}
+        #   image_saved  data=圖片存檔路徑（str）  agent 在 chat 中生圖完成時觸發
         self.on_stream = None
 
         # CLI 指令確認回呼：callable(command) -> bool。
@@ -372,7 +373,8 @@ class Agent:
                 elif isinstance(event, EventImageGenerationDone):
                     path = save_image_b64(event.b64)
                     self.last_images.append(path)
-                    log.info("IMAGE saved %s", path)
+                    log.debug("IMAGE saved %s", path)
+                    self._emit("image_saved", str(path))
 
                 # ── 串流結束，提取用量 ────────────────
                 elif isinstance(event, EventUsage):
