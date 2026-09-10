@@ -107,13 +107,10 @@ def test_empty_input_interrupts(keys, exception):
                 key_bindings=key_bindings(lambda: False),
             )
             pipe.send_text(keys)
-            try:
-                await asyncio.wait_for(session.prompt_async(), timeout=3)
-            except exception:
-                return True
-            return False
+            await asyncio.wait_for(session.prompt_async(), timeout=3)
 
-    assert asyncio.run(scenario())
+    with pytest.raises(exception):
+        asyncio.run(scenario())
 
 
 def test_selection_restores_chat_prompt_options():
