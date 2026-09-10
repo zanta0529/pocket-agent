@@ -1,5 +1,6 @@
 """Safe, scrollback-friendly CLI presentation."""
 
+import json
 from pathlib import Path
 
 from prompt_toolkit.formatted_text import FormattedText
@@ -56,6 +57,57 @@ class CliRenderer:
             except Exception:
                 pass
             self._active_status = None
+
+    def _ensure_newline(self) -> None:
+        """若文字串流游標未換行，補一個換行確保後續輸出從行首開始。
+
+        text 事件以 end="" 輸出，游標停在行尾；tool_start、tool_done、
+        read 等事件若緊接其後，不補換行會造成輸出黏在回應文字後方。
+        """
+        if self._stream_has_content:
+            self.console.print()
+            self._stream_has_content = False
+
+    def _summarise_args(self, name: str, args_raw: str) -> str:
+        """從工具的 JSON arguments 字串萃取最有意義的單一摘要欄位。
+
+        依工具名稱特徵選擇最具代表性的欄位（如 run_command 取 command、
+        read_file 取 file_path），讓使用者不必解讀完整 JSON 即可判斷意圖。
+        JSON 解析失敗時回退到純字串截短，確保不 crash。
+        """
+        MAX = 70
+        name_lower = name.lower()
+
+        parsed: dict | None = None
+        if args_raw:
+            try:
+                parsed = json.loads(args_raw)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+
+        if parsed and isinstance(parsed, dict):
+            # 依工具名稱萃取最具代表性的欄位
+            if any(k in name_lower for k in ("run_command", "bash", "shell", "python", "powershell", "node", "cmd")):
+                val = parsed.get("command") or parsed.get("cmd") or ""
+            elif any(k in name_lower for k in ("replace", "edit", "patch", "write", "create")):
+                val = parsed.get("target_file") or parsed.get("file_path") or parsed.get("path") or ""
+            elif any(k in name_lower for k in ("read", "view", "list", "find", "grep", "search")):
+                val = (
+                    parsed.get("file_path")
+                    or parsed.get("path")
+                    or parsed.get("query")
+                    or parsed.get("pattern")
+                    or parsed.get("directory")
+                    or ""
+                )
+            else:
+                # 通用 fallback：取第一個非空的 value
+                val = next((str(v) for v in parsed.values() if v), "")
+            if val:
+                return clip(str(val), MAX)
+
+        # JSON 解析失敗或無可用欄位：回退截短原始字串
+        return clip(args_raw, MAX) if args_raw else ""
 
     def message(self, value: object, style: str = "dim") -> None:
         self.console.print(Text(plain(value), style=style))
@@ -131,17 +183,18 @@ class CliRenderer:
                 self.console.print(Text(f"  ∴ {snippet}", style="dim italic"))
 
         elif kind == "read":
+            self._ensure_newline()
             self.console.print(Text.assemble(("● ", "bold green"), ("Read", "bold yellow"), (f" ({plain(data)})", "")))
 
         elif kind == "tool_start":
+            self._ensure_newline()
+
             if isinstance(data, dict):
                 name = data.get("name", str(data))
-                args = data.get("arguments", "")
-                if isinstance(args, str) and len(args) > 50:
-                    args = args[:47] + "..."
+                args_raw = data.get("arguments", "") or ""
             else:
                 name = str(data)
-                args = ""
+                args_raw = ""
 
             name_lower = name.lower()
 
@@ -171,11 +224,14 @@ class CliRenderer:
                 action = "Action"
                 action_color = "bold cyan"
 
-            arg_str = f" ({name})" if not args else f" ({name} {args})"
+            summary = self._summarise_args(name, args_raw)
+            # 格式：● {動詞} ({工具名稱}) {摘要}  — 工具名稱與摘要分開，視覺層次更清晰
+            arg_str = f" ({name})" if not summary else f" ({name}) {summary}"
 
             self.console.print(Text.assemble(("● ", bullet_color), (action, action_color), (plain(arg_str), "")))
 
         elif kind == "tool_done":
+            self._ensure_newline()
             if isinstance(data, dict):
                 name = data.get("name", "")
                 ok = data.get("ok", True)

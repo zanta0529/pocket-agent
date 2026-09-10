@@ -1,0 +1,122 @@
+# PocketAgent 專案特定開發指南
+
+本文件依目前版本庫的 README、原始碼、依賴、測試及 CI 設定整理。
+搭配 [AI_INSTRUCTIONS.md](AI_INSTRUCTIONS.md) 使用；變更技術棧前重新確認現況。
+以下架構描述為已觀察現況，開發要求則為後續修改應遵循的準則，並非完整安全稽核結論。
+
+## 1. 專案定位與技術棧
+
+- PocketAgent 是本機 Python AI 代理應用，提供預設 GUI 與 CLI，README 宣告支援 Windows、macOS、Linux。
+- README 最低版本為 Python 3.11；一般 CI 與 Windows 發布流程也使用 Python 3.11。
+- 入口為 `main.py`，使用 Click；GUI 使用 CustomTkinter／Tkinter，CLI 使用 Rich／prompt_toolkit。
+- 引擎包含 OpenAI Responses API 與 Ollama Chat Completions；非同步流程使用 asyncio。
+- 認證包含 OAuth PKCE；相關依賴包含 OpenAI SDK、httpx、FastAPI、uvicorn、keyring。
+- MCP 提供外部工具整合；`browser_mcp.py` 為瀏覽器整合入口，依賴中包含 Playwright。
+- 文件輸出相關依賴包含 python-docx、python-pptx、ReportLab；PDF 讀取使用 pypdf。
+- 已檢閱的 session 持久化使用 JSON，設定使用環境變數／YAML 等；不要自行引入 SQLite 或 ORM。
+
+## 2. 目錄與責任邊界
+
+| 路徑 | 用途與修改原則 |
+| --- | --- |
+| `main.py` | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。 |
+| `agent/core.py` | Agent 核心協調；修改前追蹤引擎、工具與前端的呼叫關係。 |
+| `agent/engines/` | BaseEngine、事件資料型別、factory 與 provider 實作。 |
+| `agent/frontend/` | GUI／CLI 策略；CLI 拆分為 input、render、state、commands 等模組。 |
+| `gui/` | 圖形介面、元件與 assets；不得將 GUI 依賴無條件引入無頭 CLI 路徑。 |
+| `agent/auth.py` | 認證與 provider 設定；避免暴露憑證或觸發真實登入。 |
+| `agent/mcp_manager.py` | MCP 連線與生命週期。 |
+| `agent/shell.py` | 命令執行、確認、逾時與編碼處理；屬安全敏感區域。 |
+| `agent/paths.py` | 開發／PyInstaller／portable 路徑與使用者資料位置。 |
+| `agent/sessions.py` | JSON 對話持久化。 |
+| `agent/registry.py`、`agent/skills.py`、`agent/plugins.py` | 擴充註冊、技能載入與匯入。 |
+| `skills/`、`agents/`、`commands/` | 產品隨附的技能、子代理與命令，不等同開發代理規範。 |
+| `.agents/skills/` | 開發代理技能；維持通用性，專案差異放在本指南。 |
+| `tests/` | pytest 回歸測試。 |
+| `build_portable.py`、`PocketAgent.spec` | portable 與 PyInstaller 包裝設定。 |
+| `docs/` | 工程規範與文件；根目錄及 `.agents/` 的 AGENTS.md 為代理入口。 |
+
+## 3. 編碼與相容性要求
+
+- Python 使用 4 空白縮排、UTF-8、LF 與檔尾換行；行長以 120 為準。
+- Python 格式以 `pyproject.toml` 的 Ruff 設定為準：雙引號、E／F／I 規則；
+  `.editorconfig` 的 single quote 提示不覆寫 Python formatter。
+- 新增程式以 Python 3.11 相容為基準，不使用僅在更高版本提供的語法或標準庫 API。
+- 新增／修改介面補型別與必要的錯誤處理，不為型別改善擴大重構既有程式。
+- 保留 `BaseEngine.stream_chat` 的 Event 型別契約；修改串流事件時同步檢查兩個 provider 與所有消費端。
+- 避免在 GUI 執行緒阻塞網路與長時間操作；更新元件沿用既有排程模式。
+- 保留取消、失敗提示、附件狀態、連線關閉與 MCP 清理行為，不在失敗後偷偷自動重送可能有副作用的操作。
+- 使用 pathlib 與集中式路徑 helper，不硬編碼本機磁碟或假定目前目錄就是專案根目錄。
+- 文件與使用者訊息以繁體中文為主，程式識別字沿用現有英文慣例。
+
+## 4. 資料、擴充與安全
+
+- 隨附資源透過 `bundle_dir()` 取得；PyInstaller 使用其 bundle 資源位置。
+- `user_dir()` 為 `~/.pocket-agent`；發布版 `.env` 與 MCP 設定走使用者資料目錄，
+  開發模式則由 `env_path()`、`mcp_config_path()` 指向版本庫位置。不得將可寫資料塞入唯讀 bundle。
+- 對話保存在 `~/.pocket-agent/sessions/*.json`；修改格式須考慮既有資料讀取與遷移。
+- 產品技能從 bundle 的 `skills/` 與使用者 `~/.pocket-agent/skills/` 載入，同名時使用者優先；
+  SKILL.md 使用 name／description frontmatter。不要將 `.agents/skills/` 當成產品載入目錄。
+- 技能／外掛 ZIP、附件、MCP 回應與模型工具參數皆是不可信輸入；維持並補強路徑穿越、覆寫與解壓防護。
+- 不讀取、列印或提交真實 `.env`、token、私人 session、瀏覽器狀態或 `agent.log`；需要設定時先讀範例檔。
+- 不自動啟動 OAuth、真實模型呼叫、MCP／瀏覽器服務、更新器或外部腳本。
+- 修改 shell、hooks、plugins、MCP 或更新流程時，不移除確認機制、逾時或沙箱檢查。
+- 應用程式的 shell／sandbox 能力不等於開發代理已獲准執行命令，也不能保證任意命令均被安全隔離。
+- 不手動修改或提交 venv、build、dist、快取、產生的圖片／文件與私人設定。
+
+## 5. 本機環境與工具政策
+
+- 本次工作環境為 Windows；平台工具明示以 cmd.exe 執行，PowerShell 受群組原則封鎖。不得繞過。
+- 不把此限制推論為所有 Shell 均不可用，亦不宣稱原生檔案工具永遠不受檔案權限或沙箱限制。
+- 優先使用平台實際提供的原生讀寫工具。沒有原生工具時先揭露限制，
+  經使用者／工具審查授權後，可用 cmd.exe 搭配 Python 做限定範圍的檔案讀寫與 Git 唯讀查詢。
+  此替代機制不是測試、安裝、建置或繞過 OS 政策的許可。
+- 對中文文件明確使用 UTF-8；Python 終端機讀写可使用 `python -X utf8`，不以有損解碼結果覆蓋原檔。
+- 既有檔案覆寫前說明影響並確認未覆蓋他人修改；本機缺少工具或權限時停止並交付手動方案。
+- 開發代理不得自動執行測試、Lint、格式化、建置或 pre-commit；只提供手動命令。
+- 不自動安裝依賴、啟動服務、commit、push、打 tag、發布或刪除資料。
+- 本節保留本機禁止自動驗證的要求；遠端既有 CI 仍依 workflow 執行，不為配合本機政策停用 CI。
+
+## 6. 依賴與發布維護
+
+- `requirements.in` 為直接依賴來源，`requirements.txt` 是 pip-compile 產出的鎖定結果；不要手改鎖定版本。
+- 依賴異動先說明必要性、相容性與影響，再由使用者於授權環境重新產生並檢閱鎖定檔。
+- 不直接重播鎖定檔註記的 `--no-index` 指令；該選項是否可用取決於本機套件來源。
+- 發布 workflow 在 Windows／Python 3.11 執行 `build_portable.py`，v* tag 會觸發 release。
+- 修改打包或資源路徑時須考慮原始碼、portable 與 PyInstaller 模式；不直接修改 dist 成品。
+
+## 7. 驗證方式與手動命令
+
+一般 CI 在 Ubuntu／Python 3.11 執行 Ruff 格式檢查、Lint 與 pytest。
+既有測試涵蓋 auth／Ollama、CLI commands／flow／input／render／state、MCP manager 與 shell sandbox；
+這不代表 GUI、打包或所有 provider 均已有完整覆蓋。
+
+新增測試沿用 pytest、unittest.mock／AsyncMock、tmp_path 等既有模式；隔離網路、OAuth、
+使用者 home、session、MCP 與子行程，不使用真實憑證或改動真實使用者資料。
+
+以下命令僅供使用者在版本庫根目錄的已授權 Windows cmd.exe 手動執行。
+前提為 venv 已建立，且其中已安裝專案依賴及 Ruff／pytest；不存在時不要宣稱可以直接執行。
+
+```cmd
+venv\Scripts\python.exe -m ruff format --check .
+venv\Scripts\python.exe -m ruff check .
+venv\Scripts\python.exe -m pytest tests/
+```
+
+針對 CLI 交易／清理行為可先執行：
+
+```cmd
+venv\Scripts\python.exe -m pytest tests/test_cli_flow.py
+```
+
+回報時分開列出：文件／差異檢閱、實際執行的命令與結果、未執行項目及原因。
+本機僅提供命令不等於測試通過；GUI 與打包相關變更仍需使用者額外人工驗證。
+
+## 8. 已知設定差異與後續協調
+
+- README 與 CI 為 Python 3.11，但 Ruff target-version 目前是 py310；
+  requirements.txt 檔頭則記錄由 Python 3.14 產生。鎖定依賴能否完整支援 3.11 尚須驗證。
+  不把生成版本誤寫成最低執行版本；統一設定或重建鎖定檔需另立變更。
+- `.editorconfig` 的 single quote 與 Ruff 的 double quote 不一致；Python 暫以 Ruff 為準。
+- 根目錄 `AGENTS.md` 與 `.agents/AGENTS.md` 為薄入口，先引導讀取 `docs/AI_INSTRUCTIONS.md`，
+  再讀取本專案指南；不重複維護工程與工具政策。入口存在不保證各代理自動載入，仍須確認工具設定。
