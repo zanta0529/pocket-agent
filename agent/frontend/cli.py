@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from .base import FrontendStrategy
 
+log = logging.getLogger("pocket-agent")
+
 if TYPE_CHECKING:
     from agent.core import Agent
 
@@ -158,7 +160,9 @@ async def send_turn(
     if result.action == "image":
         renderer.message(f"已存檔：{reply}", "green")
     else:
-        renderer.reply(reply, monotonic() - started, getattr(agent, "total_tokens", 0), streamed=True)
+        turn_tokens = getattr(agent, "total_tokens", 0)
+        state.session_tokens += turn_tokens
+        renderer.reply(reply, monotonic() - started, turn_tokens, streamed=True)
 
 
 async def conversation(
@@ -207,10 +211,12 @@ async def conversation(
 class CliFrontend(FrontendStrategy):
     """Scrollback-first CLI with separate input and rendering phases."""
 
-    def run(self, system_prompt: str = "You are a helpful assistant.") -> None:
-        asyncio.run(self._run_cli(system_prompt))
+    def run(self, system_prompt: str = "You are a helpful assistant.", resume: bool = False) -> None:
+        asyncio.run(self._run_cli(system_prompt, resume=resume))
 
-    async def _run_cli(self, system_prompt: str) -> None:
+    async def _run_cli(self, system_prompt: str, resume: bool = False) -> None:
+        import pathlib
+
         from rich.console import Console
 
         from agent.auth import fetch_available_models, get_model, get_openai_client, load_config
@@ -230,11 +236,26 @@ class CliFrontend(FrontendStrategy):
                 if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
                     h.setLevel(logging.WARNING)
 
+        # F2：自動載入工作區規範 (.pocket-agent.md)
+        _ctx_file = pathlib.Path.cwd() / ".pocket-agent.md"
+        if _ctx_file.exists():
+            try:
+                _ctx = _ctx_file.read_text(encoding="utf-8").strip()
+                if _ctx:
+                    system_prompt = system_prompt + "\n\n---\n## 工作區規範\n" + _ctx
+            except Exception as e:
+                log.warning("工作區規範讀取失敗：%s", e)
+
         client = None
         mcp = None
         agent = None
         try:
             renderer.banner()
+
+            # 若有工作區規範，在 banner 後提示（保持 banner 整潔）
+            if _ctx_file.exists() and "工作區規範" in system_prompt:
+                renderer.message(f"已載入工作區規範：{_ctx_file.name}")
+
             client = get_openai_client()
             mcp = MCPManager()
             renderer.message("啟動 MCP servers…")
@@ -250,9 +271,44 @@ class CliFrontend(FrontendStrategy):
             elif not available:
                 renderer.message("無法取得模型清單，使用目前設定。", "yellow")
             agent = Agent(client=client, mcp=mcp, model=state.model, system_prompt=system_prompt)
+
+            # F3：讓 renderer 能取得 model 名稱顯示在標頭
+            renderer._state = state
+
+            # F1：CLI 工具確認機制（同步阻塞，由 asyncio.to_thread 包裝呼叫）
+            def _cli_confirm(command: str) -> bool:
+                renderer._ensure_newline()
+                renderer.message(f"⚠ 即將執行：{command}", "yellow")
+                try:
+                    ans = input("允許？[y/N] ").strip().lower()
+                    return ans in ("y", "yes")
+                except (EOFError, KeyboardInterrupt):
+                    return False
+
+            agent.on_confirm = _cli_confirm
+
             tools = list(mcp.list_tools())
             renderer.welcome(state, tools)
-            await conversation(agent, state, CliInput(state), renderer, tools)
+
+            # F7：--resume 自動恢復最近 session
+            if resume:
+                from agent.sessions import list_sessions, load_session
+
+                sessions = list_sessions()
+                if sessions:
+                    latest = load_session(sessions[0]["id"])
+                    if latest and latest.get("history"):
+                        agent.history = latest["history"]
+                        state.session_id = latest["id"]
+                        renderer.message(
+                            f"已恢復：{latest.get('title', '（無標題）')} · {len(agent.history)} 則訊息",
+                            "green",
+                        )
+                else:
+                    renderer.message("沒有找到歷史 session，以全新對話啟動。", "dim")
+
+            # F6：Ctrl+L 清屏後重印 banner
+            await conversation(agent, state, CliInput(state, on_clear_screen=renderer.banner), renderer, tools)
         except Exception as exc:
             renderer.message(f"CLI 執行失敗：{exc}", "red")
         finally:

@@ -31,7 +31,8 @@ load_dotenv(env_path())
 @click.option("--cli", "--console", "--tui", is_flag=True, help="終端機模式（不開 GUI）")
 @click.option("--gui", is_flag=True, help="強制圖形介面模式（預設）")
 @click.option("--system", default="You are a helpful assistant.", help="System prompt（CLI 模式用）")
-def main(ctx, cli, gui, system):
+@click.option("--resume", is_flag=True, help="CLI 模式啟動時自動恢復最近一次 session")
+def main(ctx, cli, gui, system, resume):
     """Pocket Agent — 用 OpenAI 帳號登入，不需要 API Key"""
     if ctx.invoked_subcommand is None:
         # 根據參數或執行檔名稱選擇前端策略
@@ -44,7 +45,7 @@ def main(ctx, cli, gui, system):
         else:
             strategy = GuiFrontend()
 
-        strategy.run(system)
+        strategy.run(system, resume=resume)
 
 
 @main.command()

@@ -151,13 +151,57 @@ class CommandHandler:
         else:
             raise ValueError("用法：/session [list | load <id> | save | delete <id>]")
 
+    async def compact(self) -> None:
+        """摘要並壓縮中間對話歷史，回收 context 空間。"""
+        history = self.agent.history
+        if len(history) < 4:
+            self.renderer.message("對話歷史不足（需至少 4 則），無需壓縮。")
+            return
+
+        # 擷取中間歷史（排除首 2 和末 2 則）用於摘要
+        middle = history[2:-2]
+        middle_text = "\n".join(f"[{m['role']}] {str(m.get('content', ''))[:300]}" for m in middle)
+        summary_prompt = "請用繁體中文，以 3–6 句話摘要以下對話的核心要點，讓後續對話能銜接前文脈絡：\n\n" + middle_text
+
+        self.renderer.message("壓縮中…（正在向模型請求摘要）", "dim")
+        try:
+            # 使用 responses.create 輕量呼叫，與引擎一致，不污染 agent.history
+            response = await self.agent.client.responses.create(
+                model=self.agent.model,
+                input=summary_prompt,
+            )
+            # 取得回覆文字（相容 Responses API 的回傳結構）
+            summary = ""
+            for item in getattr(response, "output", []):
+                for part in getattr(item, "content", []):
+                    if getattr(part, "type", "") == "output_text":
+                        summary += getattr(part, "text", "")
+            if not summary:
+                # fallback：嘗試直接取 output_text 屬性
+                summary = getattr(response, "output_text", "") or str(response)
+        except Exception as e:
+            self.renderer.message(f"壓縮失敗：{e}", "red")
+            return
+
+        if not summary.strip():
+            self.renderer.message("摘要結果為空，歷史未變更。", "yellow")
+            return
+
+        original_len = len(history)
+        notice = {
+            "role": "system",
+            "content": f"[System] 以下為對話摘要（已壓縮 {original_len - 4} 則）：\n{summary.strip()}",
+        }
+        self.agent.history = history[:2] + [notice] + history[-2:]
+        self.renderer.message(f"✓ 已壓縮：{original_len} 則 → {len(self.agent.history)} 則", "green")
+
     async def dispatch(self, raw: str) -> CommandResult:
         text = raw.strip()
         if not text.startswith("/"):
             return CommandResult("chat", raw)
         head, *tail = text.split(maxsplit=1)
         name, args = head[1:], tail[0] if tail else ""
-        if name in ("quit", "logout", "clear", "help", "tools") and args:
+        if name in ("quit", "logout", "clear", "compact", "help", "tools") and args:
             raise ValueError(f"/{name} 不接受參數")
         if name == "quit":
             return CommandResult("quit")
@@ -180,6 +224,8 @@ class CommandHandler:
             await self.model(args)
         elif name == "session":
             self.session(args)
+        elif name == "compact":
+            await self.compact()
         elif name == "tools":
             self.renderer.message("MCP 工具：" + (", ".join(self.tools) or "無"))
         elif name == "help":

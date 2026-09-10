@@ -20,6 +20,7 @@ BUILTINS = {
     "attachments": "查看／移除待送附件",
     "model": "切換當次提供者與模型",
     "session": "查看／載入歷史對話",
+    "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
     "clear": "清除對話，保留附件",
     "help": "指令說明",
     "tools": "工具清單",
@@ -102,7 +103,7 @@ class SlashCommandCompleter(Completer):
                 yield Completion(name, start_position=-(len(text) - 1), display_meta=plain(description))
 
 
-def key_bindings(selecting: Callable[[], bool]) -> KeyBindings:
+def key_bindings(selecting: Callable[[], bool], on_clear_screen: Callable[[], None] | None = None) -> KeyBindings:
     bindings = KeyBindings()
 
     @bindings.add("enter")
@@ -132,11 +133,18 @@ def key_bindings(selecting: Callable[[], bool]) -> KeyBindings:
         else:
             buffer.start_completion(select_first=True)
 
+    @bindings.add("c-l")
+    def clear_screen(event: KeyPressEvent) -> None:
+        """清除終端畫面（不清對話歷史），符合 terminal 習慣。"""
+        event.app.renderer.clear()
+        if on_clear_screen is not None:
+            on_clear_screen()
+
     return bindings
 
 
 class CliInput:
-    def __init__(self, state: CliState) -> None:
+    def __init__(self, state: CliState, on_clear_screen: Callable[[], None] | None = None) -> None:
         self.selecting = False
         self.completer = SlashCommandCompleter(state)
         self.session = PromptSession(
@@ -144,7 +152,7 @@ class CliInput:
             completer=self.completer,
             complete_while_typing=True,
             bottom_toolbar=lambda: toolbar(state, shutil.get_terminal_size().columns),
-            key_bindings=key_bindings(lambda: self.selecting),
+            key_bindings=key_bindings(lambda: self.selecting, on_clear_screen=on_clear_screen),
             erase_when_done=True,
             color_depth=ColorDepth.DEPTH_1_BIT if "NO_COLOR" in os.environ or not sys.stdout.isatty() else None,
         )

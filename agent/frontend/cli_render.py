@@ -27,9 +27,10 @@ def clip(value: str, width: int) -> str:
 def toolbar(state: CliState, width: int) -> FormattedText:
     width = max(0, width)
     count = f"待送 {len(state.pending_files)}"
+    tokens_str = f" · {state.session_tokens} tokens" if state.session_tokens > 0 else ""
     model = f"{state.provider}/{state.model}"
-    budget = max(0, width - cell_len(count) - 3)
-    line = f"{clip(model, budget)} · {count}" if budget else count
+    budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
+    line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
     if state.pending_files:
         extra = f" · {Path(state.pending_files[0]).name}"
         if cell_len(plain(line + extra)) <= width:
@@ -48,6 +49,8 @@ class CliRenderer:
         self._stream_has_content: bool = False
         # 思考中 spinner：由 send_turn 啟動，由 event("text") 或 send_turn 結束前停止
         self._active_status = None
+        # 當前 CLI 狀態引用（啟動後由 cli.py 設定），用於標頭顯示 model 名稱
+        self._state: CliState | None = None
 
     def _stop_status(self) -> None:
         """停止思考中 spinner（若仍在執行），確保不與串流輸出衝突。"""
@@ -172,7 +175,8 @@ class CliRenderer:
                 # 第一個 token 到來：先停止思考中 spinner，再印標頭
                 self._stop_status()
                 self.console.print()  # 與上一條訊息間隔
-                self.console.print(Text("● Pocket Agent", style="bold #B8860B"))
+                label = f"● Pocket Agent ({self._state.model})" if self._state is not None else "● Pocket Agent"
+                self.console.print(Text(label, style="bold #B8860B"))
                 self._stream_header_printed = True
             self.console.print(str(data), end="", highlight=False)
             self._stream_has_content = True

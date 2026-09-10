@@ -18,6 +18,7 @@ class CliState:
     pending_files: list[str] = field(default_factory=list)
     last_failed_input: str = ""
     session_id: str = field(default_factory=_new_session_id)
+    session_tokens: int = 0  # 本 session 累計 token 用量（供 toolbar 顯示）
 
     def add_files(self, paths: list[str]) -> list[str]:
         # Validate the whole batch before committing, including readability.
