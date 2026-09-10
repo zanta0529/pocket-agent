@@ -122,7 +122,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     # GUI 程式底下跑 console 指令不要閃出黑視窗
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
-    log.info("CLI run: %s", command)
+    log.debug("CLI run: %s", command)
 
     import os
 
@@ -134,12 +134,12 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     if sandbox_mode == "wsl":
         cmd_args = ["wsl", "--", "sh", "-c", command]
         is_shell = False
-        log.info("Using WSL Sandbox")
+        log.debug("Using WSL Sandbox")
     elif sandbox_mode == "docker":
         container_name = os.getenv("SANDBOX_CONTAINER", "pocket_sandbox")
         cmd_args = ["docker", "exec", container_name, "sh", "-c", command]
         is_shell = False
-        log.info("Using Docker Sandbox")
+        log.debug("Using Docker Sandbox")
 
     try:
         proc = subprocess.run(
