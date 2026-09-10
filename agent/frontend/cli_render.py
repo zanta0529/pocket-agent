@@ -201,6 +201,17 @@ class CliRenderer:
                 args_raw = ""
 
             name_lower = name.lower()
+            native_tools = {
+                "read_file",
+                "write_to_file",
+                "replace_file_content",
+                "list_dir",
+                "find_by_name",
+                "grep_search",
+                "search_web",
+                "read_url_content",
+            }
+            is_native = name in native_tools
 
             danger_kws = [
                 "bash",
@@ -228,17 +239,23 @@ class CliRenderer:
                 action = "Action"
                 action_color = "bold cyan"
 
+            name_color = "bold green" if is_native else ""
             summary = self._summarise_args(name, args_raw)
-            # 格式：● {動詞} ({工具名稱}) {摘要}  — 工具名稱與摘要分開，視覺層次更清晰
-            arg_str = f" ({name})" if not summary else f" ({name}) {summary}"
 
-            self.console.print(Text.assemble(("● ", bullet_color), (action, action_color), (plain(arg_str), "")))
+            parts = [("● ", bullet_color), (action, action_color), (" (", ""), (name, name_color), (")", "")]
+            if summary:
+                parts.append((f" {plain(summary)}", ""))
+
+            self.console.print(Text.assemble(*parts))
 
         elif kind == "tool_done":
             self._ensure_newline()
             if isinstance(data, dict):
                 name = data.get("name", "")
                 ok = data.get("ok", True)
-                icon = "✓" if ok else "✗"
-                color = "green" if ok else "red"
+                if ok:
+                    # 成功時不印出冗餘的 ✓ name
+                    return
+                icon = "✗"
+                color = "red"
                 self.console.print(Text(f"  {icon} {name}", style=color))

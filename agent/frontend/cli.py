@@ -291,8 +291,18 @@ class CliFrontend(FrontendStrategy):
                 renderer._ensure_newline()
                 # 簡化警告：不再重複印出完整的 command，因為上方 Action 已經顯示過
                 renderer.message("⚠ 系統要求執行上述指令，是否允許？", "yellow")
+
+                # 暫停 spinner，避免背景更新覆蓋 input 提示字串
+                status = renderer._active_status
+                if status:
+                    status.stop()
+
                 try:
                     ans = input("允許？[y: 單次 | a: 本次對話 | A: 永遠 | N: 拒絕] ").strip()
+
+                    if status:
+                        status.start()
+
                     if ans == "y" or ans == "Y":
                         return True
                     elif ans == "a":
@@ -309,6 +319,8 @@ class CliFrontend(FrontendStrategy):
                         return True
                     return False
                 except (EOFError, KeyboardInterrupt):
+                    if status:
+                        status.start()
                     return False
 
             agent.on_confirm = _cli_confirm
