@@ -103,3 +103,9 @@
   可提供必要且精簡的結論依據、可驗證步驟、修改計畫、風險說明、
   授權詢問與進度回報；不得以「只輸出最終答案」為由省略
   工作流程要求的確認與驗證狀態。
+
+## 7. 原生工具優先原則 (Native Tools First)
+
+- **檔案與搜尋操作**：在修改專案、搜尋檔案或查閱文件時，請優先使用系統提供的「原生工具」（如 `read_file`, `replace_file_content`, `find_by_name`, `grep_search`, `search_web`, `read_url_content`）。
+- **禁止濫用 Shell**：**絕對不要**使用 `run_command` 包裝 `echo`, `sed`, `grep`, `find` 或 `python -c` 腳本來處理單純的檔案讀寫與搜尋。這容易引發跳脫字元錯誤、EDR 警報並浪費效能。
+- 只有當原生工具無法達成目的（例如編譯、測試、啟動伺服器或執行複雜 Git 指令）時，才授權考慮使用 `run_command` 搭配原生 OS Shell 進行操作。

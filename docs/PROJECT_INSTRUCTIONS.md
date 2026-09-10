@@ -27,6 +27,7 @@
 | `agent/auth.py`                                            | 認證與 provider 設定；避免暴露憑證或觸發真實登入。                                                       |
 | `agent/mcp_manager.py`                                     | MCP 連線與生命週期。                                                                                     |
 | `agent/shell.py`                                           | 命令執行、確認、逾時與編碼處理；屬安全敏感區域。                                                         |
+| `agent/fs_tools.py`、`agent/web_tools.py`                  | 原生檔案與網路工具實作；包含嚴密的安全沙箱、網頁解析與人類授權機制。                                     |
 | `agent/paths.py`                                           | 開發／PyInstaller／portable 路徑與使用者資料位置。                                                       |
 | `agent/sessions.py`                                        | JSON 對話持久化。                                                                                        |
 | `agent/registry.py`、`agent/skills.py`、`agent/plugins.py` | 擴充註冊、技能載入與匯入。                                                                               |
@@ -116,9 +117,9 @@
 
 ### 5.1 專案政策
 
-- 優先使用平台實際提供的原生讀寫工具。沒有原生工具時先揭露限制；替代操作須符合使用者授權、工具審查與當前環境限制，不自行取得額外權限。
+- **原生工具優先**：Pocket Agent 已內建 `agent/fs_tools.py` 與 `agent/web_tools.py`。進行檔案讀寫、全域搜尋 (grep/find)、或網頁搜尋時，**必須優先使用系統提供的原生工具**。嚴禁使用 `run_command` 包裝 `echo`、`sed`、`grep` 或 `python -c` 腳本來處理單純的 I/O 操作，以避免觸發 EDR 警報與跳脫字元錯誤。
 - 對中文文件明確使用 UTF-8，不以有損解碼結果覆蓋原檔。
-- 既有檔案覆寫前說明影響並確認未覆蓋他人修改；缺少工具或權限時停止並交付手動方案。
+- 既有檔案覆寫前需透過原生工具進行確認；缺少工具或權限時停止並交付手動方案。
 - 開發代理不得自動執行測試、Lint、格式化、建置或 pre-commit；只提供手動命令。
 - 不自動安裝依賴、啟動服務、commit、push、打 tag、發布或刪除資料。
 - 上述開發代理政策不因 OS 不同而自動放寬；遠端既有 CI 仍依 workflow 執行，不為配合開發代理政策停用 CI。

@@ -56,12 +56,14 @@ log = logging.getLogger("pocket-agent")
 
 from .doctools import DOC_TOOLS, call_doc_tool, is_doc_tool  # noqa: E402
 from .files import FileUploader  # noqa: E402
+from .fs_tools import FS_TOOLS, call_fs_tool, is_fs_tool  # noqa: E402
 from .hooks import run_hooks  # noqa: E402
 from .imagegen import image_tool, save_image_b64  # noqa: E402
 from .mcp_manager import MCPManager  # noqa: E402
 from .shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: E402
 from .skills import call_skill_tool, is_skill_tool, skill_tools, skills_index_prompt  # noqa: E402
 from .subagents import get_subagent, is_subagent_tool, subagent_tools  # noqa: E402
+from .web_tools import WEB_TOOLS, call_web_tool, is_web_tool  # noqa: E402
 
 DEFAULT_MAX_TOOL_ROUNDS = 10
 
@@ -203,8 +205,8 @@ class Agent:
     # ── Core loop ─────────────────────────────────
 
     def _build_tools(self) -> list:
-        """MCP 工具 + hosted 生圖工具 + 本地文件工具 + skill / subagent 工具。"""
-        tools = list(self.mcp.openai_tools() or []) + DOC_TOOLS + SHELL_TOOLS + skill_tools()
+        """MCP 工具 + hosted 生圖工具 + 本地文件工具 + shell 工具 + 原生檔案工具 + 網路工具 + skill / subagent 工具。"""
+        tools = list(self.mcp.openai_tools() or []) + DOC_TOOLS + SHELL_TOOLS + FS_TOOLS + WEB_TOOLS + skill_tools()
 
         url_str = str(self.client.base_url)
         is_openai = "openai.com" in url_str or "chatgpt.com" in url_str
@@ -440,6 +442,12 @@ class Agent:
                     elif is_shell_tool(fc["name"]):
                         # 阻塞的 subprocess + 確認視窗等待 → 丟到 thread 跑
                         result = await asyncio.to_thread(call_shell_tool, fc["name"], args, self.on_confirm)
+                    elif is_fs_tool(fc["name"]):
+                        result = await asyncio.to_thread(
+                            call_fs_tool, fc["name"], args, self.on_confirm, self.workspace_dirs
+                        )
+                    elif is_web_tool(fc["name"]):
+                        result = await asyncio.to_thread(call_web_tool, fc["name"], args)
                     elif is_doc_tool(fc["name"]):
                         result, fpath = call_doc_tool(fc["name"], args)
                         if fpath:
