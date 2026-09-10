@@ -37,6 +37,16 @@
 - **Artifacts 全域隔離**：強制將 AI 自動生成的專案計畫與文檔寫入 `~/.pocket-agent/artifacts/`，避免污染既有專案程式碼。
 - **Context Overflow 滑動視窗**：當上下文超過 12 萬字元時，自動觸發首尾保留截斷機制，防止 Token 上限導致的模型崩潰。
 
+### 5. 深入架構與實作文件 (Deep Dive Documentation)
+
+為了幫助開發者深入了解 Pocket Agent 底層的實作細節與設計模式，我們準備了以下視覺化說明文件：
+
+- [OAuth 2.0 PKCE 認證機制](docs/oauth-mechanism.md)
+- [雙軌大模型轉接架構 (LLM Engine Adapter)](docs/llm-adapter-architecture.md)
+- [Hooks 生命週期機制](docs/hooks-lifecycle.md)
+- [MCP 伺服器掛載與安全注入機制](docs/mcp-architecture.md)
+- [工具呼叫與 Subagent 委派機制](docs/tool-subagent-mechanism.md)
+
 ---
 
 ## 🛠️ 環境需求與安裝 (Prerequisites & Installation)
@@ -90,6 +100,7 @@ python main.py
 - `/file <路徑>`：附加本機檔案（支援程式碼、PDF 等）作為上下文。
 - `/image <描述>`：呼叫模型進行圖像生成 (可搭配 `-i` 參數引入參考圖，進行圖生圖)。
 - `/model <provider> <model_name>`：即時切換後端 API (支援 `openai` 或 `ollama`)。
+- `/session [list | load <id> | save | delete <id>]`：管理歷史對話 (Session)，支援儲存與讀取持久化紀錄。
 - `/clear`：清除當前記憶體的對話歷史。
 - `/logout`：清除本機端的 OAuth Token 憑證。
 - `/quit`：關閉應用程式。
@@ -104,18 +115,19 @@ python main.py --cli
 
 CLI 採可捲動對話版面；首屏只列目前專案、模型與 MCP 工具數，詳細清單按需查看。
 
-| 操作 | 說明 |
-| --- | --- |
-| Enter | 送出整段輸入 |
-| Esc 後 Enter（Meta+Enter） | 插入換行；多行貼上先保留於編輯器 |
-| Tab／方向鍵 | 補全與選擇；輸入歷史保留 |
-| Ctrl+C（輸入期間） | 有文字時清空輸入，空白時提示退出方式；不清附件 |
-| Ctrl+D（空輸入）或 /quit | 離開 |
-| /help、/tools | 查看指令、MCP 工具清單 |
-| /model | 分步輸入／補全提供者與模型，Esc 返回；也保留完整參數語法 |
-| /attachments | 列出本次待送附件與編號 |
-| /attachments remove <編號> | 移除單一待送附件，不刪除檔案 |
-| /attachments clear | 清空待送佇列，不刪除檔案 |
+| 操作                       | 說明                                                     |
+| -------------------------- | -------------------------------------------------------- |
+| Enter                      | 送出整段輸入                                             |
+| Esc 後 Enter（Meta+Enter） | 插入換行；多行貼上先保留於編輯器                         |
+| Tab／方向鍵                | 補全與選擇；輸入歷史保留                                 |
+| Ctrl+C（輸入期間）         | 有文字時清空輸入，空白時提示退出方式；不清附件           |
+| Ctrl+D（空輸入）或 /quit   | 離開                                                     |
+| /help、/tools              | 查看指令、MCP 工具清單                                   |
+| /model                     | 分步輸入／補全提供者與模型，Esc 返回；也保留完整參數語法 |
+| /session                   | 管理歷史對話 (list / load / save / delete)               |
+| /attachments               | 列出本次待送附件與編號                                   |
+| /attachments remove <編號> | 移除單一待送附件，不刪除檔案                             |
+| /attachments clear         | 清空待送佇列，不刪除檔案                                 |
 
 使用 `/file <完整路徑>` 附加一般檔案，路徑可加雙引號。訊息內也可使用 `@README.md`；
 含空白的 @ 路徑必須加雙引號，例如 `@"D:\my project\說明.txt" 請整理`。
@@ -129,7 +141,6 @@ CLI `/image <描述>` 使用待送附件作參考圖，不使用上方 GUI 語�
 CLI 仍會消耗本次附件；不依回覆文字猜測成功。不提供核心交易回滾或 exactly-once 保證。
 本批未接入回答串流或執行中安全取消，Ctrl+C 的清空行為僅適用於輸入期間。
 無色彩輸出仍有文字狀態；Windows Terminal 的深／淺底、多行貼上及窄視窗需人工驗收。
-
 
 ---
 
