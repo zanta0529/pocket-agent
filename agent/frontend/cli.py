@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING
@@ -14,6 +15,74 @@ if TYPE_CHECKING:
     from .cli_input import CliInput
     from .cli_render import CliRenderer
     from .cli_state import CliState
+
+
+def _format_usage_limit_hint(exc: BaseException) -> list[str] | None:
+    """解析 OpenAI RateLimitError 中的 usage_limit_reached 資訊，回傳人性化說明行列表。
+
+    先嘗試 exc.body（OpenAI SDK >= 1.x 的結構化屬性），
+    再從 str(exc) fallback 解析（適用於 body 為 None 的情境）。
+    時間以本機時區顯示；若取不到 resets_at 則省略時間資訊。
+    回傳 list[str]（每個元素為獨立一行），呼叫端逐行呼叫 renderer.message() 以確保換行。
+    """
+    import ast
+    import re
+
+    def _extract_error_dict(exc: BaseException) -> dict | None:
+        # 路徑 1：OpenAI SDK >= 1.x 的 .body 屬性
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                return err
+
+        # 路徑 2：從 str(exc) 解析 "Error code: 429 - {...}" 格式
+        text = str(exc)
+        # 找到第一個 { 並嘗試 ast.literal_eval 解析整段
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                parsed = ast.literal_eval(match.group())
+                if isinstance(parsed, dict):
+                    err = parsed.get("error")
+                    if isinstance(err, dict):
+                        return err
+            except (ValueError, SyntaxError):
+                pass
+
+        return None
+
+    try:
+        error = _extract_error_dict(exc)
+        if error is None or error.get("type") != "usage_limit_reached":
+            return None
+
+        plan_type: str = error.get("plan_type") or "未知"
+        resets_at: object = error.get("resets_at")
+        resets_in_seconds: object = error.get("resets_in_seconds")
+
+        lines: list[str] = [
+            f"💳 API 用量已達上限（方案：{plan_type}）",
+            "   本次請求未被計費，輸入已保留，重置後可直接重試。",
+        ]
+        if isinstance(resets_at, (int, float)) and resets_at > 0:
+            reset_dt = datetime.fromtimestamp(resets_at, tz=timezone.utc).astimezone()
+            lines.append(f"   重置時間：{reset_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        if isinstance(resets_in_seconds, (int, float)) and resets_in_seconds > 0:
+            secs = int(resets_in_seconds)
+            hours, remainder = divmod(secs, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            if hours:
+                countdown = f"{hours} 小時 {minutes} 分 {seconds} 秒"
+            elif minutes:
+                countdown = f"{minutes} 分 {seconds} 秒"
+            else:
+                countdown = f"{seconds} 秒"
+            lines.append(f"   距離重置還有：{countdown}")
+        return lines
+    except Exception:
+        # 解析失敗不中斷正常錯誤流程
+        return None
 
 
 def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer") -> None:
@@ -77,6 +146,10 @@ async def send_turn(
     except Exception as exc:
         state.last_failed_input = raw
         renderer.message(f"本輪未完成：{exc}", "red")
+        hint_lines = _format_usage_limit_hint(exc)
+        if hint_lines:
+            for line in hint_lines:
+                renderer.message(line, "yellow")
         renderer.message("待送附件保留；本輪可能部分完成，重送前請檢查結果。未自動重試。", "yellow")
         return
 
