@@ -1,74 +1,122 @@
-# 業界主流 AI 代理工具配置標準 (Agent Configuration Standards)
+# 常見 AI Agent 分層配置與 Context Discovery Patterns (Architecture Spec v1.0)
 
-本文檔整理了主流 AI 代理工具（包含本專案 `Pocket Agent`）在「分層配置 (Layered Configuration)」上的架構慣例與存放位置，作為開發與配置時的參考。
-
-## 為什麼需要分層配置？
-
-業界標準的做法是將配置區分為：
-
-- **全域配置 (Global)**：存放「跨專案通用的工作習慣與技能」（例如：偏好語言、通用自動化腳本），設定一次即可套用於所有專案。
-- **專案配置 (Local/Project)**：存放「專屬於該專案的領域知識與架構限制」（例如：該專案使用的特定框架、獨有的部署腳本），用於達成專案間的環境隔離並覆寫全域配置。
+本規格書（Architecture Spec）旨在定義與比較現代 AI 代理工具在「分層配置 (Layered Configuration)」、「上下文探索 (Context Discovery)」以及「技能管理 (Skills)」上的核心架構設計，並作為 Pocket Agent 實作的正式架構依據。
 
 ---
 
-## 架構核心：疊加與覆寫機制 (Concatenation & Overriding)
+## 1. Scope
 
-業界所有的現代 AI 代理系統（包含 Cursor、GitHub Copilot、Antigravity CLI、Pocket Agent 等），在處理「全域規範」與「專案規範」的衝突時，皆採用**「依序疊加 (Concatenation)」**的策略，而非互相排斥。這項標準是基於底層語言模型的物理特性所制定的：
+現代 AI 代理系統面臨著跨專案開發、多重環境設定與團隊協作等複雜場景。為了維持系統的擴充性與環境隔離性，我們必須明確區分四種截然不同的生命週期物件：**Secrets**、**Runtime Config**、**Instructions (Context)** 與 **Skills**。
 
-1. **先載入全域配置**：放置於系統提示詞 (System Prompt) 的最頂端，作為代理的底層常識與基礎人設。
-2. **後附加專案配置**：串接於提示詞的最尾端。
-
-### 🧠 Transformer 模型的「近因效應 (Recency Bias)」
-
-現代大語言模型 (LLM) 在處理長文本上下文時，天生存在**近因效應**——模型對於 Prompt 最尾端（最靠近使用者當下提問的位置）的指令，會給予最高的權重與注意力。
-
-業界主流工具正是利用這個特性來實現優雅的覆寫：當底層的全域規範規定「預設使用 Python 開發」，但尾端的專案配置（如 `.cursorrules` 或 `AGENTS.md`）卻規定「本專案嚴格使用 TypeScript」時，模型會自然以最尾端的專案規範為準。這種「由廣到深」的提示詞組裝管線 (Prompt Engineering Pipeline)，實現了極為強大的跨專案配置隔離與繼承。
+本文件將定義這四者的語意 (Semantics)，分析常見代理工具的實作模式，並確立 Pocket Agent 的最終設計架構。
 
 ---
 
-## 代理工具配置對照清單
+## 2. Configuration Model 的四種核心語意
 
-### 1. Antigravity CLI (agy) & Antigravity IDE
+在代理架構中，絕不能將所有設定混為一談。我們將配置模型分為四層不同的處理語意：
 
-這兩套工具共用 Antigravity 核心引擎，具備極為完整的階層式 (Hierarchical) 掃描機制，是典型的 Markdown 代理架構。
+### 2.1 Secrets / Credentials（機密憑證）
 
-- **【全域】規範檔案**：`~/.gemini/config/` (包含內部定義的 JSON 與全域 rules)。
-- **【全域】Skills 檔案**：`~/.gemini/config/skills/`
-- **【專案】規範檔案**：專案根目錄的 `GEMINI.md`、`AGENTS.md`，或位於 `.agents/rules/*.md` 內的檔案（會從當前目錄往上尋找至 Git Root）。
-- **【專案】Skills 檔案**：專案目錄內的 `.agents/skills/<name>/SKILL.md`（或相容 `.agent/`、`_agents/` 等命名）。
+- **特性**：API 金鑰、OAuth Tokens 等高敏感度資料。
+- **處理語意**：**Strict Isolation (嚴格隔離)**。
+- **規則**：絕對不可與 Runtime Config 混用，通常由專屬的 Keyring 系統或受保護的環境變數獨立管理。
 
-### 2. Claude Code
+### 2.2 Runtime Configuration（機制配置）
 
-Claude Code 的設計哲學偏向極簡與設定檔驅動 (Config-driven)，較少依賴分散的 Markdown 檔案。
+- **特性**：決定 Agent 系統如何運作的明確參數（例如模型選擇、MCP 伺服器掛載、權限設定）。
+- **處理語意**：**Deterministic Merge (決定性合併)**。
+- **規則**：透過程式碼邏輯進行深層或淺層合併，當發生衝突時，通常由更具體的層級（Local/Project）直接覆寫較廣泛的層級（Global）。這完全由程式碼控制，與 AI 模型的理解無關。
 
-- **【全域】規範檔案**：`~/.claude.json`
-- **【全域】Skills 檔案**：無實體 Markdown 技能檔，依賴 `~/.claude.json` 中掛載的全域 MCP Servers 提供能力。
-- **【專案】規範檔案**：專案根目錄下的 `.claude.json`（若存在則覆寫或與全域合併）。
-- **【專案】Skills 檔案**：無實體 Markdown 技能檔，通常是透過專案層級的 `.claude.json` 掛載該專案特有的 MCP 伺服器或自訂工具腳本。
+### 2.3 Instructions / Context（自然語言上下文）
 
-### 3. Codex (OpenAI)
+- **特性**：提供給大語言模型 (LLM) 閱讀的自然語言指引（例如架構限制、開發守則、人設）。
+- **處理語意**：**Concatenate Chain (依序疊加)**。
+- **規則**：不同層級的 Instructions（Global → Project → Subdirectory）通常不會互相排除，而是透過 Agent runtime 的 prompt construction 規則被組合起來。當多份指令被組合後，LLM 如何處理互相衝突的指令，屬於模型的 instruction-following 行為。由 Agent runtime 定義的 instruction precedence 負責處理衝突，而非單純仰賴模型的物理特性。
 
-_(以 OpenAI 官方原生服務：ChatGPT Custom Instructions / Assistant API 為準)_
+### 2.4 Skills（技能擴充）
 
-- **【全域】規範檔案**：無本機實體檔案。儲存於雲端帳號的 "Custom Instructions" 設定中。
-- **【全域】Skills 檔案**：無本機實體檔案。封裝為雲端帳號內的 Custom GPTs 或全域 Functions。
-- **【專案】規範檔案**：**無原生支援**。OpenAI 原生介面沒有專案資料夾的概念，必須依賴第三方封裝工具（如 Cursor 的 `.cursorrules` 或是 Github Copilot 的 `.github/copilot-instructions.md`）代為讀取後，作為上下文傳入 API。
-- **【專案】Skills 檔案**：**無原生支援**。同上，需由第三方 Client 端實作載入邏輯。
+- **特性**：具備特定目的的工具操作手冊或工作流腳本。
+- **處理語意**：**Shadowing (遮蔽) + Progressive Disclosure (漸進式揭露)**。
+- **規則**：
+  - **Shadowing**：當 Project 存在與 Global 同名的 Skill 時，Project Skill 將完全遮蔽（Shadow）Global Skill，只有 Local 版本會被載入。
+  - **Progressive Disclosure**：**Instructions are persistent context; Skills are discoverable capabilities.** 系統啟動時只向模型暴露技能的名稱與描述 (Discovery)；直到模型判斷需要使用時，才動態載入完整的 `SKILL.md` 內容。
 
-### 4. Hermes Agent
+---
 
-Hermes 是強烈倡導「Thin Router (薄入口)」與「專案內化 Markdown」的代理系統。
+## 3. Agent Comparison (常見代理實作比較)
 
-- **【全域】規範檔案**：通常依賴於使用者執行的宿主環境 (Host Environment) 或其專屬的系統設定檔。
-- **【全域】Skills 檔案**：提供基礎的泛用工具庫（如檔案讀寫、搜尋）。
-- **【專案】規範檔案**：嚴格依賴專案根目錄的 `AGENTS.md` 作為路由，並透過其指引動態讀取 `docs/AI_INSTRUCTIONS.md` 及 `docs/PROJECT_INSTRUCTIONS.md`。
-- **【專案】Skills 檔案**：通常放置於 `.agents/skills/`，與專案的知識庫緊密結合。
+### 3.1 Antigravity CLI (agy) & Antigravity IDE
 
-### 5. Pocket Agent (本專案)
+Antigravity 是 Google 推出的 AI-first 開發平台 (官方網站：`https://antigravity.google/`)。CLI 與 IDE 共享相同的核心引擎與客製化生態系統，擁有極為嚴謹的階層式架構，完美體現了上述語意。
 
-架構設計上吸取了 Antigravity 的優點，採用了明確且輕量化的分層與短路求值 (Short-circuit) 設計。
+- **Runtime Config**：
+  - **Global**：`~/.gemini/config/` (包含內部定義的 JSON 與全域 rules)。
+- **Instructions (Context/Rules)**：
+  - 採用多層次的 Hierarchical Discovery 機制。
+  - **Project**：專案根目錄的 `GEMINI.md`、`AGENTS.md`。
+  - **Directory**：位於 `.agents/rules/*.md` 內的檔案（會從當前開啟/編輯檔案的目錄往上尋找至 Git Root）。
+  - **行為**：透過 Progressive Disclosure，系統會對檔案進行 Deduplication，並將找到的 Rules 疊加 (Concatenate) 至模型上下文中。
+- **Skills (Plugins/Sidecars/Hooks/MCP)**：
+  - **User**：`~/.gemini/skills/` 或 `~/.agents/skills/`
+  - **Workspace**：`.gemini/skills/` 或 `.agents/skills/`
+  - **行為**：採用 Shadowing 與 Progressive Disclosure。若發生同名衝突，Workspace Skill 會遮蔽 User Skill；未主動呼叫前僅載入 Skill Name 與 Description。
 
-- **【全域】規範檔案**：`~/.pocket-agent/instructions.md`（啟動時自動注入於底層，作為預設系統行為）。
-- **【全域】Skills 檔案**：`~/.pocket-agent/skills/<skill-name>/SKILL.md`（需要時動態載入）。
-- **【專案】規範檔案**：專案根目錄下的 `AGENTS.md` 或 `.agents/AGENTS.md`（啟動時短路求值尋找單一入口）。
-- **【專案】Skills 檔案**：專案根目錄下的 `.agents/skills/<skill-name>/SKILL.md`（優先權高於全域，可覆寫同名通用技能）。
+### 3.2 Claude Code
+
+Claude Code 結合了 JSON 設定檔與 Markdown 記憶指令。
+
+- **Runtime Config**：`~/.claude/settings.json`（全域）與 `.claude/settings.json`（專案）。
+- **Instructions (Context)**：`~/.claude/CLAUDE.md`（全域）與專案根目錄的 `CLAUDE.md`。_(註：早期曾支援 `./CLAUDE.local.md` 作為 Project-local memory，但現已被官方標示為 Deprecated)_
+- **Skills**：新版統一放置於 `~/.claude/skills/` 與專案的 `.claude/skills/` 中。
+
+### 3.3 Hermes Agent
+
+Hermes Agent 強烈依賴薄入口與動態路由。
+
+- **Runtime Config**：通常透過 `config.yaml` 或環境變數定義。
+- **Instructions (Context)**：
+  - **Global Personality**：獨立載入 `~/.hermes/SOUL.md` 或 `$HERMES_HOME/SOUL.md`。
+  - **Project Context Type Selection (First-match-wins)**：對入口檔案類型採短路求值：`.hermes.md` → `AGENTS.override.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules`，第一個命中的類型生效。
+  - **Merged Chain**：若選中 `AGENTS.md` 類型，則會沿 Git root → current working directory 建立多層的 merged chain。越深層的檔案越晚出現，內容優先。
+- **Skills**：`~/.hermes/skills/` (全域) 與專案級別技能。採用典型的 Progressive Disclosure，模型需先執行 `skill_view` 才會載入完整內容。
+
+---
+
+## 4. Pocket Agent Design (本專案架構設計)
+
+為了確保極致的擴充性與環境隔離，Pocket Agent 的最終架構嚴格遵循以下流向：
+
+```text
+                 ┌──────────────────┐
+                 │  Runtime Config  │
+                 │  deterministic   │
+                 │      merge       │
+                 └────────┬─────────┘
+                          │
+                 ┌────────▼─────────┐
+                 │   Instructions   │
+                 │   concatenate    │
+                 │ Global→Project   │
+                 │    →Directory    │
+                 └────────┬─────────┘
+                          │
+                 ┌────────▼─────────┐
+                 │     Skills       │
+                 │ discover → load  │
+                 │ Project shadows  │
+                 │      Global      │
+                 └──────────────────┘
+```
+
+### 4.1 指令疊加與組合規則 (Instruction Hierarchy)
+
+1. **載入 Global Instructions** (`~/.pocket-agent/instructions.md`) 作為最底層的基礎常識。
+2. **尋找 Project Entry** 採「單一類型短路 (Discovery)」：尋找 `AGENTS.md` 或 `.agents/AGENTS.md` 作為本專案的進入點。
+3. **依序疊加 (Concatenate)**：將 Project Entry 附加於 Global Instructions 尾端。若兩者出現衝突，Pocket Agent 不保證單純依靠文字位置產生 deterministic override；如需 deterministic override，應透過 Runtime Config 的明確設定實現。
+
+### 4.2 技能遮蔽與漸進式揭露 (Skill Discovery & Shadowing)
+
+1. **探索 (Discovery)**：同時掃描 `~/.pocket-agent/skills/` (全域) 與 `.agents/skills/` (專案)。
+2. **遮蔽 (Shadowing)**：若兩端存在同名技能，專案層級的技能將無條件遮蔽全域技能。
+3. **漸進式揭露 (Progressive Disclosure)**：只將過濾後的技能名稱與描述注入 System Prompt。技能本文僅在模型判定需要啟用該技能時，才載入至目前的 Agent Context。
