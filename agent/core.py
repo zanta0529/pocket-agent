@@ -278,7 +278,17 @@ class Agent:
 
     def _instructions(self) -> str:
         """system prompt + skill 目錄（每輪重算，skill 可熱加）。"""
-        return self.system_prompt + skills_index_prompt()
+        base = self.system_prompt
+
+        if self.workspace_dirs:
+            extra = (
+                "\n\n[系統資訊] 使用者已授權本次會話可讀寫以下額外工作區目錄，請在搜尋或讀取檔案時主動將其納入考量：\n"
+            )
+            for wd in self.workspace_dirs:
+                extra += f"- {wd}\n"
+            base += extra
+
+        return base + skills_index_prompt()
 
     async def _run_subagent(self, args: dict) -> str:
         """委派任務給子代理，回傳其最終回覆。"""

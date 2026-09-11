@@ -320,6 +320,17 @@ class CommandHandler:
             await self.compact()
         elif name == "tools":
             self.renderer.message("MCP 工具：" + (", ".join(self.tools) or "無"))
+        elif name == "workspace":
+            from pathlib import Path
+
+            self.renderer.message("【預設工作區】")
+            self.renderer.message(f"  {Path.cwd().resolve()}")
+            if self.agent.workspace_dirs:
+                self.renderer.message("【額外授權目錄】")
+                for wd in self.agent.workspace_dirs:
+                    self.renderer.message(f"  {wd}")
+            else:
+                self.renderer.message("【額外授權目錄】無")
         elif name == "help":
             from agent.commands import list_commands
 

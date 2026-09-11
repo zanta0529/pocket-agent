@@ -213,33 +213,16 @@ class CliRenderer:
             }
             is_native = name in native_tools
 
-            danger_kws = [
-                "bash",
-                "python",
-                "node",
-                "powershell",
-                "shell",
-                "run",
-                "delete",
-                "move",
-                "rm",
-                "mv",
-                "command",
-                "cmd",
-            ]
-            bullet_color = "bold red" if any(kw in name_lower for kw in danger_kws) else "bold green"
-
             if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep"]):
                 action = "Read"
-                action_color = "bold yellow"
             elif any(kw in name_lower for kw in ["write", "replace", "edit", "patch", "delete", "create"]):
                 action = "Write"
-                action_color = "bold red"
             else:
                 action = "Action"
-                action_color = "bold cyan"
 
-            name_color = "bold green" if is_native else ""
+            action_color = "bold yellow"
+            name_color = "bold green" if is_native else "bold cyan"
+            bullet_color = "bold red" if action == "Write" or not is_native else "bold green"
             summary = self._summarise_args(name, args_raw)
 
             parts = [("● ", bullet_color), (action, action_color), (" (", ""), (name, name_color), (")", "")]

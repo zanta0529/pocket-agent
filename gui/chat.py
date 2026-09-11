@@ -890,6 +890,19 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
                     self._add_system("⚠ 用法：/add-dir <目錄路徑>")
                 self.input.delete("1.0", "end")
                 return
+            elif parts[0] == "/workspace":
+                from pathlib import Path
+
+                lines = ["【預設工作區】", f"  {Path.cwd().resolve()}"]
+                if self.app.agent.workspace_dirs:
+                    lines.append("\n【額外授權目錄】")
+                    for wd in self.app.agent.workspace_dirs:
+                        lines.append(f"  {wd}")
+                else:
+                    lines.append("\n【額外授權目錄】無")
+                self._add_system("\n".join(lines))
+                self.input.delete("1.0", "end")
+                return
 
             from agent.commands import expand_command, get_command
 
