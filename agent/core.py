@@ -202,6 +202,35 @@ class Agent:
     def clear_history(self) -> None:
         self.history.clear()
 
+    def check_new_workspace_dir(self, path_str: str) -> tuple[str, str, Path | None]:
+        """檢查是否能將外部目錄加入工作區。
+        回傳 (status_code, message, resolved_path)
+        status_code: invalid, not_found, in_default, already_authorized, needs_auth
+        """
+        try:
+            target_dir = Path(path_str).expanduser().resolve()
+        except Exception:
+            return "invalid", "無效的路徑格式。", None
+
+        if not target_dir.exists() or not target_dir.is_dir():
+            return "not_found", f"目錄不存在或非資料夾：{target_dir}", target_dir
+
+        cwd = Path.cwd().resolve()
+        try:
+            target_dir.relative_to(cwd)
+            return "in_default", f"{target_dir} 已經在預設工作區內。", target_dir
+        except ValueError:
+            pass
+
+        if str(target_dir) in self.workspace_dirs:
+            return "already_authorized", f"{target_dir} 已經授權過。", target_dir
+
+        return "needs_auth", f"目錄 {target_dir} 位於目前工作區外。", target_dir
+
+    def add_workspace_dir(self, target_dir: Path) -> None:
+        if str(target_dir) not in self.workspace_dirs:
+            self.workspace_dirs.append(str(target_dir))
+
     # ── Core loop ─────────────────────────────────
 
     def _build_tools(self) -> list:

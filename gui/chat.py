@@ -827,6 +827,24 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
 
         ctk.CTkButton(dialog, text="確認切換", command=on_confirm).grid(row=2, column=0, columnspan=2, pady=30)
 
+    def _handle_add_dir(self, path_str: str) -> None:
+        import tkinter.messagebox as mb
+
+        status, msg, target_dir = self.app.agent.check_new_workspace_dir(path_str)
+        if status in ("invalid", "not_found"):
+            self._add_system(f"⚠ {msg}")
+            return
+        if status in ("in_default", "already_authorized"):
+            self._add_system(f"✓ {msg}")
+            return
+
+        ans = mb.askyesno("安全警告", f"{msg}\n\n是否授權本次會話讀寫該目錄？", parent=self.winfo_toplevel())
+        if ans and target_dir:
+            self.app.agent.add_workspace_dir(target_dir)
+            self._add_system(f"✓ 已授權：{target_dir}，可透過工具讀寫。")
+        else:
+            self._add_system("⚠ 已拒絕授權。")
+
     def _send(self):
         text = self.input.get(
             "1.0",
@@ -865,6 +883,13 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
                     self._show_model_selection_dialog()
                     self.input.delete("1.0", "end")
                     return
+            elif parts[0] == "/add-dir":
+                if len(parts) >= 2:
+                    self._handle_add_dir(" ".join(parts[1:]))
+                else:
+                    self._add_system("⚠ 用法：/add-dir <目錄路徑>")
+                self.input.delete("1.0", "end")
+                return
 
             from agent.commands import expand_command, get_command
 

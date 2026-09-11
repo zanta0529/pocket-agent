@@ -289,7 +289,29 @@ class CommandHandler:
         elif name == "attachments":
             self.attachments(args)
         elif name == "add-dir":
-            self.renderer.message("目錄工作範圍尚未接入，不會讀取目錄；請用 /file 或 @ 附加檔案。", "yellow")
+            if not args:
+                raise ValueError("用法：/add-dir <目錄路徑>")
+
+            status, msg, target_dir = self.agent.check_new_workspace_dir(args)
+            if status in ("invalid", "not_found"):
+                raise ValueError(msg)
+            if status in ("in_default", "already_authorized"):
+                self.renderer.message(f"✓ {msg}")
+                return CommandResult()
+
+            from rich.text import Text
+
+            warn_text = Text()
+            warn_text.append("【安全警告】", style="bold red")
+            warn_text.append(f"{msg}是否授權本次會話讀寫該目錄？")
+            self.renderer.console.print(warn_text)
+
+            confirm = await self.reader.choose("請選擇", ["允許", "拒絕"])
+            if confirm == "允許" and target_dir:
+                self.agent.add_workspace_dir(target_dir)
+                self.renderer.message(f"✓ 已授權：{target_dir}，可透過工具讀寫。", "green")
+            else:
+                self.renderer.message("⚠ 已拒絕授權。", "yellow")
         elif name == "model":
             await self.model(args)
         elif name == "session":
