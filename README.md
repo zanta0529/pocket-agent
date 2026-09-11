@@ -40,7 +40,7 @@
 
 ### 5. 工作區環境規範 (Workspace Context)
 
-支援在專案目錄下放置 `.pocket-agent.md` 檔案。CLI 啟動時會自動偵測該檔案，並將其內容注入為 System Prompt 的一部分。此設計讓開發者可針對不同專案設定專屬的程式碼風格、架構限制與 AI 規範，而無需修改全域設定。
+支援在專案目錄下放置 `AGENTS.md` 或 `.agents/AGENTS.md` 檔案。CLI 啟動時會自動偵測並尋找第一順位的檔案，將其內容注入為 System Prompt 的一部分。此設計讓開發者可針對不同專案設定專屬的程式碼風格、架構限制與 AI 規範（或建立 Thin Router 引導 AI 載入外部指令），而無需修改全域設定。
 
 ### 6. 深入架構與實作文件 (Deep Dive Documentation)
 
@@ -51,6 +51,26 @@
 - [Hooks 生命週期機制](docs/hooks-lifecycle.md)
 - [MCP 伺服器掛載與安全注入機制](docs/mcp-architecture.md)
 - [工具呼叫與 Subagent 委派機制](docs/tool-subagent-mechanism.md)
+
+### 7. 打包版本的專案客製化 (Customizing Packaged Versions)
+
+當您使用經過打包的發布版本（例如 `PocketAgent-portable.zip` 內的執行檔）時，您可以透過**「分層配置 (Layered Configuration)」**來完美隔離全域與專案的 AI 規範：
+
+#### A. 全域規範 (Global Instructions)
+若您有跨專案通用的開發習慣（例如：一律使用繁體中文、要求撰寫 Docstring），請建立：
+📄 `~/.pocket-agent/instructions.md` (Windows 通常位於 `C:\Users\使用者名稱\.pocket-agent\instructions.md`)
+PocketAgent 會在每次啟動時自動載入此檔案，作為底層的通用規則。
+
+#### B. 專案特有規範 (Project-Local Configurations)
+請在**您當下欲開發的目標專案工作目錄** 中，依循以下結構配置專案專屬的限制與技能：
+
+1. **專案入口規範 (`AGENTS.md`)**
+   在您的專案根目錄建立 `AGENTS.md`（或 `.agents/AGENTS.md`）。啟動時，它會被附加在全域規範之後，從而精準覆寫全域規則（例如：特定專案強制使用 TypeScript）。
+2. **自訂技能清單 (`.agents/skills/`)**
+   建立 `.agents/skills/` 資料夾，並在其中以子目錄形式建立技能（例如 `.agents/skills/my-workflow/SKILL.md`）。AI 代理將會自動感知並優先載入此處的技能，覆寫全域同名的預設技能。
+
+💡 **運作原理範例**：
+假設您把 `PocketAgent.exe` 安裝在全域環境變數中。當您透過終端機 `cd D:\Projects\MyAwesomeApp` 並執行 PocketAgent 時，它會自動將 `~/.pocket-agent/instructions.md` 與 `D:\Projects\MyAwesomeApp\AGENTS.md` 堆疊合併，同時優先讀取該目錄下的專案專屬技能，從而完美實現**不改動執行檔即可跨專案無縫切換上下文**的隔離體驗。
 
 ---
 

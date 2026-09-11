@@ -222,6 +222,7 @@ class CliFrontend(FrontendStrategy):
         from agent.auth import fetch_available_models, get_model, get_openai_client, load_config
         from agent.core import Agent
         from agent.mcp_manager import MCPManager
+        from agent.paths import user_dir
 
         from .cli_input import CliInput
         from .cli_render import CliRenderer
@@ -236,9 +237,26 @@ class CliFrontend(FrontendStrategy):
                 if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
                     h.setLevel(logging.WARNING)
 
-        # F2：自動載入工作區規範 (.pocket-agent.md)
-        _ctx_file = pathlib.Path.cwd() / ".pocket-agent.md"
-        if _ctx_file.exists():
+        # F1.5：載入全域規範 (Global Instructions)
+        global_ctx_file = user_dir() / "instructions.md"
+        loaded_global_ctx = False
+        if global_ctx_file.exists() and global_ctx_file.is_file():
+            try:
+                _g_ctx = global_ctx_file.read_text(encoding="utf-8").strip()
+                if _g_ctx:
+                    system_prompt = system_prompt + "\n\n---\n## 全域規範\n" + _g_ctx
+                    loaded_global_ctx = True
+            except Exception as e:
+                log.warning("全域規範讀取失敗：%s", e)
+
+        # F2：自動載入工作區規範 (依業界標準)
+        candidates = [
+            pathlib.Path.cwd() / "AGENTS.md",
+            pathlib.Path.cwd() / ".agents" / "AGENTS.md",
+        ]
+
+        _ctx_file = next((p for p in candidates if p.exists() and p.is_file()), None)
+        if _ctx_file:
             try:
                 _ctx = _ctx_file.read_text(encoding="utf-8").strip()
                 if _ctx:
@@ -252,8 +270,10 @@ class CliFrontend(FrontendStrategy):
         try:
             renderer.banner()
 
+            if loaded_global_ctx:
+                renderer.message(f"已載入全域規範：{global_ctx_file.name}")
             # 若有工作區規範，在 banner 後提示（保持 banner 整潔）
-            if _ctx_file.exists() and "工作區規範" in system_prompt:
+            if _ctx_file and "工作區規範" in system_prompt:
                 renderer.message(f"已載入工作區規範：{_ctx_file.name}")
 
             client = get_openai_client()
