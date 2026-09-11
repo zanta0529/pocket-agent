@@ -27,7 +27,7 @@
 | `agent/auth.py`                                            | 認證與 provider 設定；避免暴露憑證或觸發真實登入。                                                       |
 | `agent/mcp_manager.py`                                     | MCP 連線與生命週期。                                                                                     |
 | `agent/shell.py`                                           | 命令執行、確認、逾時與編碼處理；屬安全敏感區域。                                                         |
-| `agent/fs_tools.py`、`agent/web_tools.py`                  | 原生檔案與網路工具實作；包含嚴密的安全沙箱、網頁解析與人類授權機制。                                     |
+| `agent/fs_tools.py`、`agent/web_tools.py`                  | 原生檔案與網路工具實作；包含安全沙箱、網頁解析與人類授權相關機制，修改時須確認並維持其實際防護邊界。     |
 | `agent/paths.py`                                           | 開發／PyInstaller／portable 路徑與使用者資料位置。                                                       |
 | `agent/sessions.py`                                        | JSON 對話持久化。                                                                                        |
 | `agent/registry.py`、`agent/skills.py`、`agent/plugins.py` | 擴充註冊、技能載入與匯入。                                                                               |
@@ -56,11 +56,11 @@
 
 #### 核心解耦與狀態同步 (Decoupling & State Synchronization)
 
-- **依賴單向性 (Dependency Rule)**：前端依賴核心，核心依賴 `BaseEngine` 契約呼叫模型。引擎負責封裝供應商 SDK 差異，絕對不可依賴 UI (Tkinter/Rich)。
-- **邏輯集中不重複 (DRY)**：不隨介面變動的業務規則（如跨介面指令 `/add-dir`、檔案路徑檢查）**必須**統一實作於共用層（如 `agent/core.py`）。嚴禁在 CLI (`cli_commands.py`) 與 GUI (`chat.py`) 之間複製貼上判斷邏輯，前端僅負責接收狀態並渲染。
-- **動態狀態注入 (Dynamic Context)**：當指令變更了 Agent 的存取權限或全域狀態（如新增工作區目錄），必須同步將該狀態注入至 LLM 的 System Prompt（如 `Agent._instructions()`），確保模型認知與沙箱一致。
-- **契約完整性 (Contract Integrity)**：替換模型實作時，不可遺失 `Event*` 串流事件、取消機制、錯誤傳遞與資源清理。不支援的功能應明確回報，不得偽造成功。
-- **邊界判斷集中化**：避免在系統各處散落 `if provider...` 或 `if gui...` 的硬編碼判斷，應集中於 Factory 或透過 Strategy 介面封裝差異。
+- **依賴單向性 (Dependency Rule)**：前端依賴核心，核心依賴 `BaseEngine` 契約呼叫模型。核心與引擎均不得直接操作 UI (Tkinter/Rich)；核心應透過事件、回傳結果或抽象介面通知前端。
+- **邏輯集中不重複 (DRY)**：不隨介面變動的業務規則（如跨介面指令 `/add-dir`、檔案路徑檢查）**必須**統一實作於共用層（如核心或合適的共用服務模組）。嚴禁在 CLI (`cli_commands.py`) 與 GUI (`chat.py`) 之間複製貼上判斷邏輯，前端僅負責接收狀態並渲染。
+- **動態狀態注入 (Dynamic Context)**：當指令變更了 Agent 的存取權限或全域狀態時，應同步注入模型完成任務所需、可安全揭露的狀態摘要（如透過 `Agent._instructions()`），以維持認知一致；實際授權仍由工具與沙箱強制執行，不以 System Prompt 取代權限檢查。
+- **契約完整性 (Contract Integrity)**：替換模型實作時，不可遺失工具參數分片、完成事件、`Event*` 串流事件、取消機制、錯誤傳遞與資源清理。不支援的功能應明確回報，不得偽造成功。
+- **邊界判斷集中化**：避免在系統各處散落 `if provider...` 或 `if gui...` 的硬編碼判斷，應集中於 Factory 或透過 Strategy 介面封裝差異。優先沿用既有擴充點，不為單一需求建立通用框架。
 
 #### AI 代理的擴充查核點 (Extension Checklist)
 
@@ -105,7 +105,7 @@
 
 - **原生工具優先**：Pocket Agent 已內建 `agent/fs_tools.py` 與 `agent/web_tools.py`。進行檔案讀寫、全域搜尋 (grep/find)、或網頁搜尋時，**必須優先使用系統提供的原生工具**。嚴禁使用 `run_command` 包裝 `echo`、`sed`、`grep` 或 `python -c` 腳本來處理單純的 I/O 操作，以避免觸發 EDR 警報與跳脫字元錯誤。
 - 對中文文件明確使用 UTF-8，不以有損解碼結果覆蓋原檔。
-- 既有檔案覆寫前需透過原生工具進行確認；缺少工具或權限時停止並交付手動方案。
+- 既有檔案覆寫前需透過原生工具進行確認；缺少工具時，僅可依第 5.2 節所列條件申請替代方式；未取得授權或受權限限制時，停止並交付手動方案，不得繞過限制。
 - 開發代理不得自動執行測試、Lint、格式化、建置或 pre-commit；只提供手動命令。
 - 不自動安裝依賴、啟動服務、commit、push、打 tag、發布或刪除資料。
 - 上述開發代理政策不因 OS 不同而自動放寬；遠端既有 CI 仍依 workflow 執行，不為配合開發代理政策停用 CI。
@@ -125,7 +125,7 @@
   - **狀態小圓點 (Bullet)**：安全的本機唯讀操作 (Read + 內建) 為綠色 (`bold green`)；潛在風險操作 (Write 或非內建工具) 則為紅色 (`bold red`)。
   - **安全警告字樣**：涉及權限跨越等嚴重提示時，「【安全警告】」前綴應單獨使用紅色 (`bold red`)，而非整段變色。
 - **非同步 Spinner 衝突**：在使用 `rich.status` (如「思考中...」動畫) 等會在背景執行緒持續刷新畫面的 UI 元件時，**嚴禁**在未停止動畫的狀態下直接呼叫 `input()` 或其他同步阻塞的標準輸入。
-- **處理原則**：在向使用者索取授權或等待輸入前，必須先呼叫 `status.stop()` 暫停背景重繪，取得輸入後再呼叫 `status.start()` 恢復，以避免多執行緒渲染衝突導致提示字串被吞噬或畫面假死。
+- **處理原則**：在向使用者索取授權或等待輸入前，必須先呼叫 `status.stop()` 暫停背景重繪，取得輸入後，若原作業仍在進行且需繼續渲染，再呼叫 `status.start()` 恢復（遇到取消或退出時不宜無條件恢復），以避免多執行緒渲染衝突導致畫面假死。
 
 ## 6. 依賴與發布維護
 
@@ -164,6 +164,6 @@ venv\Scripts\python.exe -m pytest tests/test_cli_flow.py
 
 ## 8. 專案入口與設定基準
 
-- 程式碼格式與相容性以 `pyproject.toml` (Ruff) 為最終基準，若與 `.editorconfig` 等檔案有衝突時優先依循 Ruff 規範。
+- Python 程式碼格式與靜態檢查以 `pyproject.toml` 的 Ruff 設定為準；執行時相容性以 Python 3.11 為基準。若設定不一致，先回報差異，不自行調整版本或重建鎖定檔。
 - 根目錄 `AGENTS.md`、`.agents/AGENTS.md` 等皆為薄入口，應統一引導讀取 `docs/AI_INSTRUCTIONS.md` 與本專案指南，不重複維護工程與工具政策。
 - 各平台入口的自動載入狀態需依實際工具讀取結果判定，不可僅依賴代理的口頭宣稱。
