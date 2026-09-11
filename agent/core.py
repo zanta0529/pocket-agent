@@ -235,7 +235,14 @@ class Agent:
 
     def _build_tools(self) -> list:
         """MCP 工具 + hosted 生圖工具 + 本地文件工具 + shell 工具 + 原生檔案工具 + 網路工具 + skill / subagent 工具。"""
-        tools = list(self.mcp.openai_tools() or []) + DOC_TOOLS + SHELL_TOOLS + FS_TOOLS + WEB_TOOLS + skill_tools()
+        tools = (
+            list(self.mcp.openai_tools() or [])
+            + DOC_TOOLS
+            + SHELL_TOOLS
+            + FS_TOOLS
+            + WEB_TOOLS
+            + skill_tools(self.workspace_dirs)
+        )
 
         url_str = str(self.client.base_url)
         is_openai = "openai.com" in url_str or "chatgpt.com" in url_str
@@ -288,7 +295,7 @@ class Agent:
                 extra += f"- {wd}\n"
             base += extra
 
-        return base + skills_index_prompt()
+        return base + skills_index_prompt(self.workspace_dirs)
 
     async def _run_subagent(self, args: dict) -> str:
         """委派任務給子代理，回傳其最終回覆。"""
@@ -458,7 +465,7 @@ class Agent:
                         )
 
                     if is_skill_tool(fc["name"]):
-                        result = call_skill_tool(args)
+                        result = call_skill_tool(args, self.workspace_dirs)
                     elif fc["name"] == "ask_question":
                         loop = asyncio.get_running_loop()
                         fut = loop.create_future()

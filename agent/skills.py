@@ -49,14 +49,26 @@ _registry = SkillRegistry(REPO_SKILLS_DIR, USER_SKILLS_DIR)
 # ── 掃描與載入 ────────────────────────────────────
 
 
-def list_skills() -> list[dict]:
-    """列出所有 skill 的 {name, description, path}，使用者目錄優先。"""
-    return _registry.list_all()
+def _get_workspace_skill_dirs(workspace_dirs: list[str] | None) -> list[Path]:
+    dirs = [Path.cwd() / ".agents" / "skills"]
+    if workspace_dirs:
+        for wd in workspace_dirs:
+            p = Path(wd) / ".agents" / "skills"
+            if p not in dirs:
+                dirs.append(p)
+    return dirs
 
 
-def load_skill(name: str) -> str | None:
+def list_skills(workspace_dirs: list[str] | None = None) -> list[dict]:
+    """列出所有 skill 的 {name, description, path}，專案目錄與使用者目錄優先。"""
+    extra_dirs = _get_workspace_skill_dirs(workspace_dirs)
+    return _registry.list_all(extra_dirs=extra_dirs)
+
+
+def load_skill(name: str, workspace_dirs: list[str] | None = None) -> str | None:
     """回傳指定 skill 的本文；找不到時回傳 None。"""
-    return _registry.read_body(name)
+    extra_dirs = _get_workspace_skill_dirs(workspace_dirs)
+    return _registry.read_body(name, extra_dirs=extra_dirs)
 
 
 # ── ZIP 匯入（相容 ChatGPT / Claude 的 Agent Skills zip）──
@@ -133,9 +145,9 @@ def import_skill_zip(zip_path: str | Path, overwrite: bool = False) -> list[str]
 # ── 系統提示注入 ──────────────────────────────────
 
 
-def skills_index_prompt() -> str:
+def skills_index_prompt(workspace_dirs: list[str] | None = None) -> str:
     """產生附加到 system prompt 的 skill 目錄；沒有 skill 時回傳空字串。"""
-    skills = list_skills()
+    skills = list_skills(workspace_dirs)
     if not skills:
         return ""
 
@@ -172,21 +184,21 @@ SKILL_TOOL = {
 }
 
 
-def skill_tools() -> list[dict]:
+def skill_tools(workspace_dirs: list[str] | None = None) -> list[dict]:
     """有 skill 才註冊工具，避免無謂佔用 context。"""
-    return [SKILL_TOOL] if list_skills() else []
+    return [SKILL_TOOL] if list_skills(workspace_dirs) else []
 
 
 def is_skill_tool(name: str) -> bool:
     return name == "use_skill"
 
 
-def call_skill_tool(args: dict) -> str:
+def call_skill_tool(args: dict, workspace_dirs: list[str] | None = None) -> str:
     name = str(args.get("name", "")).strip()
-    body = load_skill(name)
+    body = load_skill(name, workspace_dirs)
 
     if body is None:
-        available = ", ".join(s["name"] for s in list_skills()) or "（無）"
+        available = ", ".join(s["name"] for s in list_skills(workspace_dirs)) or "（無）"
         return f"[ERROR] 找不到 skill「{name}」。可用：{available}"
 
     return f"# Skill: {name}\n\n{body}"

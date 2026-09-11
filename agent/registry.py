@@ -41,10 +41,14 @@ class MarkdownRegistry(ABC):
         """將解析出的資料轉換為標準字典，必須包含 'name' 鍵值"""
         pass
 
-    def list_all(self) -> list[dict]:
-        """掃描所有層級的目錄，回傳已註冊的資源清單（使用者目錄優先覆蓋）"""
+    def list_all(self, extra_dirs: list[Path] | None = None) -> list[dict]:
+        """掃描所有層級的目錄，回傳已註冊的資源清單（優先順序：repo_dir < user_dir < extra_dirs）"""
         found: dict[str, dict] = {}
-        for base in (self.repo_dir, self.user_dir):
+        bases = [self.repo_dir, self.user_dir]
+        if extra_dirs:
+            bases.extend(extra_dirs)
+
+        for base in bases:
             if not base.is_dir():
                 continue
             for md in sorted(base.glob(self.get_glob_pattern())):
@@ -60,16 +64,16 @@ class MarkdownRegistry(ABC):
                     found[item["name"]] = item
         return list(found.values())
 
-    def get_item(self, name: str) -> dict | None:
+    def get_item(self, name: str, extra_dirs: list[Path] | None = None) -> dict | None:
         """依照名稱取得特定資源資訊"""
-        for item in self.list_all():
+        for item in self.list_all(extra_dirs=extra_dirs):
             if item["name"] == name:
                 return item
         return None
 
-    def read_body(self, name: str) -> str | None:
+    def read_body(self, name: str, extra_dirs: list[Path] | None = None) -> str | None:
         """讀取並回傳資源的本文內容（去除 frontmatter）"""
-        item = self.get_item(name)
+        item = self.get_item(name, extra_dirs=extra_dirs)
         if item and "path" in item:
             try:
                 path: Path = item["path"]
