@@ -28,6 +28,8 @@ echo [2/3] Building (takes 2-5 minutes)...
 if errorlevel 1 exit /b 1
 
 echo [3/3] Creating zip...
+copy /y pa.bat dist\PocketAgent\ >nul
+copy /y pa.sh dist\PocketAgent\ >nul
 "%PY%" -c "import shutil; shutil.make_archive('dist/PocketAgent','zip','dist','PocketAgent'); print('zip done')"
 if errorlevel 1 exit /b 1
 
