@@ -24,6 +24,7 @@ BUILTINS = {
     "clear": "清除對話，保留附件",
     "help": "指令說明",
     "tools": "工具清單",
+    "skills": "列出目前所有可用的全域與專案技能",
     "workspace": "顯示目前的工作區路徑清單",
     "add-dir": "單次會話內，將外部資料夾加入工作範圍",
     "logout": "登出",
@@ -93,12 +94,18 @@ class SlashCommandCompleter(Completer):
         if not text.startswith("/") or any(c.isspace() for c in text):
             return
         from agent.commands import list_commands
+        from agent.skills import list_skills
 
         commands = dict(BUILTINS)
         if self.state.provider == "openai":
             commands["image"] = "產生圖片（待送附件作參考圖）"
         for command in list_commands():
             commands.setdefault(command["name"], command["description"])
+
+        # Add skills as slash commands
+        for skill in list_skills(None):
+            commands.setdefault(skill["name"], f"[Skill] {skill.get('description', '')}")
+
         for name, description in commands.items():
             if name.startswith(text[1:]):
                 yield Completion(name, start_position=-(len(text) - 1), display_meta=plain(description))

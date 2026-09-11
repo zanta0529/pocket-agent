@@ -18,8 +18,6 @@ ROOT = Path(SPECPATH)
 # 要和 agent/paths.py 的 bundle_dir() 假設一致。
 datas = [
     (str(ROOT / "gui" / "assets"),               "gui/assets"),
-    (str(ROOT / "skills"),                       "skills"),
-    (str(ROOT / "commands"),                     "commands"),
     (str(ROOT / "agents"),                       "agents"),
     (str(ROOT / "mcp_config.example.yaml"),      "."),
     (str(ROOT / ".env.example"),                 "."),

@@ -320,6 +320,81 @@ class CommandHandler:
             await self.compact()
         elif name == "tools":
             self.renderer.message("MCP 工具：" + (", ".join(self.tools) or "無"))
+        elif name == "skills":
+            from pathlib import Path
+
+            from rich.markdown import Markdown
+            from rich.text import Text
+
+            from agent.paths import bundle_dir, user_dir
+            from agent.skills import list_skills, load_skill
+
+            if args:
+                skill_name = args.strip()
+                body = load_skill(skill_name, self.agent.workspace_dirs)
+                if body:
+                    self.renderer.console.print(f"\n[bold white]Skill: {skill_name}[/bold white]")
+                    self.renderer.console.print(Markdown(body))
+                else:
+                    self.renderer.message(f"無法載入技能 {skill_name}")
+                return CommandResult()
+
+            skills = list_skills(self.agent.workspace_dirs)
+            if not skills:
+                self.renderer.message("目前沒有可用的全域或專案技能。")
+                return CommandResult()
+
+            self.renderer.console.print()
+            header = Text("Skills\n", style="bold white")
+            header.append(f"{len(skills)} skills", style="dim")
+            self.renderer.console.print(header)
+            self.renderer.console.print()
+
+            create = Text("Create new skills\n", style="bold white")
+            create.append("  Workspace: ", style="dim")
+            create.append(f"{Path.cwd().resolve().as_posix()}/.agents/skills/{{skill_name}}/SKILL.md\n", style="blue")
+            create.append("  Global:    ", style="dim")
+            create.append("~/.pocket-agent/skills/{skill_name}/SKILL.md\n", style="blue")
+            self.renderer.console.print(create)
+
+            user_path = user_dir() / "skills"
+            bundle_path = bundle_dir() / "skills"
+
+            workspace_skills = []
+            global_skills = []
+            builtin_skills = []
+
+            for s in skills:
+                p = s["path"]
+                try:
+                    p.relative_to(user_path)
+                    global_skills.append(s)
+                except ValueError:
+                    try:
+                        p.relative_to(bundle_path)
+                        builtin_skills.append(s)
+                    except ValueError:
+                        workspace_skills.append(s)
+
+            def print_group(title, subtitle, items):
+                if not items:
+                    return
+                t = Text()
+                t.append(f"{title} ", style="bold white")
+                t.append(f"• {subtitle}", style="dim")
+                self.renderer.console.print(t)
+                for item in items:
+                    line = Text()
+                    line.append(f"  {item['name']}", style="blue")
+                    line.append(f": {item.get('description', '')}")
+                    self.renderer.console.print(line)
+                self.renderer.console.print()
+
+            print_group("Workspace skills", "Workspace config", workspace_skills)
+            print_group("Global skills", "Global config", global_skills)
+            print_group("Built-in skills", "Built-in", builtin_skills)
+
+            self.renderer.message("提示：若要檢視某個技能的完整內容，請輸入 /skills <skill_name>", "dim")
         elif name == "workspace":
             from pathlib import Path
 
@@ -350,11 +425,23 @@ class CommandHandler:
             return CommandResult("image", args)
         else:
             from agent.commands import expand_command, get_command
+            from agent.skills import list_skills
 
-            if get_command(name) is None:
-                raise ValueError(f"找不到指令 /{name}；輸入 /help 查看說明")
-            expanded = expand_command("/" + name + (" " + args if args else ""))
-            if expanded is None or not expanded.strip():
-                raise ValueError("指令模板無法展開或內容為空；待送附件保留")
-            return CommandResult("chat", expanded)
+            if get_command(name) is not None:
+                expanded = expand_command("/" + name + (" " + args if args else ""))
+                if expanded is None or not expanded.strip():
+                    raise ValueError("指令模板無法展開或內容為空；待送附件保留")
+                return CommandResult("chat", expanded)
+
+            # 檢查是否為 Skill (將 /skill-name 轉為呼叫指令)
+            skills_dict = {s["name"]: s for s in list_skills(self.agent.workspace_dirs)}
+            if name in skills_dict:
+                prompt = f"請載入並使用 `{name}` 技能來處理此任務"
+                if args:
+                    prompt += f"：\n{args}"
+                else:
+                    prompt += "。"
+                return CommandResult("chat", prompt)
+
+            raise ValueError(f"找不到指令或技能 /{name}；輸入 /help 查看說明")
         return CommandResult()
