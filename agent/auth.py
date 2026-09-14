@@ -297,14 +297,30 @@ def get_openai_client(provider: str = None, model: str = None):
         from agent.paths import env_path
 
         load_dotenv(env_path(), override=True)
-        # 優先從 config 讀取，沒有再從 .env 讀取
-        base_url = cfg.get("ollama_base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        base_url = base_url.rstrip("/")
-        if not base_url.endswith("/v1"):
-            base_url = f"{base_url}/v1"
+        # 依據使用者指示，一律讀取 .env 的設定值
+        base_url = os.getenv("OLLAMA_BASE_URL")
+        if base_url:
+            base_url = base_url.rstrip("/")
+            if not base_url.endswith("/v1"):
+                base_url = f"{base_url}/v1"
         api_key = "ollama"
         extra_headers = {}
         http_client = httpx.AsyncClient(trust_env=False)
+    elif provider == "openrouter":
+        from dotenv import load_dotenv
+
+        from agent.paths import env_path
+
+        load_dotenv(env_path(), override=True)
+        base_url = os.getenv("OPENROUTER_BASE_URL")
+        if not base_url:
+            raise ValueError("OPENROUTER_BASE_URL 未在 .env 中設定")
+        base_url = base_url.rstrip("/")
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        extra_headers = {
+            "HTTP-Referer": "https://github.com/zanta0529/pocket-agent",
+            "X-Title": "Pocket Agent",
+        }
     else:
         # 預設 OpenAI (Codex 後端)
         base_url = CODEX_BASE_URL
@@ -334,8 +350,9 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
             from agent.paths import env_path
 
             load_dotenv(env_path(), override=True)
-            cfg = load_config()
-            base_url = cfg.get("ollama_base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            base_url = os.getenv("OLLAMA_BASE_URL")
+            if not base_url:
+                return []
             base_url = base_url.rstrip("/")
             if base_url.endswith("/v1"):
                 base_url = base_url[:-3]
@@ -348,6 +365,27 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
 
             logging.getLogger("pocket-agent").error(f"Ollama fetch tags error: {e}")
             return []
+        return []
+
+    if provider == "openrouter":
+        try:
+            from dotenv import load_dotenv
+
+            from agent.paths import env_path
+
+            load_dotenv(env_path(), override=True)
+            base_url = os.getenv("OPENROUTER_BASE_URL")
+            if not base_url:
+                return []
+            base_url = base_url.rstrip("/")
+            with httpx.Client() as client:
+                resp = client.get(f"{base_url}/models", timeout=10)
+            if resp.status_code == 200:
+                return [m["id"] for m in resp.json().get("data", [])]
+        except Exception as e:
+            import logging
+
+            logging.getLogger("pocket-agent").error(f"OpenRouter fetch models error: {e}")
         return []
 
     # OpenAI 原有邏輯

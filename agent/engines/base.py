@@ -59,3 +59,31 @@ class BaseEngine:
         Subclasses must yield the Event* dataclasses.
         """
         raise NotImplementedError
+
+    @staticmethod
+    def format_chat_tools(tools: list) -> Any:
+        """
+        Helper method for Adapters that need to convert the flattened tool schema
+        to the standard nested OpenAI chat.completions schema.
+        """
+        from openai import NOT_GIVEN
+
+        if not tools:
+            return NOT_GIVEN
+
+        chat_tools = []
+        for t in tools:
+            if t.get("type") == "function" and "name" in t:
+                chat_tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.get("name"),
+                            "description": t.get("description", ""),
+                            "parameters": t.get("parameters", {}),
+                        },
+                    }
+                )
+            else:
+                chat_tools.append(t)
+        return chat_tools

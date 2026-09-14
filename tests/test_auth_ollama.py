@@ -86,7 +86,7 @@ def test_fetch_available_models_ollama_exception():
         assert models == []
 
 
-def test_explicit_ollama_client_uses_config_once():
+def test_explicit_ollama_client_uses_env():
     from agent.auth import get_openai_client
 
     with (
@@ -101,7 +101,7 @@ def test_explicit_ollama_client_uses_config_once():
         http.assert_called_once_with(trust_env=False)
         client.assert_called_once_with(
             api_key="ollama",
-            base_url="http://configured:11434/v1",
+            base_url="http://environment:11434/v1",
             default_headers={},
             http_client=http.return_value,
         )

@@ -100,8 +100,6 @@ class AccountView(ctk.CTkFrame):
             row=0, column=0, sticky="w", pady=(0, 10)
         )
 
-        import os
-
         from agent.auth import load_config
 
         cfg = load_config()
@@ -113,38 +111,26 @@ class AccountView(ctk.CTkFrame):
 
         ctk.CTkRadioButton(
             radio_frame, text="OpenAI", variable=self.provider_var, value="openai", command=self._on_provider_change
-        ).grid(row=0, column=0, padx=(0, 20))
+        ).grid(row=0, column=0, padx=(0, 10), pady=(0, 10))
 
         ctk.CTkRadioButton(
             radio_frame,
-            text="Ollama (本地)",
+            text="Ollama",
             variable=self.provider_var,
             value="ollama",
             command=self._on_provider_change,
-        ).grid(row=0, column=1)
+        ).grid(row=0, column=1, padx=(0, 10), pady=(0, 10))
 
-        self.ollama_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        self.ollama_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        self.ollama_frame.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(self.ollama_frame, text="Ollama URL:").grid(row=0, column=0, padx=(0, 10), sticky="w")
-
-        default_url = cfg.get("ollama_base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        self.ollama_url_var = ctk.StringVar(value=default_url)
-        self.ollama_url_entry = ctk.CTkEntry(self.ollama_frame, textvariable=self.ollama_url_var, width=250)
-        self.ollama_url_entry.grid(row=0, column=1, sticky="w")
-        self.ollama_url_entry.bind("<FocusOut>", self._on_ollama_url_change)
-        self.ollama_url_entry.bind("<Return>", self._on_ollama_url_change)
-
-        if self.provider_var.get() != "ollama":
-            self.ollama_frame.grid_remove()
+        ctk.CTkRadioButton(
+            radio_frame,
+            text="OpenRouter",
+            variable=self.provider_var,
+            value="openrouter",
+            command=self._on_provider_change,
+        ).grid(row=1, column=0, padx=(0, 10))
 
     def _on_provider_change(self):
         provider = self.provider_var.get()
-        if provider == "ollama":
-            self.ollama_frame.grid()
-        else:
-            self.ollama_frame.grid_remove()
 
         from agent.auth import load_config, save_config
 
@@ -159,24 +145,6 @@ class AccountView(ctk.CTkFrame):
             self.app.is_ready = False
             self._refresh()
             self.app.reinit()
-
-    def _on_ollama_url_change(self, event=None):
-        url = self.ollama_url_var.get().strip()
-        if not url:
-            url = "http://localhost:11434"
-            self.ollama_url_var.set(url)
-
-        from agent.auth import load_config, save_config
-
-        cfg = load_config()
-        if cfg.get("ollama_base_url") != url:
-            cfg["ollama_base_url"] = url
-            save_config(cfg)
-            if self.provider_var.get() == "ollama":
-                self.app.agent = None
-                self.app.mcp = None
-                self.app.is_ready = False
-                self.app.reinit()
 
     def _refresh(self):
 
@@ -199,10 +167,14 @@ class AccountView(ctk.CTkFrame):
         cfg = load_config()
         self.provider = cfg.get("provider", "openai")
 
-        if self.provider == "ollama":
+        if self.provider in ("ollama", "openrouter"):
             self.status_icon.configure(image=self.logged_in_image, text="")
-            self.status_label.configure(text="使用 Ollama 本地模型", text_color=("gray10", "gray90"))
-            self.login_btn.configure(text="無須登入", state="disabled")
+            if self.provider == "ollama":
+                label_text = "使用 Ollama 本地模型"
+            else:
+                label_text = f"使用 {self.provider.upper()} (.env 金鑰)"
+            self.status_label.configure(text=label_text, text_color=("gray10", "gray90"))
+            self.login_btn.configure(text="無須網頁登入", state="disabled")
             self.logout_btn.configure(state="disabled")
         elif has_valid_token(self.provider):
             info = get_user_info(self.provider)

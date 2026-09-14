@@ -1,8 +1,6 @@
 import logging
 from typing import Any, AsyncGenerator, Callable, Optional
 
-from openai import NOT_GIVEN
-
 from .base import (
     BaseEngine,
     EventText,
@@ -53,7 +51,7 @@ class OllamaChatEngine(BaseEngine):
 
         # Optional: formatting tools for chat completions
         # Tools in Pocket Agent are standard function JSON schema.
-        chat_tools = tools if tools else NOT_GIVEN
+        chat_tools = self.format_chat_tools(tools)
 
         try:
             stream = await self.client.chat.completions.create(

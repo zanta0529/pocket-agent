@@ -40,7 +40,7 @@ def run_setup() -> None:
 
     try:
         provider = _step_provider()
-        if provider != "ollama":
+        if provider == "openai":
             _step_login(provider)
         _step_model(provider)
         _step_mcp()
@@ -60,7 +60,7 @@ def _step_provider() -> str:
     cfg = load_config()
     current_provider = cfg.get("provider", "openai")
 
-    providers = ["openai", "ollama"]
+    providers = ["openai", "ollama", "openrouter"]
     for i, p in enumerate(providers, 1):
         tag = " [green]← 目前[/green]" if p == current_provider else ""
         console.print(f"  [cyan]{i}[/cyan]. [bold]{p.upper()}[/bold]{tag}")
