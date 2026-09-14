@@ -87,3 +87,52 @@ class BaseEngine:
             else:
                 chat_tools.append(t)
         return chat_tools
+
+    @staticmethod
+    def format_chat_messages(input_items: list) -> list:
+        """
+        Helper method to convert Pocket Agent's internal history format (based on Responses API)
+        to standard OpenAI chat.completions messages format.
+        """
+        messages = []
+        for item in input_items:
+            msg = dict(item)
+
+            # Format text/image content lists
+            if isinstance(msg.get("content"), list):
+                new_content = []
+                for part in msg["content"]:
+                    if part.get("type") == "input_text":
+                        new_content.append({"type": "text", "text": part.get("text", "")})
+                    elif part.get("type") == "input_image":
+                        new_content.append({"type": "image_url", "image_url": {"url": part.get("image_url", "")}})
+                    else:
+                        new_content.append(part)
+                msg["content"] = new_content
+
+            # Convert Responses API tool format to Chat Completions format
+            item_type = msg.get("type")
+            if item_type == "function_call":
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": msg.get("call_id"),
+                                "type": "function",
+                                "function": {"name": msg.get("name"), "arguments": msg.get("arguments", "{}")},
+                            }
+                        ],
+                    }
+                )
+            elif item_type == "function_call_output":
+                messages.append({"role": "tool", "tool_call_id": msg.get("call_id"), "content": msg.get("output", "")})
+            else:
+                if "type" in msg:
+                    del msg["type"]  # Remove Responses API specific type field if it exists
+                if "role" not in msg:
+                    msg["role"] = "user"  # Fallback if missing
+                messages.append(msg)
+
+        return messages

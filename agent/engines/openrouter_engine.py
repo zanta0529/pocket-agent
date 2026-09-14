@@ -28,23 +28,9 @@ class OpenRouterEngine(BaseEngine):
         build_tools_callback: Optional[Callable[[], list]] = None,
     ) -> AsyncGenerator[Any, None]:
 
-        messages = []
+        messages = self.format_chat_messages(input_items)
         if instructions:
-            messages.append({"role": "system", "content": instructions})
-
-        for item in input_items:
-            msg = dict(item)
-            if isinstance(msg.get("content"), list):
-                new_content = []
-                for part in msg["content"]:
-                    if part.get("type") == "input_text":
-                        new_content.append({"type": "text", "text": part.get("text", "")})
-                    elif part.get("type") == "input_image":
-                        new_content.append({"type": "image_url", "image_url": {"url": part.get("image_url", "")}})
-                    else:
-                        new_content.append(part)
-                msg["content"] = new_content
-            messages.append(msg)
+            messages.insert(0, {"role": "system", "content": instructions})
 
         chat_tools = self.format_chat_tools(tools)
 
