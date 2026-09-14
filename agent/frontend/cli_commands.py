@@ -290,32 +290,32 @@ class CommandHandler:
                 self.renderer.message(f"已加入待送：{path}")
         elif name == "attachments":
             self.attachments(args)
-        elif name == "add-dir":
-            if not args:
-                raise ValueError("用法：/add-dir <目錄路徑>")
+        elif name in ("add-dir", "workspace", "model"):
+            from agent.sys_commands import sys_registry
 
-            status, msg, target_dir = self.agent.check_new_workspace_dir(args)
-            if status in ("invalid", "not_found"):
-                raise ValueError(msg)
-            if status in ("in_default", "already_authorized"):
-                self.renderer.message(f"✓ {msg}")
-                return CommandResult()
+            result = sys_registry.execute(f"/{name} {args}", self.agent)
 
-            from rich.text import Text
+            if result.status == "error":
+                raise ValueError(result.message)
+            elif result.status == "success":
+                self.renderer.message(result.message, "green" if name == "add-dir" else "cyan")
+            elif result.status == "needs_auth":
+                from rich.text import Text
 
-            warn_text = Text()
-            warn_text.append("【安全警告】", style="bold red")
-            warn_text.append(f"{msg}是否授權本次會話讀寫該目錄？")
-            self.renderer.console.print(warn_text)
+                warn_text = Text()
+                warn_text.append("【安全警告】", style="bold red")
+                warn_text.append(f"{result.message}是否授權本次會話讀寫該目錄？")
+                self.renderer.console.print(warn_text)
 
-            confirm = await self.reader.choose("請選擇", ["允許", "拒絕"])
-            if confirm == "允許" and target_dir:
-                self.agent.add_workspace_dir(target_dir)
-                self.renderer.message(f"✓ 已授權：{target_dir}，可透過工具讀寫。", "green")
-            else:
-                self.renderer.message("⚠ 已拒絕授權。", "yellow")
-        elif name == "model":
-            await self.model(args)
+                confirm = await self.reader.choose("請選擇", ["允許", "拒絕"])
+                if confirm == "允許" and result.payload.get("target_dir"):
+                    self.agent.add_workspace_dir(result.payload["target_dir"])
+                    self.renderer.message(f"✓ 已授權：{result.payload['target_dir']}，可透過工具讀寫。", "green")
+                else:
+                    self.renderer.message("⚠ 已拒絕授權。", "yellow")
+            elif result.status == "interactive_menu":
+                if name == "model":
+                    await self.model(args)
         elif name == "session":
             await self.session(args)
         elif name == "compact":
@@ -397,17 +397,6 @@ class CommandHandler:
             print_group("Built-in skills", "Built-in", builtin_skills)
 
             self.renderer.message("提示：若要檢視某個技能的完整內容，請輸入 /skills <skill_name>", "dim")
-        elif name == "workspace":
-            from pathlib import Path
-
-            self.renderer.message("【預設工作區】")
-            self.renderer.message(f"  {Path.cwd().resolve()}")
-            if self.agent.workspace_dirs:
-                self.renderer.message("【額外授權目錄】")
-                for wd in self.agent.workspace_dirs:
-                    self.renderer.message(f"  {wd}")
-            else:
-                self.renderer.message("【額外授權目錄】無")
         elif name == "help":
             from agent.commands import list_commands
 

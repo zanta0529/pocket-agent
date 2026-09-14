@@ -823,24 +823,6 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
 
         ctk.CTkButton(dialog, text="確認切換", command=on_confirm).grid(row=2, column=0, columnspan=2, pady=30)
 
-    def _handle_add_dir(self, path_str: str) -> None:
-        import tkinter.messagebox as mb
-
-        status, msg, target_dir = self.app.agent.check_new_workspace_dir(path_str)
-        if status in ("invalid", "not_found"):
-            self._add_system(f"⚠ {msg}")
-            return
-        if status in ("in_default", "already_authorized"):
-            self._add_system(f"✓ {msg}")
-            return
-
-        ans = mb.askyesno("安全警告", f"{msg}\n\n是否授權本次會話讀寫該目錄？", parent=self.winfo_toplevel())
-        if ans and target_dir:
-            self.app.agent.add_workspace_dir(target_dir)
-            self._add_system(f"✓ 已授權：{target_dir}，可透過工具讀寫。")
-        else:
-            self._add_system("⚠ 已拒絕授權。")
-
     def _send(self):
         text = self.input.get(
             "1.0",
@@ -858,45 +840,29 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
         display_text = text
         if text.startswith("/"):
             parts = text.split()
-            if parts[0] == "/model":
-                if len(parts) >= 3:
-                    provider = parts[1].lower()
-                    model_name = parts[2]
-                    from agent.auth import get_openai_client
+            if parts[0] in ("/model", "/add-dir", "/workspace"):
+                from agent.sys_commands import sys_registry
 
-                    try:
-                        new_client = get_openai_client(provider=provider, model=model_name)
-                        self.app.agent.client = new_client
-                        self.app.agent.model = model_name
-                        self._add_system(f"✓ 當次對話已切換為：{provider.upper()} - {model_name}")
-                        self.input.delete("1.0", "end")
-                        return
-                    except Exception as e:
-                        self._add_system(f"⚠ 切換模型失敗：{e}")
-                        self.input.delete("1.0", "end")
-                        return
-                else:
-                    self._show_model_selection_dialog()
-                    self.input.delete("1.0", "end")
-                    return
-            elif parts[0] == "/add-dir":
-                if len(parts) >= 2:
-                    self._handle_add_dir(" ".join(parts[1:]))
-                else:
-                    self._add_system("⚠ 用法：/add-dir <目錄路徑>")
-                self.input.delete("1.0", "end")
-                return
-            elif parts[0] == "/workspace":
-                from pathlib import Path
+                result = sys_registry.execute(text, self.app.agent)
+                if result.status == "error":
+                    self._add_system(result.message)
+                elif result.status == "success":
+                    self._add_system(result.message)
+                elif result.status == "needs_auth":
+                    import tkinter.messagebox as mb
 
-                lines = ["【預設工作區】", f"  {Path.cwd().resolve()}"]
-                if self.app.agent.workspace_dirs:
-                    lines.append("\n【額外授權目錄】")
-                    for wd in self.app.agent.workspace_dirs:
-                        lines.append(f"  {wd}")
-                else:
-                    lines.append("\n【額外授權目錄】無")
-                self._add_system("\n".join(lines))
+                    ans = mb.askyesno(
+                        "安全警告", f"{result.message}\n\n是否授權本次會話讀寫該目錄？", parent=self.winfo_toplevel()
+                    )
+                    if ans and result.payload.get("target_dir"):
+                        self.app.agent.add_workspace_dir(result.payload["target_dir"])
+                        self._add_system(f"✓ 已授權：{result.payload['target_dir']}，可透過工具讀寫。")
+                    else:
+                        self._add_system("⚠ 已拒絕授權。")
+                elif result.status == "interactive_menu":
+                    if parts[0] == "/model":
+                        self._show_model_selection_dialog()
+
                 self.input.delete("1.0", "end")
                 return
 
