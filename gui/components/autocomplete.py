@@ -13,6 +13,8 @@ class AutocompleteMenu(ctk.CTkToplevel):
         self.textbox = textbox
         self.on_select = on_select
         self.is_open = False
+        self.page = 0
+        self.all_items = []
 
         self.frame = ctk.CTkFrame(
             self,
@@ -29,28 +31,64 @@ class AutocompleteMenu(ctk.CTkToplevel):
 
         self.withdraw()
 
-    def update_items(self, items, filter_text):
-        self.items = items
+    def update_items(self, items, filter_text=None, reset_page=True):
+        if reset_page:
+            self.page = 0
+        self.all_items = items
+        self.items = []
+
         for lbl in self.labels:
             lbl.destroy()
         self.labels.clear()
 
-        if not items:
+        if not self.all_items:
             self.hide()
             return
 
-        for i, item in enumerate(items):
-            if isinstance(item, dict) and "description" in item:
+        PAGE_SIZE = 10
+        total = len(self.all_items)
+
+        start_idx = self.page * PAGE_SIZE
+        if start_idx >= total:
+            self.page = max(0, (total - 1) // PAGE_SIZE)
+            start_idx = self.page * PAGE_SIZE
+
+        end_idx = start_idx + PAGE_SIZE
+        page_items = self.all_items[start_idx:end_idx]
+
+        if self.page > 0:
+            self.items.append({"is_pagination": True, "direction": -1, "display": f"↑ {start_idx} before"})
+
+        self.items.extend(page_items)
+
+        if end_idx < total:
+            self.items.append({"is_pagination": True, "direction": 1, "display": f"↓ {total - end_idx} more"})
+
+        for i, item in enumerate(self.items):
+            if isinstance(item, dict) and "is_pagination" in item:
+                text = f"  {item['display']}"
+                font = ctk.CTkFont(size=12, slant="italic")
+                text_color = "gray60"
+            elif isinstance(item, dict) and "description" in item:
                 # Command format or Path format
                 display_name = item.get("display", item.get("name", ""))
                 desc = item.get("description", "")
                 text = f"{display_name}"
                 if desc:
                     text += f" - {desc}"
+                font = ctk.CTkFont(size=12)
+                text_color = None
             else:
                 text = str(item)
+                font = ctk.CTkFont(size=12)
+                text_color = None
 
-            lbl = ctk.CTkLabel(self.frame, text=text, anchor="w", padx=10, pady=2, font=ctk.CTkFont(size=12))
+            # Apply font explicitly if provided. CTkLabel handles text_color
+            lbl_kwargs = {"text": text, "anchor": "w", "padx": 10, "pady": 2, "font": font}
+            if text_color:
+                lbl_kwargs["text_color"] = text_color
+
+            lbl = ctk.CTkLabel(self.frame, **lbl_kwargs)
             lbl.pack(fill="x", expand=True)
             lbl.bind("<Button-1>", lambda e, idx=i: self._click_select(idx))
             lbl.bind("<Enter>", lambda e, idx=i: self.select_item(idx))
@@ -79,7 +117,12 @@ class AutocompleteMenu(ctk.CTkToplevel):
 
     def get_selected(self):
         if 0 <= self.selected_index < len(self.items):
-            return self.items[self.selected_index]
+            item = self.items[self.selected_index]
+            if isinstance(item, dict) and "is_pagination" in item:
+                self.page += item["direction"]
+                self.update_items(self.all_items, reset_page=False)
+                return None
+            return item
         return None
 
     def _click_select(self, index):

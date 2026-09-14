@@ -56,6 +56,8 @@ def references(text: str) -> list[str]:
 class SlashCommandCompleter(Completer):
     def __init__(self, state: CliState) -> None:
         self.state = state
+        self.page = 0
+        self.last_text = ""
 
     def paths(self, prefix: str) -> Iterator[Completion]:
         quoted = prefix.startswith(QUOTE)
@@ -83,6 +85,10 @@ class SlashCommandCompleter(Completer):
 
     def get_completions(self, document: Document, complete_event: CompleteEvent) -> Iterator[Completion]:
         text = document.text_before_cursor
+        if text != self.last_text:
+            self.page = 0
+            self.last_text = text
+
         if text.startswith("/file "):
             yield from self.paths(text[6:])
             return
@@ -106,16 +112,71 @@ class SlashCommandCompleter(Completer):
         for skill in list_skills(None):
             commands.setdefault(skill["name"], f"[Skill] {skill.get('description', '')}")
 
+        matches = []
         for name, description in commands.items():
             if name.startswith(text[1:]):
-                yield Completion(name, start_position=-(len(text) - 1), display_meta=plain(description))
+                matches.append((name, description))
+
+        PAGE_SIZE = 5
+        total = len(matches)
+
+        if total == 0:
+            return
+
+        start_idx = self.page * PAGE_SIZE
+        if start_idx >= total:
+            self.page = (total - 1) // PAGE_SIZE
+            start_idx = self.page * PAGE_SIZE
+
+        end_idx = start_idx + PAGE_SIZE
+        page_items = matches[start_idx:end_idx]
+
+        if self.page > 0:
+            yield Completion(
+                text[1:],
+                start_position=-(len(text) - 1),
+                display=f"  ↑ {start_idx} before",
+                display_meta="",
+                style="class:completion-menu.more",
+            )
+
+        for name, description in page_items:
+            yield Completion(name, start_position=-(len(text) - 1), display_meta=plain(description))
+
+        if end_idx < total:
+            yield Completion(
+                text[1:],
+                start_position=-(len(text) - 1),
+                display=f"  ↓ {total - end_idx} more",
+                display_meta="",
+                style="class:completion-menu.more",
+            )
 
 
-def key_bindings(selecting: Callable[[], bool], on_clear_screen: Callable[[], None] | None = None) -> KeyBindings:
+def key_bindings(
+    selecting: Callable[[], bool],
+    on_clear_screen: Callable[[], None] | None = None,
+    completer: SlashCommandCompleter | None = None,
+) -> KeyBindings:
     bindings = KeyBindings()
 
     @bindings.add("enter")
     def submit(event: KeyPressEvent) -> None:
+        buffer = event.current_buffer
+        if completer and buffer.complete_state and buffer.complete_state.current_completion:
+            c = buffer.complete_state.current_completion
+            display_str = c.display_text
+            if "more" in display_str or "before" in display_str:
+                if display_str.lstrip().startswith("↓"):
+                    completer.page += 1
+                    buffer.complete_state = None
+                    buffer.start_completion(select_first=True)
+                    return
+                elif display_str.lstrip().startswith("↑"):
+                    completer.page = max(0, completer.page - 1)
+                    buffer.complete_state = None
+                    buffer.start_completion(select_first=True)
+                    return
         event.current_buffer.validate_and_handle()
 
     @bindings.add("escape", "enter", filter=Condition(lambda: not selecting()))
@@ -178,7 +239,9 @@ class CliInput:
             completer=self.completer,
             complete_while_typing=True,
             bottom_toolbar=lambda: toolbar(state, shutil.get_terminal_size().columns),
-            key_bindings=key_bindings(lambda: self.selecting, on_clear_screen=on_clear_screen),
+            key_bindings=key_bindings(
+                lambda: self.selecting, on_clear_screen=on_clear_screen, completer=self.completer
+            ),
             erase_when_done=True,
             color_depth=ColorDepth.DEPTH_1_BIT if "NO_COLOR" in os.environ or not sys.stdout.isatty() else None,
         )

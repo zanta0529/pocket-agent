@@ -6,7 +6,7 @@ from .base import FrontendStrategy
 class GuiFrontend(FrontendStrategy):
     """圖形介面 (GUI) 執行策略"""
 
-    def run(self, system_prompt: str = "You are a helpful assistant."):
+    def run(self, system_prompt: str = "You are a helpful assistant.", resume: bool = False):
         try:
             from gui.app import App
         except ModuleNotFoundError as e:
@@ -22,7 +22,7 @@ class GuiFrontend(FrontendStrategy):
                 if choice in ("", "y", "yes"):
                     from .cli import CliFrontend
 
-                    CliFrontend().run(system_prompt)
+                    CliFrontend().run(system_prompt, resume=resume)
                     return
                 sys.exit(1)
             raise
