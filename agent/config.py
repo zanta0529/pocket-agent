@@ -9,6 +9,8 @@ log = logging.getLogger("pocket-agent")
 
 CONFIG_PATH = Path.home() / ".pocket-agent" / "config.json"
 
+SUPPORTED_PROVIDERS = ["openai", "ollama", "openrouter"]
+
 
 class ConfigProvider(ABC):
     """設定檔供應器介面 (Strategy)"""

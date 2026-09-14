@@ -23,9 +23,10 @@ async def switch_model(
     renderer: CliRenderer,
 ) -> None:
     from agent.auth import get_openai_client
+    from agent.config import SUPPORTED_PROVIDERS
 
-    if provider not in ("openai", "ollama") or not model or any(c.isspace() for c in model):
-        raise ValueError("用法：/model <openai|ollama> <模型名稱>")
+    if provider not in SUPPORTED_PROVIDERS or not model or any(c.isspace() for c in model):
+        raise ValueError(f"用法：/model <{'|'.join(SUPPORTED_PROVIDERS)}> <模型名稱>")
     new_client = get_openai_client(provider=provider, model=model)
     old_client = agent.client
     # No await between construction and commit: all consumers see one state.
@@ -55,18 +56,19 @@ class CommandHandler:
 
     async def model(self, args: str) -> None:
         from agent.auth import fetch_available_models
+        from agent.config import SUPPORTED_PROVIDERS
 
         if args:
             parts = args.split()
             if len(parts) != 2:
-                raise ValueError("用法：/model <openai|ollama> <模型名稱>")
+                raise ValueError(f"用法：/model <{'|'.join(SUPPORTED_PROVIDERS)}> <模型名稱>")
             provider, model = parts
         else:
-            provider = await self.reader.choose("提供者 openai / ollama", ["openai", "ollama"])
+            provider = await self.reader.choose(f"提供者 {' / '.join(SUPPORTED_PROVIDERS)}", SUPPORTED_PROVIDERS)
             if not provider:
                 return
-            if provider not in ("openai", "ollama"):
-                raise ValueError("僅支援 openai 或 ollama")
+            if provider not in SUPPORTED_PROVIDERS:
+                raise ValueError(f"僅支援 {', '.join(SUPPORTED_PROVIDERS)}")
             try:
                 models = fetch_available_models(provider)
             except Exception:

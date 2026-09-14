@@ -40,14 +40,14 @@ def run_setup() -> None:
 
 
 def _step_provider() -> str:
-    from agent.config import config
+    from agent.config import SUPPORTED_PROVIDERS, config
 
     console.print(Rule("① 選擇服務供應商 (Provider)"))
     console.print()
 
     current_provider = config.get("provider", "openai")
 
-    providers = ["openai", "ollama", "openrouter"]
+    providers = SUPPORTED_PROVIDERS
     for i, p in enumerate(providers, 1):
         tag = " [green]← 目前[/green]" if p == current_provider else ""
         console.print(f"  [cyan]{i}[/cyan]. [bold]{p.upper()}[/bold]{tag}")
