@@ -36,7 +36,9 @@ def test_failed_switch_preserves_state():
 @pytest.mark.parametrize("raw", ["/modelxxx", "/quit extra", "/image", "/attachments remove 0"])
 def test_invalid_commands_preserve_attachments(raw):
     state = CliState("openai", "model", ["pending"])
-    handler = CommandHandler(Mock(), state, Mock(), Mock(), [])
+    agent = Mock()
+    agent.workspace_dirs = []
+    handler = CommandHandler(agent, state, Mock(), Mock(), [])
     with patch("agent.commands.get_command", return_value=None):
         with pytest.raises(ValueError):
             asyncio.run(handler.dispatch(raw))
@@ -45,6 +47,8 @@ def test_invalid_commands_preserve_attachments(raw):
 
 def test_clear_and_add_dir_do_not_consume_attachments():
     agent, renderer = Mock(), Mock()
+    agent.workspace_dirs = []
+    agent.check_new_workspace_dir.return_value = ("in_default", "加入成功，但不會讀取目錄", "dir")
     state = CliState("openai", "model", ["pending"])
     handler = CommandHandler(agent, state, Mock(), renderer, [])
     asyncio.run(handler.dispatch("/clear"))

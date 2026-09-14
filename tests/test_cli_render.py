@@ -112,14 +112,13 @@ def test_stream_round_start_without_content_no_extra_newline():
 # ── F2: tool_done 結果標記 ────────────────────────────
 
 
-def test_tool_done_ok_prints_checkmark():
-    """tool_done ok=True 印 ✓ 工具名。"""
+def test_tool_done_ok_prints_nothing():
+    """tool_done ok=True 成功時不印出冗餘訊息。"""
     stream = StringIO()
     renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=80))
     renderer.event("tool_done", {"name": "read_file", "ok": True})
     output = stream.getvalue()
-    assert "✓" in output
-    assert "read_file" in output
+    assert output == ""
 
 
 def test_tool_done_fail_prints_cross():
