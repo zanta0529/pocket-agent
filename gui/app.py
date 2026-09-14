@@ -171,11 +171,96 @@ class App(DnDCTk):
     # ── Layout ────────────────────────────────────
 
     def _build(self):
+        import platform
+
+        if platform.system() == "Windows":
+            self.overrideredirect(True)
+
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
         # 建立畫面前先載入所有圖片。
         self._load_images()
+
+        # ── Title Bar ─────────────────────────────
+        self.title_bar = ctk.CTkFrame(self, height=36, corner_radius=0, fg_color=("gray90", "gray8"))
+        self.title_bar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.title_bar.grid_propagate(False)
+
+        title_icon = ctk.CTkImage(
+            light_image=self._app_icon._light_image, dark_image=self._app_icon._dark_image, size=(20, 20)
+        )
+        title_lbl = ctk.CTkLabel(
+            self.title_bar,
+            text=" Pocket Agent",
+            image=title_icon,
+            compound="left",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        title_lbl.pack(side="left", padx=12)
+
+        btn_frame = ctk.CTkFrame(self.title_bar, fg_color="transparent")
+        btn_frame.pack(side="right")
+
+        def close_win():
+            self.quit()
+
+        def maximize_win():
+            if self.state() == "zoomed":
+                self.state("normal")
+            else:
+                self.state("zoomed")
+
+        def minimize_win():
+            self.state("iconic")
+
+        ctk.CTkButton(
+            btn_frame,
+            text="—",
+            width=46,
+            height=36,
+            corner_radius=0,
+            fg_color="transparent",
+            text_color=("black", "white"),
+            hover_color=("gray75", "gray25"),
+            command=minimize_win,
+        ).pack(side="left")
+        ctk.CTkButton(
+            btn_frame,
+            text="☐",
+            width=46,
+            height=36,
+            corner_radius=0,
+            fg_color="transparent",
+            text_color=("black", "white"),
+            hover_color=("gray75", "gray25"),
+            command=maximize_win,
+        ).pack(side="left")
+        ctk.CTkButton(
+            btn_frame,
+            text="✕",
+            width=46,
+            height=36,
+            corner_radius=0,
+            fg_color="transparent",
+            text_color=("black", "white"),
+            hover_color="#c0392b",
+            command=close_win,
+        ).pack(side="left")
+
+        def start_move(event):
+            self._drag_start_x = event.x
+            self._drag_start_y = event.y
+
+        def do_move(event):
+            x = self.winfo_x() + event.x - self._drag_start_x
+            y = self.winfo_y() + event.y - self._drag_start_y
+            self.geometry(f"+{x}+{y}")
+
+        self.title_bar.bind("<ButtonPress-1>", start_move)
+        self.title_bar.bind("<B1-Motion>", do_move)
+        title_lbl.bind("<ButtonPress-1>", start_move)
+        title_lbl.bind("<B1-Motion>", do_move)
 
         # ── Sidebar ───────────────────────────────
         sidebar = ctk.CTkFrame(
@@ -184,7 +269,7 @@ class App(DnDCTk):
             corner_radius=0,
         )
         sidebar.grid(
-            row=0,
+            row=1,
             column=0,
             sticky="nsew",
         )
@@ -241,6 +326,7 @@ class App(DnDCTk):
                 text=label,
                 font=ctk.CTkFont(
                     size=14,
+                    weight="bold",
                 ),
                 # 使用對應的透明背景 PNG。
                 image=self._nav_icons[key],
@@ -251,8 +337,8 @@ class App(DnDCTk):
                 fg_color="transparent",
                 text_color=("gray10", "gray90"),
                 hover_color=("gray70", "gray30"),
-                height=42,
-                corner_radius=8,
+                height=44,
+                corner_radius=10,
                 command=lambda k=key: self.show(k),
             )
 
@@ -297,14 +383,15 @@ class App(DnDCTk):
             text="  新對話",
             font=ctk.CTkFont(
                 size=14,
+                weight="bold",
             ),
             image=self.new_chat_icon,
             anchor="w",
             fg_color="transparent",
             text_color=("gray10", "gray90"),
             hover_color=("gray70", "gray30"),
-            height=34,
-            corner_radius=8,
+            height=40,
+            corner_radius=10,
             command=self.new_chat,
         ).grid(
             row=9,
@@ -355,6 +442,22 @@ class App(DnDCTk):
             weight=1,
         )
 
+        separator_bottom = ctk.CTkFrame(
+            sidebar,
+            height=2,
+            fg_color=("gray20", "gray50"),
+            corner_radius=0,
+        )
+
+        separator_bottom.grid(
+            row=12,
+            column=0,
+            padx=10,
+            pady=(8, 4),
+            sticky="ew",
+        )
+        separator_bottom.grid_propagate(False)
+
         nav_items_bottom = [
             (" 設定", "settings"),
             (" 帳號", "account"),
@@ -362,20 +465,20 @@ class App(DnDCTk):
 
         for row_index, (label, key) in enumerate(
             nav_items_bottom,
-            start=12,
+            start=13,
         ):
             btn = ctk.CTkButton(
                 sidebar,
                 text=label,
-                font=ctk.CTkFont(size=14),
+                font=ctk.CTkFont(size=14, weight="bold"),
                 image=self._nav_icons[key],
                 compound="left",
                 anchor="w",
                 fg_color="transparent",
                 text_color=("gray10", "gray90"),
                 hover_color=("gray70", "gray30"),
-                height=42,
-                corner_radius=8,
+                height=44,
+                corner_radius=10,
                 command=lambda k=key: self.show(k),
             )
 
@@ -396,7 +499,7 @@ class App(DnDCTk):
             fg_color=("gray96", "gray11"),
         )
         content.grid(
-            row=0,
+            row=1,
             column=1,
             sticky="nsew",
         )

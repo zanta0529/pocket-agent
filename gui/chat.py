@@ -47,8 +47,9 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
         self.msg_frame = ctk.CTkScrollableFrame(
             self,
             fg_color=("gray95", "gray12"),
-            scrollbar_button_color=("gray65", "gray35"),
-            scrollbar_button_hover_color=("gray50", "gray50"),
+            scrollbar_fg_color="transparent",
+            scrollbar_button_color=("gray80", "gray22"),
+            scrollbar_button_hover_color=("gray65", "gray40"),
             corner_radius=0,
         )
         self.msg_frame.grid(
@@ -92,30 +93,34 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
         # 輸入區
         input_frame = ctk.CTkFrame(
             self,
-            height=110,
+            corner_radius=14,
+            border_width=1,
+            border_color=("gray80", "gray25"),
+            fg_color=("gray95", "gray14"),
         )
         input_frame.grid(
             row=3,
             column=0,
             sticky="ew",
-            padx=10,
-            pady=8,
+            padx=16,
+            pady=(4, 16),
         )
         input_frame.grid_columnconfigure(0, weight=1)
 
         self.input = ctk.CTkTextbox(
             input_frame,
-            height=92,
+            height=68,
             wrap="word",
             font=ctk.CTkFont(size=self._chat_font_size()),
             border_width=0,
+            fg_color="transparent",
         )
 
         self.input.grid(
             row=0,
             column=0,
-            padx=(8, 4),
-            pady=8,
+            padx=12,
+            pady=(12, 4),
             sticky="ew",
         )
 
@@ -187,121 +192,102 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
             size=(22, 22),
         )
 
-        # 工作區按鈕
-        ctk.CTkButton(
+        # ── 底部工具列 ────────────────
+        bottom_bar = ctk.CTkFrame(
             input_frame,
-            text="📂",
-            width=40,
-            height=40,
-            font=ctk.CTkFont(size=20),
             fg_color="transparent",
-            hover_color=("gray70", "gray30"),
-            command=self._add_workspace_dir,
-        ).grid(
-            row=0,
-            column=1,
-            padx=2,
-            pady=8,
         )
+        bottom_bar.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=12,
+            pady=(0, 12),
+        )
+        bottom_bar.grid_columnconfigure(1, weight=1)
 
-        # 附件按鈕
-        ctk.CTkButton(
-            input_frame,
-            text="",
-            image=self.attach_icon,
-            width=40,
-            height=40,
-            fg_color="transparent",
-            hover_color=("gray70", "gray30"),
-            command=self._attach_file,
-        ).grid(
-            row=0,
-            column=2,
-            padx=2,
-            pady=8,
-        )
-
-        # 送出按鈕
-        self.send_btn = ctk.CTkButton(
-            input_frame,
-            text="送出",
-            width=72,
-            command=self._send,
-        )
-        self.send_btn.grid(
-            row=0,
-            column=3,
-            padx=(2, 8),
-            pady=8,
-        )
-
-        # ── 模型 / 推理強度快速選單 ────────────────
+        # 模型 / 推理強度快速選單
         from agent.auth import get_model, load_config
         from gui.settings import REASONING
 
-        opts_row = ctk.CTkFrame(
-            input_frame,
-            fg_color="transparent",
-        )
-        opts_row.grid(
-            row=1,
-            column=0,
-            columnspan=3,
-            padx=8,
-            pady=(0, 6),
-            sticky="w",
-        )
+        opts_row = ctk.CTkFrame(bottom_bar, fg_color="transparent")
+        opts_row.grid(row=0, column=0, sticky="w")
 
         cfg = load_config()
         model = cfg.get("model") or get_model()
-
         model_values = [model]
-
-        ctk.CTkLabel(
-            opts_row,
-            text="模型",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-        ).grid(row=0, column=0, padx=(2, 6))
 
         self.model_var = ctk.StringVar(value=model)
         self.model_menu = ctk.CTkOptionMenu(
             opts_row,
             values=model_values,
             variable=self.model_var,
-            width=150,
-            height=26,
+            width=130,
+            height=32,
             font=ctk.CTkFont(size=12),
+            fg_color=("gray85", "gray22"),
+            button_color=("gray75", "gray32"),
+            button_hover_color=("gray65", "gray42"),
+            text_color=("gray10", "gray90"),
             command=lambda _v: self._apply_chat_options(),
         )
-        self.model_menu.grid(row=0, column=1, padx=(0, 14))
+        self.model_menu.grid(row=0, column=0, padx=(0, 8))
 
-        # 推理強度用短標籤（取全名「（」之前的部分）
         self._effort_short = [(key, label.split("（")[0]) for key, label in REASONING]
         effort = cfg.get("reasoning_effort", "medium")
-        short = next(
-            (s for k, s in self._effort_short if k == effort),
-            "Medium",
-        )
-
-        ctk.CTkLabel(
-            opts_row,
-            text="推理",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-        ).grid(row=0, column=2, padx=(0, 6))
+        short = next((s for k, s in self._effort_short if k == effort), "Medium")
 
         self.effort_var = ctk.StringVar(value=short)
         self.effort_menu = ctk.CTkOptionMenu(
             opts_row,
             values=[s for _k, s in self._effort_short],
             variable=self.effort_var,
-            width=110,
-            height=26,
+            width=90,
+            height=32,
             font=ctk.CTkFont(size=12),
+            fg_color=("gray85", "gray22"),
+            button_color=("gray75", "gray32"),
+            button_hover_color=("gray65", "gray42"),
+            text_color=("gray10", "gray90"),
             command=lambda _v: self._apply_chat_options(),
         )
-        self.effort_menu.grid(row=0, column=3)
+        self.effort_menu.grid(row=0, column=1)
+
+        # 按鈕區 (右側)
+        btn_row = ctk.CTkFrame(bottom_bar, fg_color="transparent")
+        btn_row.grid(row=0, column=2, sticky="e")
+
+        ctk.CTkButton(
+            btn_row,
+            text="📂",
+            width=32,
+            height=32,
+            font=ctk.CTkFont(size=18),
+            fg_color="transparent",
+            hover_color=("gray80", "gray30"),
+            command=self._add_workspace_dir,
+        ).grid(row=0, column=0, padx=2)
+
+        ctk.CTkButton(
+            btn_row,
+            text="",
+            image=self.attach_icon,
+            width=32,
+            height=32,
+            fg_color="transparent",
+            hover_color=("gray80", "gray30"),
+            command=self._attach_file,
+        ).grid(row=0, column=1, padx=2)
+
+        self.send_btn = ctk.CTkButton(
+            btn_row,
+            text="送出",
+            width=64,
+            height=32,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._send,
+        )
+        self.send_btn.grid(row=0, column=2, padx=(6, 0))
 
         # 背景抓取後端即時模型列表更新選單
         self._fetch_models_async()
@@ -1525,113 +1511,137 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
         row.pack(
             fill="x",
             padx=8,
-            pady=3,
+            pady=6,
         )
+
+        is_user = role == "user"
 
         background_color = {
-            "user": (
-                "#1a56db",
-                "#1a56db",
-            ),
-            "assistant": (
-                "gray82",
-                "gray22",
-            ),
-            "error": (
-                "#c0392b",
-                "#922b21",
-            ),
-        }.get(
-            role,
-            (
-                "gray80",
-                "gray20",
-            ),
-        )
+            "user": ("#1a56db", "#1a56db"),
+            "assistant": ("gray85", "gray20"),
+            "error": ("#c0392b", "#922b21"),
+        }.get(role, ("gray80", "gray20"))
 
         text_color = {
-            "user": (
-                "white",
-                "white",
-            ),
-            "assistant": (
-                "gray10",
-                "gray95",
-            ),
-            "error": (
-                "white",
-                "white",
-            ),
-        }.get(
-            role,
-            (
-                "gray10",
-                "gray90",
-            ),
-        )
+            "user": ("white", "white"),
+            "assistant": ("gray10", "gray95"),
+            "error": ("white", "white"),
+        }.get(role, ("gray10", "gray90"))
 
-        anchor = "e" if role == "user" else "w"
+        # Avatar
+        avatar_image = self.app._nav_icons.get("account") if is_user else self.app._app_icon
+        avatar_label = ctk.CTkLabel(
+            row,
+            text="",
+            image=avatar_image,
+            width=32,
+            height=32,
+        )
 
         bubble = ctk.CTkFrame(
             row,
             fg_color=background_color,
-            corner_radius=14,
-        )
-        bubble.pack(
-            anchor=anchor,
-            padx=6,
+            corner_radius=16,
         )
 
-        # 高度先給一行，插入文字後依實際顯示行數調整
-        # （最多 15 行，超過才用泡泡內 scrollbar）
-        textbox = ctk.CTkTextbox(
-            bubble,
-            width=self._bubble_width(),
-            height=36,
-            wrap="word",
-            fg_color=background_color,
-            text_color=text_color,
-            border_width=0,
-            corner_radius=10,
-            scrollbar_button_color=(
-                "gray65",
-                "gray40",
-            ),
-            scrollbar_button_hover_color=(
-                "gray50",
-                "gray55",
-            ),
-            activate_scrollbars=True,
-            font=ctk.CTkFont(size=self._chat_font_size()),
-        )
+        if is_user:
+            avatar_label.pack(side="right", padx=(8, 4), anchor="n")
+            bubble.pack(side="right", padx=6)
+        else:
+            avatar_label.pack(side="left", padx=(4, 8), anchor="n")
+            bubble.pack(side="left", padx=6)
 
-        textbox.insert(
-            "1.0",
-            text,
-        )
+        content_frame = ctk.CTkFrame(bubble, fg_color="transparent")
+        content_frame.pack(padx=12, pady=10)
 
-        textbox.configure(
-            state="disabled",
-        )
+        import re
 
-        textbox.pack(
-            padx=10,
-            pady=8,
-        )
+        parts = re.split(r"```([a-zA-Z0-9_\-\+]*)\n(.*?)```", text, flags=re.DOTALL)
 
-        # 依實際顯示行數調整高度（中文寬度粗估會失準）；
-        # 超過設定的最大行數時固定高度、泡泡內捲動
-        self._fit_textbox_height(
-            textbox,
-            max_lines=self._bubble_max_lines(),
-        )
+        # parts structure: [text1, lang1, code1, text2, lang2, code2, text3]
+        for i in range(0, len(parts), 3):
+            # Normal text block
+            txt = parts[i].strip("\r\n")
+            if txt:
+                tb = ctk.CTkTextbox(
+                    content_frame,
+                    width=self._bubble_width(),
+                    height=36,
+                    wrap="word",
+                    fg_color="transparent",
+                    text_color=text_color,
+                    border_width=0,
+                    scrollbar_button_color=("gray65", "gray40"),
+                    scrollbar_button_hover_color=("gray50", "gray55"),
+                    activate_scrollbars=True,
+                    font=ctk.CTkFont(size=self._chat_font_size()),
+                )
+                tb.insert("1.0", txt)
+                tb.configure(state="disabled")
+                tb.pack(fill="x", pady=(0, 4) if len(parts) > 1 else 0)
+                self._fit_textbox_height(tb, max_lines=self._bubble_max_lines())
+                self.scroll_manager.bind_bubble(tb)
 
-        # 每個訊息泡泡皆可使用滑鼠滾輪
-        self.scroll_manager.bind_bubble(textbox)
+            # Code block
+            if i + 2 < len(parts):
+                lang = parts[i + 1].strip()
+                code_txt = parts[i + 2].strip("\r\n")
 
-        # 行、泡泡空白處控制外層對話區
+                code_bg = ("#e6e6e6", "#141414")
+                header_bg = ("#d9d9d9", "#1c1c1c")
+
+                box_frame = ctk.CTkFrame(content_frame, fg_color=code_bg, corner_radius=8)
+                box_frame.pack(fill="x", pady=4)
+
+                header = ctk.CTkFrame(box_frame, fg_color=header_bg, corner_radius=8)
+                header.pack(fill="x")
+                ctk.CTkLabel(header, text=lang or "code", font=ctk.CTkFont(size=11), text_color="gray").pack(
+                    side="left", padx=10, pady=2
+                )
+
+                def make_copy_cmd(ct=code_txt):
+                    def copy_code():
+                        self.clipboard_clear()
+                        self.clipboard_append(ct)
+                        self.update_idletasks()
+
+                    return copy_code
+
+                ctk.CTkButton(
+                    header,
+                    text="複製",
+                    width=40,
+                    height=20,
+                    font=ctk.CTkFont(size=11),
+                    fg_color="transparent",
+                    text_color="gray",
+                    hover_color=("gray75", "gray30"),
+                    command=make_copy_cmd(),
+                ).pack(side="right", padx=6, pady=2)
+
+                cb = ctk.CTkTextbox(
+                    box_frame,
+                    width=self._bubble_width() - 20,
+                    height=36,
+                    wrap="none",
+                    fg_color="transparent",
+                    text_color=("gray20", "gray85"),
+                    border_width=0,
+                    activate_scrollbars=True,
+                    font=ctk.CTkFont(family="Consolas", size=self._chat_font_size()),
+                )
+                cb.insert("1.0", code_txt)
+                cb.configure(state="disabled")
+                cb.pack(fill="x", padx=10, pady=8)
+                self._fit_textbox_height(cb, max_lines=self._bubble_max_lines())
+                self.scroll_manager.bind_bubble(cb)
+                self.scroll_manager.bind_outer(box_frame)
+                self.scroll_manager.bind_outer(header)
+
         self.scroll_manager.bind_outer(row)
         self.scroll_manager.bind_outer(bubble)
+        self.scroll_manager.bind_outer(avatar_label)
+        self.scroll_manager.bind_outer(content_frame)
 
         self._scroll_bottom()
 
@@ -1642,37 +1652,45 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
             self.msg_frame,
             fg_color="transparent",
         )
-        row.pack(fill="x", padx=8, pady=3)
+        row.pack(fill="x", padx=8, pady=6)
+
+        avatar_label = ctk.CTkLabel(
+            row,
+            text="",
+            image=self.app._app_icon,
+            width=32,
+            height=32,
+        )
+        avatar_label.pack(side="left", padx=(4, 8), anchor="n")
 
         bubble = ctk.CTkFrame(
             row,
-            fg_color=("gray82", "gray22"),
-            corner_radius=14,
+            fg_color=("gray85", "gray20"),
+            corner_radius=16,
         )
-        bubble.pack(anchor="w", padx=6)
+        bubble.pack(side="left", padx=6)
 
         textbox = ctk.CTkTextbox(
             bubble,
             width=self._bubble_width(),
             height=36,
             wrap="word",
-            fg_color=("gray82", "gray22"),
+            fg_color="transparent",
             text_color=("gray10", "gray95"),
             border_width=0,
-            corner_radius=10,
             scrollbar_button_color=("gray65", "gray40"),
             scrollbar_button_hover_color=("gray50", "gray55"),
             activate_scrollbars=True,
             font=ctk.CTkFont(size=self._chat_font_size()),
         )
+
         textbox.configure(state="disabled")
-        textbox.pack(padx=10, pady=8)
+        textbox.pack(padx=12, pady=10)
 
         self.scroll_manager.bind_bubble(textbox)
         self.scroll_manager.bind_outer(row)
         self.scroll_manager.bind_outer(bubble)
-
-        self._scroll_bottom()
+        self.scroll_manager.bind_outer(avatar_label)
 
         return row, textbox
 
