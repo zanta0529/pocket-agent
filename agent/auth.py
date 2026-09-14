@@ -284,21 +284,21 @@ def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=No
 
 def get_openai_client(provider: str = None, model: str = None):
     """建立 OpenAI 相容的 client，根據 provider 切換 Base URL 與 Auth。"""
+    from dotenv import load_dotenv
     from openai import AsyncOpenAI
 
-    cfg = load_config()
+    from agent.config import config
+    from agent.paths import env_path
+
+    # 在此讀取 .env 以確保 os.getenv 能拿到最新的環境變數，配合 ConfigManager
+    load_dotenv(env_path(), override=True)
+
     if provider is None:
-        provider = cfg.get("provider", "openai")
+        provider = config.get("provider", "openai")
 
     http_client = None
     if provider == "ollama":
-        from dotenv import load_dotenv
-
-        from agent.paths import env_path
-
-        load_dotenv(env_path(), override=True)
-        # 依據使用者指示，一律讀取 .env 的設定值
-        base_url = os.getenv("OLLAMA_BASE_URL")
+        base_url = config.get("ollama_base_url")
         if base_url:
             base_url = base_url.rstrip("/")
             if not base_url.endswith("/v1"):
@@ -307,16 +307,11 @@ def get_openai_client(provider: str = None, model: str = None):
         extra_headers = {}
         http_client = httpx.AsyncClient(trust_env=False)
     elif provider == "openrouter":
-        from dotenv import load_dotenv
-
-        from agent.paths import env_path
-
-        load_dotenv(env_path(), override=True)
-        base_url = os.getenv("OPENROUTER_BASE_URL")
+        base_url = config.get("openrouter_base_url")
         if not base_url:
-            raise ValueError("OPENROUTER_BASE_URL 未在 .env 中設定")
+            raise ValueError("未設定 OpenRouter Base URL。請先透過 `agent setup` 或 GUI 設定。")
         base_url = base_url.rstrip("/")
-        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        api_key = config.get("openrouter_api_key") or ""
         extra_headers = {
             "HTTP-Referer": "https://github.com/zanta0529/pocket-agent",
             "X-Title": "Pocket Agent",
@@ -343,14 +338,16 @@ def get_openai_client(provider: str = None, model: str = None):
 
 def fetch_available_models(provider: str = "openai") -> list[str]:
     """取得可用模型列表。"""
+    from dotenv import load_dotenv
+
+    from agent.config import config
+    from agent.paths import env_path
+
+    load_dotenv(env_path(), override=True)
+
     if provider == "ollama":
         try:
-            from dotenv import load_dotenv
-
-            from agent.paths import env_path
-
-            load_dotenv(env_path(), override=True)
-            base_url = os.getenv("OLLAMA_BASE_URL")
+            base_url = config.get("ollama_base_url")
             if not base_url:
                 return []
             base_url = base_url.rstrip("/")
@@ -364,17 +361,11 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
             import logging
 
             logging.getLogger("pocket-agent").error(f"Ollama fetch tags error: {e}")
-            return []
         return []
 
     if provider == "openrouter":
         try:
-            from dotenv import load_dotenv
-
-            from agent.paths import env_path
-
-            load_dotenv(env_path(), override=True)
-            base_url = os.getenv("OPENROUTER_BASE_URL")
+            base_url = config.get("openrouter_base_url")
             if not base_url:
                 return []
             base_url = base_url.rstrip("/")
@@ -472,16 +463,19 @@ def get_user_info(provider: str = "openai") -> dict:
 
 
 def get_model() -> str:
-    cfg = load_config()
-    return cfg.get("model") or os.getenv("OPENAI_MODEL", "gpt-6-astra")
+    from agent.config import config
+
+    return config.get("model", "gpt-6-astra")
 
 
 def load_config() -> dict:
-    if CONFIG_PATH.exists():
-        return json.loads(CONFIG_PATH.read_text())
-    return {}
+    from agent.config import config
+
+    return dict(config.json_provider._data)
 
 
 def save_config(cfg: dict) -> None:
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+    from agent.config import config
+
+    config.json_provider._data = cfg
+    config.json_provider.save()

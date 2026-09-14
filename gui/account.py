@@ -95,23 +95,26 @@ class AccountView(ctk.CTkFrame):
     def _build_provider_settings(self):
         settings_frame = ctk.CTkFrame(self, fg_color="transparent")
         settings_frame.grid(row=5, column=0, padx=30, pady=(20, 0), sticky="ew")
+        settings_frame.columnconfigure(0, weight=1)
 
         ctk.CTkLabel(settings_frame, text="AI LLM Provider 設定", font=ctk.CTkFont(size=16, weight="bold")).grid(
             row=0, column=0, sticky="w", pady=(0, 10)
         )
 
-        from agent.auth import load_config
+        from agent.config import config
 
-        cfg = load_config()
-
-        self.provider_var = ctk.StringVar(value=cfg.get("provider", "openai"))
+        self.provider_var = ctk.StringVar(value=config.get("provider", "openai"))
 
         radio_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
         radio_frame.grid(row=1, column=0, sticky="w")
 
         ctk.CTkRadioButton(
-            radio_frame, text="OpenAI", variable=self.provider_var, value="openai", command=self._on_provider_change
-        ).grid(row=0, column=0, padx=(0, 10), pady=(0, 10))
+            radio_frame,
+            text="OpenAI",
+            variable=self.provider_var,
+            value="openai",
+            command=self._on_provider_change,
+        ).grid(row=0, column=0, padx=(0, 20), pady=(0, 10))
 
         ctk.CTkRadioButton(
             radio_frame,
@@ -119,7 +122,7 @@ class AccountView(ctk.CTkFrame):
             variable=self.provider_var,
             value="ollama",
             command=self._on_provider_change,
-        ).grid(row=0, column=1, padx=(0, 10), pady=(0, 10))
+        ).grid(row=0, column=1, padx=(0, 20), pady=(0, 10))
 
         ctk.CTkRadioButton(
             radio_frame,
@@ -127,24 +130,89 @@ class AccountView(ctk.CTkFrame):
             variable=self.provider_var,
             value="openrouter",
             command=self._on_provider_change,
-        ).grid(row=1, column=0, padx=(0, 10))
+        ).grid(row=0, column=2, padx=(0, 20), pady=(0, 10))
+
+        # Config Inputs Frame (Hidden by default)
+        self.config_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        self.config_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        self.config_frame.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(self.config_frame, text="Base URL:").grid(row=0, column=0, sticky="w", pady=(0, 5), padx=(0, 10))
+        self.url_entry = ctk.CTkEntry(self.config_frame, placeholder_text="例如: https://openrouter.ai/api/v1")
+        self.url_entry.grid(row=0, column=1, sticky="ew", pady=(0, 5))
+
+        ctk.CTkLabel(self.config_frame, text="API Key:").grid(row=1, column=0, sticky="w", pady=(0, 5), padx=(0, 10))
+        self.api_key_entry = ctk.CTkEntry(self.config_frame, show="*")
+        self.api_key_entry.grid(row=1, column=1, sticky="ew", pady=(0, 5))
+
+        self.save_config_btn = ctk.CTkButton(
+            self.config_frame, text="儲存連線設定", command=self._save_provider_config, width=120
+        )
+        self.save_config_btn.grid(row=2, column=1, sticky="e", pady=(5, 0))
+
+        self._update_config_ui()
+
+    def _update_config_ui(self):
+        from agent.config import config
+
+        provider = self.provider_var.get()
+        if provider == "openai":
+            self.config_frame.grid_remove()
+        else:
+            self.config_frame.grid()
+            url_key = f"{provider}_base_url"
+            key_key = f"{provider}_api_key"
+
+            self.url_entry.delete(0, "end")
+            val_url = config.get(url_key, "")
+            if val_url:
+                self.url_entry.insert(0, val_url)
+
+            self.api_key_entry.delete(0, "end")
+            val_key = config.get(key_key, "")
+            if val_key:
+                self.api_key_entry.insert(0, val_key)
+
+            if provider == "ollama":
+                self.api_key_entry.configure(state="disabled", placeholder_text="Ollama 無需 API Key")
+            else:
+                self.api_key_entry.configure(state="normal", placeholder_text="請輸入 API Key")
+
+    def _save_provider_config(self):
+        from agent.config import config
+
+        provider = self.provider_var.get()
+        if provider != "openai":
+            config.set(f"{provider}_base_url", self.url_entry.get().strip())
+            if provider != "ollama":
+                config.set(f"{provider}_api_key", self.api_key_entry.get().strip())
+            # Show brief success indicator
+            orig_text = self.save_config_btn.cget("text")
+            self.save_config_btn.configure(text="已儲存 ✓", fg_color="green")
+            self.app.after(
+                1500, lambda: self.save_config_btn.configure(text=orig_text, fg_color=["#3B8ED0", "#1F6AA5"])
+            )
+
+            # Restart agent if running
+            if self.app.is_ready:
+                self.app.agent = None
+                self.app.mcp = None
+                self.app.is_ready = False
+                self.app.reinit()
 
     def _on_provider_change(self):
         provider = self.provider_var.get()
+        from agent.config import config
 
-        from agent.auth import load_config, save_config
-
-        cfg = load_config()
-        if cfg.get("provider", "openai") != provider:
-            cfg["provider"] = provider
-            save_config(cfg)
-
-            self._hide_auth_url()
+        config.set("provider", provider)
+        self._update_config_ui()
+        self._hide_auth_url()
+        if self.app.is_ready:
             self.app.agent = None
             self.app.mcp = None
             self.app.is_ready = False
-            self._refresh()
             self.app.reinit()
+        self._refresh()
 
     def _refresh(self):
 
@@ -162,10 +230,10 @@ class AccountView(ctk.CTkFrame):
             size=(64, 64),
         )
 
-        from agent.auth import get_user_info, has_valid_token, load_config
+        from agent.auth import get_user_info, has_valid_token
+        from agent.config import config
 
-        cfg = load_config()
-        self.provider = cfg.get("provider", "openai")
+        self.provider = config.get("provider", "openai")
 
         if self.provider in ("ollama", "openrouter"):
             self.status_icon.configure(image=self.logged_in_image, text="")

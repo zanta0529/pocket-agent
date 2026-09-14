@@ -4,8 +4,6 @@ import threading
 
 import customtkinter as ctk
 
-# Chat 頁選單使用的內建預設清單；登入後會由後端即時列表更新。
-MODELS = ["gpt-6-astra", "gpt-reserve", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini"]
 REASONING = [
     ("medium", "Medium（預設，平衡速度與深度）"),
     ("high", "High（更深入，較慢）"),
