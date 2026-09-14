@@ -26,15 +26,26 @@ def clip(value: str, width: int) -> str:
 
 def toolbar(state: CliState, width: int) -> FormattedText:
     width = max(0, width)
-    count = f"待送 {len(state.pending_files)}"
-    tokens_str = f" · {state.session_tokens} tokens" if state.session_tokens > 0 else ""
+
+    if not state.pending_files:
+        count = "待送 0"
+    else:
+        names = [Path(p).name for p in state.pending_files]
+        count = f"待送 {len(names)} ({', '.join(names)})"
+
+    if state.session_tokens > 0:
+        max_tokens = 128000
+        ratio = min(1.0, state.session_tokens / max_tokens)
+        filled = int(ratio * 10)
+        bar = "█" * filled + "░" * (10 - filled)
+        tokens_str = f" · {state.session_tokens} tokens [{bar}]"
+    else:
+        tokens_str = ""
+
     model = f"{state.provider}/{state.model}"
     budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
     line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
-    if state.pending_files:
-        extra = f" · {Path(state.pending_files[0]).name}"
-        if cell_len(plain(line + extra)) <= width:
-            line += extra
+
     for extra in [" · / 指令  @ 檔案", " · Enter 送出  Esc+Enter 換行", f" · {Path.cwd().name}"]:
         if cell_len(plain(line + extra)) <= width:
             line += extra
@@ -229,16 +240,24 @@ class CliRenderer:
             if summary:
                 parts.append((f" {plain(summary)}", ""))
 
-            self.console.print(Text.assemble(*parts))
+            # 使用暫態狀態 (Status) 顯示工具執行，避免洗版
+            self._stop_status()
+            from rich.status import Status
+
+            self._active_status = Status(Text.assemble(*parts), spinner="dots", console=self.console)
+            self._active_status.start()
 
         elif kind == "tool_done":
-            self._ensure_newline()
+            self._stop_status()
+
+            # 恢復思考中狀態
+            from rich.status import Status
+
+            self._active_status = Status("思考中…", spinner="dots", console=self.console)
+            self._active_status.start()
+
             if isinstance(data, dict):
                 name = data.get("name", "")
                 ok = data.get("ok", True)
-                if ok:
-                    # 成功時不印出冗餘的 ✓ name
-                    return
-                icon = "✗"
-                color = "red"
-                self.console.print(Text(f"  {icon} {name}", style=color))
+                if not ok:
+                    self.console.print(Text(f"  ✗ {name}", style="red"))

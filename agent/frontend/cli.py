@@ -299,6 +299,9 @@ class CliFrontend(FrontendStrategy):
 
             # F1：CLI 工具確認機制（三重授權）
             def _cli_confirm(command: str) -> bool:
+                from rich.panel import Panel
+                from rich.text import Text
+
                 from agent.auth import load_config, save_config
 
                 # 1. 檢查全域「永遠信任」
@@ -311,13 +314,19 @@ class CliFrontend(FrontendStrategy):
                     return True
 
                 renderer._ensure_newline()
-                # 簡化警告：不再重複印出完整的 command，因為上方 Action 已經顯示過
-                renderer.message("⚠ 系統要求執行上述指令，是否允許？", "yellow")
 
                 # 暫停 spinner，避免背景更新覆蓋 input 提示字串
                 status = renderer._active_status
                 if status:
                     status.stop()
+
+                panel = Panel(
+                    Text(f"預計執行：\n{command}", style="yellow"),
+                    title="【安全警告】系統要求執行指令",
+                    border_style="bold red",
+                    expand=False,
+                )
+                renderer.console.print(panel)
 
                 try:
                     ans = input("允許？[y: 單次 | a: 本次對話 | A: 永遠 | N: 拒絕] ").strip()
