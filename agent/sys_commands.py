@@ -86,6 +86,16 @@ class ModelCommand(SysCommand):
             return CommandResult("error", f"⚠ 切換模型失敗：{e}")
 
 
+class LearnCommand(SysCommand):
+    @property
+    def name(self) -> str:
+        return "learn"
+
+    def execute(self, args_str: str, agent: Any) -> CommandResult:
+        # CLI / GUI 透過狀態標記 "learn_interactive" 決定進入非同步與對話框流程
+        return CommandResult("learn_interactive", "請等待萃取...")
+
+
 class SysCommandRegistry:
     def __init__(self):
         self._commands: Dict[str, SysCommand] = {}
@@ -113,3 +123,4 @@ sys_registry = SysCommandRegistry()
 sys_registry.register(AddDirCommand())
 sys_registry.register(WorkspaceCommand())
 sys_registry.register(ModelCommand())
+sys_registry.register(LearnCommand())

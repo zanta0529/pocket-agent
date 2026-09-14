@@ -27,6 +27,7 @@ BUILTINS = {
     "skills": "列出目前所有可用的全域與專案技能",
     "workspace": "顯示目前的工作區路徑清單",
     "add-dir": "單次會話內，將外部資料夾加入工作範圍",
+    "learn": "從近期對話萃取為共用技能",
     "logout": "登出",
     "quit": "離開",
 }
@@ -246,9 +247,9 @@ class CliInput:
             color_depth=ColorDepth.DEPTH_1_BIT if "NO_COLOR" in os.environ or not sys.stdout.isatty() else None,
         )
 
-    async def read(self, default: str = "") -> str:
+    async def read(self, message: str = "› ", default: str = "") -> str:
         return await self.session.prompt_async(
-            "› ",
+            message,
             default=default,
             completer=self.completer,
             multiline=True,

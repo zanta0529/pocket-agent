@@ -642,6 +642,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
             all_cmds = list_commands()
             # 加入內建指令
             all_cmds.append({"name": "model", "description": "切換當次服務提供者與模型"})
+            all_cmds.append({"name": "learn", "description": "從近期對話萃取為共用技能"})
             matched_cmds = []
             for cmd in all_cmds:
                 if cmd["name"].lower().startswith(cmd_prefix):
@@ -823,6 +824,81 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
 
         ctk.CTkButton(dialog, text="確認切換", command=on_confirm).grid(row=2, column=0, columnspan=2, pady=30)
 
+    def _poll_learn(self, future):
+        if future.done():
+            try:
+                skill_content = future.result()
+                self._show_learn_dialog(skill_content)
+            except Exception as e:
+                self._add_system(f"⚠ 萃取失敗：{e}")
+        else:
+            self.after(100, lambda: self._poll_learn(future))
+
+    def _show_learn_dialog(self, content: str):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("儲存 Skill")
+        dialog.geometry("600x600")
+        dialog.transient(self.app)
+        dialog.grab_set()
+
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(2, weight=1)
+
+        # Name
+        name_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        name_frame.grid(row=0, column=0, padx=20, pady=(20, 5), sticky="ew")
+        name_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(name_frame, text="名稱 (英數字與折線):", font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=0, padx=(0, 10)
+        )
+        name_var = ctk.StringVar()
+        ctk.CTkEntry(name_frame, textvariable=name_var).grid(row=0, column=1, sticky="ew")
+
+        # Description
+        desc_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        desc_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
+        desc_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(desc_frame, text="簡短描述:", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=(0, 10))
+        desc_var = ctk.StringVar()
+        ctk.CTkEntry(desc_frame, textvariable=desc_var).grid(row=0, column=1, sticky="ew")
+
+        # Content Textbox
+        ctk.CTkLabel(dialog, text="Skill 內容:", font=ctk.CTkFont(weight="bold")).grid(
+            row=2, column=0, padx=20, pady=(10, 0), sticky="w"
+        )
+        content_box = ctk.CTkTextbox(dialog, wrap="word")
+        content_box.grid(row=3, column=0, padx=20, pady=(5, 10), sticky="nsew")
+        content_box.insert("1.0", content)
+
+        # Scope & Buttons
+        bottom_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        bottom_frame.grid(row=4, column=0, padx=20, pady=(10, 20), sticky="ew")
+
+        ctk.CTkLabel(bottom_frame, text="儲存範圍:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0, 10))
+        scope_var = ctk.StringVar(value="workspace")
+        ctk.CTkOptionMenu(bottom_frame, variable=scope_var, values=["workspace", "global"]).pack(side="left")
+
+        def on_confirm():
+            name = name_var.get().strip()
+            desc = desc_var.get().strip()
+            if not name:
+                import tkinter.messagebox as mb
+
+                mb.showerror("錯誤", "請輸入 Skill 名稱", parent=dialog)
+                return
+
+            from agent.skills import save_skill
+
+            final_content = content_box.get("1.0", "end-1c")
+            save_path = save_skill(name, desc, final_content, scope_var.get())
+            self._add_system(f"✓ 已儲存 Skill 至: {save_path}")
+            dialog.destroy()
+
+        ctk.CTkButton(bottom_frame, text="儲存", command=on_confirm).pack(side="right", padx=(10, 0))
+        ctk.CTkButton(bottom_frame, text="取消", fg_color="gray", hover_color="darkgray", command=dialog.destroy).pack(
+            side="right"
+        )
+
     def _send(self):
         text = self.input.get(
             "1.0",
@@ -840,7 +916,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
         display_text = text
         if text.startswith("/"):
             parts = text.split()
-            if parts[0] in ("/model", "/add-dir", "/workspace"):
+            if parts[0] in ("/model", "/add-dir", "/workspace", "/learn"):
                 from agent.sys_commands import sys_registry
 
                 result = sys_registry.execute(text, self.app.agent)
@@ -862,6 +938,11 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
                 elif result.status == "interactive_menu":
                     if parts[0] == "/model":
                         self._show_model_selection_dialog()
+                elif result.status == "learn_interactive":
+                    self._add_system("正在萃取對話知識，請稍候...")
+                    # 啟動非同步萃取任務
+                    future = self.app.run_async(self.app.agent.extract_skill())
+                    self.after(100, lambda: self._poll_learn(future))
 
                 self.input.delete("1.0", "end")
                 return

@@ -142,6 +142,31 @@ def import_skill_zip(zip_path: str | Path, overwrite: bool = False) -> list[str]
             return imported
 
 
+# ── 寫入與儲存 ────────────────────────────────────
+
+
+def save_skill(name: str, description: str, body: str, scope: str = "global") -> Path:
+    """寫入 Skill 至指定範圍，回傳儲存的路徑。
+    scope: "global" (存入 ~/.pocket-agent/skills) 或 "workspace" (存入 cwd/.agents/skills)
+    """
+    if scope == "workspace":
+        base_dir = Path.cwd() / ".agents" / "skills"
+    else:
+        base_dir = USER_SKILLS_DIR
+
+    skill_dir = base_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+
+    skill_path = skill_dir / "SKILL.md"
+
+    # 建立包含 frontmatter 的完整內容
+    content = f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
+    skill_path.write_text(content, encoding="utf-8")
+
+    log.info("skill 已儲存：%s ← %s", name, skill_path)
+    return skill_path
+
+
 # ── 系統提示注入 ──────────────────────────────────
 
 

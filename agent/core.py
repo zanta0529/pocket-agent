@@ -237,6 +237,39 @@ class Agent:
         if str(target_dir) not in self.workspace_dirs:
             self.workspace_dirs.append(str(target_dir))
 
+    async def extract_skill(self) -> str:
+        """非同步呼叫 LLM 總結對話為 Skill Markdown。"""
+        if len(self.history) < 2:
+            return "對話歷史不足，無法萃取 Skill。"
+
+        history_text = "\n".join(f"[{m['role']}] {str(m.get('content', ''))[:500]}" for m in self.history[-10:])
+        summary_prompt = (
+            "請將以下最近的對話內容，萃取出可重用的行為或知識，撰寫成符合 Skill 格式的 Markdown 內容。\n"
+            "不用加上額外的開場白，直接輸出內容。不要包含 ```markdown 等標籤。\n\n"
+            f"{history_text}"
+        )
+
+        extractor = Agent(
+            client=self.client,
+            mcp=self.mcp,
+            model=self.model,
+            system_prompt="你是一個擅長知識萃取與歸納的軟體架構師，專門撰寫精準、具體的 Markdown 技能教學指南。",
+            is_subagent=True,
+            reasoning_effort="none",
+        )
+
+        _, summary, _ = await extractor.chat(summary_prompt)
+
+        summary = summary.strip()
+        if summary.startswith("```markdown"):
+            summary = summary[11:]
+        elif summary.startswith("```"):
+            summary = summary[3:]
+        if summary.endswith("```"):
+            summary = summary[:-3]
+
+        return summary.strip()
+
     # ── Core loop ─────────────────────────────────
 
     def _build_tools(self) -> list:
