@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
@@ -232,7 +231,10 @@ class CliFrontend(FrontendStrategy):
 
         # CLI 模式：抑制 StreamHandler INFO，避免 log 訊息干擾 terminal 輸出
         # 若開發者明確設定 DEBUG 等級則尊重，不抑制
-        if os.getenv("MY_AGENT_LOG_LEVEL", "INFO").upper() == "INFO":
+        from agent.config import config
+
+        _lvl = config.get("log_level", "INFO").upper()
+        if _lvl == "INFO":
             for h in logging.getLogger("pocket-agent").handlers:
                 if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
                     h.setLevel(logging.WARNING)

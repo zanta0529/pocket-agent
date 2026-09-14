@@ -152,13 +152,11 @@ class SettingsView(ctk.CTkFrame):
         self.font_size_entry.delete(0, "end")
         self.font_size_entry.insert(0, str(cfg.get("chat_font_size", 13)))
 
-        import os
-
+        from agent.config import config
         from agent.core import DEFAULT_MAX_TOOL_ROUNDS
 
-        env_default = int(os.getenv("MAX_TOOL_ROUNDS", DEFAULT_MAX_TOOL_ROUNDS))
         self.tool_rounds_entry.delete(0, "end")
-        self.tool_rounds_entry.insert(0, str(cfg.get("max_tool_rounds", env_default)))
+        self.tool_rounds_entry.insert(0, str(config.get("max_tool_rounds", DEFAULT_MAX_TOOL_ROUNDS)))
 
         self.cli_auto_var.set(bool(cfg.get("cli_auto_approve", False)))
 

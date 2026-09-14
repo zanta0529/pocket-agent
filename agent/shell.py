@@ -124,9 +124,9 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
 
     log.debug("CLI run: %s", command)
 
-    import os
+    from agent.config import config
 
-    sandbox_mode = os.getenv("USE_SANDBOX", "none").lower()
+    sandbox_mode = config.get("use_sandbox", "none").lower()
 
     cmd_args = command
     is_shell = True
@@ -136,7 +136,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         is_shell = False
         log.debug("Using WSL Sandbox")
     elif sandbox_mode == "docker":
-        container_name = os.getenv("SANDBOX_CONTAINER", "pocket_sandbox")
+        container_name = config.get("sandbox_container", "pocket_sandbox")
         cmd_args = ["docker", "exec", container_name, "sh", "-c", command]
         is_shell = False
         log.debug("Using Docker Sandbox")

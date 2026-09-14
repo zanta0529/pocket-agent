@@ -9,7 +9,6 @@ item 就帶有 base64 PNG。計費走 ChatGPT Plus/Pro 訂閱配額，不吃 API
 
 import base64
 import mimetypes
-import os
 from pathlib import Path
 
 from .auth import get_model, get_openai_client
@@ -93,7 +92,9 @@ async def generate_image(
         raise ValueError(f"quality 必須是 {sorted(VALID_QUALITIES)}，收到：{quality}")
 
     client = get_openai_client(provider="openai")
-    wrapper_model = os.getenv(_WRAPPER_MODEL_ENV) or get_model()
+    from agent.config import config
+
+    wrapper_model = config.get("openai_image_wrapper_model") or get_model()
 
     content: list[dict] = [{"type": "input_text", "text": prompt}]
     for img in input_images or []:

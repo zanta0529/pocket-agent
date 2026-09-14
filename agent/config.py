@@ -32,6 +32,15 @@ class EnvConfigProvider(ConfigProvider):
         "ollama_base_url": "OLLAMA_BASE_URL",
         "openrouter_api_key": "OPENROUTER_API_KEY",
         "openrouter_base_url": "OPENROUTER_BASE_URL",
+        "max_tool_rounds": "MAX_TOOL_ROUNDS",
+        "log_level": "POCKET_AGENT_LOG_LEVEL",
+        "openai_client_id": "OPENAI_CLIENT_ID",
+        "openai_originator": "OPENAI_ORIGINATOR",
+        "openai_add_organizations": "OPENAI_ADD_ORGANIZATIONS",
+        "openai_codex_simplified_flow": "OPENAI_CODEX_SIMPLIFIED_FLOW",
+        "openai_image_wrapper_model": "OPENAI_IMAGE_WRAPPER_MODEL",
+        "use_sandbox": "USE_SANDBOX",
+        "sandbox_container": "SANDBOX_CONTAINER",
     }
 
     def get(self, key: str) -> Optional[Any]:

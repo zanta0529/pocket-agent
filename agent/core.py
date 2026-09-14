@@ -3,11 +3,12 @@
 import asyncio
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
 from openai import NOT_GIVEN, AsyncOpenAI
+
+from agent.config import config
 
 from .paths import is_packaged, user_dir
 
@@ -26,9 +27,9 @@ _handlers: list[logging.Handler] = [
 if sys.stderr is not None:
     _handlers.append(logging.StreamHandler())
 
-# 預設 INFO。要深入追查時設環境變數 MY_AGENT_LOG_LEVEL=DEBUG，
-# 不要把 DEBUG 當成預設發佈出去（理由見下方第三方 logger 的說明）。
-_LOG_LEVEL = os.getenv("MY_AGENT_LOG_LEVEL", "INFO").upper()
+# 預設 INFO。要深入追查時可設定 POCKET_AGENT_LOG_LEVEL=DEBUG，
+# 這樣 HTTP payload、工具呼叫細節都會印出來。
+_LOG_LEVEL = config.get("log_level", "INFO").upper()
 
 logging.basicConfig(
     level=getattr(logging, _LOG_LEVEL, logging.INFO),
@@ -79,13 +80,18 @@ class Agent:
         max_tool_rounds: int | None = None,  # 未指定時讀 MAX_TOOL_ROUNDS 環境變數
         is_subagent: bool = False,  # 子代理不觸發 hooks、不能再開子代理
     ):
+        from agent.config import config
+
         self.client = client
         self.mcp = mcp
         self._is_subagent = is_subagent
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-6-astra")
+        self.model = model or config.get("model", "gpt-6-astra")
         self.system_prompt = system_prompt
         self.reasoning_effort = reasoning_effort
-        self.max_tool_rounds = max_tool_rounds or int(os.getenv("MAX_TOOL_ROUNDS", DEFAULT_MAX_TOOL_ROUNDS))
+
+        rounds_val = max_tool_rounds or config.get("max_tool_rounds")
+        self.max_tool_rounds = int(rounds_val) if rounds_val is not None else DEFAULT_MAX_TOOL_ROUNDS
+
         self.files = FileUploader(client)
         self.history: list[dict] = []
         self.cancel_requested = False  # 使用者按「停止」時設為 True（跨執行緒安全）

@@ -7,7 +7,6 @@ import base64
 import hashlib
 import json
 import logging
-import os
 import secrets
 import sys
 import threading
@@ -33,6 +32,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
+from agent.config import config
+
 # ── OAuth 設定 ────────────────────────────────────
 DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
@@ -43,9 +44,14 @@ OPENAI_SCOPE = "openid profile email offline_access"
 
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
-ORIGINATOR = os.getenv("OPENAI_ORIGINATOR", "pocket-agent")
-ADD_ORGANIZATIONS = os.getenv("OPENAI_ADD_ORGANIZATIONS", "1").strip().lower() not in ("0", "false", "no", "off")
-USE_SIMPLIFIED_FLOW = os.getenv("OPENAI_CODEX_SIMPLIFIED_FLOW", "1").strip().lower() not in ("0", "false", "no", "off")
+ORIGINATOR = config.get("openai_originator") or "pocket-agent"
+ADD_ORGANIZATIONS = str(config.get("openai_add_organizations", "1")).strip().lower() not in ("0", "false", "no", "off")
+USE_SIMPLIFIED_FLOW = str(config.get("openai_codex_simplified_flow", "1")).strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
 
 log = logging.getLogger("pocket-agent")
 
@@ -263,7 +269,7 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
 
 
 def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=None) -> str:
-    client_id = os.getenv("OPENAI_CLIENT_ID") or DEFAULT_CLIENT_ID
+    client_id = config.get("openai_client_id") or DEFAULT_CLIENT_ID
     client_secret = ""
 
     token = _load_token(provider)
@@ -382,7 +388,7 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
     # OpenAI 原有邏輯
     token = _load_token("openai")
     if token and _is_expired(token):
-        client_id = os.getenv("OPENAI_CLIENT_ID") or DEFAULT_CLIENT_ID
+        client_id = config.get("openai_client_id") or DEFAULT_CLIENT_ID
         token = _try_refresh("openai", token, client_id)
     if not token:
         return []
