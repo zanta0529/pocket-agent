@@ -35,5 +35,5 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo Done: dist\PocketAgent.zip
-echo Put it on a shared drive; colleagues unzip and double-click PocketAgent.exe
+echo Put it on a shared drive; colleagues unzip and run PocketAgent-cli.exe
 endlocal

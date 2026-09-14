@@ -6,7 +6,7 @@
 
 ## 📖 專案簡介 (Introduction)
 
-**PocketAgent** 是一款具備企業級擴充性與安全性的本機端 Python AI 代理工具，提供圖形化介面 (GUI) 與命令列 (CLI) 雙模式。
+**PocketAgent** 是一款具備企業級擴充性與安全性的本機端 Python AI 代理工具，提供極簡、高效且專注於開發者體驗的命令列 (CLI) 介面。
 
 本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案內建強大的本地端大語言模型 (Ollama) 支援，滿足對資料隱私具高度要求的離線開發場景。
 
@@ -17,13 +17,8 @@
 ### 1. 雙軌大模型轉接架構 (LLM Engine Adapter Architecture)
 
 - **OpenAI Responses API**：原生支援 ChatGPT Plus/Pro 最新協定，完美整合工具呼叫 (Function Calling) 與反思推理 (Reasoning) 能力。
-- **Ollama Chat Completions**：底層採用 Adapter Pattern (轉接器模式) 平滑相容標準 API，具備內建的 `<think>` 標籤狀態機剖析器。即使切換至本地端開源推理模型 (如 DeepSeek-R1)，亦能將思考過程無縫對接至 GUI 的獨立摺疊面板中，並精準擷取 Token 用量。
-- **動態切換**：可直接透過 GUI 的「帳號設定」介面或是 CLI 的 `/model` 指令，於運行中即時切換服務提供者與大模型。
-
-### 2. 優化的使用者體驗 (Optimized UX)
-
-- **獨立的思考過程顯示**：AI 的推理過程 (Thought) 獨立於對話內容顯示於 GUI 摺疊區塊，確保主對話窗乾淨易讀。
-- **一鍵複製與匯出**：對話泡泡底部內建獨立的訊息與程式碼複製功能，一鍵帶走需要的產出。
+- **Ollama Chat Completions**：底層採用 Adapter Pattern (轉接器模式) 平滑相容標準 API，具備內建的 `<think>` 標籤狀態機剖析器。即使切換至本地端開源推理模型 (如 DeepSeek-R1)，亦能將思考過程無縫對接，並精準擷取 Token 用量。
+- **動態切換**：可直接透過 CLI 的 `/model` 指令，於運行中即時互動切換服務提供者與大模型。
 
 ### 3. 多重代理與擴充性 (Extensibility & Multi-Agent)
 
@@ -57,11 +52,13 @@
 當您使用經過打包的發布版本（例如 `PocketAgent-portable.zip` 內的執行檔）時，您可以透過**「分層配置 (Layered Configuration)」**來完美隔離全域與專案的 AI 規範：
 
 #### A. 全域規範 (Global Instructions)
+
 若您有跨專案通用的開發習慣（例如：一律使用繁體中文、要求撰寫 Docstring），請建立：
 📄 `~/.pocket-agent/instructions.md` (Windows 通常位於 `C:\Users\使用者名稱\.pocket-agent\instructions.md`)
 PocketAgent 會在每次啟動時自動載入此檔案，作為底層的通用規則。
 
 #### B. 專案特有規範 (Project-Local Configurations)
+
 請在**您當下欲開發的目標專案工作目錄** 中，依循以下結構配置專案專屬的限制與技能：
 
 1. **專案入口規範 (`AGENTS.md`)**
@@ -105,8 +102,6 @@ chmod +x agent.sh
 agent.bat
 ```
 
-_(💡 提示：若希望隱藏後台的終端機視窗，可將 `agent.bat` 內的 `python.exe` 替換為 `pythonw.exe`)_
-
 ### 開發者手動啟動
 
 ```bash
@@ -116,11 +111,13 @@ pip install -r requirements.txt
 ```
 
 若您首次使用，建議先執行設定精靈完成 API 參數與登入配置（將儲存於 `~/.pocket-agent/config.json`）：
+
 ```bash
 python main.py setup
 ```
 
-完成設定後，即可啟動 GUI 介面：
+完成設定後，即可啟動代理：
+
 ```bash
 python main.py
 ```
@@ -129,26 +126,24 @@ python main.py
 
 ## 💻 快速上手與操作 (Quick Start & Usage)
 
-啟動後除了操作 GUI 面板，您亦可在文字輸入框直接使用下列核心指令 (Slash Commands)：
+啟動後，您可以在命令列輸入框直接使用下列核心指令 (Slash Commands)：
 
 - `/file <路徑>`：附加本機檔案（支援程式碼、PDF 等）作為上下文。
-- `/image <描述>`：呼叫模型進行圖像生成 (可搭配 `-i` 參數引入參考圖，進行圖生圖)。
-- `/model <provider> <model_name>`：即時切換後端 API (支援 `openai` 或 `ollama`)。
+- `/image <描述>`：呼叫模型進行圖像生成 (可附加參考圖作為 Context 進行圖生圖)。
+- `/model <provider> <model_name>`：即時切換後端 API (支援 `openai`、`openrouter` 或 `ollama`)。
 - `/session [list | load <id> | save | delete <id>]`：管理歷史對話 (Session)。無參數時啟動互動式光棒選單，支援儲存與讀取持久化紀錄。
 - `/compact`：讓 AI 自動摘要並壓縮中間的對話歷史，快速回收 Context 上限空間。
 - `/clear`：清除當前記憶體的對話歷史。
 - `/logout`：清除本機端的 OAuth Token 憑證。
 - `/quit`：關閉應用程式。
 
-### 終端機模式 (CLI Mode)
-
-若您習慣於無頭 (Headless) 或純文字環境中工作，請加上 `--cli` 參數啟動。若想自動載入前一次未完成的對話，可附加 `--resume`：
+若想在啟動時自動載入前一次未完成的對話，可附加 `--resume` 參數：
 
 ```bash
-python main.py --cli --resume
+python main.py --resume
 ```
 
-CLI 採可捲動對話版面；首屏只列目前專案、模型與 MCP 工具數，詳細清單按需查看。底端狀態列（Toolbar）會即時顯示當次對話累計的 Token 用量。
+命令列介面採可捲動對話版面；首屏只列目前專案、模型與 MCP 工具數，詳細清單按需查看。底端狀態列（Toolbar）會即時顯示當次對話累計的 Token 用量。
 
 | 操作                       | 說明                                           |
 | -------------------------- | ---------------------------------------------- |
@@ -170,8 +165,8 @@ CLI 採可捲動對話版面；首屏只列目前專案、模型與 MCP 工具�
 含空白的 @ 路徑必須加雙引號，例如 `@"D:\my project\說明.txt" 請整理`。
 檔案正規化去重，僅在送出時讀取內容；工具列的「待送」不代表模型已讀取。
 `/clear` 只清對話並保留附件；`/add-dir` 尚未接入，不會讀取目錄或擴大工作權限。
-CLI `/image <描述>` 使用待送附件作參考圖，不使用上方 GUI 語法的 `-i` 選項。
-模型切換只對當次會話有效，不寫設定；僅 openai 顯示生圖指令。
+`/image <描述>` 使用待送佇列中的附加檔案作為參考圖進行生圖。
+模型切換只對當次會話有效，不寫設定；僅 openai 支援影像生成指令。
 
 **失敗與取消限制：** 聊天／生圖拋出例外時保留附件，原輸入預填供修改，不自動重送。
 本輪可能已寫入歷史或執行部分工具，重送前請檢查結果。核心若將錯誤轉為正常回覆，

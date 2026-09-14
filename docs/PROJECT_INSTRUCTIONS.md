@@ -6,9 +6,9 @@
 
 ## 1. 專案定位與技術棧
 
-- PocketAgent 是本機 Python AI 代理應用，提供預設 GUI 與 CLI，README 宣告支援 Windows、macOS、Linux。
+- PocketAgent 是本機 Python AI 代理應用，提供 CLI 模式，README 宣告支援 Windows、macOS、Linux。
 - README 最低版本為 Python 3.11；一般 CI 與 Windows 發布流程也使用 Python 3.11。
-- 入口為 `main.py`，使用 Click；GUI 使用 CustomTkinter／Tkinter，CLI 使用 Rich／prompt_toolkit。
+- 入口為 `main.py`，使用 Click；CLI 使用 Rich／prompt_toolkit。
 - 引擎包含 OpenAI Responses API 與 Ollama Chat Completions；非同步流程使用 asyncio。
 - 認證包含 OAuth PKCE；相關依賴包含 OpenAI SDK、httpx、FastAPI、uvicorn、keyring。
 - MCP 提供外部工具整合；`browser_mcp.py` 為瀏覽器整合入口，依賴中包含 Playwright。
@@ -22,8 +22,7 @@
 | `main.py`                                                  | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                             |
 | `agent/core.py`                                            | Agent 核心協調；修改前追蹤引擎、工具與前端的呼叫關係。                                                   |
 | `agent/engines/`                                           | BaseEngine、事件資料型別、factory 與 provider 實作。                                                     |
-| `agent/frontend/`                                          | GUI／CLI 策略；CLI 拆分為 input、render、state、commands 等模組。                                        |
-| `gui/`                                                     | 圖形介面、元件與 assets；不得將 GUI 依賴無條件引入無頭 CLI 路徑。                                        |
+| `agent/frontend/`                                          | CLI 策略；拆分為 input、render、state、commands 等模組。                                                 |
 | `agent/auth.py`                                            | 認證與 provider 設定；避免暴露憑證或觸發真實登入。                                                       |
 | `agent/mcp_manager.py`                                     | MCP 連線與生命週期。                                                                                     |
 | `agent/shell.py`                                           | 命令執行、確認、逾時與編碼處理；屬安全敏感區域。                                                         |
@@ -39,7 +38,7 @@
 
 ### 2.1 架構設計原則：Adapter／Strategy／Factory
 
-本專案同時支援 Ollama／Cloud AI 與 CLI／GUI，這是兩個應獨立變動的維度。設計目標是讓模型供應商與操作介面可替換，而不是為每一種組合各自維護一套 Agent 流程。
+本專案支援 Ollama／Cloud AI，設計目標是讓模型供應商可替換，而不是為每一種組合各自維護一套 Agent 流程。
 
 **後續開發必須遵循「依賴抽象、封裝差異、共用流程集中維護」的設計風格。**
 
@@ -48,25 +47,25 @@
 | 模式／邊界        | 現有對應                                                  | 修改原則                                                                             |
 | ----------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | Adapter（轉接器） | `BaseEngine`、`OpenAIResponsesEngine`、`OllamaChatEngine` | 將供應商的請求格式、SDK 呼叫與串流回應轉換為統一的 `stream_chat` 與 `Event*` 契約。  |
-| Strategy（策略）  | `FrontendStrategy`、`CliFrontend`、`GuiFrontend`          | 封裝不同前端的啟動與互動方式；介面差異留在前端，共同業務流程交由核心處理。           |
+| Strategy（策略）  | `FrontendStrategy`、`CliFrontend`                         | 封裝前端的啟動與互動方式；共同業務流程交由核心處理。                                 |
 | Factory（工廠）   | `EngineFactory.create(provider, client, model)`           | 集中選擇及建立引擎，避免各呼叫端自行判斷供應商並建構具體實作。                       |
-| 共用流程協調      | `agent/core.py` 與既有共用模組                            | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依前端或供應商複製流程。 |
+| 共用流程協調      | `agent/core.py` 與既有共用模組                            | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依供應商複製流程。       |
 
 以上描述為現有抽象的設計角色與後續修改準則，不代表所有歷史程式碼均已完全解耦。修改前仍須確認實際呼叫路徑與契約，不得只依類別名稱推定行為。
 
 #### 核心解耦與狀態同步 (Decoupling & State Synchronization)
 
-- **依賴單向性 (Dependency Rule)**：前端依賴核心，核心依賴 `BaseEngine` 契約呼叫模型。核心與引擎均不得直接操作 UI (Tkinter/Rich)；核心應透過事件、回傳結果或抽象介面通知前端。
-- **邏輯集中不重複 (DRY)**：不隨介面變動的業務規則（如跨介面指令 `/add-dir`、檔案路徑檢查）**必須**統一實作於共用層（如核心或合適的共用服務模組）。嚴禁在 CLI (`cli_commands.py`) 與 GUI (`chat.py`) 之間複製貼上判斷邏輯，前端僅負責接收狀態並渲染。
+- **依賴單向性 (Dependency Rule)**：前端依賴核心，核心依賴 `BaseEngine` 契約呼叫模型。核心與引擎均不得直接操作 UI (Rich)；核心應透過事件、回傳結果或抽象介面通知前端。
+- **邏輯集中不重複 (DRY)**：業務規則（如指令 `/add-dir`、檔案路徑檢查）**必須**統一實作於共用層（如核心或合適的共用服務模組），前端僅負責接收狀態並渲染。
 - **動態狀態注入 (Dynamic Context)**：當指令變更了 Agent 的存取權限或全域狀態時，應同步注入模型完成任務所需、可安全揭露的狀態摘要（如透過 `Agent._instructions()`），以維持認知一致；實際授權仍由工具與沙箱強制執行，不以 System Prompt 取代權限檢查。
 - **契約完整性 (Contract Integrity)**：替換模型實作時，不可遺失工具參數分片、完成事件、`Event*` 串流事件、取消機制、錯誤傳遞與資源清理。不支援的功能應明確回報，不得偽造成功。
-- **邊界判斷集中化**：避免在系統各處散落 `if provider...` 或 `if gui...` 的硬編碼判斷，應集中於 Factory 或透過 Strategy 介面封裝差異。優先沿用既有擴充點，不為單一需求建立通用框架。
+- **邊界判斷集中化**：避免在系統各處散落 `if provider...` 等硬編碼判斷，應集中於 Factory 封裝差異。優先沿用既有擴充點，不為單一需求建立通用框架。
 
 #### AI 代理的擴充查核點 (Extension Checklist)
 
-1. **辨識修改邊界**：修改前先確認該功能屬於「共用流程」、「供應商 Adapter 差異」還是「前端 Strategy 差異」。
-2. **實作與整合**：新增供應商請實作 Adapter 並接入 Factory；新增跨介面功能請先在核心寫好規則，再到兩端接上 UI。
-3. **契約相容測試**：利用 Mock 或假資料測試 CLI/GUI × 不同 Provider 的組合，確認取消、錯誤與資源清理行為一致。
+1. **辨識修改邊界**：修改前先確認該功能屬於「共用流程」還是「供應商 Adapter 差異」。
+2. **實作與整合**：新增供應商請實作 Adapter 並接入 Factory；跨模組功能請先在核心寫好規則，再到前端接上 UI。
+3. **契約相容測試**：利用 Mock 或假資料測試不同 Provider 的組合，確認取消、錯誤與資源清理行為一致。
 4. **交付設計說明**：回報時須說明重用的抽象介面、封裝位置，以及對契約相容性的影響。
 
 測試執行仍須遵守本指南第 5、7 節，不因架構調整而自動執行測試、Lint 或建置。
@@ -139,7 +138,7 @@
 
 一般 CI 在 Ubuntu／Python 3.11 執行 Ruff 格式檢查、Lint 與 pytest。
 既有測試涵蓋 auth／Ollama、CLI commands／flow／input／render／state、MCP manager 與 shell sandbox；
-這不代表 GUI、打包或所有 provider 均已有完整覆蓋。
+這不代表打包或所有 provider 均已有完整覆蓋。
 
 新增測試沿用 pytest、unittest.mock／AsyncMock、tmp_path 等既有模式；隔離網路、OAuth、
 使用者 home、session、MCP 與子行程，不使用真實憑證或改動真實使用者資料。
@@ -160,7 +159,7 @@ venv\Scripts\python.exe -m pytest tests/test_cli_flow.py
 ```
 
 回報時分開列出：文件／差異檢閱、實際執行的命令與結果、未執行項目及原因。
-本機僅提供命令不等於測試通過；GUI 與打包相關變更仍需使用者額外人工驗證。
+本機僅提供命令不等於測試通過；打包相關變更仍需使用者額外人工驗證。
 
 ## 8. 專案入口與設定基準
 
