@@ -320,7 +320,13 @@ class CommandHandler:
                 self.renderer.message("正在萃取對話知識，請稍候...", "dim")
                 skill_content = await self.agent.extract_skill()
 
-                # 在 CLI 直接預覽結果
+                from agent.registry import parse_frontmatter
+
+                meta, body = parse_frontmatter(skill_content)
+                suggested_name = meta.get("name", "")
+                suggested_desc = meta.get("description", "")
+
+                # 在 CLI 直接預覽結果 (去除 frontmatter 供存檔使用)
                 from rich.markdown import Markdown
 
                 from agent.skills import save_skill
@@ -328,17 +334,17 @@ class CommandHandler:
                 self.renderer.console.print(Markdown(skill_content))
 
                 skill_name = await self.reader.read(
-                    "請輸入要儲存的 Skill 名稱 (英數字中折線，例如 my-skill，留空取消): "
+                    "請輸入要儲存的 Skill 名稱 (英數字中折線，例如 my-skill，留空取消): ", default=suggested_name
                 )
                 if not skill_name:
                     self.renderer.message("已取消儲存。")
                     return CommandResult()
 
-                skill_desc = await self.reader.read("請輸入簡短的 Skill 描述: ")
+                skill_desc = await self.reader.read("請輸入簡短的 Skill 描述: ", default=suggested_desc)
 
                 scope = await self.reader.choose("請選擇儲存範圍", ["workspace", "global"])
                 if scope:
-                    save_path = save_skill(skill_name.strip(), skill_desc.strip(), skill_content, scope)
+                    save_path = save_skill(skill_name.strip(), skill_desc.strip(), body.strip(), scope)
                     self.renderer.message(f"✓ 已儲存 Skill 至: {save_path}", "green")
                 else:
                     self.renderer.message("已取消儲存。")
