@@ -1,7 +1,5 @@
 """設定精靈 — python main.py setup"""
 
-import os
-
 import yaml
 from rich.console import Console
 from rich.panel import Panel
@@ -9,22 +7,10 @@ from rich.prompt import Confirm, Prompt
 from rich.rule import Rule
 from rich.text import Text
 
-from .auth import get_access_token, load_config, logout, save_config
+from .auth import get_access_token, logout
 from .paths import mcp_config_path
 
 console = Console()
-
-MODELS = {
-    "openai": [
-        ("gpt-6-astra", "最新旗艦"),
-        ("gpt-reserve", "高可用備用模型"),
-        ("gpt-5.6-sol", "強力推理"),
-        ("gpt-5.6-terra", "一般平衡"),
-        ("gpt-5.6-luna", "快速回應"),
-        ("gpt-5.5", "舊旗艦"),
-        ("gpt-5.4-mini", "輕量快速"),
-    ]
-}
 
 
 def run_setup() -> None:
@@ -40,8 +26,7 @@ def run_setup() -> None:
 
     try:
         provider = _step_provider()
-        if provider != "ollama":
-            _step_login(provider)
+        _step_login(provider)
         _step_model(provider)
         _step_mcp()
     except KeyboardInterrupt:
@@ -55,12 +40,14 @@ def run_setup() -> None:
 
 
 def _step_provider() -> str:
-    console.print(Rule("① 選擇服務提供者"))
-    console.print()
-    cfg = load_config()
-    current_provider = cfg.get("provider", "openai")
+    from agent.config import config
 
-    providers = ["openai", "ollama"]
+    console.print(Rule("① 選擇服務供應商 (Provider)"))
+    console.print()
+
+    current_provider = config.get("provider", "openai")
+
+    providers = ["openai", "ollama", "openrouter"]
     for i, p in enumerate(providers, 1):
         tag = " [green]← 目前[/green]" if p == current_provider else ""
         console.print(f"  [cyan]{i}[/cyan]. [bold]{p.upper()}[/bold]{tag}")
@@ -72,45 +59,63 @@ def _step_provider() -> str:
     )
     selected = providers[int(choice) - 1]
 
-    cfg["provider"] = selected
-    save_config(cfg)
+    config.set("provider", selected)
     console.print(f"[green]✓ 已設定為 {selected.upper()}[/green]\n")
     return selected
 
 
 def _step_login(provider: str) -> None:
-    console.print(Rule(f"② 登入 {provider.upper()}"))
-    console.print()
+    from agent.config import config
 
     if provider == "openai":
-        client_id = os.getenv("OPENAI_CLIENT_ID")
-        if not client_id:
-            # We use openclaw by default, so this might not be strictly needed, but let's keep the original logic
-            from .auth import DEFAULT_CLIENT_ID
+        console.print(Rule("② 登入 OPENAI"))
+        console.print()
+        from .auth import _is_expired, _load_token
 
-            client_id = DEFAULT_CLIENT_ID
+        token = _load_token(provider)
+        if token and not _is_expired(token):
+            console.print("[green]✓ 已登入 OPENAI（token 有效）[/green]")
+            if not Confirm.ask("要重新登入嗎？", default=False):
+                console.print()
+                return
+            logout(provider)
+        console.print("即將開啟瀏覽器，請用你的 [bold]OPENAI 帳號[/bold] 登入並授權…\n")
+        input("按 Enter 繼續…")
+        get_access_token(provider=provider)
+        console.print()
+    elif provider == "openrouter":
+        console.print(Rule("② 設定 OpenRouter"))
+        console.print()
+        current_key = config.get("openrouter_api_key", "")
+        current_url = config.get("openrouter_base_url", "https://openrouter.ai/api/v1")
 
-    from .auth import _is_expired, _load_token
+        console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
+        new_url = Prompt.ask("請輸入 Base URL", default=current_url)
+        config.set("openrouter_base_url", new_url)
 
-    token = _load_token(provider)
-    if token and not _is_expired(token):
-        console.print(f"[green]✓ 已登入 {provider.upper()}（token 有效）[/green]")
-        if not Confirm.ask("要重新登入嗎？", default=False):
-            console.print()
-            return
-        logout(provider)
-
-    console.print(f"即將開啟瀏覽器，請用你的 [bold]{provider.upper()} 帳號[/bold] 登入並授權…\n")
-    input("按 Enter 繼續…")
-    get_access_token(provider=provider)  # 觸發瀏覽器 OAuth
-    console.print()
+        key_hint = "*" * 10 + current_key[-4:] if current_key and len(current_key) > 4 else "未設定"
+        console.print(f"[dim]目前 API Key: {key_hint}[/dim]")
+        new_key = Prompt.ask("請輸入 API Key (直接 Enter 保持原狀)", default="")
+        if new_key.strip():
+            config.set("openrouter_api_key", new_key.strip())
+        console.print("[green]✓ OpenRouter 設定已更新[/green]\n")
+    elif provider == "ollama":
+        console.print(Rule("② 設定 Ollama"))
+        console.print()
+        current_url = config.get("ollama_base_url", "http://localhost:11434")
+        console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
+        new_url = Prompt.ask("請輸入 Ollama 連線位址", default=current_url)
+        config.set("ollama_base_url", new_url)
+        console.print("[green]✓ Ollama 設定已更新[/green]\n")
 
 
 def _step_model(provider: str) -> None:
+    from agent.config import config
+
     console.print(Rule("③ 預設模型"))
     console.print()
 
-    current = load_config().get("model", "gpt-4o")
+    current = config.get("model", "gpt-4o")
     console.print(f"[dim]目前：{current}[/dim]\n")
 
     # 嘗試動態取得遠端/本地可用模型
@@ -125,7 +130,7 @@ def _step_model(provider: str) -> None:
     if fetched:
         provider_models = [(m, "從遠端取得") for m in fetched]
     else:
-        provider_models = MODELS.get(provider, [])
+        provider_models = []
 
     if not provider_models:
         console.print("[yellow]無法取得推薦模型，請手動輸入。[/yellow]")
@@ -138,13 +143,13 @@ def _step_model(provider: str) -> None:
         console.print()
 
         choice = Prompt.ask("選擇", choices=[str(i) for i in range(1, len(provider_models) + 2)], default="1")
-        idx = int(choice) - 1
-        model = provider_models[idx][0] if idx < len(provider_models) else Prompt.ask("模型名稱").strip()
+        if int(choice) == len(provider_models) + 1:
+            model = Prompt.ask("請輸入模型名稱").strip()
+        else:
+            model = provider_models[int(choice) - 1][0]
 
-    cfg = load_config()
-    cfg["model"] = model
-    save_config(cfg)
-    console.print(f"[green]✓ 已設定為 {model}[/green]\n")
+    config.set("model", model)
+    console.print(f"[green]✓ 已設定預設模型為 {model}[/green]\n")
 
 
 def _step_mcp() -> None:

@@ -236,7 +236,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
 
         # ── 模型 / 推理強度快速選單 ────────────────
         from agent.auth import get_model, load_config
-        from gui.settings import MODELS, REASONING
+        from gui.settings import REASONING
 
         opts_row = ctk.CTkFrame(
             input_frame,
@@ -252,13 +252,9 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
         )
 
         cfg = load_config()
-        provider = cfg.get("provider", "openai")
         model = cfg.get("model") or get_model()
 
-        if provider == "openai":
-            model_values = MODELS if model in MODELS else MODELS + [model]
-        else:
-            model_values = [model]
+        model_values = [model]
 
         ctk.CTkLabel(
             opts_row,

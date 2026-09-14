@@ -1,8 +1,6 @@
 import logging
 from typing import Any, AsyncGenerator, Callable, Optional
 
-from openai import NOT_GIVEN
-
 from .base import (
     BaseEngine,
     EventText,
@@ -27,33 +25,13 @@ class OllamaChatEngine(BaseEngine):
         build_tools_callback: Optional[Callable[[], list]] = None,
     ) -> AsyncGenerator[Any, None]:
 
-        messages = []
+        messages = self.format_chat_messages(input_items)
         if instructions:
-            messages.append({"role": "system", "content": instructions})
-
-        # input_items usually contains the history (which are standard messages)
-        # However, for tool results, if we have tool call history, it needs to be formatted for chat.completions.
-        # Pocket Agent's input_items is a direct copy of self.history.
-        # Wait, how does Responses API handle tool results? It passes them in `input`.
-        # If the history contains tool messages, they must be formatted correctly.
-        for item in input_items:
-            # We copy to avoid mutating the original history
-            msg = dict(item)
-            if isinstance(msg.get("content"), list):
-                new_content = []
-                for part in msg["content"]:
-                    if part.get("type") == "input_text":
-                        new_content.append({"type": "text", "text": part.get("text", "")})
-                    elif part.get("type") == "input_image":
-                        new_content.append({"type": "image_url", "image_url": {"url": part.get("image_url", "")}})
-                    else:
-                        new_content.append(part)
-                msg["content"] = new_content
-            messages.append(msg)
+            messages.insert(0, {"role": "system", "content": instructions})
 
         # Optional: formatting tools for chat completions
         # Tools in Pocket Agent are standard function JSON schema.
-        chat_tools = tools if tools else NOT_GIVEN
+        chat_tools = self.format_chat_tools(tools)
 
         try:
             stream = await self.client.chat.completions.create(

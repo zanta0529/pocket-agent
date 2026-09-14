@@ -113,6 +113,15 @@ _(💡 提示：若希望隱藏後台的終端機視窗，可將 `agent.bat` 內
 python -m venv venv
 source venv/bin/activate  # Windows 環境請執行: venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+若您首次使用，建議先執行設定精靈完成 API 參數與登入配置（將儲存於 `~/.pocket-agent/config.json`）：
+```bash
+python main.py setup
+```
+
+完成設定後，即可啟動 GUI 介面：
+```bash
 python main.py
 ```
 
