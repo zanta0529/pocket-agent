@@ -92,7 +92,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
         # 輸入區
         input_frame = ctk.CTkFrame(
             self,
-            height=70,
+            height=110,
         )
         input_frame.grid(
             row=3,
@@ -105,9 +105,10 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
 
         self.input = ctk.CTkTextbox(
             input_frame,
-            height=52,
+            height=92,
             wrap="word",
             font=ctk.CTkFont(size=self._chat_font_size()),
+            border_width=0,
         )
 
         self.input.grid(
@@ -410,6 +411,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
             text="放開滑鼠即可附加檔案",
             text_color=("#1a56db", "#6ea8ff"),
         )
+        self.input.configure(border_color=("#1a56db", "#6ea8ff"), border_width=2)
 
         return getattr(event, "action", "copy")
 
@@ -423,6 +425,7 @@ class ChatView(ctk.CTkFrame, IMEHelperMixin):
         """還原附件列的提示文字與縮圖列。"""
 
         self.attach_bar.configure(text="", text_color="gray")
+        self.input.configure(border_width=0)
         self._update_attachment_bar()
 
     def _update_attachment_bar(self):

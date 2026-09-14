@@ -240,12 +240,15 @@ class CliRenderer:
             if summary:
                 parts.append((f" {plain(summary)}", ""))
 
-            # 使用暫態狀態 (Status) 顯示工具執行，避免洗版
-            self._stop_status()
-            from rich.status import Status
+            if not self.console.is_terminal:
+                self.console.print(Text.assemble(*parts))
+            else:
+                # 使用暫態狀態 (Status) 顯示工具執行，避免洗版
+                self._stop_status()
+                from rich.status import Status
 
-            self._active_status = Status(Text.assemble(*parts), spinner="dots", console=self.console)
-            self._active_status.start()
+                self._active_status = Status(Text.assemble(*parts), spinner="dots", console=self.console)
+                self._active_status.start()
 
         elif kind == "tool_done":
             self._stop_status()

@@ -223,18 +223,16 @@ class App(DnDCTk):
 
         # ── 導覽按鈕 ──────────────────────────────
         # 按鈕文字已移除 Emoji，改由 PNG 圖片顯示。
-        nav_items = [
+        nav_items_top = [
             (" Chat", "chat"),
             (" MCP 工具", "mcp"),
             (" Skills", "skills"),
             (" 自動化", "automation"),
             (" Plugins", "plugins"),
-            (" 設定", "settings"),
-            (" 帳號", "account"),
         ]
 
         for row_index, (label, key) in enumerate(
-            nav_items,
+            nav_items_top,
             start=1,
         ):
             btn = ctk.CTkButton(
@@ -356,6 +354,40 @@ class App(DnDCTk):
             0,
             weight=1,
         )
+
+        nav_items_bottom = [
+            (" 設定", "settings"),
+            (" 帳號", "account"),
+        ]
+
+        for row_index, (label, key) in enumerate(
+            nav_items_bottom,
+            start=12,
+        ):
+            btn = ctk.CTkButton(
+                sidebar,
+                text=label,
+                font=ctk.CTkFont(size=14),
+                image=self._nav_icons[key],
+                compound="left",
+                anchor="w",
+                fg_color="transparent",
+                text_color=("gray10", "gray90"),
+                hover_color=("gray70", "gray30"),
+                height=42,
+                corner_radius=8,
+                command=lambda k=key: self.show(k),
+            )
+
+            btn.grid(
+                row=row_index,
+                column=0,
+                padx=10,
+                pady=3,
+                sticky="ew",
+            )
+
+            self._nav_btns[key] = btn
 
         # ── Content ───────────────────────────────
         content = ctk.CTkFrame(
