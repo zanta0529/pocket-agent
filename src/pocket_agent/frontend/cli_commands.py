@@ -348,6 +348,14 @@ class CommandHandler:
                     self.renderer.message(f"✓ 已儲存 Skill 至: {save_path}", "green")
                 else:
                     self.renderer.message("已取消儲存。")
+        elif name == "subagent":
+            if not args:
+                raise ValueError("用法：/subagent <子代理名稱> [任務描述]")
+            parts = args.split(maxsplit=1)
+            subagent_name = parts[0]
+            task = parts[1] if len(parts) > 1 else "請執行你的預設任務"
+            prompt = f"請使用 `run_subagent` 工具，委派 `{subagent_name}` 子代理來處理以下任務：\n{task}"
+            return CommandResult("chat", prompt)
         elif name == "session":
             await self.session(args)
         elif name == "compact":
@@ -466,5 +474,17 @@ class CommandHandler:
                     prompt += "。"
                 return CommandResult("chat", prompt)
 
-            raise ValueError(f"找不到指令或技能 /{name}；輸入 /help 查看說明")
+            # 檢查是否為 Subagent (將 /subagent-name 轉為呼叫指令)
+            from pocket_agent.subagents import list_subagents
+
+            sa_dict = {sa["name"]: sa for sa in list_subagents()}
+            if name in sa_dict:
+                prompt = f"請使用 `run_subagent` 工具，委派 `{name}` 子代理來處理以下任務"
+                if args:
+                    prompt += f"：\n{args}"
+                else:
+                    prompt += "。"
+                return CommandResult("chat", prompt)
+
+            raise ValueError(f"找不到指令、技能或子代理 /{name}；輸入 /help 查看說明")
         return CommandResult()

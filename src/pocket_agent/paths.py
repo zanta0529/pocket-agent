@@ -26,7 +26,7 @@ def is_portable() -> bool:
     靠發佈時放進根目錄的 PORTABLE 標記檔判斷——可攜版跑的是
     一般 python.exe，沒有 sys.frozen 可以問。
     """
-    return (Path(__file__).resolve().parent.parent / "PORTABLE").exists()
+    return (Path(__file__).resolve().parent.parent.parent / "PORTABLE").exists()
 
 
 def is_packaged() -> bool:
@@ -42,7 +42,7 @@ def bundle_dir() -> Path:
     """唯讀隨附資源的根目錄（GUI 圖檔、內建 skills/commands/agents）。"""
     if is_frozen():
         return Path(sys._MEIPASS)
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def user_dir() -> Path:

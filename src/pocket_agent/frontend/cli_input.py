@@ -16,20 +16,21 @@ from .cli_render import plain, toolbar
 from .cli_state import CliState
 
 BUILTINS = {
-    "file": "附加一般檔案",
-    "attachments": "查看／移除待送附件",
-    "model": "切換當次提供者與模型",
-    "session": "查看／載入歷史對話",
-    "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
-    "clear": "清除對話，保留附件",
-    "help": "指令說明",
-    "tools": "工具清單",
-    "skills": "列出目前所有可用的全域與專案技能",
-    "workspace": "顯示目前的工作區路徑清單",
     "add-dir": "單次會話內，將外部資料夾加入工作範圍",
+    "attachments": "查看／移除待送附件",
+    "clear": "清除對話，保留附件",
+    "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
+    "file": "附加一般檔案",
+    "help": "指令說明",
     "learn": "從近期對話萃取為共用技能",
     "logout": "登出",
+    "model": "切換當次提供者與模型",
     "quit": "離開",
+    "session": "查看／載入歷史對話",
+    "skills": "列出目前所有可用的全域與專案技能",
+    "subagent": "強制委派任務給指定的子代理",
+    "tools": "工具清單",
+    "workspace": "顯示目前的工作區路徑清單",
 }
 QUOTE = chr(34)
 REFERENCE = re.compile(r"(?:^|\s)@(?:" + QUOTE + "([^" + QUOTE + "]+)" + QUOTE + r"(?=\s|$)|([^\s" + QUOTE + "]+))")
@@ -112,6 +113,12 @@ class SlashCommandCompleter(Completer):
         # Add skills as slash commands
         for skill in list_skills(None):
             commands.setdefault(skill["name"], f"[Skill] {skill.get('description', '')}")
+
+        # Add subagents as slash commands
+        from pocket_agent.subagents import list_subagents
+
+        for sa in list_subagents():
+            commands.setdefault(sa["name"], f"[Subagent] {sa.get('description', '')}")
 
         matches = []
         for name, description in commands.items():

@@ -137,6 +137,7 @@ python main.py
 - `/file <路徑>`：附加本機檔案（支援程式碼、PDF 等）作為上下文。
 - `/image <描述>`：呼叫模型進行圖像生成 (可附加參考圖作為 Context 進行圖生圖)。
 - `/model <provider> <model_name>`：即時切換後端 API (支援 `openai`、`openrouter` 或 `ollama`)。
+- `/subagent <name>`：強制委派任務給指定的子代理（例如 `/subagent researcher 查資料`）。另外也支援直接使用 `/<name>` 作為動態捷徑（例如 `/researcher 查資料`）。
 - `/session [list | load <id> | save | delete <id>]`：管理歷史對話 (Session)。無參數時啟動互動式光棒選單，支援儲存與讀取持久化紀錄。
 - `/compact`：讓 AI 自動摘要並壓縮中間的對話歷史，快速回收 Context 上限空間。
 - `/clear`：清除當前記憶體的對話歷史。
@@ -160,6 +161,7 @@ python main.py --resume
 | Ctrl+C（輸入期間）         | 有文字時清空輸入，空白時提示退出方式；不清附件 |
 | Ctrl+D（空輸入）或 /quit   | 離開                                           |
 | /help、/tools              | 查看指令、MCP 工具清單                         |
+| /subagent、/<name>         | 委派任務給子代理（例如 /researcher）           |
 | /model                     | 互動式光棒選單切換提供者與模型，Esc 返回       |
 | /session                   | 互動式光棒選單分頁瀏覽並管理歷史對話           |
 | /compact                   | 自動摘要並壓縮對話紀錄                         |

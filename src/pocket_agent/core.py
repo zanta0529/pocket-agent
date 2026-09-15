@@ -359,6 +359,30 @@ class Agent:
             max_tool_rounds=self.max_tool_rounds,
             is_subagent=True,
         )
+
+        def subagent_stream_forwarder(kind: str, data: object = ""):
+            if kind == "thinking":
+                self._emit("thinking", f"[{name}] {data}")
+            elif kind == "tool_start":
+                if isinstance(data, dict):
+                    new_data = dict(data)
+                    new_data["name"] = f"{name}::{new_data.get('name', '')}"
+                    self._emit("tool_start", new_data)
+                else:
+                    self._emit("tool_start", f"{name}::{data}")
+            elif kind == "tool_done":
+                if isinstance(data, dict):
+                    new_data = dict(data)
+                    new_data["name"] = f"{name}::{new_data.get('name', '')}"
+                    self._emit("tool_done", new_data)
+                else:
+                    self._emit("tool_done", f"{name}::{data}")
+            elif kind == "image_saved":
+                self._emit("image_saved", data)
+            # 刻意不轉發 "text" 與 "round_start"，讓 UI 維持在 spinner 狀態，避免內文與主代理衝突
+
+        sub.on_stream = subagent_stream_forwarder
+
         log.info("SUBAGENT run %s task=%r", name, task[:80])
 
         try:
