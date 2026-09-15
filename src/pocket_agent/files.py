@@ -187,7 +187,11 @@ class FileUploader:
         return {"type": "input_image", "image_url": f"data:image/png;base64,{b64}"}
 
     def _read_text_file(self, p: Path) -> dict:
-        text = p.read_text(errors="replace")
+        try:
+            text = p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = p.read_text(errors="replace")
+
         text, truncated = self._truncate(text)
         suffix_note = "\n…（內容過長已截斷）" if truncated else ""
         return {"type": "input_text", "text": f"[{p.name}]\n```\n{text}{suffix_note}\n```"}
