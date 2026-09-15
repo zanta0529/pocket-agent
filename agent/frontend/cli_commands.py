@@ -379,12 +379,12 @@ class CommandHandler:
                 return CommandResult()
 
             self.renderer.console.print()
-            header = Text("Skills\n", style="bold white")
+            header = Text("Skills\n", style="bold magenta")
             header.append(f"{len(skills)} skills", style="dim")
             self.renderer.console.print(header)
             self.renderer.console.print()
 
-            create = Text("Create new skills\n", style="bold white")
+            create = Text("Create new skills\n", style="bold cyan")
             create.append("  Workspace: ", style="dim")
             create.append(f"{Path.cwd().resolve().as_posix()}/.agents/skills/{{skill_name}}/SKILL.md\n", style="blue")
             create.append("  Global:    ", style="dim")
@@ -414,7 +414,7 @@ class CommandHandler:
                 if not items:
                     return
                 t = Text()
-                t.append(f"{title} ", style="bold white")
+                t.append(f"{title} ", style="bold yellow")
                 t.append(f"• {subtitle}", style="dim")
                 self.renderer.console.print(t)
                 for item in items:
