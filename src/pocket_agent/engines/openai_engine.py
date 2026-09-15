@@ -113,3 +113,74 @@ class OpenAIResponsesEngine(BaseEngine):
                     await stream.close()
                 except Exception:
                     pass
+
+    def parse_rate_limit_error(self, exc: Exception) -> str | None:
+        """Parse OpenAI RateLimitError (or usage_limit_reached) for reset time."""
+        from datetime import datetime, timezone
+        import ast
+        import re
+        
+        try:
+            error = None
+            
+            # Path 1: Check standard body attribute
+            body = getattr(exc, "body", None)
+            if isinstance(body, dict):
+                error = body.get("error")
+                
+            # Path 2: Fallback to parsing string if body is missing
+            if not isinstance(error, dict):
+                text = str(exc)
+                match = re.search(r"\{.*\}", text, re.DOTALL)
+                if match:
+                    try:
+                        parsed = ast.literal_eval(match.group())
+                        if isinstance(parsed, dict):
+                            error = parsed.get("error")
+                    except (ValueError, SyntaxError):
+                        pass
+
+            if not isinstance(error, dict):
+                return None
+                
+            if error.get("type") != "usage_limit_reached":
+                return None
+
+            plan_type: str = error.get("plan_type") or "未知"
+            resets_at: object = error.get("resets_at")
+            resets_in_seconds: object = error.get("resets_in_seconds")
+
+            lines: list[str] = [
+                f"\n\n💳 **API 用量已達上限** (方案：{plan_type})"
+            ]
+            
+            reset_time_str = ""
+            countdown_str = ""
+            
+            if isinstance(resets_at, (int, float)) and resets_at > 0:
+                reset_dt = datetime.fromtimestamp(resets_at, tz=timezone.utc).astimezone()
+                reset_time_str = reset_dt.strftime('%Y-%m-%d %H:%M:%S')
+                
+            if isinstance(resets_in_seconds, (int, float)) and resets_in_seconds > 0:
+                secs = int(resets_in_seconds)
+                hours, remainder = divmod(secs, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                if hours:
+                    countdown_str = f"{hours} 小時 {minutes} 分 {seconds} 秒"
+                elif minutes:
+                    countdown_str = f"{minutes} 分 {seconds} 秒"
+                else:
+                    countdown_str = f"{seconds} 秒"
+                    
+            if reset_time_str and countdown_str:
+                lines.append(f"⏳ **重置時間**：{reset_time_str} (距今約 {countdown_str})")
+            elif reset_time_str:
+                lines.append(f"⏳ **重置時間**：{reset_time_str}")
+            elif countdown_str:
+                lines.append(f"⏳ **距今約**：{countdown_str}")
+                
+            if len(lines) > 1:
+                return "\n\n".join(lines)
+            return None
+        except Exception:
+            return None

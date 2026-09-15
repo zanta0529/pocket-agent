@@ -40,8 +40,8 @@ class OllamaChatEngine(BaseEngine):
                 tools=chat_tools,
                 stream=True,
             )
-        except Exception:
-            log.exception("Ollama chat completion failed")
+        except Exception as e:
+            log.info(f"Ollama chat completion failed: {e}")
             raise
 
         in_think_block = False

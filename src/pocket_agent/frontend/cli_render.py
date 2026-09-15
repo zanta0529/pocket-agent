@@ -174,6 +174,26 @@ class CliRenderer:
         if kind == "system":
             self.message(data)
 
+        elif kind == "error_panel":
+            self._ensure_newline()
+            self._stop_status()
+            
+            from rich.panel import Panel
+            from rich.text import Text
+            
+            title = data.get("title", "錯誤") if isinstance(data, dict) else "錯誤"
+            text = data.get("text", str(data)) if isinstance(data, dict) else str(data)
+            
+            panel = Panel(
+                Text(text, style="white"),
+                title=f"⚠️ {title}",
+                border_style="bold red",
+                expand=False,
+            )
+            self.console.print()
+            self.console.print(panel)
+            self.console.print()
+            
         elif kind == "round_start":
             # 工具呼叫後重跑：若已串流了文字，換行確認，再開始新輪
             if self._stream_has_content:

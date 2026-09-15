@@ -137,8 +137,8 @@ class Agent:
         """
         import time
 
-        from openai import BadRequestError
-
+        from openai import BadRequestError, RateLimitError
+        
         self.cancel_requested = False
         self.total_tokens = 0
         start_time = time.time()
@@ -162,16 +162,48 @@ class Agent:
                 or "too large" in err_msg
                 or "maximum context" in err_msg
             ):
-                log.warning("Context exceeded intercepted.")
-                thinking = ""
-                reply = (
-                    "⚠️ **Context Exceeded**\n\n"
-                    "輸入的內容或附加檔案過長，已超出當前模型的上下文處理極限。\n"
-                    "建議做法：請縮小附加的檔案數量或拆分內容後再試一次。"
-                )
+                log.info("Context exceeded intercepted.")
                 self.history.pop()  # Remove the failed user input from history
+                raise RuntimeError(
+                    "Context Exceeded (上下文長度超出上限)\n\n"
+                    "輸入的內容或附加檔案過長，已超出當前模型的處理極限。\n"
+                    "請縮小附加的檔案數量或拆分內容後再試一次。"
+                )
             else:
                 raise
+        except RateLimitError as e:
+            log.info("Rate limit exceeded intercepted.")
+            
+            # Use Engine Strategy to parse detailed error hint
+            url_str = str(self.client.base_url)
+            if "openai.com" in url_str or "chatgpt.com" in url_str:
+                provider = "openai"
+            elif "openrouter.ai" in url_str:
+                provider = "openrouter"
+            else:
+                provider = "ollama"
+                
+            from .engines import EngineFactory
+            engine = EngineFactory.create(provider, self.client, self.model)
+            hint = engine.parse_rate_limit_error(e)
+
+            # Extract JSON message if possible
+            err_msg = str(e)
+            try:
+                import json
+                if hasattr(e, 'response') and e.response:
+                    data = e.response.json()
+                    err_msg = data.get("error", {}).get("message", err_msg)
+            except Exception:
+                pass
+            
+            self.history.pop()
+            
+            msg = f"API 請求頻率限制 / 額度耗盡 (Rate Limit Exceeded)\n\n伺服器回傳：{err_msg}"
+            if hint:
+                msg += hint
+                
+            raise RuntimeError(msg)
 
         if self.last_images:
             paths = "\n".join(f"🖼️ {p}" for p in self.last_images)
@@ -415,8 +447,12 @@ class Agent:
         consecutive_errors = 0  # 連續全錯輪次計數
 
         url_str = str(self.client.base_url)
-        is_openai = "openai.com" in url_str or "chatgpt.com" in url_str
-        provider = "openai" if is_openai else "ollama"
+        if "openai.com" in url_str or "chatgpt.com" in url_str:
+            provider = "openai"
+        elif "openrouter.ai" in url_str:
+            provider = "openrouter"
+        else:
+            provider = "ollama"
 
         from .engines import (
             EngineFactory,

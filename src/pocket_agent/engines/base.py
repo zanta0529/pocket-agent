@@ -60,6 +60,12 @@ class BaseEngine:
         """
         raise NotImplementedError
 
+    def parse_rate_limit_error(self, exc: Exception) -> str | None:
+        """
+        Parse rate limit exception and return a human-readable hint string (e.g. reset time).
+        """
+        return None
+
     @staticmethod
     def format_chat_tools(tools: list) -> Any:
         """

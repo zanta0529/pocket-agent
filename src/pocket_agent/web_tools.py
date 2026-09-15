@@ -152,5 +152,5 @@ def call_web_tool(name: str, args: dict) -> str:
         return f"[ERROR] 未知的工具名稱: {name}"
 
     except Exception as e:
-        log.exception(f"Web Tool {name} 執行失敗")
+        log.info(f"Web Tool {name} 執行失敗: {e}")
         return f"[ERROR] 網路操作失敗: {e}"

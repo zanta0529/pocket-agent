@@ -146,11 +146,25 @@ async def send_turn(
 
     except Exception as exc:
         state.last_failed_input = raw
-        renderer.message(f"本輪未完成：{exc}", "red")
+        renderer._ensure_newline()
+        renderer._stop_status()
+        
+        from rich.panel import Panel
+        from rich.markdown import Markdown
+        
+        err_text = str(exc)
         hint_lines = _format_usage_limit_hint(exc)
         if hint_lines:
-            for line in hint_lines:
-                renderer.message(line, "yellow")
+            err_text += "\n\n" + "\n".join(hint_lines)
+            
+        panel = Panel(
+            Markdown(err_text),
+            title="⚠️ 本輪未完成 (錯誤)",
+            border_style="bold red",
+            expand=False,
+        )
+        renderer.console.print()
+        renderer.console.print(panel)
         renderer.message("待送附件保留；本輪可能部分完成，重送前請檢查結果。未自動重試。", "yellow")
         return
 
