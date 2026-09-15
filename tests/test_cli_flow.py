@@ -10,6 +10,7 @@ from agent.frontend.cli import CliFrontend, conversation, send_turn
 from agent.frontend.cli_commands import CommandResult
 from agent.frontend.cli_render import CliRenderer
 from agent.frontend.cli_state import CliState
+from agent.mcp_manager import MCPStartupResult
 
 
 @pytest.mark.parametrize("action", ["chat", "image"])
@@ -79,9 +80,14 @@ def test_failed_input_prefilled_without_auto_retry():
 
 
 @pytest.mark.parametrize("startup_fails", [False, True])
-def test_frontend_cleans_up_clients_and_mcp(startup_fails):
+def test_frontend_cleans_up_clients_and_mcp(startup_fails, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     client = SimpleNamespace(close=AsyncMock())
-    mcp = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), list_tools=Mock(return_value=[]))
+    mcp = SimpleNamespace(
+        start=AsyncMock(return_value=MCPStartupResult(0, 0, 0, 0)),
+        stop=AsyncMock(),
+        list_tools=Mock(return_value=[]),
+    )
     if startup_fails:
         mcp.start.side_effect = RuntimeError("startup")
     agent = SimpleNamespace(client=client, on_stream=None, history=[])
@@ -96,7 +102,63 @@ def test_frontend_cleans_up_clients_and_mcp(startup_fails):
         patch("agent.frontend.cli_input.CliInput", return_value=reader),
         patch("rich.console.Console", return_value=Console(file=StringIO())),
         patch("agent.sessions.save_session"),
+        patch("agent.paths.user_dir", return_value=tmp_path),
     ):
         asyncio.run(CliFrontend()._run_cli("system"))
+    client.close.assert_awaited_once()
+    mcp.stop.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("result", "message", "style"),
+    [
+        (MCPStartupResult(0, 0, 0, 0), "未設定 MCP 服務，略過初始化。", None),
+        (MCPStartupResult(2, 2, 0, 12), "MCP 已就緒：已連線 2 個服務，載入 12 個工具。", None),
+        (MCPStartupResult(1, 1, 0, 0), "MCP 已連線 1 個服務，目前無可用工具。", None),
+        (
+            MCPStartupResult(2, 1, 1, 3),
+            "MCP 部分就緒：1 個服務初始化成功，載入 3 個工具；1 個服務初始化失敗。",
+            "yellow",
+        ),
+        (
+            MCPStartupResult(2, 1, 1, 0),
+            "MCP 部分就緒：1 個服務初始化成功，載入 0 個工具；1 個服務初始化失敗。",
+            "yellow",
+        ),
+        (MCPStartupResult(2, 0, 2, 0), "MCP 初始化失敗，請檢查設定或上述錯誤訊息。", "red"),
+    ],
+)
+def test_frontend_mcp_startup_messages(result, message, style, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    renderer = Mock()
+    client = SimpleNamespace(close=AsyncMock())
+
+    async def start(*, on_start):
+        if result.configured_servers:
+            on_start(result.configured_servers)
+            renderer.message.assert_called_once_with("正在初始化 MCP 服務…")
+        else:
+            renderer.message.assert_not_called()
+        return result
+
+    mcp = SimpleNamespace(start=AsyncMock(side_effect=start), stop=AsyncMock(), list_tools=Mock(return_value=[]))
+    agent = SimpleNamespace(client=client, on_stream=None, history=[])
+    with (
+        patch("agent.paths.user_dir", return_value=tmp_path),
+        patch("agent.auth.get_openai_client", return_value=client),
+        patch("agent.auth.get_model", return_value="model"),
+        patch("agent.auth.load_config", return_value={"provider": "openai"}),
+        patch("agent.auth.fetch_available_models", return_value=["model"]),
+        patch("agent.mcp_manager.MCPManager", return_value=mcp),
+        patch("agent.core.Agent", return_value=agent),
+        patch("agent.frontend.cli_render.CliRenderer", return_value=renderer),
+        patch("agent.frontend.cli_input.CliInput"),
+        patch("agent.frontend.cli.conversation", new_callable=AsyncMock),
+    ):
+        asyncio.run(CliFrontend()._run_cli("system"))
+    calls = [entry.args for entry in renderer.message.call_args_list]
+    expected = [("正在初始化 MCP 服務…",)] if result.configured_servers else []
+    expected.append((message,) if style is None else (message, style))
+    assert calls == expected
     client.close.assert_awaited_once()
     mcp.stop.assert_awaited_once()

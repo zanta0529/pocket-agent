@@ -280,8 +280,24 @@ class CliFrontend(FrontendStrategy):
 
             client = get_openai_client()
             mcp = MCPManager()
-            renderer.message("啟動 MCP servers…")
-            await mcp.start()
+            startup = await mcp.start(on_start=lambda count: renderer.message("正在初始化 MCP 服務…"))
+            if startup.configured_servers == 0:
+                renderer.message("未設定 MCP 服務，略過初始化。")
+            elif startup.failed_servers == 0:
+                if startup.tool_count > 0:
+                    renderer.message(
+                        f"MCP 已就緒：已連線 {startup.ready_servers} 個服務，載入 {startup.tool_count} 個工具。"
+                    )
+                else:
+                    renderer.message(f"MCP 已連線 {startup.ready_servers} 個服務，目前無可用工具。")
+            elif startup.ready_servers > 0:
+                renderer.message(
+                    f"MCP 部分就緒：{startup.ready_servers} 個服務初始化成功，載入 {startup.tool_count} 個工具；"
+                    f"{startup.failed_servers} 個服務初始化失敗。",
+                    "yellow",
+                )
+            else:
+                renderer.message("MCP 初始化失敗，請檢查設定或上述錯誤訊息。", "red")
             state = CliState(load_config().get("provider", "openai"), get_model())
             try:
                 available = fetch_available_models(state.provider)

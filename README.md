@@ -20,6 +20,11 @@
 - **Ollama Chat Completions**：底層採用 Adapter Pattern (轉接器模式) 平滑相容標準 API，具備內建的 `<think>` 標籤狀態機剖析器。即使切換至本地端開源推理模型 (如 DeepSeek-R1)，亦能將思考過程無縫對接，並精準擷取 Token 用量。
 - **動態切換**：可直接透過 CLI 的 `/model` 指令，於運行中即時互動切換服務提供者與大模型。
 
+### 2. 本地文件產生與匯出 (Native Document Generation)
+
+- **自動化文件排版**：無需依賴外部服務，內建 `create_docx`、`create_pdf` 與 `create_pptx` 原生工具。
+- **無縫格式轉換**：只需透過自然語言下達指令，AI 即可自動整理對話脈絡、分析專案內容，並輸出排版精美的 Word 報告、PDF 說明書或 PowerPoint 簡報，大幅提升生產力。
+
 ### 3. 多重代理與擴充性 (Extensibility & Multi-Agent)
 
 - **子代理 (Subagents)**：允許在設定檔定義多種人設 (例如：架構師、研究員)，主 Agent 在面對複雜情境時會自動委派任務，實現多代理協同作業。
@@ -46,6 +51,7 @@
 - [Hooks 生命週期機制](docs/hooks-lifecycle.md)
 - [MCP 伺服器掛載與安全注入機制](docs/mcp-architecture.md)
 - [工具呼叫與 Subagent 委派機制](docs/tool-subagent-mechanism.md)
+- [CLI 操作與限制說明 (CLI Usage & Limitations)](docs/cli-usage-limitations.md)
 
 ### 7. 打包版本的專案客製化 (Customizing Packaged Versions)
 
@@ -161,18 +167,7 @@ python main.py --resume
 | /attachments remove <編號> | 移除單一待送附件，不刪除檔案                   |
 | /attachments clear         | 清空待送佇列，不刪除檔案                       |
 
-使用 `/file <完整路徑>` 附加一般檔案，路徑可加雙引號。訊息內也可使用 `@README.md`；
-含空白的 @ 路徑必須加雙引號，例如 `@"D:\my project\說明.txt" 請整理`。
-檔案正規化去重，僅在送出時讀取內容；工具列的「待送」不代表模型已讀取。
-`/clear` 只清對話並保留附件；`/add-dir` 尚未接入，不會讀取目錄或擴大工作權限。
-`/image <描述>` 使用待送佇列中的附加檔案作為參考圖進行生圖。
-模型切換只對當次會話有效，不寫設定；僅 openai 支援影像生成指令。
-
-**失敗與取消限制：** 聊天／生圖拋出例外時保留附件，原輸入預填供修改，不自動重送。
-本輪可能已寫入歷史或執行部分工具，重送前請檢查結果。核心若將錯誤轉為正常回覆，
-CLI 仍會消耗本次附件；不依回覆文字猜測成功。不提供核心交易回滾或 exactly-once 保證。
-本批未接入回答串流或執行中安全取消，Ctrl+C 的清空行為僅適用於輸入期間。
-無色彩輸出仍有文字狀態；Windows Terminal 的深／淺底、多行貼上及窄視窗需人工驗收。
+> 💡 關於 CLI 介面的附件處理、路徑解析、影像生成細節，以及系統錯誤與中斷時的邊界行為，請詳閱：[CLI 操作與限制說明](docs/cli-usage-limitations.md)。
 
 ---
 

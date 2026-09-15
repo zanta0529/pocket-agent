@@ -7,6 +7,7 @@
 """
 
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,16 @@ class ToolEntry:
     inject: dict = field(default_factory=dict)  # 自動注入的參數值
 
 
+@dataclass(frozen=True)
+class MCPStartupResult:
+    """本次初始化結果；ready 表示連線與工具註冊皆成功。"""
+
+    configured_servers: int
+    ready_servers: int
+    failed_servers: int
+    tool_count: int
+
+
 class MCPManager:
     """載入 mcp_config.yaml，建立所有 server 連線，提供統一工具查詢與執行介面。"""
 
@@ -45,19 +56,26 @@ class MCPManager:
 
     # ── Lifecycle ─────────────────────────────────
 
-    async def start(self) -> None:
+    async def start(self, *, on_start: Callable[[int], None] | None = None) -> MCPStartupResult:
         config = self._load_config()
-        servers = config.get("servers") or {}
+        servers = {name: spec for name, spec in (config.get("servers") or {}).items() if spec is not None}
+        if not servers:
+            return MCPStartupResult(0, 0, 0, 0)
+        if on_start is not None:
+            on_start(len(servers))
+        ready_servers = 0
+        failed_servers = 0
         for name, spec in servers.items():
-            if spec is None:
-                continue
             try:
                 session = await self._connect(name, spec)
                 self._sessions.append(session)
                 inject = spec.get("inject") or {}
                 await self._register_tools(name, session, inject)
+                ready_servers += 1
             except Exception as e:
+                failed_servers += 1
                 print(f"[MCP] ⚠ 無法連線 {name!r}: {e}")
+        return MCPStartupResult(len(servers), ready_servers, failed_servers, len(self._tools))
 
     async def stop(self) -> None:
         for closer in reversed(self._exit_stack_closers):
