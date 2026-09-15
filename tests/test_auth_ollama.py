@@ -1,7 +1,7 @@
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -100,12 +100,13 @@ def test_explicit_ollama_client_uses_env():
         patch("openai.AsyncOpenAI") as client,
     ):
         result = get_openai_client(provider="ollama", model="test-model")
-        http.assert_called_once_with(trust_env=False)
+        http.assert_called_once_with(trust_env=False, timeout=ANY)
         client.assert_called_once_with(
             api_key="ollama",
             base_url="http://environment:11434/v1",
             default_headers={},
             http_client=http.return_value,
+            timeout=ANY,
         )
         assert result is client.return_value
 
@@ -130,6 +131,7 @@ def test_explicit_openai_client_preserves_headers():
                 "OpenAI-Beta": "responses=experimental",
                 "chatgpt-account-id": "mock-account",
             },
+            timeout=ANY,
         )
 
 

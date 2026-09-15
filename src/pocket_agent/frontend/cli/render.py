@@ -269,6 +269,50 @@ class CliRenderer:
                 self._active_status = Status(Text.assemble(*parts), spinner="dots", console=self.console)
                 self._active_status.start()
 
+        elif kind == "ask_question":
+            self._ensure_newline()
+            self._stop_status()
+
+            questions = data.get("questions", [])
+            callback = data.get("callback")
+
+            def _ask_worker():
+                try:
+                    from prompt_toolkit import prompt
+                    from rich.panel import Panel
+                    from rich.text import Text
+
+                    self.console.print()
+                    answers = []
+                    for q in questions:
+                        text = q.get("question", "")
+                        options = q.get("options", [])
+                        is_multi = q.get("is_multi_select", False)
+
+                        self.console.print(
+                            Panel(Text(text), title="🤔 代理提問 (ask_question)", border_style="bold blue")
+                        )
+                        for i, opt in enumerate(options):
+                            self.console.print(f"  [{i + 1}] {opt}")
+
+                        hint = "請輸入選項編號，或自由作答"
+                        if is_multi:
+                            hint += " (多選可用逗號分隔)"
+
+                        ans = prompt(f"👉 {hint}: ")
+                        answers.append(ans)
+                        self.console.print()
+
+                    if callback:
+                        callback({"answers": answers})
+                except Exception as e:
+                    if callback:
+                        callback({"error": str(e)})
+
+            import threading
+
+            threading.Thread(target=_ask_worker, daemon=True).start()
+
         elif kind == "tool_done":
             self._stop_status()
 
