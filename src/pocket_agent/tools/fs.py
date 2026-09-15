@@ -142,7 +142,7 @@ def call_fs_tool(
 ) -> str:
     """執行檔案操作工具。"""
     try:
-        path_str = args.get("path", "")
+        path_str = args.get("path") or args.get("target_file") or args.get("file") or args.get("target") or ""
         if not path_str:
             return "[ERROR] 缺少必填參數 'path'"
 

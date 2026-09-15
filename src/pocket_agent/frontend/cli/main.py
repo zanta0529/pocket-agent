@@ -135,6 +135,7 @@ async def send_turn(
                 _, reply, _ = await chat_task
             except (asyncio.CancelledError, KeyboardInterrupt):
                 agent.request_stop()
+                chat_task.cancel()
                 renderer._stop_status()
                 renderer.message("⏹ 已停止", "yellow")
                 state.last_failed_input = raw
@@ -233,6 +234,16 @@ class CliFrontend(FrontendStrategy):
 
     async def _run_cli(self, system_prompt: str, resume: bool = False) -> None:
         import pathlib
+        import sys
+
+        # Windows asyncio SIGINT workaround
+        if sys.platform == "win32":
+
+            async def _win_sigint_workaround():
+                while True:
+                    await asyncio.sleep(0.5)
+
+            asyncio.create_task(_win_sigint_workaround())
 
         from rich.console import Console
 
