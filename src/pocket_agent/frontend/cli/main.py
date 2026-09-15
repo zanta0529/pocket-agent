@@ -288,9 +288,35 @@ class CliFrontend(FrontendStrategy):
         _ctx_file = next((p for p in candidates if p.exists() and p.is_file()), None)
         if _ctx_file:
             try:
+                import re
+
                 _ctx = _ctx_file.read_text(encoding="utf-8").strip()
                 if _ctx:
                     system_prompt = system_prompt + "\n\n---\n## 工作區規範\n" + _ctx
+
+                    # 動態展開 AGENTS.md 內關聯的 Markdown 檔案
+                    linked_mds = re.findall(r"\[.*?\]\((.*?\.md)\)", _ctx)
+                    # 使用 set 去重複，並保持順序（若需要）
+                    seen = set()
+                    for md_rel_path in linked_mds:
+                        if md_rel_path in seen:
+                            continue
+                        seen.add(md_rel_path)
+                        try:
+                            md_target = (_ctx_file.parent / md_rel_path).resolve()
+                            # 基本沙箱防護：確認展開的檔案位於專案根目錄之下
+                            try:
+                                md_target.relative_to(pathlib.Path.cwd().resolve())
+                            except ValueError:
+                                log.debug(f"跳過展開 {md_target}：超出工作區目錄範圍")
+                                continue
+
+                            if md_target.exists() and md_target.is_file():
+                                md_content = md_target.read_text(encoding="utf-8").strip()
+                                if md_content:
+                                    system_prompt += f"\n\n---\n## 自動展開文件：{md_target.name}\n" + md_content
+                        except Exception as inner_e:
+                            log.debug("展開連結文件 %s 失敗：%s", md_rel_path, inner_e)
             except Exception as e:
                 log.warning("工作區規範讀取失敗：%s", e)
 

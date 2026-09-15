@@ -1,3 +1,4 @@
+import datetime
 import logging
 from pathlib import Path
 from typing import Callable
@@ -10,7 +11,8 @@ FS_TOOLS = [
         "name": "read_file",
         "description": (
             "Read the contents of a file. Optionally provide start_line and end_line "
-            "to read a specific range. Lines are 1-indexed."
+            "to read a specific range. Lines are 1-indexed. Large files default to max 500 lines. "
+            "If truncated, do NOT rewrite blindly. Use grep_search to find keywords or use start_line/end_line."
         ),
         "parameters": {
             "type": "object",
@@ -41,10 +43,23 @@ FS_TOOLS = [
     },
     {
         "type": "function",
+        "name": "append_to_file",
+        "description": "Append content to the end of an existing file.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute or relative path to the file."},
+                "content": {"type": "string", "description": "The content to append."},
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "type": "function",
         "name": "replace_file_content",
         "description": (
             "Safely replace a specific target string within a file. The target must match EXACTLY "
-            "(including whitespace) and should be unique within the file."
+            "(including whitespace) and should be unique within the file or within the specified line range."
         ),
         "parameters": {
             "type": "object",
@@ -52,6 +67,14 @@ FS_TOOLS = [
                 "path": {"type": "string", "description": "Absolute or relative path to the file."},
                 "target": {"type": "string", "description": "The exact string sequence to replace."},
                 "replacement": {"type": "string", "description": "The new content to replace the target with."},
+                "start_line": {
+                    "type": "integer",
+                    "description": "Optional start line to narrow the search scope (1-indexed).",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Optional end line to narrow the search scope (1-indexed).",
+                },
             },
             "required": ["path", "target", "replacement"],
         },
@@ -59,10 +82,26 @@ FS_TOOLS = [
     {
         "type": "function",
         "name": "list_dir",
-        "description": "List the contents (files and folders) of a directory.",
+        "description": "List the contents (files and folders) of a directory as a tree structure.",
         "parameters": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Absolute or relative path to the directory."}},
+            "properties": {
+                "path": {"type": "string", "description": "Absolute or relative path to the directory."},
+                "depth": {
+                    "type": "integer",
+                    "description": "Maximum depth of the directory tree to display (default: 2).",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_file_info",
+        "description": "Get basic information about a file, such as size, line count, and last modification time.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "Absolute or relative path to the file."}},
             "required": ["path"],
         },
     },
@@ -154,13 +193,63 @@ def call_fs_tool(
             if not target.is_dir():
                 return f"[ERROR] 路徑不是一個目錄: {target}"
 
-            items = []
-            for item in target.iterdir():
-                kind = "DIR" if item.is_dir() else "FILE"
-                items.append(f"[{kind}] {item.name}")
-            if not items:
-                return f"目錄 {target} 為空。"
-            return "\n".join(items)
+            max_depth = args.get("depth", 2)
+            if not isinstance(max_depth, int) or max_depth < 1:
+                max_depth = 2
+
+            def build_tree(dir_path: Path, current_depth: int, prefix: str = "") -> list[str]:
+                if current_depth > max_depth:
+                    return [f"{prefix}└── ... (已達深度限制 {max_depth})"]
+
+                try:
+                    entries = list(dir_path.iterdir())
+                except Exception as e:
+                    return [f"{prefix}└── [ERROR 讀取失敗: {e}]"]
+
+                # 目錄在前，檔案在後，並照名稱排序
+                entries.sort(key=lambda x: (not x.is_dir(), x.name.lower()))
+                tree_lines = []
+                count = len(entries)
+                for i, entry in enumerate(entries):
+                    is_last = i == count - 1
+                    connector = "└── " if is_last else "├── "
+                    child_prefix = "    " if is_last else "│   "
+
+                    if entry.is_dir():
+                        tree_lines.append(f"{prefix}{connector}[DIR] {entry.name}/")
+                        tree_lines.extend(build_tree(entry, current_depth + 1, prefix + child_prefix))
+                    else:
+                        tree_lines.append(f"{prefix}{connector}{entry.name}")
+                return tree_lines
+
+            lines = [f"[DIR] {target.name}/"] + build_tree(target, 1)
+            return "\n".join(lines)
+
+        elif name == "get_file_info":
+            if not target.exists():
+                return f"[ERROR] 檔案或目錄不存在: {target}"
+
+            stat = target.stat()
+            size_bytes = stat.st_size
+            mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+            info = [f"路徑: {target}"]
+            if target.is_dir():
+                info.append("類型: 目錄")
+            else:
+                info.append("類型: 一般檔案")
+                info.append(f"大小: {size_bytes} Bytes")
+                try:
+                    with target.open("r", encoding="utf-8") as f:
+                        line_count = sum(1 for _ in f)
+                    info.append(f"總行數: {line_count}")
+                except UnicodeDecodeError:
+                    info.append("總行數: (無法讀取，可能為二進位檔案)")
+                except Exception as e:
+                    info.append(f"總行數: (讀取失敗: {e})")
+
+            info.append(f"最後修改時間: {mtime}")
+            return "\n".join(info)
 
         elif name == "read_file":
             if not target.exists() or not target.is_file():
@@ -171,13 +260,24 @@ def call_fs_tool(
 
             start = args.get("start_line")
             end = args.get("end_line")
+            total_lines = len(lines)
 
-            # 若未指定範圍，回傳整個檔案並附帶行號
+            # 預設行為與截斷保護
             if start is None and end is None:
-                return "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(lines))
+                max_lines = 500
+                if total_lines > max_lines:
+                    sliced = lines[:max_lines]
+                    result = "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(sliced))
+                    result += (
+                        f"\n\n...（內容過長，共 {total_lines} 行，目前僅顯示前 {max_lines} 行。"
+                        "請使用 start_line/end_line 繼續讀取）"
+                    )
+                    return result
+                else:
+                    return "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(lines))
 
             start_idx = max(0, int(start) - 1) if start else 0
-            end_idx = min(len(lines), int(end)) if end else len(lines)
+            end_idx = min(total_lines, int(end)) if end else total_lines
 
             sliced = lines[start_idx:end_idx]
             return "\n".join(f"{start_idx + i + 1:4}| {line.rstrip()}" for i, line in enumerate(sliced))
@@ -198,29 +298,67 @@ def call_fs_tool(
             target.write_text(content, encoding="utf-8")
             return f"[SUCCESS] 成功寫入檔案 {target}"
 
+        elif name == "append_to_file":
+            content = args.get("content", "")
+
+            if not target.exists():
+                return "[ERROR] 檔案不存在，無法附加。請使用 write_to_file 建立新檔。"
+
+            if on_confirm and not on_confirm(f"附加內容至檔案：{target.name}"):
+                return "[使用者拒絕執行此檔案寫入操作]"
+
+            with target.open("a", encoding="utf-8") as f:
+                f.write(content)
+            return f"[SUCCESS] 成功附加內容至檔案 {target}"
+
         elif name == "replace_file_content":
             if not target.exists() or not target.is_file():
                 return f"[ERROR] 檔案不存在: {target}"
 
             target_str = args.get("target", "")
             replacement = args.get("replacement", "")
+            start_line = args.get("start_line")
+            end_line = args.get("end_line")
 
             if not target_str:
                 return "[ERROR] 缺少必填參數 'target'"
 
             content = target.read_text(encoding="utf-8")
 
-            count = content.count(target_str)
-            if count == 0:
-                return "[ERROR] 找不到指定的 target 字串。請確保字元與空白完全相符。"
-            elif count > 1:
-                return f"[ERROR] 找到 {count} 處相符的 target 字串。請提供更多上下文以確保唯一性。"
+            if start_line or end_line:
+                lines = content.splitlines(keepends=True)
+                total_lines = len(lines)
+                start_idx = max(0, int(start_line) - 1) if start_line else 0
+                end_idx = min(total_lines, int(end_line)) if end_line else total_lines
+
+                # 範圍外的內容
+                prefix_content = "".join(lines[:start_idx])
+                target_scope = "".join(lines[start_idx:end_idx])
+                suffix_content = "".join(lines[end_idx:])
+
+                count = target_scope.count(target_str)
+                if count == 0:
+                    return f"[ERROR] 在指定的行數範圍內 ({start_idx + 1}-{end_idx}) 找不到 target 字串。"
+                elif count > 1:
+                    return f"[ERROR] 在指定的行數範圍內找到 {count} 處相符的 target 字串，請再縮小範圍以確保唯一性。"
+
+                new_scope = target_scope.replace(target_str, replacement)
+                new_content = prefix_content + new_scope + suffix_content
+            else:
+                count = content.count(target_str)
+                if count == 0:
+                    return "[ERROR] 找不到指定的 target 字串。請確保字元與空白完全相符。"
+                elif count > 1:
+                    return (
+                        f"[ERROR] 找到 {count} 處相符的 target 字串。"
+                        "請提供更多上下文或指定 start_line/end_line 確保唯一性。"
+                    )
+                new_content = content.replace(target_str, replacement)
 
             # 人工確認
             if on_confirm and not on_confirm(f"局部修改檔案：{target.name}"):
                 return "[使用者拒絕執行此檔案替換操作]"
 
-            new_content = content.replace(target_str, replacement)
             target.write_text(new_content, encoding="utf-8")
             return f"[SUCCESS] 成功替換檔案 {target} 的局部內容"
 
