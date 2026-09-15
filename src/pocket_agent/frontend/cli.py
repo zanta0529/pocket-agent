@@ -148,15 +148,15 @@ async def send_turn(
         state.last_failed_input = raw
         renderer._ensure_newline()
         renderer._stop_status()
-        
-        from rich.panel import Panel
+
         from rich.markdown import Markdown
-        
+        from rich.panel import Panel
+
         err_text = str(exc)
         hint_lines = _format_usage_limit_hint(exc)
         if hint_lines:
             err_text += "\n\n" + "\n".join(hint_lines)
-            
+
         panel = Panel(
             Markdown(err_text),
             title="⚠️ 本輪未完成 (錯誤)",

@@ -137,8 +137,8 @@ class Agent:
         """
         import time
 
-        from openai import BadRequestError, RateLimitError
-        
+        from openai import APIStatusError, BadRequestError
+
         self.cancel_requested = False
         self.total_tokens = 0
         start_time = time.time()
@@ -171,9 +171,12 @@ class Agent:
                 )
             else:
                 raise
-        except RateLimitError as e:
-            log.info("Rate limit exceeded intercepted.")
-            
+        except APIStatusError as e:
+            if getattr(e, "status_code", None) not in (402, 429):
+                raise
+
+            log.info(f"API Error {e.status_code} intercepted.")
+
             # Use Engine Strategy to parse detailed error hint
             url_str = str(self.client.base_url)
             if "openai.com" in url_str or "chatgpt.com" in url_str:
@@ -182,27 +185,47 @@ class Agent:
                 provider = "openrouter"
             else:
                 provider = "ollama"
-                
+
             from .engines import EngineFactory
+
             engine = EngineFactory.create(provider, self.client, self.model)
-            hint = engine.parse_rate_limit_error(e)
+            hint = engine.parse_api_error(e)
 
             # Extract JSON message if possible
             err_msg = str(e)
             try:
-                import json
-                if hasattr(e, 'response') and e.response:
-                    data = e.response.json()
-                    err_msg = data.get("error", {}).get("message", err_msg)
+                error_dict = None
+                body = getattr(e, "body", None)
+                if isinstance(body, dict):
+                    error_dict = body.get("error")
+
+                if not isinstance(error_dict, dict):
+                    import ast
+                    import re
+
+                    match = re.search(r"\{.*\}", err_msg, re.DOTALL)
+                    if match:
+                        parsed = ast.literal_eval(match.group())
+                        if isinstance(parsed, dict):
+                            error_dict = parsed.get("error")
+
+                if isinstance(error_dict, dict):
+                    err_msg = error_dict.get("message", err_msg)
             except Exception:
                 pass
-            
+
             self.history.pop()
-            
-            msg = f"API 請求頻率限制 / 額度耗盡 (Rate Limit Exceeded)\n\n伺服器回傳：{err_msg}"
+
+            if e.status_code == 429:
+                msg = f"API 請求頻率限制 / 額度耗盡 (Rate Limit Exceeded)\n\n伺服器回傳：{err_msg}"
+            elif e.status_code == 402:
+                msg = f"API 帳戶餘額不足 (Payment Required)\n\n伺服器回傳：{err_msg}"
+            else:
+                msg = f"API 錯誤 ({e.status_code})\n\n伺服器回傳：{err_msg}"
+
             if hint:
                 msg += hint
-                
+
             raise RuntimeError(msg)
 
         if self.last_images:

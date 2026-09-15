@@ -124,35 +124,48 @@ class OpenRouterEngine(BaseEngine):
                 except Exception:
                     pass
 
-    def parse_rate_limit_error(self, exc: Exception) -> str | None:
-        """Parse OpenRouter RateLimitError for X-RateLimit-Reset time."""
+    def parse_api_error(self, exc: Exception) -> str | None:
+        """Parse OpenRouter APIStatusError for reset time or remedy hint."""
         import ast
         import re
         from datetime import datetime, timezone
 
         try:
+            status_code = getattr(exc, "status_code", None)
+
             # Attempt to extract JSON from error string
             text = str(exc)
             match = re.search(r"\{.*\}", text, re.DOTALL)
             if not match:
                 return None
-            
+
             parsed = ast.literal_eval(match.group())
             if not isinstance(parsed, dict):
                 return None
-            
+
             error_data = parsed.get("error", {})
             metadata = error_data.get("metadata", {})
+
+            if status_code == 402:
+                remedy = metadata.get("remedy_hint")
+                if remedy:
+                    return f"\n\n💡 **建議做法**：{remedy}"
+                return None
+
+            if status_code != 429:
+                return None
+
             headers = metadata.get("headers", {})
-            
+
             reset_ms = headers.get("X-RateLimit-Reset")
             if not reset_ms:
                 return None
-            
+
             reset_ts = int(reset_ms) / 1000.0
             reset_dt = datetime.fromtimestamp(reset_ts, tz=timezone.utc).astimezone()
-            
+
             import time
+
             now_ts = time.time()
             if reset_ts > now_ts:
                 secs = int(reset_ts - now_ts)
@@ -164,10 +177,10 @@ class OpenRouterEngine(BaseEngine):
                     countdown = f"{minutes} 分 {seconds} 秒"
                 else:
                     countdown = f"{seconds} 秒"
-                
+
                 return f"\n\n⏳ **重置時間**：{reset_dt.strftime('%Y-%m-%d %H:%M:%S')} (距今約 {countdown})"
             else:
                 return f"\n\n⏳ **重置時間**：應已於 {reset_dt.strftime('%Y-%m-%d %H:%M:%S')} 重置"
-                
+
         except Exception:
             return None
