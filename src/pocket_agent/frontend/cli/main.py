@@ -152,6 +152,11 @@ async def send_turn(
         from rich.panel import Panel
 
         err_text = str(exc)
+        if "Connection error" in err_text:
+            err_text += (
+                "\n\n💡 **系統提示**：此錯誤通常發生在網路不穩定、或是模型產生的內容與"
+                "工具呼叫（例如產生整份 PDF）過於龐大，導致 API 伺服器中斷連線或逾時。"
+            )
         hint_lines = _format_usage_limit_hint(exc)
         if hint_lines:
             err_text += "\n\n" + "\n".join(hint_lines)

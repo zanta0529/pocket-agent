@@ -350,7 +350,7 @@ def get_openai_client(provider: str = None, model: str = None):
                 base_url = f"{base_url}/v1"
         api_key = "ollama"
         extra_headers = {}
-        http_client = httpx.AsyncClient(trust_env=False)
+        http_client = httpx.AsyncClient(trust_env=False, timeout=httpx.Timeout(timeout=1800.0, connect=60.0))
     elif provider == "openrouter":
         base_url = config.get("openrouter_base_url")
         if not base_url:
@@ -378,6 +378,7 @@ def get_openai_client(provider: str = None, model: str = None):
         base_url=base_url,
         default_headers=extra_headers,
         http_client=http_client,
+        timeout=httpx.Timeout(timeout=1800.0, connect=60.0),  # 防止長文本生成與巨大工具呼叫斷線
     )
 
 
