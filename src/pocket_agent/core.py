@@ -8,7 +8,7 @@ from pathlib import Path
 
 from openai import NOT_GIVEN, AsyncOpenAI
 
-from agent.config import config
+from pocket_agent.config import config
 
 from .paths import is_packaged, user_dir
 
@@ -80,7 +80,7 @@ class Agent:
         max_tool_rounds: int | None = None,  # 未指定時讀 MAX_TOOL_ROUNDS 環境變數
         is_subagent: bool = False,  # 子代理不觸發 hooks、不能再開子代理
     ):
-        from agent.config import config
+        from pocket_agent.config import config
 
         self.client = client
         self.mcp = mcp

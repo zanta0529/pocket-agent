@@ -1,6 +1,6 @@
 import pytest
 
-from agent.frontend.cli_state import CliState
+from pocket_agent.frontend.cli_state import CliState
 
 
 def test_attachment_batch_and_snapshot(tmp_path):

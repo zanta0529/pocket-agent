@@ -92,7 +92,7 @@ async def generate_image(
         raise ValueError(f"quality 必須是 {sorted(VALID_QUALITIES)}，收到：{quality}")
 
     client = get_openai_client(provider="openai")
-    from agent.config import config
+    from pocket_agent.config import config
 
     wrapper_model = config.get("openai_image_wrapper_model") or get_model()
 

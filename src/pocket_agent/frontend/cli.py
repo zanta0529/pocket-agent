@@ -10,7 +10,7 @@ from .base import FrontendStrategy
 log = logging.getLogger("pocket-agent")
 
 if TYPE_CHECKING:
-    from agent.core import Agent
+    from pocket_agent.core import Agent
 
     from .cli_commands import CommandResult
     from .cli_input import CliInput
@@ -88,7 +88,7 @@ def _format_usage_limit_hint(exc: BaseException) -> list[str] | None:
 
 def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer") -> None:
     """對話結束時自動存檔（失敗不中斷退出）。"""
-    from agent.sessions import save_session
+    from pocket_agent.sessions import save_session
 
     if not agent.history:
         return
@@ -115,7 +115,7 @@ async def send_turn(
 
         if result.action == "image":
             # 圖片生成無串流事件，保留 status spinner
-            from agent.imagegen import generate_image
+            from pocket_agent.imagegen import generate_image
 
             with renderer.console.status("生圖中…", spinner="dots"):
                 reply = await generate_image(
@@ -218,10 +218,10 @@ class CliFrontend(FrontendStrategy):
 
         from rich.console import Console
 
-        from agent.auth import fetch_available_models, get_model, get_openai_client, load_config
-        from agent.core import Agent
-        from agent.mcp_manager import MCPManager
-        from agent.paths import user_dir
+        from pocket_agent.auth import fetch_available_models, get_model, get_openai_client, load_config
+        from pocket_agent.core import Agent
+        from pocket_agent.mcp_manager import MCPManager
+        from pocket_agent.paths import user_dir
 
         from .cli_input import CliInput
         from .cli_render import CliRenderer
@@ -231,7 +231,7 @@ class CliFrontend(FrontendStrategy):
 
         # CLI 模式：抑制 StreamHandler INFO，避免 log 訊息干擾 terminal 輸出
         # 若開發者明確設定 DEBUG 等級則尊重，不抑制
-        from agent.config import config
+        from pocket_agent.config import config
 
         _lvl = config.get("log_level", "INFO").upper()
         if _lvl == "INFO":
@@ -318,7 +318,7 @@ class CliFrontend(FrontendStrategy):
                 from rich.panel import Panel
                 from rich.text import Text
 
-                from agent.auth import load_config, save_config
+                from pocket_agent.auth import load_config, save_config
 
                 # 1. 檢查全域「永遠信任」
                 config = load_config()
@@ -377,7 +377,7 @@ class CliFrontend(FrontendStrategy):
 
             # F7：--resume 自動恢復最近 session
             if resume:
-                from agent.sessions import list_sessions, load_session
+                from pocket_agent.sessions import list_sessions, load_session
 
                 sessions = list_sessions()
                 if sessions:

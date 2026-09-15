@@ -69,7 +69,7 @@ class ModelCommand(SysCommand):
             provider = parts[0].lower()
             model_name = parts[1]
         elif len(parts) == 1:
-            from agent.config import config
+            from pocket_agent.config import config
 
             provider = config.get("provider", "openai")
             model_name = parts[0]
@@ -77,7 +77,7 @@ class ModelCommand(SysCommand):
             return CommandResult("interactive_menu", "請選擇模型")
 
         try:
-            from agent.auth import get_openai_client
+            from pocket_agent.auth import get_openai_client
 
             agent.client = get_openai_client(provider=provider, model=model_name)
             agent.model = model_name

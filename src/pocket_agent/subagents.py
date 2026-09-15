@@ -1,8 +1,8 @@
 """Subagents：帶獨立人設的子代理，主 agent 透過 run_subagent 工具委派。
 
 定義檔（兩處都掃，使用者目錄優先）：
-    <repo>/agents/<name>.md
-    ~/.pocket-agent/agents/<name>.md
+    <repo>/subagents/<name>.md
+    ~/.pocket-agent/subagents/<name>.md
 
 檔案格式：
     ---
@@ -22,8 +22,8 @@ from .registry import MarkdownRegistry
 
 log = logging.getLogger("pocket-agent")
 
-REPO_AGENTS_DIR = bundle_dir() / "agents"  # 內建，隨程式發佈（唯讀）
-USER_AGENTS_DIR = user_dir() / "agents"  # 使用者自訂／plugin 裝入（可寫）
+REPO_SUBAGENTS_DIR = bundle_dir() / "subagents"  # 內建，隨程式發佈（唯讀）
+USER_SUBAGENTS_DIR = user_dir() / "subagents"  # 使用者自訂／plugin 裝入（可寫）
 
 
 class SubagentRegistry(MarkdownRegistry):
@@ -42,7 +42,7 @@ class SubagentRegistry(MarkdownRegistry):
 
 
 # 全域實例
-_registry = SubagentRegistry(REPO_AGENTS_DIR, USER_AGENTS_DIR)
+_registry = SubagentRegistry(REPO_SUBAGENTS_DIR, USER_SUBAGENTS_DIR)
 
 
 def list_subagents() -> list[dict]:

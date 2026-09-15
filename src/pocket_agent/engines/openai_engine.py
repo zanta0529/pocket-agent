@@ -1,7 +1,7 @@
 import logging
 from typing import Any, AsyncGenerator, Callable, Optional
 
-from agent.imagegen import disable_model_param
+from pocket_agent.imagegen import disable_model_param
 
 from .base import (
     BaseEngine,

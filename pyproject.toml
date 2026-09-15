@@ -1,3 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pocket-agent"
+version = "0.1.0"
+description = "A portable AI agent"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[project.scripts]
+pocket-agent = "pocket_agent.main:main"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
 [tool.ruff]
 # 與您的 .editorconfig 和 .prettierrc 保持一致
 line-length = 120
@@ -18,3 +36,6 @@ select = ["E", "F", "I"]
 quote-style = "double"
 # 使用空白縮排
 indent-style = "space"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

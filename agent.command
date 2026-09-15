@@ -69,4 +69,5 @@ else
     echo "============================================================"
 fi
 
-"$RUN_PY" main.py "$@"
+export PYTHONPATH="$(pwd)/src"
+"$RUN_PY" -m pocket_agent "$@"

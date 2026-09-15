@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from rich.console import Console
 
-from agent.frontend.cli import CliFrontend, conversation, send_turn
-from agent.frontend.cli_commands import CommandResult
-from agent.frontend.cli_render import CliRenderer
-from agent.frontend.cli_state import CliState
-from agent.mcp_manager import MCPStartupResult
+from pocket_agent.frontend.cli import CliFrontend, conversation, send_turn
+from pocket_agent.frontend.cli_commands import CommandResult
+from pocket_agent.frontend.cli_render import CliRenderer
+from pocket_agent.frontend.cli_state import CliState
+from pocket_agent.mcp_manager import MCPStartupResult
 
 
 @pytest.mark.parametrize("action", ["chat", "image"])
@@ -28,7 +28,7 @@ def test_send_transaction(tmp_path, action, fails):
         chat.side_effect = RuntimeError("offline")
         image.side_effect = RuntimeError("offline")
     agent = SimpleNamespace(chat=chat, total_tokens=0, on_stream=None, request_stop=Mock())
-    with patch("agent.imagegen.generate_image", image):
+    with patch("pocket_agent.imagegen.generate_image", image):
         asyncio.run(send_turn(agent, state, renderer, "original", CommandResult(action, "prompt")))
     assert bool(state.pending_files) == fails
     assert state.last_failed_input == ("original" if fails else "")
@@ -73,7 +73,7 @@ def test_failed_input_prefilled_without_auto_retry():
     )
     state = CliState("openai", "model")
     renderer = CliRenderer(Console(file=StringIO()))
-    with patch("agent.sessions.save_session"):
+    with patch("pocket_agent.sessions.save_session"):
         asyncio.run(conversation(agent, state, reader, renderer, []))
     assert reader.read.call_args_list[1].kwargs["default"] == "hello"
     agent.chat.assert_awaited_once()
@@ -93,16 +93,16 @@ def test_frontend_cleans_up_clients_and_mcp(startup_fails, tmp_path, monkeypatch
     agent = SimpleNamespace(client=client, on_stream=None, history=[])
     reader = SimpleNamespace(read=AsyncMock(side_effect=EOFError))
     with (
-        patch("agent.auth.get_openai_client", return_value=client),
-        patch("agent.auth.get_model", return_value="model"),
-        patch("agent.auth.load_config", return_value={"provider": "openai"}),
-        patch("agent.auth.fetch_available_models", return_value=["model"]),
-        patch("agent.mcp_manager.MCPManager", return_value=mcp),
-        patch("agent.core.Agent", return_value=agent),
-        patch("agent.frontend.cli_input.CliInput", return_value=reader),
+        patch("pocket_agent.auth.get_openai_client", return_value=client),
+        patch("pocket_agent.auth.get_model", return_value="model"),
+        patch("pocket_agent.auth.load_config", return_value={"provider": "openai"}),
+        patch("pocket_agent.auth.fetch_available_models", return_value=["model"]),
+        patch("pocket_agent.mcp_manager.MCPManager", return_value=mcp),
+        patch("pocket_agent.core.Agent", return_value=agent),
+        patch("pocket_agent.frontend.cli_input.CliInput", return_value=reader),
         patch("rich.console.Console", return_value=Console(file=StringIO())),
-        patch("agent.sessions.save_session"),
-        patch("agent.paths.user_dir", return_value=tmp_path),
+        patch("pocket_agent.sessions.save_session"),
+        patch("pocket_agent.paths.user_dir", return_value=tmp_path),
     ):
         asyncio.run(CliFrontend()._run_cli("system"))
     client.close.assert_awaited_once()
@@ -144,16 +144,16 @@ def test_frontend_mcp_startup_messages(result, message, style, tmp_path, monkeyp
     mcp = SimpleNamespace(start=AsyncMock(side_effect=start), stop=AsyncMock(), list_tools=Mock(return_value=[]))
     agent = SimpleNamespace(client=client, on_stream=None, history=[])
     with (
-        patch("agent.paths.user_dir", return_value=tmp_path),
-        patch("agent.auth.get_openai_client", return_value=client),
-        patch("agent.auth.get_model", return_value="model"),
-        patch("agent.auth.load_config", return_value={"provider": "openai"}),
-        patch("agent.auth.fetch_available_models", return_value=["model"]),
-        patch("agent.mcp_manager.MCPManager", return_value=mcp),
-        patch("agent.core.Agent", return_value=agent),
-        patch("agent.frontend.cli_render.CliRenderer", return_value=renderer),
-        patch("agent.frontend.cli_input.CliInput"),
-        patch("agent.frontend.cli.conversation", new_callable=AsyncMock),
+        patch("pocket_agent.paths.user_dir", return_value=tmp_path),
+        patch("pocket_agent.auth.get_openai_client", return_value=client),
+        patch("pocket_agent.auth.get_model", return_value="model"),
+        patch("pocket_agent.auth.load_config", return_value={"provider": "openai"}),
+        patch("pocket_agent.auth.fetch_available_models", return_value=["model"]),
+        patch("pocket_agent.mcp_manager.MCPManager", return_value=mcp),
+        patch("pocket_agent.core.Agent", return_value=agent),
+        patch("pocket_agent.frontend.cli_render.CliRenderer", return_value=renderer),
+        patch("pocket_agent.frontend.cli_input.CliInput"),
+        patch("pocket_agent.frontend.cli.conversation", new_callable=AsyncMock),
     ):
         asyncio.run(CliFrontend()._run_cli("system"))
     calls = [entry.args for entry in renderer.message.call_args_list]

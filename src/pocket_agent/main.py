@@ -17,7 +17,7 @@ import asyncio
 import click
 from dotenv import load_dotenv
 
-from agent.paths import env_path
+from pocket_agent.paths import env_path
 
 load_dotenv(env_path())
 
@@ -33,7 +33,7 @@ load_dotenv(env_path())
 def main(ctx, cli, system, resume):
     """Pocket Agent — 用 OpenAI 帳號登入，不需要 API Key"""
     if ctx.invoked_subcommand is None:
-        from agent.frontend import CliFrontend
+        from pocket_agent.frontend import CliFrontend
 
         strategy = CliFrontend()
         strategy.run(system, resume=resume)
@@ -42,7 +42,7 @@ def main(ctx, cli, system, resume):
 @main.command()
 def setup():
     """互動式設定精靈（CLI）"""
-    from agent.wizard import run_setup
+    from pocket_agent.wizard import run_setup
 
     run_setup()
 
@@ -50,7 +50,7 @@ def setup():
 @main.command()
 def logout():
     """登出（清除本機 token）"""
-    from agent.auth import logout as _lo
+    from pocket_agent.auth import logout as _lo
 
     _lo()
 
@@ -65,7 +65,7 @@ def image(prompt, output, inputs, size, quality):
     """用 gpt-image-2 生圖（走 ChatGPT 訂閱配額）"""
     from rich.console import Console
 
-    from agent.imagegen import generate_image
+    from pocket_agent.imagegen import generate_image
 
     console = Console()
     with console.status("[dim]生圖中（可能需要 1-2 分鐘）...[/dim]", spinner="dots"):

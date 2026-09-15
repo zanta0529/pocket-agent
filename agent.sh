@@ -76,5 +76,5 @@ else
     echo "============================================================"
 fi
 
-# 執行主程式並傳遞所有參數
-"$RUN_PY" main.py "$@"
+export PYTHONPATH="$(pwd)/src"
+"$RUN_PY" -m pocket_agent "$@"

@@ -17,7 +17,7 @@ ROOT = Path(SPECPATH)
 # 隨程式發佈的唯讀資源。
 # 要和 agent/paths.py 的 bundle_dir() 假設一致。
 datas = [
-    (str(ROOT / "agents"),                       "agents"),
+    (str(ROOT / "subagents"),                       "subagents"),
     (str(ROOT / "mcp_config.example.yaml"),      "."),
     (str(ROOT / ".env.example"),                 "."),
     (str(ROOT / "browser_mcp.py"),               "."),
@@ -32,8 +32,8 @@ hiddenimports = (
 )
 
 a = Analysis(
-    ["main.py"],
-    pathex=[str(ROOT)],
+    ["src/pocket_agent/main.py"],
+    pathex=[str(ROOT / "src")],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,

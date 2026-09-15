@@ -31,13 +31,13 @@ log = logging.getLogger("pocket-agent")
 # 且會被下次程式更新整個覆蓋掉。
 SKILLS_DIR = user_dir() / "skills"
 COMMANDS_DIR = user_dir() / "commands"
-AGENTS_DIR = user_dir() / "agents"
+SUBAGENTS_DIR = user_dir() / "subagents"
 REGISTRY_PATH = user_dir() / "plugins.json"
 
 # 衝突檢查要連內建的一起看，否則會裝出一個蓋不掉內建同名項目的鬼影。
 BUILTIN_SKILLS_DIR = bundle_dir() / "skills"
 BUILTIN_COMMANDS_DIR = bundle_dir() / "commands"
-BUILTIN_AGENTS_DIR = bundle_dir() / "agents"
+BUILTIN_SUBAGENTS_DIR = bundle_dir() / "subagents"
 
 
 def _mcp_config_file() -> Path:
@@ -147,7 +147,7 @@ def install_plugin_zip(zip_path: str | Path, overwrite: bool = False) -> dict:
 
             command_files = sorted((tmp / "commands").glob("*.md")) if (tmp / "commands").is_dir() else []
 
-            agent_files = sorted((tmp / "agents").glob("*.md")) if (tmp / "agents").is_dir() else []
+            agent_files = sorted((tmp / "subagents").glob("*.md")) if (tmp / "subagents").is_dir() else []
 
             mcp_file = tmp / "mcp.yaml"
             new_servers = _parse_plugin_mcp(mcp_file) if mcp_file.exists() else {}
@@ -169,7 +169,7 @@ def install_plugin_zip(zip_path: str | Path, overwrite: bool = False) -> dict:
                 if (COMMANDS_DIR / f.name).exists() or (BUILTIN_COMMANDS_DIR / f.name).exists():
                     conflicts.append(f"command「{f.stem}」")
             for f in agent_files:
-                if (AGENTS_DIR / f.name).exists() or (BUILTIN_AGENTS_DIR / f.name).exists():
+                if (SUBAGENTS_DIR / f.name).exists() or (BUILTIN_SUBAGENTS_DIR / f.name).exists():
                     conflicts.append(f"subagent「{f.stem}」")
             for server_name in new_servers:
                 if server_name in mcp_config["servers"]:
@@ -202,8 +202,8 @@ def install_plugin_zip(zip_path: str | Path, overwrite: bool = False) -> dict:
             # 就位：subagents
             installed_agents = []
             for f in agent_files:
-                AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(f, AGENTS_DIR / f.name)
+                SUBAGENTS_DIR.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, SUBAGENTS_DIR / f.name)
                 installed_agents.append(f.stem)
 
             # 就位：MCP servers
@@ -267,7 +267,7 @@ def uninstall_plugin(name: str) -> None:
             (base / f"{command_name}.md").unlink(missing_ok=True)
 
     for agent_name in info.get("subagents", []):
-        for base in (AGENTS_DIR, legacy_root / "agents"):
+        for base in (SUBAGENTS_DIR, legacy_root / "subagents"):
             (base / f"{agent_name}.md").unlink(missing_ok=True)
 
     server_names = info.get("mcp_servers", [])

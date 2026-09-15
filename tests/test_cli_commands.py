@@ -4,15 +4,15 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from agent.frontend.cli_commands import CommandHandler, switch_model
-from agent.frontend.cli_state import CliState
+from pocket_agent.frontend.cli_commands import CommandHandler, switch_model
+from pocket_agent.frontend.cli_state import CliState
 
 
 def test_model_switch_commits_state_and_closes_old_client():
     old, new = SimpleNamespace(close=AsyncMock()), SimpleNamespace(close=AsyncMock())
     agent = SimpleNamespace(client=old, model="old", history=["preserve"])
     state = CliState("openai", "old", ["pending"])
-    with patch("agent.auth.get_openai_client", return_value=new):
+    with patch("pocket_agent.auth.get_openai_client", return_value=new):
         asyncio.run(switch_model(agent, state, "ollama", "new", Mock()))
     assert agent.client is new
     assert (state.provider, state.model, agent.model) == ("ollama", "new", "new")
@@ -25,7 +25,7 @@ def test_failed_switch_preserves_state():
     old = SimpleNamespace(close=AsyncMock())
     agent = SimpleNamespace(client=old, model="old")
     state = CliState("openai", "old")
-    with patch("agent.auth.get_openai_client", side_effect=RuntimeError("offline")):
+    with patch("pocket_agent.auth.get_openai_client", side_effect=RuntimeError("offline")):
         with pytest.raises(RuntimeError):
             asyncio.run(switch_model(agent, state, "ollama", "new", Mock()))
     assert agent.client is old
@@ -39,7 +39,7 @@ def test_invalid_commands_preserve_attachments(raw):
     agent = Mock()
     agent.workspace_dirs = []
     handler = CommandHandler(agent, state, Mock(), Mock(), [])
-    with patch("agent.commands.get_command", return_value=None):
+    with patch("pocket_agent.commands.get_command", return_value=None):
         with pytest.raises(ValueError):
             asyncio.run(handler.dispatch(raw))
     assert state.pending_files == ["pending"]
@@ -63,8 +63,8 @@ def test_model_selection_unavailable_allows_manual_entry():
     reader = SimpleNamespace(choose=AsyncMock(side_effect=["ollama", "manual"]))
     handler = CommandHandler(Mock(), state, reader, Mock(), [])
     with (
-        patch("agent.auth.fetch_available_models", return_value=[]),
-        patch("agent.frontend.cli_commands.switch_model", new_callable=AsyncMock) as switch,
+        patch("pocket_agent.auth.fetch_available_models", return_value=[]),
+        patch("pocket_agent.frontend.cli_commands.switch_model", new_callable=AsyncMock) as switch,
     ):
         asyncio.run(handler.dispatch("/model"))
         switch.assert_awaited_once()
@@ -76,7 +76,7 @@ def test_model_selection_cancel_keeps_state():
     state = CliState("openai", "old")
     reader = SimpleNamespace(choose=AsyncMock(return_value=None))
     handler = CommandHandler(Mock(), state, reader, Mock(), [])
-    with patch("agent.auth.get_openai_client") as create:
+    with patch("pocket_agent.auth.get_openai_client") as create:
         asyncio.run(handler.dispatch("/model"))
         create.assert_not_called()
     assert state.model == "old"
@@ -87,7 +87,7 @@ def test_old_client_cleanup_failure_does_not_rollback():
     new = SimpleNamespace(close=AsyncMock())
     agent = SimpleNamespace(client=old, model="old")
     state = CliState("openai", "old")
-    with patch("agent.auth.get_openai_client", return_value=new):
+    with patch("pocket_agent.auth.get_openai_client", return_value=new):
         asyncio.run(switch_model(agent, state, "ollama", "new", Mock()))
     assert agent.client is new and state.model == "new"
 
@@ -96,8 +96,8 @@ def test_custom_expansion_failure_retains_queue():
     state = CliState("openai", "model", ["pending"])
     handler = CommandHandler(Mock(), state, Mock(), Mock(), [])
     with (
-        patch("agent.commands.get_command", return_value={"name": "custom"}),
-        patch("agent.commands.expand_command", return_value=None),
+        patch("pocket_agent.commands.get_command", return_value={"name": "custom"}),
+        patch("pocket_agent.commands.expand_command", return_value=None),
     ):
         with pytest.raises(ValueError):
             asyncio.run(handler.dispatch("/custom"))
@@ -118,7 +118,7 @@ def test_session_list_empty():
     """空白時顯示「尚無歷史對話」。"""
     renderer = Mock()
     handler = _make_handler(renderer=renderer)
-    with patch("agent.sessions.list_sessions", return_value=[]):
+    with patch("pocket_agent.sessions.list_sessions", return_value=[]):
         asyncio.run(handler.dispatch("/session list"))
     renderer.message.assert_called_once()
     assert "尚無歷史對話" in renderer.message.call_args.args[0]
@@ -134,7 +134,7 @@ def test_session_list_shows_recent():
         {"id": "20260909-120000-aabbcc", "title": "第一輪對話", "updated_at": time.time()},
         {"id": "20260909-130000-ddeeff", "title": "第二輪對話", "updated_at": time.time()},
     ]
-    with patch("agent.sessions.list_sessions", return_value=sessions):
+    with patch("pocket_agent.sessions.list_sessions", return_value=sessions):
         asyncio.run(handler.dispatch("/session list"))
     assert renderer.message.call_count == 2
     first_call = renderer.message.call_args_list[0].args[0]
@@ -154,7 +154,7 @@ def test_session_load_ok():
         "title": "測試對話",
         "history": [{"role": "user", "content": "hi"}],
     }
-    with patch("agent.sessions.load_session", return_value=mock_data):
+    with patch("pocket_agent.sessions.load_session", return_value=mock_data):
         asyncio.run(handler.dispatch("/session load 20260909-120000-aabbcc"))
     assert agent.history == mock_data["history"]
     assert state.session_id == "20260909-120000-aabbcc"
@@ -166,7 +166,7 @@ def test_session_load_not_found():
     agent = Mock()
     agent.history = ["original"]
     handler = _make_handler(agent=agent)
-    with patch("agent.sessions.load_session", return_value=None):
+    with patch("pocket_agent.sessions.load_session", return_value=None):
         with pytest.raises(ValueError, match="找不到 session"):
             asyncio.run(handler.dispatch("/session load nonexistent"))
     assert agent.history == ["original"]
@@ -178,7 +178,7 @@ def test_session_save_ok():
     agent.history = [{"role": "user", "content": "test"}]
     state = CliState("openai", "model")
     handler = _make_handler(agent=agent, state=state)
-    with patch("agent.sessions.save_session") as mock_save:
+    with patch("pocket_agent.sessions.save_session") as mock_save:
         asyncio.run(handler.dispatch("/session save"))
     mock_save.assert_called_once_with(state.session_id, agent.history)
 
@@ -189,8 +189,8 @@ def test_session_delete_ok():
     handler = _make_handler(renderer=renderer)
     mock_data = {"id": "abc", "title": "要刪除的對話"}
     with (
-        patch("agent.sessions.load_session", return_value=mock_data),
-        patch("agent.sessions.delete_session") as mock_del,
+        patch("pocket_agent.sessions.load_session", return_value=mock_data),
+        patch("pocket_agent.sessions.delete_session") as mock_del,
     ):
         asyncio.run(handler.dispatch("/session delete abc"))
     mock_del.assert_called_once_with("abc")

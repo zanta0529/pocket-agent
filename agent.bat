@@ -108,7 +108,8 @@ echo [INFO] Environment setup completed!
 echo ============================================================
 
 :RUN
-"%RUN_PY%" main.py %*
+set PYTHONPATH=%~dp0src
+"%RUN_PY%" -m pocket_agent %*
 if errorlevel 1 (
     echo.
     echo ============================================================

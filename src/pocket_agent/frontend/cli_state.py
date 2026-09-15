@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def _new_session_id() -> str:
-    from agent.sessions import new_session_id
+    from pocket_agent.sessions import new_session_id
 
     return new_session_id()
 

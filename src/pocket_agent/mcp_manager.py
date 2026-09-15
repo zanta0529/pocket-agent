@@ -98,7 +98,7 @@ class MCPManager:
 
         # 注入參數（模型看不到，但 server 需要）
         full_args = {**entry.inject, **arguments}
-        from agent.core import log
+        from pocket_agent.core import log
 
         # Artifact 隔離攔截
         if tool_name in ("write_to_file", "write_file", "create_file") and "ArtifactMetadata" in full_args:

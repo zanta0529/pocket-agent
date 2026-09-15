@@ -9,8 +9,8 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from agent.frontend.cli_input import SlashCommandCompleter, file_argument, key_bindings, references
-from agent.frontend.cli_state import CliState
+from pocket_agent.frontend.cli_input import SlashCommandCompleter, file_argument, key_bindings, references
+from pocket_agent.frontend.cli_state import CliState
 
 
 def test_windows_quoted_references():
@@ -26,7 +26,7 @@ def test_windows_quoted_references():
 def test_completion_tracks_provider():
     state = CliState("openai", "model")
     completer = SlashCommandCompleter(state)
-    with patch("agent.commands.list_commands", return_value=[]):
+    with patch("pocket_agent.commands.list_commands", return_value=[]):
         assert list(completer.get_completions(Document("/im"), CompleteEvent()))
         state.provider = "ollama"
         assert not list(completer.get_completions(Document("/im"), CompleteEvent()))
@@ -117,7 +117,7 @@ def test_selection_restores_chat_prompt_options():
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from agent.frontend.cli_input import CliInput
+    from pocket_agent.frontend.cli_input import CliInput
 
     async def scenario():
         reader = CliInput.__new__(CliInput)

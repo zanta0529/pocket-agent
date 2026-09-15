@@ -100,8 +100,8 @@ class SlashCommandCompleter(Completer):
             return
         if not text.startswith("/") or any(c.isspace() for c in text):
             return
-        from agent.commands import list_commands
-        from agent.skills import list_skills
+        from pocket_agent.commands import list_commands
+        from pocket_agent.skills import list_skills
 
         commands = dict(BUILTINS)
         if self.state.provider == "openai":

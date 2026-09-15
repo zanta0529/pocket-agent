@@ -40,7 +40,7 @@ def run_setup() -> None:
 
 
 def _step_provider() -> str:
-    from agent.config import SUPPORTED_PROVIDERS, config
+    from pocket_agent.config import SUPPORTED_PROVIDERS, config
 
     console.print(Rule("① 選擇服務供應商 (Provider)"))
     console.print()
@@ -65,7 +65,7 @@ def _step_provider() -> str:
 
 
 def _step_login(provider: str) -> None:
-    from agent.config import config
+    from pocket_agent.config import config
 
     if provider == "openai":
         console.print(Rule("② 登入 OPENAI"))
@@ -110,7 +110,7 @@ def _step_login(provider: str) -> None:
 
 
 def _step_model(provider: str) -> None:
-    from agent.config import config
+    from pocket_agent.config import config
 
     console.print(Rule("③ 預設模型"))
     console.print()
@@ -121,7 +121,7 @@ def _step_model(provider: str) -> None:
     # 嘗試動態取得遠端/本地可用模型
     fetched = []
     try:
-        from agent.auth import fetch_available_models
+        from pocket_agent.auth import fetch_available_models
 
         fetched = fetch_available_models(provider)
     except Exception:

@@ -55,11 +55,11 @@ Antigravity 是 Google 推出的 AI-first 開發平台 (官方網站：`https://
 - **Instructions (Context/Rules)**：
   - 採用多層次的 Hierarchical Discovery 機制。
   - **Project**：專案根目錄的 `GEMINI.md`、`AGENTS.md`。
-  - **Directory**：位於 `.agents/rules/*.md` 內的檔案（會從當前開啟/編輯檔案的目錄往上尋找至 Git Root）。
+  - **Directory**：位於 `.subagents/rules/*.md` 內的檔案（會從當前開啟/編輯檔案的目錄往上尋找至 Git Root）。
   - **行為**：透過 Progressive Disclosure，系統會對檔案進行 Deduplication，並將找到的 Rules 疊加 (Concatenate) 至模型上下文中。
 - **Skills (Plugins/Sidecars/Hooks/MCP)**：
-  - **User**：`~/.gemini/skills/` 或 `~/.agents/skills/`
-  - **Workspace**：`.gemini/skills/` 或 `.agents/skills/`
+  - **User**：`~/.gemini/skills/` 或 `~/.subagents/skills/`
+  - **Workspace**：`.gemini/skills/` 或 `.subagents/skills/`
   - **行為**：採用 Shadowing 與 Progressive Disclosure。若發生同名衝突，Workspace Skill 會遮蔽 User Skill；未主動呼叫前僅載入 Skill Name 與 Description。
 
 ### 3.2 Claude Code
@@ -112,11 +112,11 @@ Hermes Agent 強烈依賴薄入口與動態路由。
 ### 4.1 指令疊加與組合規則 (Instruction Hierarchy)
 
 1. **載入 Global Instructions** (`~/.pocket-agent/instructions.md`) 作為最底層的基礎常識。
-2. **尋找 Project Entry** 採「單一類型短路 (Discovery)」：尋找 `AGENTS.md` 或 `.agents/AGENTS.md` 作為本專案的進入點。
+2. **尋找 Project Entry** 採「單一類型短路 (Discovery)」：尋找 `AGENTS.md` 或 `.subagents/AGENTS.md` 作為本專案的進入點。
 3. **依序疊加 (Concatenate)**：將 Project Entry 附加於 Global Instructions 尾端。若兩者出現衝突，Pocket Agent 不保證單純依靠文字位置產生 deterministic override；如需 deterministic override，應透過 Runtime Config 的明確設定實現。
 
 ### 4.2 技能遮蔽與漸進式揭露 (Skill Discovery & Shadowing)
 
-1. **探索 (Discovery)**：同時掃描 `~/.pocket-agent/skills/` (全域) 與 `.agents/skills/` (專案)。
+1. **探索 (Discovery)**：同時掃描 `~/.pocket-agent/skills/` (全域) 與 `.subagents/skills/` (專案)。
 2. **遮蔽 (Shadowing)**：若兩端存在同名技能，專案層級的技能將無條件遮蔽全域技能。
 3. **漸進式揭露 (Progressive Disclosure)**：只將過濾後的技能名稱與描述注入 System Prompt。技能本文僅在模型判定需要啟用該技能時，才載入至目前的 Agent Context。

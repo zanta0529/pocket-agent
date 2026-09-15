@@ -32,7 +32,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-from agent.config import config
+from pocket_agent.config import config
 
 # ── OAuth 設定 ────────────────────────────────────
 DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -332,8 +332,8 @@ def get_openai_client(provider: str = None, model: str = None):
     from dotenv import load_dotenv
     from openai import AsyncOpenAI
 
-    from agent.config import config
-    from agent.paths import env_path
+    from pocket_agent.config import config
+    from pocket_agent.paths import env_path
 
     # 在此讀取 .env 以確保 os.getenv 能拿到最新的環境變數，配合 ConfigManager
     load_dotenv(env_path(), override=True)
@@ -385,8 +385,8 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
     """取得可用模型列表。"""
     from dotenv import load_dotenv
 
-    from agent.config import config
-    from agent.paths import env_path
+    from pocket_agent.config import config
+    from pocket_agent.paths import env_path
 
     load_dotenv(env_path(), override=True)
 
@@ -508,19 +508,19 @@ def get_user_info(provider: str = "openai") -> dict:
 
 
 def get_model() -> str:
-    from agent.config import config
+    from pocket_agent.config import config
 
     return config.get("model", "gpt-6-astra")
 
 
 def load_config() -> dict:
-    from agent.config import config
+    from pocket_agent.config import config
 
     return dict(config.json_provider._data)
 
 
 def save_config(cfg: dict) -> None:
-    from agent.config import config
+    from pocket_agent.config import config
 
     config.json_provider._data = cfg
     config.json_provider.save()

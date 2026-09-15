@@ -42,13 +42,12 @@ PYTHON_EXCLUDES = {
 
 # 要帶進 app/ 的原始碼與資源
 APP_ITEMS = [
-    "main.py",
+    "src",
     "browser_mcp.py",
-    "agent",
     "gui",
     "skills",
     "commands",
-    "agents",
+    "subagents",
     "mcp_config.example.yaml",
     ".env.example",
     "requirements.txt",  # 讓「自動更新」之後能對照/補裝新套件
@@ -71,10 +70,10 @@ REM and %PYTHONPATH%, so a colleague with a different uvicorn or httpx
 REM installed gets different behaviour from what we shipped and tested.
 REM PYTHONHOME would be worse still: it repoints at another installation.
 set PYTHONNOUSERSITE=1
-set PYTHONPATH=
+set PYTHONPATH=%~dp0app\src
 set PYTHONHOME=
 
-start "" "%~dp0python\\pythonw.exe" "%~dp0app\\main.py" %*
+start "" "%~dp0python\\pythonw.exe" -m pocket_agent %*
 endlocal
 """
 

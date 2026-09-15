@@ -6,7 +6,7 @@ from .cli_render import CliRenderer
 from .cli_state import CliState
 
 if TYPE_CHECKING:
-    from agent.core import Agent
+    from pocket_agent.core import Agent
 
 
 @dataclass
@@ -22,8 +22,8 @@ async def switch_model(
     model: str,
     renderer: CliRenderer,
 ) -> None:
-    from agent.auth import get_openai_client
-    from agent.config import SUPPORTED_PROVIDERS
+    from pocket_agent.auth import get_openai_client
+    from pocket_agent.config import SUPPORTED_PROVIDERS
 
     if provider not in SUPPORTED_PROVIDERS or not model or any(c.isspace() for c in model):
         raise ValueError(f"用法：/model <{'|'.join(SUPPORTED_PROVIDERS)}> <模型名稱>")
@@ -55,8 +55,8 @@ class CommandHandler:
         self.tools = tools
 
     async def model(self, args: str) -> None:
-        from agent.auth import fetch_available_models
-        from agent.config import SUPPORTED_PROVIDERS
+        from pocket_agent.auth import fetch_available_models
+        from pocket_agent.config import SUPPORTED_PROVIDERS
 
         if args:
             parts = args.split()
@@ -100,7 +100,7 @@ class CommandHandler:
             raise ValueError("用法：/attachments [clear|remove <編號>]")
 
     async def session(self, args: str) -> None:
-        from agent.sessions import (
+        from pocket_agent.sessions import (
             delete_session,
             list_sessions,
             load_session,
@@ -231,7 +231,7 @@ class CommandHandler:
 
         self.renderer.message("壓縮中…（正在向模型請求摘要）", "dim")
         try:
-            from agent.core import Agent
+            from pocket_agent.core import Agent
 
             # 採用 Adapter 精神：建立一個輕量的子代理專門做摘要，
             # 讓底層 EngineFactory 去處理 OpenAI 或 Ollama 的 API 差異。
@@ -278,7 +278,7 @@ class CommandHandler:
         if name == "quit":
             return CommandResult("quit")
         if name == "logout":
-            from agent.auth import logout
+            from pocket_agent.auth import logout
 
             logout()
             return CommandResult("quit")
@@ -291,7 +291,7 @@ class CommandHandler:
         elif name == "attachments":
             self.attachments(args)
         elif name in ("add-dir", "workspace", "model", "learn"):
-            from agent.sys_commands import sys_registry
+            from pocket_agent.sys_commands import sys_registry
 
             result = sys_registry.execute(f"/{name} {args}", self.agent)
 
@@ -320,7 +320,7 @@ class CommandHandler:
                 self.renderer.message("正在萃取對話知識，請稍候...", "dim")
                 skill_content = await self.agent.extract_skill()
 
-                from agent.registry import parse_frontmatter
+                from pocket_agent.registry import parse_frontmatter
 
                 meta, body = parse_frontmatter(skill_content)
                 suggested_name = meta.get("name", "")
@@ -329,7 +329,7 @@ class CommandHandler:
                 # 在 CLI 直接預覽結果 (去除 frontmatter 供存檔使用)
                 from rich.markdown import Markdown
 
-                from agent.skills import save_skill
+                from pocket_agent.skills import save_skill
 
                 self.renderer.console.print(Markdown(skill_content))
 
@@ -360,8 +360,8 @@ class CommandHandler:
             from rich.markdown import Markdown
             from rich.text import Text
 
-            from agent.paths import bundle_dir, user_dir
-            from agent.skills import list_skills, load_skill
+            from pocket_agent.paths import bundle_dir, user_dir
+            from pocket_agent.skills import list_skills, load_skill
 
             if args:
                 skill_name = args.strip()
@@ -430,7 +430,7 @@ class CommandHandler:
 
             self.renderer.message("提示：若要檢視某個技能的完整內容，請輸入 /skills <skill_name>", "dim")
         elif name == "help":
-            from agent.commands import list_commands
+            from pocket_agent.commands import list_commands
 
             for command, description in BUILTINS.items():
                 self.renderer.message(f"/{command}  {description}")
@@ -447,8 +447,8 @@ class CommandHandler:
                 raise ValueError("用法：/image <描述>")
             return CommandResult("image", args)
         else:
-            from agent.commands import expand_command, get_command
-            from agent.skills import list_skills
+            from pocket_agent.commands import expand_command, get_command
+            from pocket_agent.skills import list_skills
 
             if get_command(name) is not None:
                 expanded = expand_command("/" + name + (" " + args if args else ""))

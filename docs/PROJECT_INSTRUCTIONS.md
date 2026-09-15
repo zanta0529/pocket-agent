@@ -17,24 +17,24 @@
 
 ## 2. 目錄與責任邊界
 
-| 路徑                                                       | 用途與修改原則                                                                                           |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `main.py`                                                  | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                             |
-| `agent/core.py`                                            | Agent 核心協調；修改前追蹤引擎、工具與前端的呼叫關係。                                                   |
-| `agent/engines/`                                           | BaseEngine、事件資料型別、factory 與 provider 實作。                                                     |
-| `agent/frontend/`                                          | CLI 策略；拆分為 input、render、state、commands 等模組。                                                 |
-| `agent/auth.py`                                            | 認證與 provider 設定；避免暴露憑證或觸發真實登入。                                                       |
-| `agent/mcp_manager.py`                                     | MCP 連線與生命週期。                                                                                     |
-| `agent/shell.py`                                           | 命令執行、確認、逾時與編碼處理；屬安全敏感區域。                                                         |
-| `agent/fs_tools.py`、`agent/web_tools.py`                  | 原生檔案與網路工具實作；包含安全沙箱、網頁解析與人類授權相關機制，修改時須確認並維持其實際防護邊界。     |
-| `agent/paths.py`                                           | 開發／PyInstaller／portable 路徑與使用者資料位置。                                                       |
-| `agent/sessions.py`                                        | JSON 對話持久化。                                                                                        |
-| `agent/registry.py`、`agent/skills.py`、`agent/plugins.py` | 擴充註冊、技能載入與匯入。                                                                               |
-| `skills/`、`agents/`、`commands/`                          | 產品隨附的技能、子代理與命令，不等同開發代理規範。                                                       |
-| `.agents/skills/`                                          | 開發代理技能；維持通用性，專案差異放在本指南。                                                           |
-| `tests/`                                                   | pytest 回歸測試。                                                                                        |
-| `build_portable.py`、`PocketAgent.spec`                    | portable 與 PyInstaller 包裝設定。                                                                       |
-| `docs/`                                                    | 工程規範與文件；代理入口見根目錄 `AGENTS.md`、`.agents/AGENTS.md` 與 `.github/copilot-instructions.md`。 |
+| 路徑                                                                                        | 用途與修改原則                                                                                           |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `main.py`                                                                                   | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                             |
+| `src/pocket_agent/core.py`                                                                  | Agent 核心協調；修改前追蹤引擎、工具與前端的呼叫關係。                                                   |
+| `agent/engines/`                                                                            | BaseEngine、事件資料型別、factory 與 provider 實作。                                                     |
+| `agent/frontend/`                                                                           | CLI 策略；拆分為 input、render、state、commands 等模組。                                                 |
+| `src/pocket_agent/auth.py`                                                                  | 認證與 provider 設定；避免暴露憑證或觸發真實登入。                                                       |
+| `src/pocket_agent/mcp_manager.py`                                                           | MCP 連線與生命週期。                                                                                     |
+| `src/pocket_agent/shell.py`                                                                 | 命令執行、確認、逾時與編碼處理；屬安全敏感區域。                                                         |
+| `src/pocket_agent/fs_tools.py`、`src/pocket_agent/web_tools.py`                             | 原生檔案與網路工具實作；包含安全沙箱、網頁解析與人類授權相關機制，修改時須確認並維持其實際防護邊界。     |
+| `src/pocket_agent/paths.py`                                                                 | 開發／PyInstaller／portable 路徑與使用者資料位置。                                                       |
+| `src/pocket_agent/sessions.py`                                                              | JSON 對話持久化。                                                                                        |
+| `src/pocket_agent/registry.py`、`src/pocket_agent/skills.py`、`src/pocket_agent/plugins.py` | 擴充註冊、技能載入與匯入。                                                                               |
+| `skills/`、`subagents/`、`commands/`                                                           | 產品隨附的技能、子代理與命令，不等同開發代理規範。                                                       |
+| `.subagents/skills/`                                                                           | 開發代理技能；維持通用性，專案差異放在本指南。                                                           |
+| `tests/`                                                                                    | pytest 回歸測試。                                                                                        |
+| `build_portable.py`、`PocketAgent.spec`                                                     | portable 與 PyInstaller 包裝設定。                                                                       |
+| `docs/`                                                                                     | 工程規範與文件；代理入口見根目錄 `AGENTS.md`、`.subagents/AGENTS.md` 與 `.github/copilot-instructions.md`。 |
 
 ### 2.1 架構設計原則：Adapter／Strategy／Factory
 
@@ -44,12 +44,12 @@
 
 #### 設計模式與責任邊界
 
-| 模式／邊界        | 現有對應                                                  | 修改原則                                                                             |
-| ----------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Adapter（轉接器） | `BaseEngine`、`OpenAIResponsesEngine`、`OllamaChatEngine` | 將供應商的請求格式、SDK 呼叫與串流回應轉換為統一的 `stream_chat` 與 `Event*` 契約。  |
-| Strategy（策略）  | `FrontendStrategy`、`CliFrontend`                         | 封裝前端的啟動與互動方式；共同業務流程交由核心處理。                                 |
-| Factory（工廠）   | `EngineFactory.create(provider, client, model)`           | 集中選擇及建立引擎，避免各呼叫端自行判斷供應商並建構具體實作。                       |
-| 共用流程協調      | `agent/core.py` 與既有共用模組                            | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依供應商複製流程。       |
+| 模式／邊界        | 現有對應                                                  | 修改原則                                                                            |
+| ----------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Adapter（轉接器） | `BaseEngine`、`OpenAIResponsesEngine`、`OllamaChatEngine` | 將供應商的請求格式、SDK 呼叫與串流回應轉換為統一的 `stream_chat` 與 `Event*` 契約。 |
+| Strategy（策略）  | `FrontendStrategy`、`CliFrontend`                         | 封裝前端的啟動與互動方式；共同業務流程交由核心處理。                                |
+| Factory（工廠）   | `EngineFactory.create(provider, client, model)`           | 集中選擇及建立引擎，避免各呼叫端自行判斷供應商並建構具體實作。                      |
+| 共用流程協調      | `src/pocket_agent/core.py` 與既有共用模組                 | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依供應商複製流程。      |
 
 以上描述為現有抽象的設計角色與後續修改準則，不代表所有歷史程式碼均已完全解耦。修改前仍須確認實際呼叫路徑與契約，不得只依類別名稱推定行為。
 
@@ -90,7 +90,7 @@
   開發模式則由 `env_path()`、`mcp_config_path()` 指向版本庫位置。不得將可寫資料塞入唯讀 bundle。
 - 對話保存在 `~/.pocket-agent/sessions/*.json`；修改格式須考慮既有資料讀取與遷移。
 - 產品技能從 bundle 的 `skills/` 與使用者 `~/.pocket-agent/skills/` 載入，同名時使用者優先；
-  SKILL.md 使用 name／description frontmatter。不要將 `.agents/skills/` 當成產品載入目錄。
+  SKILL.md 使用 name／description frontmatter。不要將 `.subagents/skills/` 當成產品載入目錄。
 - 技能／外掛 ZIP、附件、MCP 回應與模型工具參數皆是不可信輸入；維持並補強路徑穿越、覆寫與解壓防護。
 - 不讀取、列印或提交真實 `.env`、token、私人 session、瀏覽器狀態或 `agent.log`；需要設定時先讀範例檔。
 - 不自動啟動 OAuth、真實模型呼叫、MCP／瀏覽器服務、更新器或外部腳本。
@@ -102,7 +102,7 @@
 
 ### 5.1 專案政策
 
-- **原生工具優先**：Pocket Agent 已內建 `agent/fs_tools.py` 與 `agent/web_tools.py`。進行檔案讀寫、全域搜尋 (grep/find)、或網頁搜尋時，**必須優先使用系統提供的原生工具**。嚴禁使用 `run_command` 包裝 `echo`、`sed`、`grep` 或 `python -c` 腳本來處理單純的 I/O 操作，以避免觸發 EDR 警報與跳脫字元錯誤。
+- **原生工具優先**：Pocket Agent 已內建 `src/pocket_agent/fs_tools.py` 與 `src/pocket_agent/web_tools.py`。進行檔案讀寫、全域搜尋 (grep/find)、或網頁搜尋時，**必須優先使用系統提供的原生工具**。嚴禁使用 `run_command` 包裝 `echo`、`sed`、`grep` 或 `python -c` 腳本來處理單純的 I/O 操作，以避免觸發 EDR 警報與跳脫字元錯誤。
 - 對中文文件明確使用 UTF-8，不以有損解碼結果覆蓋原檔。
 - 既有檔案覆寫前需透過原生工具進行確認；缺少工具時，僅可依第 5.2 節所列條件申請替代方式；未取得授權或受權限限制時，停止並交付手動方案，不得繞過限制。
 - 開發代理不得自動執行測試、Lint、格式化、建置或 pre-commit；只提供手動命令。
@@ -118,7 +118,7 @@
 
 ### 5.3 CLI 與終端機渲染限制 (Terminal UI & Rendering)
 
-- **統一的工具渲染色彩語意**：在 `agent/frontend/cli_render.py` 中渲染工具呼叫時，必須遵守以下顏色慣例，以提供一致的 UX 警示體驗：
+- **統一的工具渲染色彩語意**：在 `src/pocket_agent/frontend/cli_render.py` 中渲染工具呼叫時，必須遵守以下顏色慣例，以提供一致的 UX 警示體驗：
   - **動作分類 (Action)**：`Read`、`Write`、`Action` 等行為字眼一律維持黃色 (`bold yellow`)。
   - **工具名稱 (Tool Name)**：內建工具 (Native Tools) 為綠色 (`bold green`)；非內建工具 (Non-native / MCP Tools) 為藍青色 (`bold cyan`)。
   - **狀態小圓點 (Bullet)**：安全的本機唯讀操作 (Read + 內建) 為綠色 (`bold green`)；潛在風險操作 (Write 或非內建工具) 則為紅色 (`bold red`)。
@@ -164,5 +164,5 @@ venv\Scripts\python.exe -m pytest tests/test_cli_flow.py
 ## 8. 專案入口與設定基準
 
 - Python 程式碼格式與靜態檢查以 `pyproject.toml` 的 Ruff 設定為準；執行時相容性以 Python 3.11 為基準。若設定不一致，先回報差異，不自行調整版本或重建鎖定檔。
-- 根目錄 `AGENTS.md`、`.agents/AGENTS.md` 等皆為薄入口，應統一引導讀取 `docs/AI_INSTRUCTIONS.md` 與本專案指南，不重複維護工程與工具政策。
+- 根目錄 `AGENTS.md`、`.subagents/AGENTS.md` 等皆為薄入口，應統一引導讀取 `docs/AI_INSTRUCTIONS.md` 與本專案指南，不重複維護工程與工具政策。
 - 各平台入口的自動載入狀態需依實際工具讀取結果判定，不可僅依賴代理的口頭宣稱。
