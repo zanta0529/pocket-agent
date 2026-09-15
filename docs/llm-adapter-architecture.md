@@ -1,6 +1,6 @@
 # Pocket Agent 雙軌大模型轉接架構 (LLM Engine Adapter)
 
-為了解決不同 LLM 提供者（如 OpenAI 與 Ollama）在 API 規格與進階功能（例如 Reasoning 推理過程）上的差異，Pocket Agent 採用了 **Adapter Pattern (轉接器模式)**，將底層的模型通訊抽象化，確保上層介面（CLI）能無縫切換並統一處理。
+為了解決不同 LLM 提供者（如 OpenAI、OpenRouter 與 Ollama）在 API 規格與進階功能（例如 Reasoning 推理過程）上的差異，Pocket Agent 採用了 **Adapter Pattern (轉接器模式)**，將底層的模型通訊抽象化，確保上層介面（CLI）能無縫切換並統一處理。
 
 ## 架構設計視覺化
 
@@ -59,6 +59,6 @@ flowchart TD
 
 ## 關鍵優勢
 
-1. **無縫切換**：使用者可透過 `/model` 指令即時切換線上 (OpenAI) 或離線 (Ollama) 模型，上層的渲染邏輯與工具呼叫邏輯完全不需修改。
+1. **無縫切換**：使用者可透過 `/model` 指令即時切換線上 (OpenAI / OpenRouter) 或離線 (Ollama) 模型，上層的渲染邏輯與工具呼叫邏輯完全不需修改。
 2. **平滑相容**：無論底層是否原生支援分離式的 Reasoning 欄位，轉接器都會將其統一收斂為 `EventThinking` 事件，確保跨模型的使用者體驗一致。
 3. **擴充性高**：未來若有新的 API 供應商（如 Anthropic 或 Google Gemini），只需新增對應的 Engine 類別實作 `BaseEngine`，不需修改核心流程。

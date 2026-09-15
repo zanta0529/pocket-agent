@@ -8,7 +8,7 @@
 
 **PocketAgent** 是一款具備企業級擴充性與安全性的本機端 Python AI 代理工具，提供極簡、高效且專注於開發者體驗的命令列 (CLI) 介面。
 
-本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案內建強大的本地端大語言模型 (Ollama) 支援，滿足對資料隱私具高度要求的離線開發場景。
+本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API**，並內建強大的本地端大語言模型 (Ollama) 支援，滿足對資料隱私具高度要求的離線開發場景。
 
 ---
 
@@ -16,7 +16,7 @@
 
 ### 1. 雙軌大模型轉接架構 (LLM Engine Adapter Architecture)
 
-- **OpenAI Responses API**：原生支援 ChatGPT Plus/Pro 最新協定，完美整合工具呼叫 (Function Calling) 與反思推理 (Reasoning) 能力。
+- **OpenAI 核心 / OpenRouter 相容**：原生支援 ChatGPT Plus/Pro 最新協定，並完全相容於 OpenRouter，完美整合工具呼叫 (Function Calling) 與反思推理 (Reasoning) 能力。
 - **Ollama Chat Completions**：底層採用 Adapter Pattern (轉接器模式) 平滑相容標準 API，具備內建的 `<think>` 標籤狀態機剖析器。即使切換至本地端開源推理模型 (如 DeepSeek-R1)，亦能將思考過程無縫對接，並精準擷取 Token 用量。
 - **動態切換**：可直接透過 CLI 的 `/model` 指令，於運行中即時互動切換服務提供者與大模型。
 
