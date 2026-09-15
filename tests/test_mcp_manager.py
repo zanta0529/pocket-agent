@@ -10,7 +10,7 @@ import asyncio
 import pytest
 import yaml
 
-from pocket_agent.mcp_manager import MCPManager, MCPStartupResult, ToolEntry
+from pocket_agent.extensions.mcp import MCPManager, MCPStartupResult, ToolEntry
 
 
 def test_mcp_artifact_interception():
@@ -38,7 +38,7 @@ def test_mcp_artifact_interception():
         temp_dir = Path(tempfile.mkdtemp())
 
         # 攔截 user_dir 以避免影響真實的 ~/.pocket-agent
-        with patch("pocket_agent.paths.user_dir") as mock_user_dir:
+        with patch("pocket_agent.system.paths.user_dir") as mock_user_dir:
             mock_user_dir.return_value = temp_dir
 
             await manager.call("write_to_file", args)
@@ -81,7 +81,7 @@ def test_mcp_artifact_interception_no_user_facing():
 
         temp_dir = Path(tempfile.mkdtemp())
 
-        with patch("pocket_agent.paths.user_dir") as mock_user_dir:
+        with patch("pocket_agent.system.paths.user_dir") as mock_user_dir:
             mock_user_dir.return_value = temp_dir
 
             await manager.call("write_to_file", args)

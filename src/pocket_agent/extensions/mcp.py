@@ -16,7 +16,7 @@ import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from .paths import mcp_config_path, mcp_example_path
+from pocket_agent.system.paths import mcp_config_path, mcp_example_path
 
 try:
     from mcp.client.sse import sse_client
@@ -98,13 +98,13 @@ class MCPManager:
 
         # 注入參數（模型看不到，但 server 需要）
         full_args = {**entry.inject, **arguments}
-        from pocket_agent.core import log
+        from pocket_agent.core.agent import log
 
         # Artifact 隔離攔截
         if tool_name in ("write_to_file", "write_file", "create_file") and "ArtifactMetadata" in full_args:
             artifact_meta = full_args.pop("ArtifactMetadata")
             if artifact_meta.get("UserFacing"):
-                from .paths import user_dir
+                from pocket_agent.system.paths import user_dir
 
                 target_key = "TargetFile" if "TargetFile" in full_args else "path"
                 if target_key in full_args:

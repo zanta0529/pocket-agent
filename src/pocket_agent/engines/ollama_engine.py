@@ -1,7 +1,7 @@
 import logging
 from typing import Any, AsyncGenerator, Callable, Optional
 
-from .base import (
+from pocket_agent.engines.base import (
     BaseEngine,
     EventText,
     EventThinking,

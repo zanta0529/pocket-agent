@@ -8,9 +8,8 @@ from pathlib import Path
 
 from openai import NOT_GIVEN, AsyncOpenAI
 
-from pocket_agent.config import config
-
-from .paths import is_packaged, user_dir
+from pocket_agent.system.config import config
+from pocket_agent.system.paths import is_packaged, user_dir
 
 # ── Log 檔設定 ────────────────────────────────────
 # 開發時寫在執行目錄；發佈版寫 ~/.pocket-agent/，因為程式所在目錄
@@ -55,16 +54,21 @@ for _noisy in (
 
 log = logging.getLogger("pocket-agent")
 
-from .doctools import DOC_TOOLS, call_doc_tool, is_doc_tool  # noqa: E402
-from .files import FileUploader  # noqa: E402
-from .fs_tools import FS_TOOLS, call_fs_tool, is_fs_tool  # noqa: E402
-from .hooks import run_hooks  # noqa: E402
-from .imagegen import image_tool, save_image_b64  # noqa: E402
-from .mcp_manager import MCPManager  # noqa: E402
-from .shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: E402
-from .skills import call_skill_tool, is_skill_tool, skill_tools, skills_index_prompt  # noqa: E402
-from .subagents import get_subagent, is_subagent_tool, subagent_tools  # noqa: E402
-from .web_tools import WEB_TOOLS, call_web_tool, is_web_tool  # noqa: E402
+from pocket_agent.core.files import FileUploader  # noqa: E402
+from pocket_agent.core.subagents import get_subagent, is_subagent_tool, subagent_tools  # noqa: E402
+from pocket_agent.extensions.hooks import run_hooks  # noqa: E402
+from pocket_agent.extensions.mcp import MCPManager  # noqa: E402
+from pocket_agent.extensions.skills import (  # noqa: E402
+    call_skill_tool,
+    is_skill_tool,
+    skill_tools,
+    skills_index_prompt,
+)
+from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool, is_doc_tool  # noqa: E402
+from pocket_agent.tools.fs import FS_TOOLS, call_fs_tool, is_fs_tool  # noqa: E402
+from pocket_agent.tools.image import image_tool, save_image_b64  # noqa: E402
+from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: E402
+from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_web_tool  # noqa: E402
 
 DEFAULT_MAX_TOOL_ROUNDS = 10
 
@@ -80,7 +84,7 @@ class Agent:
         max_tool_rounds: int | None = None,  # 未指定時讀 MAX_TOOL_ROUNDS 環境變數
         is_subagent: bool = False,  # 子代理不觸發 hooks、不能再開子代理
     ):
-        from pocket_agent.config import config
+        from pocket_agent.system.config import config
 
         self.client = client
         self.mcp = mcp
@@ -186,7 +190,7 @@ class Agent:
             else:
                 provider = "ollama"
 
-            from .engines import EngineFactory
+            from pocket_agent.engines import EngineFactory
 
             engine = EngineFactory.create(provider, self.client, self.model)
             hint = engine.parse_api_error(e)
@@ -398,7 +402,7 @@ class Agent:
 
         sa = get_subagent(name)
         if sa is None:
-            from .subagents import list_subagents
+            from pocket_agent.core.subagents import list_subagents
 
             available = "、".join(a["name"] for a in list_subagents()) or "（無）"
             return f"[ERROR] 找不到子代理「{name}」。可用：{available}"
@@ -477,7 +481,7 @@ class Agent:
         else:
             provider = "ollama"
 
-        from .engines import (
+        from pocket_agent.engines import (
             EngineFactory,
             EventImageGenerationDone,
             EventText,

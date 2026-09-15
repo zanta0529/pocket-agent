@@ -7,8 +7,8 @@ from rich.prompt import Confirm, Prompt
 from rich.rule import Rule
 from rich.text import Text
 
-from .auth import get_access_token, logout
-from .paths import mcp_config_path
+from pocket_agent.system.auth import get_access_token, logout
+from pocket_agent.system.paths import mcp_config_path
 
 console = Console()
 
@@ -40,7 +40,7 @@ def run_setup() -> None:
 
 
 def _step_provider() -> str:
-    from pocket_agent.config import SUPPORTED_PROVIDERS, config
+    from pocket_agent.system.config import SUPPORTED_PROVIDERS, config
 
     console.print(Rule("① 選擇服務供應商 (Provider)"))
     console.print()
@@ -65,12 +65,12 @@ def _step_provider() -> str:
 
 
 def _step_login(provider: str) -> None:
-    from pocket_agent.config import config
+    from pocket_agent.system.config import config
 
     if provider == "openai":
         console.print(Rule("② 登入 OPENAI"))
         console.print()
-        from .auth import _is_expired, _load_token
+        from pocket_agent.system.auth import _is_expired, _load_token
 
         token = _load_token(provider)
         if token and not _is_expired(token):
@@ -110,7 +110,7 @@ def _step_login(provider: str) -> None:
 
 
 def _step_model(provider: str) -> None:
-    from pocket_agent.config import config
+    from pocket_agent.system.config import config
 
     console.print(Rule("③ 預設模型"))
     console.print()
@@ -121,7 +121,7 @@ def _step_model(provider: str) -> None:
     # 嘗試動態取得遠端/本地可用模型
     fetched = []
     try:
-        from pocket_agent.auth import fetch_available_models
+        from pocket_agent.system.auth import fetch_available_models
 
         fetched = fetch_available_models(provider)
     except Exception:

@@ -1,9 +1,7 @@
 import logging
 from typing import Any, AsyncGenerator, Callable, Optional
 
-from pocket_agent.imagegen import disable_model_param
-
-from .base import (
+from pocket_agent.engines.base import (
     BaseEngine,
     EventImageGenerationDone,
     EventText,
@@ -13,6 +11,7 @@ from .base import (
     EventToolCallStart,
     EventUsage,
 )
+from pocket_agent.tools.image import disable_model_param
 
 log = logging.getLogger("pocket-agent")
 

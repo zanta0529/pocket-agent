@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pocket_agent.auth import fetch_available_models
+from pocket_agent.system.auth import fetch_available_models
 
 
 def test_fetch_available_models_ollama():
@@ -23,8 +23,8 @@ def test_fetch_available_models_ollama():
     mock_client_class.return_value.__enter__.return_value = mock_client_instance
 
     with (
-        patch("pocket_agent.auth.httpx.Client", mock_client_class),
-        patch("pocket_agent.auth.load_config", return_value={}),
+        patch("pocket_agent.system.auth.httpx.Client", mock_client_class),
+        patch("pocket_agent.system.auth.load_config", return_value={}),
         patch("dotenv.load_dotenv"),
     ):
         with patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://192.168.1.100:11434"}):
@@ -56,8 +56,8 @@ def test_fetch_available_models_ollama_v1_suffix():
     mock_client_class.return_value.__enter__.return_value = mock_client_instance
 
     with (
-        patch("pocket_agent.auth.httpx.Client", mock_client_class),
-        patch("pocket_agent.auth.load_config", return_value={}),
+        patch("pocket_agent.system.auth.httpx.Client", mock_client_class),
+        patch("pocket_agent.system.auth.load_config", return_value={}),
         patch("dotenv.load_dotenv"),
     ):
         with patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://192.168.1.100:11434/v1"}):
@@ -78,8 +78,8 @@ def test_fetch_available_models_ollama_exception():
     mock_client_class.return_value.__enter__.return_value = mock_client_instance
 
     with (
-        patch("pocket_agent.auth.httpx.Client", mock_client_class),
-        patch("pocket_agent.auth.load_config", return_value={}),
+        patch("pocket_agent.system.auth.httpx.Client", mock_client_class),
+        patch("pocket_agent.system.auth.load_config", return_value={}),
         patch("dotenv.load_dotenv"),
     ):
         models = fetch_available_models(provider="ollama")
@@ -87,16 +87,16 @@ def test_fetch_available_models_ollama_exception():
 
 
 def test_explicit_ollama_client_uses_env():
-    from pocket_agent.auth import get_openai_client
+    from pocket_agent.system.auth import get_openai_client
 
     with (
         patch(
-            "pocket_agent.config.config.get",
+            "pocket_agent.system.config.config.get",
             side_effect=lambda k, d=None: "http://environment:11434" if k == "ollama_base_url" else "ollama",
         ),
         patch("dotenv.load_dotenv"),
         patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://environment:11434"}),
-        patch("pocket_agent.auth.httpx.AsyncClient") as http,
+        patch("pocket_agent.system.auth.httpx.AsyncClient") as http,
         patch("openai.AsyncOpenAI") as client,
     ):
         result = get_openai_client(provider="ollama", model="test-model")
@@ -111,12 +111,12 @@ def test_explicit_ollama_client_uses_env():
 
 
 def test_explicit_openai_client_preserves_headers():
-    from pocket_agent.auth import CODEX_BASE_URL, get_openai_client
+    from pocket_agent.system.auth import CODEX_BASE_URL, get_openai_client
 
     with (
-        patch("pocket_agent.config.config.get", return_value="openai"),
-        patch("pocket_agent.auth.get_access_token", return_value="mock-token") as token,
-        patch("pocket_agent.auth._extract_account_id", return_value="mock-account"),
+        patch("pocket_agent.system.config.config.get", return_value="openai"),
+        patch("pocket_agent.system.auth.get_access_token", return_value="mock-token") as token,
+        patch("pocket_agent.system.auth._extract_account_id", return_value="mock-account"),
         patch("openai.AsyncOpenAI") as client,
     ):
         get_openai_client(provider="openai")
@@ -134,14 +134,14 @@ def test_explicit_openai_client_preserves_headers():
 
 
 def test_explicit_ollama_environment_fallback():
-    from pocket_agent.auth import get_openai_client
-    from pocket_agent.config import config
+    from pocket_agent.system.auth import get_openai_client
+    from pocket_agent.system.config import config
 
     with (
         patch.object(config.json_provider, "get", return_value=None),
         patch("dotenv.load_dotenv"),
         patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://environment:11434/"}),
-        patch("pocket_agent.auth.httpx.AsyncClient"),
+        patch("pocket_agent.system.auth.httpx.AsyncClient"),
         patch("openai.AsyncOpenAI") as client,
     ):
         # Allow ConfigManager to do its job reading from EnvConfigProvider

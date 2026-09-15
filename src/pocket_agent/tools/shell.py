@@ -124,7 +124,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
 
     log.debug("CLI run: %s", command)
 
-    from pocket_agent.config import config
+    from pocket_agent.system.config import config
 
     sandbox_mode = config.get("use_sandbox", "none").lower()
 

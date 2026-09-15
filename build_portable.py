@@ -43,7 +43,7 @@ PYTHON_EXCLUDES = {
 # 要帶進 app/ 的原始碼與資源
 APP_ITEMS = [
     "src",
-    "browser_mcp.py",
+    "mcp_servers",
     "gui",
     "skills",
     "commands",
@@ -137,7 +137,8 @@ def main() -> int:
     print("[4/5] 產生啟動器 ...")
     (OUT / "start.bat").write_text(START_BAT, encoding="ascii")
     (app / "PORTABLE").write_text(
-        "可攜式發佈版標記。agent/paths.py 靠這個檔判斷要把設定與 log\n寫到 ~/.pocket-agent 而非程式目錄。請勿刪除。\n",
+        "可攜式發佈版標記。pocket_agent/system/paths.py 靠這個檔判斷要把設定與 log\n"
+        "寫到 ~/.pocket-agent 而非程式目錄。請勿刪除。\n",
         encoding="utf-8",
     )
 

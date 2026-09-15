@@ -11,16 +11,16 @@ env_path()，那時模組層級的 getenv 早就跑完了。paths 沒有相依�
 
 from dotenv import load_dotenv as _load_dotenv
 
-from .paths import env_path as _env_path
+from pocket_agent.system.paths import env_path as _env_path
 
 _load_dotenv(_env_path())
 
-from .auth import get_access_token, get_model, get_openai_client, logout  # noqa: E402
-from .core import Agent  # noqa: E402
-from .files import FileUploader  # noqa: E402
-from .imagegen import generate_image  # noqa: E402
-from .mcp_manager import MCPManager  # noqa: E402
-from .wizard import run_setup  # noqa: E402
+from pocket_agent.core.agent import Agent  # noqa: E402
+from pocket_agent.core.files import FileUploader  # noqa: E402
+from pocket_agent.extensions.mcp import MCPManager  # noqa: E402
+from pocket_agent.system.auth import get_access_token, get_model, get_openai_client, logout  # noqa: E402
+from pocket_agent.system.wizard import run_setup  # noqa: E402
+from pocket_agent.tools.image import generate_image  # noqa: E402
 
 __all__ = [
     "Agent",

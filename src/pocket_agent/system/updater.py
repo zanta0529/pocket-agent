@@ -23,7 +23,7 @@ from pathlib import Path
 
 import httpx
 
-from .paths import bundle_dir, is_frozen, is_packaged, is_portable
+from pocket_agent.system.paths import bundle_dir, is_frozen, is_packaged, is_portable
 
 log = logging.getLogger("pocket-agent")
 
@@ -50,7 +50,7 @@ _PRESERVE_NAMES = {
 
 def _ssl_verify():
     """沿用 agent.auth 已經注入好的 truststore 設定（支援公司 proxy CA）。"""
-    from .auth import _SSL_VERIFY
+    from pocket_agent.system.auth import _SSL_VERIFY
 
     return _SSL_VERIFY
 

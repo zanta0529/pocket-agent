@@ -32,4 +32,4 @@ servers:
   # browser:
   #   transport: stdio
   #   command: python
-  #   args: ["browser_mcp.py"]
+  #   args: ["mcp_servers/browser_mcp.py"]

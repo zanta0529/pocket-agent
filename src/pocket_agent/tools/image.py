@@ -11,7 +11,7 @@ import base64
 import mimetypes
 from pathlib import Path
 
-from .auth import get_model, get_openai_client
+from pocket_agent.system.auth import get_model, get_openai_client
 
 # gpt-image-2 支援的參數
 VALID_SIZES = {"auto", "1024x1024", "1536x1024", "1024x1536"}
@@ -92,7 +92,7 @@ async def generate_image(
         raise ValueError(f"quality 必須是 {sorted(VALID_QUALITIES)}，收到：{quality}")
 
     client = get_openai_client(provider="openai")
-    from pocket_agent.config import config
+    from pocket_agent.system.config import config
 
     wrapper_model = config.get("openai_image_wrapper_model") or get_model()
 

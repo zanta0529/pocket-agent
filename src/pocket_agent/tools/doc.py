@@ -6,7 +6,7 @@
 
 from pathlib import Path
 
-from .imagegen import _next_available
+from pocket_agent.tools.image import _next_available
 
 OUTPUT_DIR = Path("generated_files")
 

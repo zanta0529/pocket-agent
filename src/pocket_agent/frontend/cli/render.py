@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
 
-from .cli_state import CliState
+from pocket_agent.frontend.cli.state import CliState
 
 
 def plain(value: object) -> str:

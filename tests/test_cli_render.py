@@ -5,8 +5,8 @@ from prompt_toolkit.formatted_text import fragment_list_to_text
 from rich.cells import cell_len
 from rich.console import Console
 
-from pocket_agent.frontend.cli_render import CliRenderer, toolbar
-from pocket_agent.frontend.cli_state import CliState
+from pocket_agent.frontend.cli.render import CliRenderer, toolbar
+from pocket_agent.frontend.cli.state import CliState
 
 
 @pytest.mark.parametrize("width", [0, 1, 5, 40, 60, 80, 120])

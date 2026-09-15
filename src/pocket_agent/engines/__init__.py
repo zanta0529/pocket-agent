@@ -1,4 +1,4 @@
-from .base import (
+from pocket_agent.engines.base import (
     BaseEngine,
     EventImageGenerationDone,
     EventText,
@@ -8,9 +8,9 @@ from .base import (
     EventToolCallStart,
     EventUsage,
 )
-from .factory import EngineFactory
-from .ollama_engine import OllamaChatEngine
-from .openai_engine import OpenAIResponsesEngine
+from pocket_agent.engines.factory import EngineFactory
+from pocket_agent.engines.ollama_engine import OllamaChatEngine
+from pocket_agent.engines.openai_engine import OpenAIResponsesEngine
 
 __all__ = [
     "BaseEngine",

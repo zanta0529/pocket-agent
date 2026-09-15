@@ -1,6 +1,6 @@
 # Pocket Agent ChatGPT OAuth 2.0 認證機制
 
-本專案（主要實作於 `src/pocket_agent/auth.py`）採用了 **OAuth 2.0 PKCE (Proof Key for Code Exchange)** 授權流程來處理 ChatGPT 的登入。
+本專案（主要實作於 `src/pocket_agent/system/auth.py`）採用了 **OAuth 2.0 PKCE (Proof Key for Code Exchange)** 授權流程來處理 ChatGPT 的登入。
 
 這套機制不需要在程式碼中寫死 Client Secret，能有效防止憑證外洩，是原生桌面應用程式或 CLI 工具中最安全、也是業界標準的作法。
 

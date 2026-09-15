@@ -119,13 +119,13 @@ pip install -r requirements.txt
 若您首次使用，建議先執行設定精靈完成 API 參數與登入配置（將儲存於 `~/.pocket-agent/config.json`）：
 
 ```bash
-python main.py setup
+python -m pocket_agent setup
 ```
 
 完成設定後，即可啟動代理：
 
 ```bash
-python main.py
+python -m pocket_agent
 ```
 
 ---
@@ -147,7 +147,7 @@ python main.py
 若想在啟動時自動載入前一次未完成的對話，可附加 `--resume` 參數：
 
 ```bash
-python main.py --resume
+python -m pocket_agent --resume
 ```
 
 命令列介面採可捲動對話版面；首屏只列目前專案、模型與 MCP 工具數，詳細清單按需查看。底端狀態列（Toolbar）會即時顯示當次對話累計的 Token 用量。
@@ -184,7 +184,7 @@ servers:
   browser:
     transport: stdio
     command: python
-    args: ['browser_mcp.py']
+    args: ['mcp_servers/browser_mcp.py']
 ```
 
 _(💡 提示：若工具需使用敏感的 API Key，可利用 `inject` 參數配置，PocketAgent 會在底層自動注入，確保模型層不會接觸到金鑰明文。)_

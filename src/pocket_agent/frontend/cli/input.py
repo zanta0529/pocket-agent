@@ -12,8 +12,8 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.output import ColorDepth
 
-from .cli_render import plain, toolbar
-from .cli_state import CliState
+from pocket_agent.frontend.cli.render import plain, toolbar
+from pocket_agent.frontend.cli.state import CliState
 
 BUILTINS = {
     "add-dir": "單次會話內，將外部資料夾加入工作範圍",
@@ -101,8 +101,8 @@ class SlashCommandCompleter(Completer):
             return
         if not text.startswith("/") or any(c.isspace() for c in text):
             return
-        from pocket_agent.commands import list_commands
-        from pocket_agent.skills import list_skills
+        from pocket_agent.extensions.skills import list_skills
+        from pocket_agent.system.commands import list_commands
 
         commands = dict(BUILTINS)
         if self.state.provider == "openai":
@@ -115,7 +115,7 @@ class SlashCommandCompleter(Completer):
             commands.setdefault(skill["name"], f"[Skill] {skill.get('description', '')}")
 
         # Add subagents as slash commands
-        from pocket_agent.subagents import list_subagents
+        from pocket_agent.core.subagents import list_subagents
 
         for sa in list_subagents():
             commands.setdefault(sa["name"], f"[Subagent] {sa.get('description', '')}")

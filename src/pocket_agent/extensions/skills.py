@@ -21,8 +21,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from .paths import bundle_dir, user_dir
-from .registry import MarkdownRegistry, parse_frontmatter
+from pocket_agent.system.paths import bundle_dir, user_dir
+from pocket_agent.system.registry import MarkdownRegistry, parse_frontmatter
 
 log = logging.getLogger("pocket-agent")
 

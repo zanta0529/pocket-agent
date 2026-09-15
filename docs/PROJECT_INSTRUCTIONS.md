@@ -19,17 +19,14 @@
 
 | 路徑                                                                                        | 用途與修改原則                                                                                           |
 | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `main.py`                                                                                   | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                             |
-| `src/pocket_agent/core.py`                                                                  | Agent 核心協調；修改前追蹤引擎、工具與前端的呼叫關係。                                                   |
-| `agent/engines/`                                                                            | BaseEngine、事件資料型別、factory 與 provider 實作。                                                     |
-| `agent/frontend/`                                                                           | CLI 策略；拆分為 input、render、state、commands 等模組。                                                 |
-| `src/pocket_agent/auth.py`                                                                  | 認證與 provider 設定；避免暴露憑證或觸發真實登入。                                                       |
-| `src/pocket_agent/mcp_manager.py`                                                           | MCP 連線與生命週期。                                                                                     |
-| `src/pocket_agent/shell.py`                                                                 | 命令執行、確認、逾時與編碼處理；屬安全敏感區域。                                                         |
-| `src/pocket_agent/fs_tools.py`、`src/pocket_agent/web_tools.py`                             | 原生檔案與網路工具實作；包含安全沙箱、網頁解析與人類授權相關機制，修改時須確認並維持其實際防護邊界。     |
-| `src/pocket_agent/paths.py`                                                                 | 開發／PyInstaller／portable 路徑與使用者資料位置。                                                       |
-| `src/pocket_agent/sessions.py`                                                              | JSON 對話持久化。                                                                                        |
-| `src/pocket_agent/registry.py`、`src/pocket_agent/skills.py`、`src/pocket_agent/plugins.py` | 擴充註冊、技能載入與匯入。                                                                               |
+| `src/pocket_agent/main.py`                                                                  | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                             |
+| `src/pocket_agent/core/`                                                                    | 核心業務邏輯：Agent 協調、對話紀錄 (sessions)、上下文與錯誤處理 (exceptions)。                           |
+| `src/pocket_agent/engines/`                                                                 | LLM 引擎實作：BaseEngine、OpenAI、OpenRouter、Ollama 與 Factory。                                        |
+| `src/pocket_agent/frontend/`                                                                | 使用者介面策略：目前實作 `cli/` (包含 input、render、state、commands 等模組)。                           |
+| `src/pocket_agent/system/`                                                                  | 系統基礎設施：認證 (auth)、路徑解析 (paths)、設定管理 (config) 與初始設定精靈 (wizard)。                 |
+| `src/pocket_agent/extensions/`                                                              | 擴充功能：MCP (Model Context Protocol) 伺服器生命週期與掛載管理。                                        |
+| `src/pocket_agent/tools/`                                                                   | 內建工具實作：Shell 執行、原生檔案操作 (files)、網路請求 (web)、圖片生成 (image)、文件產出 (document)。  |
+
 | `skills/`、`subagents/`、`commands/`                                                           | 產品隨附的技能、子代理與命令，不等同開發代理規範。                                                       |
 | `.subagents/skills/`                                                                           | 開發代理技能；維持通用性，專案差異放在本指南。                                                           |
 | `tests/`                                                                                    | pytest 回歸測試。                                                                                        |
@@ -49,7 +46,7 @@
 | Adapter（轉接器） | `BaseEngine`、`OpenAIResponsesEngine`、`OllamaChatEngine` | 將供應商的請求格式、SDK 呼叫與串流回應轉換為統一的 `stream_chat` 與 `Event*` 契約。 |
 | Strategy（策略）  | `FrontendStrategy`、`CliFrontend`                         | 封裝前端的啟動與互動方式；共同業務流程交由核心處理。                                |
 | Factory（工廠）   | `EngineFactory.create(provider, client, model)`           | 集中選擇及建立引擎，避免各呼叫端自行判斷供應商並建構具體實作。                      |
-| 共用流程協調      | `src/pocket_agent/core.py` 與既有共用模組                 | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依供應商複製流程。      |
+| 共用流程協調      | `src/pocket_agent/core/agent.py` 與既有共用模組                 | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依供應商複製流程。      |
 
 以上描述為現有抽象的設計角色與後續修改準則，不代表所有歷史程式碼均已完全解耦。修改前仍須確認實際呼叫路徑與契約，不得只依類別名稱推定行為。
 
@@ -102,7 +99,7 @@
 
 ### 5.1 專案政策
 
-- **原生工具優先**：Pocket Agent 已內建 `src/pocket_agent/fs_tools.py` 與 `src/pocket_agent/web_tools.py`。進行檔案讀寫、全域搜尋 (grep/find)、或網頁搜尋時，**必須優先使用系統提供的原生工具**。嚴禁使用 `run_command` 包裝 `echo`、`sed`、`grep` 或 `python -c` 腳本來處理單純的 I/O 操作，以避免觸發 EDR 警報與跳脫字元錯誤。
+- **原生工具優先**：Pocket Agent 已內建 `src/pocket_agent/tools/files.py` 與 `src/pocket_agent/tools/web.py`。進行檔案讀寫、全域搜尋 (grep/find)、或網頁搜尋時，**必須優先使用系統提供的原生工具**。嚴禁使用 `run_command` 包裝 `echo`、`sed`、`grep` 或 `python -c` 腳本來處理單純的 I/O 操作，以避免觸發 EDR 警報與跳脫字元錯誤。
 - 對中文文件明確使用 UTF-8，不以有損解碼結果覆蓋原檔。
 - 既有檔案覆寫前需透過原生工具進行確認；缺少工具時，僅可依第 5.2 節所列條件申請替代方式；未取得授權或受權限限制時，停止並交付手動方案，不得繞過限制。
 - 開發代理不得自動執行測試、Lint、格式化、建置或 pre-commit；只提供手動命令。
@@ -118,7 +115,7 @@
 
 ### 5.3 CLI 與終端機渲染限制 (Terminal UI & Rendering)
 
-- **統一的工具渲染色彩語意**：在 `src/pocket_agent/frontend/cli_render.py` 中渲染工具呼叫時，必須遵守以下顏色慣例，以提供一致的 UX 警示體驗：
+- **統一的工具渲染色彩語意**：在 `src/pocket_agent/frontend/cli/render.py` 中渲染工具呼叫時，必須遵守以下顏色慣例，以提供一致的 UX 警示體驗：
   - **動作分類 (Action)**：`Read`、`Write`、`Action` 等行為字眼一律維持黃色 (`bold yellow`)。
   - **工具名稱 (Tool Name)**：內建工具 (Native Tools) 為綠色 (`bold green`)；非內建工具 (Non-native / MCP Tools) 為藍青色 (`bold cyan`)。
   - **狀態小圓點 (Bullet)**：安全的本機唯讀操作 (Read + 內建) 為綠色 (`bold green`)；潛在風險操作 (Write 或非內建工具) 則為紅色 (`bold red`)。

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import yaml
 
-from .paths import bundle_dir, mcp_config_path, user_dir
+from pocket_agent.system.paths import bundle_dir, mcp_config_path, user_dir
 
 log = logging.getLogger("pocket-agent")
 

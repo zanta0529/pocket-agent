@@ -17,8 +17,8 @@
 import logging
 from pathlib import Path
 
-from .paths import bundle_dir, user_dir
-from .registry import MarkdownRegistry
+from pocket_agent.system.paths import bundle_dir, user_dir
+from pocket_agent.system.registry import MarkdownRegistry
 
 log = logging.getLogger("pocket-agent")
 

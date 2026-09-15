@@ -1,10 +1,10 @@
 import logging
 from typing import Any
 
-from .base import BaseEngine
-from .ollama_engine import OllamaChatEngine
-from .openai_engine import OpenAIResponsesEngine
-from .openrouter_engine import OpenRouterEngine
+from pocket_agent.engines.base import BaseEngine
+from pocket_agent.engines.ollama_engine import OllamaChatEngine
+from pocket_agent.engines.openai_engine import OpenAIResponsesEngine
+from pocket_agent.engines.openrouter_engine import OpenRouterEngine
 
 log = logging.getLogger("pocket-agent")
 
