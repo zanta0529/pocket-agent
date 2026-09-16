@@ -200,9 +200,18 @@ def sync_index(workspace_dirs: list[str] | None = None):
     import sqlite3
 
     db_path = _get_db_path()
+
+    # 策略 3: 直接砍檔重建 (Disposable Cache)
+    # 確保 100% 沒有空位碎片與幽靈資料殘留
+    if db_path.exists():
+        try:
+            db_path.unlink()
+        except OSError as e:
+            log.warning("無法刪除舊的 skills_index.db，將退回 SQL 刪除模式: %s", e)
+
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(name, description, body)")
-        conn.execute("DELETE FROM skills_fts")
+        conn.execute("DELETE FROM skills_fts")  # 防禦性寫法，萬一 unlink 失敗仍可清空資料
         skills = list_skills(workspace_dirs)
         for s in skills:
             body = load_skill(s["name"], workspace_dirs)
