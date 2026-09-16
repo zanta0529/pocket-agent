@@ -139,6 +139,7 @@ def import_skill_zip(zip_path: str | Path, overwrite: bool = False) -> list[str]
                 imported.append(target.name)
                 log.info("skill 已匯入：%s ← %s", target.name, zip_path)
 
+            sync_index()
             return imported
 
 
@@ -164,15 +165,108 @@ def save_skill(name: str, description: str, body: str, scope: str = "global") ->
     skill_path.write_text(content, encoding="utf-8")
 
     log.info("skill 已儲存：%s ← %s", name, skill_path)
+
+    # 同步 FTS5 索引 (暫不傳 workspace_dirs，下次搜尋時會再次補齊)
+    sync_index()
+
     return skill_path
+
+
+# ── BM25 技能檢索 (SQLite FTS5) ──────────────────────
+
+_last_sync_state = None
+
+
+def _get_skills_state(workspace_dirs: list[str] | None = None) -> int:
+    """透過所有 SKILL.md 的路徑與最後修改時間 (mtime) 產生狀態指紋。"""
+    skills = list_skills(workspace_dirs)
+    state_items = []
+    for s in skills:
+        p = s["path"]
+        if p.exists():
+            state_items.append((str(p), p.stat().st_mtime))
+    return hash(tuple(sorted(state_items)))
+
+
+def _get_db_path() -> Path:
+    db_dir = user_dir() / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    return db_dir / "skills_index.db"
+
+
+def sync_index(workspace_dirs: list[str] | None = None):
+    """將目前的 skill 同步到 SQLite FTS5 虛擬資料表中。"""
+    global _last_sync_state
+    import sqlite3
+
+    db_path = _get_db_path()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(name, description, body)")
+        conn.execute("DELETE FROM skills_fts")
+        skills = list_skills(workspace_dirs)
+        for s in skills:
+            body = load_skill(s["name"], workspace_dirs)
+            if body:
+                conn.execute(
+                    "INSERT INTO skills_fts (name, description, body) VALUES (?, ?, ?)",
+                    (s["name"], s["description"], body),
+                )
+        conn.commit()
+    # 更新指紋，避免重複同步
+    _last_sync_state = _get_skills_state(workspace_dirs)
+
+
+def sync_index_if_needed(workspace_dirs: list[str] | None = None):
+    """如果技能檔案有異動 (mtime 改變或檔案增減)，或 DB 不存在時，才執行同步。"""
+    global _last_sync_state
+    current_state = _get_skills_state(workspace_dirs)
+    if _last_sync_state == current_state and _get_db_path().exists():
+        return
+    sync_index(workspace_dirs)
+
+
+def search_skills(query: str, workspace_dirs: list[str] | None = None, top_k: int = 5) -> list[dict]:
+    """使用 BM25 (FTS5) 根據 query 搜尋最相關的 Top-K 技能。"""
+    import re
+    import sqlite3
+
+    sync_index_if_needed(workspace_dirs)
+
+    if not query.strip():
+        return list_skills(workspace_dirs)[:top_k]
+
+    db_path = _get_db_path()
+    with sqlite3.connect(db_path) as conn:
+        words = re.findall(r"\w+", query)
+        if not words:
+            return list_skills(workspace_dirs)[:top_k]
+
+        fts_query = " OR ".join(words)
+        try:
+            cursor = conn.execute(
+                "SELECT name, description FROM skills_fts WHERE skills_fts MATCH ? ORDER BY rank LIMIT ?",
+                (fts_query, top_k),
+            )
+            results = [{"name": row[0], "description": row[1]} for row in cursor.fetchall()]
+            if not results:
+                return list_skills(workspace_dirs)[:top_k]
+            return results
+        except sqlite3.OperationalError as e:
+            log.warning("FTS5 查詢失敗: %s", e)
+            return list_skills(workspace_dirs)[:top_k]
 
 
 # ── 系統提示注入 ──────────────────────────────────
 
 
-def skills_index_prompt(workspace_dirs: list[str] | None = None) -> str:
-    """產生附加到 system prompt 的 skill 目錄；沒有 skill 時回傳空字串。"""
-    skills = list_skills(workspace_dirs)
+def skills_index_prompt(workspace_dirs: list[str] | None = None, query: str = "") -> str:
+    """產生附加到 system prompt 的 skill 目錄；有 query 時執行 BM25 檢索。"""
+    if query:
+        skills = search_skills(query, workspace_dirs)
+    else:
+        # 向下相容，如果沒有 query 就給出全部（或依舊限制數量避免溢位）
+        skills = list_skills(workspace_dirs)
+
     if not skills:
         return ""
 

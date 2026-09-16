@@ -237,6 +237,11 @@ class Agent:
                                 (skill_dir / fname).write_text(skill_md, encoding="utf-8")
                                 log.info(f"Auto-Learn 完成：已寫入 {fname}")
 
+                                # 同步 FTS5 索引
+                                from pocket_agent.extensions.skills import sync_index
+
+                                sync_index(self.workspace_dirs)
+
                         asyncio.create_task(background_learn())
                     except Exception as e:
                         log.warning(f"Auto-Learn 背景作業失敗: {e}")
@@ -402,7 +407,7 @@ class Agent:
             tools += subagent_tools()
         return tools
 
-    def _instructions(self) -> str:
+    def _instructions(self, query: str = "") -> str:
         """system prompt + skill 目錄（每輪重算，skill 可熱加）。"""
         base = self.system_prompt
 
@@ -422,7 +427,7 @@ class Agent:
             "絕對不要自行透過 run_command 執行測試！"
         )
 
-        return base + skills_index_prompt(self.workspace_dirs)
+        return base + skills_index_prompt(self.workspace_dirs, query)
 
     async def _run_subagent(self, args: dict) -> str:
         """委派任務給子代理，回傳其最終回覆。"""
@@ -534,9 +539,22 @@ class Agent:
             # 新一輪開始（工具呼叫後重跑時，讓 GUI 清掉上一輪的暫定文字）
             self._emit("round_start")
 
+            user_query = ""
+            for msg in reversed(input_items):
+                if msg.get("role") == "user":
+                    content = msg.get("content")
+                    if isinstance(content, str):
+                        user_query = content
+                    elif isinstance(content, list):
+                        for part in content:
+                            if part.get("type") == "input_text":
+                                user_query = part.get("text", "")
+                                break
+                    break
+
             stream = engine.stream_chat(
                 input_items=input_items,
-                instructions=self._instructions(),
+                instructions=self._instructions(user_query),
                 tools=tools,
                 reasoning_param=reasoning_param,
                 cancel_check=lambda: self.cancel_requested,
