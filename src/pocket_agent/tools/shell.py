@@ -105,6 +105,22 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     if not command:
         return "[ERROR] 沒有提供指令。"
 
+    # --- Hard Command Floor (災難指令安全底線) ---
+    import re
+
+    # 阻擋 rm -rf /, del /s /q (根目錄或全磁碟), format, mkfs 等毀滅性關鍵字
+    danger_patterns = [
+        r"rm\s+-r[fv]*\s+/?(\*|\s*$)",  # rm -rf / or rm -rf /*
+        r"del\s+(/[sqf]\s*)+\s*[A-Za-z]:\\",  # del /s /q C:\
+        r"format\s+[A-Za-z]:",  # format C:
+        r"mkfs",  # mkfs.*
+    ]
+    for pattern in danger_patterns:
+        if re.search(pattern, command, re.IGNORECASE):
+            log.warning(f"SECURITY BLOCK: 嘗試執行毀滅性指令被系統底線攔截 -> {command}")
+            return f"[ERROR] 觸發安全底線限制，拒絕執行該高風險指令：{command}"
+    # ----------------------------------------------
+
     if confirm is not None:
         try:
             allowed = confirm(command)

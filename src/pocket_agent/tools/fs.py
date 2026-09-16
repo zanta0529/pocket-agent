@@ -176,6 +176,46 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
     return target
 
 
+def _backup_file(target: Path) -> None:
+    """時光機機制：在修改檔案前進行無感備份 (Native I/O)，不觸發 Shell 子行程。"""
+    if not target.exists() or not target.is_file():
+        return
+
+    try:
+        import shutil
+        import time
+
+        from pocket_agent.system.paths import user_dir
+
+        backup_dir = user_dir() / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{timestamp}_{target.name}"
+        backup_path = backup_dir / backup_name
+
+        shutil.copy2(target, backup_path)
+        log.info(f"Time Machine: 已備份 {target.name} 至 {backup_path}")
+
+        # 記錄最新的備份映射以便 /undo 指令還原
+        mapping_file = backup_dir / "latest_backup_map.json"
+
+        import json
+
+        mapping = {}
+        if mapping_file.exists():
+            try:
+                mapping = json.loads(mapping_file.read_text(encoding="utf-8"))
+            except Exception:
+                mapping = {}
+
+        mapping[str(target.resolve())] = str(backup_path.resolve())
+        mapping_file.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+
+    except Exception as e:
+        log.warning(f"Time Machine: 備份檔案失敗 ({target}): {e}")
+
+
 def call_fs_tool(
     name: str, args: dict, on_confirm: Callable[[str], bool] | None, workspace_dirs: list[str] | None = None
 ) -> str:
@@ -294,6 +334,7 @@ def call_fs_tool(
             if on_confirm and not on_confirm(action_desc):
                 return "[使用者拒絕執行此檔案寫入操作]"
 
+            _backup_file(target)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             return f"[SUCCESS] 成功寫入檔案 {target}"
@@ -307,6 +348,7 @@ def call_fs_tool(
             if on_confirm and not on_confirm(f"附加內容至檔案：{target.name}"):
                 return "[使用者拒絕執行此檔案寫入操作]"
 
+            _backup_file(target)
             with target.open("a", encoding="utf-8") as f:
                 f.write(content)
             return f"[SUCCESS] 成功附加內容至檔案 {target}"
@@ -359,6 +401,7 @@ def call_fs_tool(
             if on_confirm and not on_confirm(f"局部修改檔案：{target.name}"):
                 return "[使用者拒絕執行此檔案替換操作]"
 
+            _backup_file(target)
             target.write_text(new_content, encoding="utf-8")
             return f"[SUCCESS] 成功替換檔案 {target} 的局部內容"
 

@@ -68,22 +68,16 @@ class ModelCommand(SysCommand):
         if len(parts) >= 2:
             provider = parts[0].lower()
             model_name = parts[1]
+            # 將參數交還給前端處理，以確保 UI 狀態同步與連線清理
+            return CommandResult("interactive_menu", "", payload={"args": args_str})
         elif len(parts) == 1:
             from pocket_agent.system.config import config
 
             provider = config.get("provider", "openai")
             model_name = parts[0]
+            return CommandResult("interactive_menu", "", payload={"args": f"{provider} {model_name}"})
         else:
             return CommandResult("interactive_menu", "請選擇模型")
-
-        try:
-            from pocket_agent.system.auth import get_openai_client
-
-            agent.client = get_openai_client(provider=provider, model=model_name)
-            agent.model = model_name
-            return CommandResult("success", f"✓ 當次對話已切換為：{provider.upper()} - {model_name}")
-        except Exception as e:
-            return CommandResult("error", f"⚠ 切換模型失敗：{e}")
 
 
 class LearnCommand(SysCommand):
@@ -94,6 +88,92 @@ class LearnCommand(SysCommand):
     def execute(self, args_str: str, agent: Any) -> CommandResult:
         # CLI / GUI 透過狀態標記 "learn_interactive" 決定進入非同步與對話框流程
         return CommandResult("learn_interactive", "請等待萃取...")
+
+
+class UndoCommand(SysCommand):
+    @property
+    def name(self) -> str:
+        return "undo"
+
+    def execute(self, args_str: str, agent: Any) -> CommandResult:
+        import json
+        import shutil
+        from pathlib import Path
+
+        from pocket_agent.system.paths import user_dir
+
+        backup_dir = user_dir() / "backups"
+        mapping_file = backup_dir / "latest_backup_map.json"
+
+        if not mapping_file.exists():
+            return CommandResult("error", "⚠ 找不到可用的備份紀錄。")
+
+        try:
+            mapping = json.loads(mapping_file.read_text(encoding="utf-8"))
+            if not mapping:
+                return CommandResult("error", "⚠ 備份紀錄為空。")
+
+            if not args_str.strip():
+                return CommandResult("interactive_undo", "選擇要還原的檔案", {"mapping": mapping})
+
+            # 有提供 args_str，視為指定還原的路徑
+            target_path_str = args_str.strip()
+            if target_path_str not in mapping:
+                return CommandResult("error", f"⚠ 備份紀錄中找不到該檔案：{target_path_str}")
+
+            backup_path = Path(mapping[target_path_str])
+            original_path = Path(target_path_str)
+
+            if not backup_path.exists():
+                return CommandResult("error", f"⚠ 備份檔已遺失：{backup_path}")
+
+            size = backup_path.stat().st_size
+            bkup_name = backup_path.name
+
+            shutil.copy2(backup_path, original_path)
+
+            # 從紀錄中移除並回寫
+            mapping.pop(target_path_str)
+            mapping_file.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+
+            msg = f"✓ 已成功還原檔案！\n  從備份檔: {bkup_name} ({size} bytes)\n  覆蓋回到: {original_path.resolve()}"
+            return CommandResult("success", msg)
+        except Exception as e:
+            return CommandResult("error", f"⚠ 還原失敗：{e}")
+
+
+class ConfigCommand(SysCommand):
+    @property
+    def name(self) -> str:
+        return "config"
+
+    def execute(self, args_str: str, agent: Any) -> CommandResult:
+        from pocket_agent.system.config import config
+
+        parts = args_str.split()
+        if not parts:
+            # 交由前端 CLI 渲染互動式選單
+            data = config.json_provider._data
+            return CommandResult("interactive_config", "", payload={"data": data})
+
+        if len(parts) >= 3 and parts[0].lower() == "set":
+            key = parts[1]
+            val_str = " ".join(parts[2:])
+
+            # 簡單型別轉換
+            if val_str.lower() in ("true", "yes", "1"):
+                val = True
+            elif val_str.lower() in ("false", "no", "0"):
+                val = False
+            else:
+                val = val_str
+
+            config.set(key, val)
+            is_secret = any(x in key.lower() for x in ("key", "token", "password", "secret"))
+            display_val = "********" if is_secret else val
+            return CommandResult("success", f"✓ 已將 {key} 設定為 {display_val}")
+
+        return CommandResult("error", "⚠ 用法：/config 顯示設定，或 /config set <key> <value> 更改設定")
 
 
 class SysCommandRegistry:
@@ -124,3 +204,5 @@ sys_registry.register(AddDirCommand())
 sys_registry.register(WorkspaceCommand())
 sys_registry.register(ModelCommand())
 sys_registry.register(LearnCommand())
+sys_registry.register(UndoCommand())
+sys_registry.register(ConfigCommand())

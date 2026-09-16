@@ -20,6 +20,7 @@ BUILTINS = {
     "attachments": "查看／移除待送附件",
     "clear": "清除對話，保留附件",
     "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
+    "config": "顯示或更改全域設定檔 (/config set <key> <value>)",
     "file": "附加一般檔案",
     "help": "指令說明",
     "learn": "從近期對話萃取為共用技能",
@@ -30,6 +31,7 @@ BUILTINS = {
     "skills": "列出目前所有可用的全域與專案技能",
     "subagent": "強制委派任務給指定的子代理",
     "tools": "工具清單",
+    "undo": "時光機：還原上一次被 AI 修改的檔案",
     "workspace": "顯示目前的工作區路徑清單",
 }
 QUOTE = chr(34)
@@ -254,16 +256,17 @@ class CliInput:
             color_depth=ColorDepth.DEPTH_1_BIT if "NO_COLOR" in os.environ or not sys.stdout.isatty() else None,
         )
 
-    async def read(self, message: str = "› ", default: str = "") -> str:
+    async def read(self, message: str = "› ", default: str = "", is_password: bool = False) -> str:
         return await self.session.prompt_async(
             message,
             default=default,
-            completer=self.completer,
-            multiline=True,
+            completer=self.completer if not is_password else None,
+            multiline=not is_password,
+            is_password=is_password,
         )
 
     async def choose(self, label: str, choices: list[str]) -> str | None:
-        from prompt_toolkit.completion import WordCompleter
+        from prompt_toolkit.completion import FuzzyCompleter, WordCompleter
 
         self.selecting = True
 
@@ -275,7 +278,9 @@ class CliInput:
             return (
                 await self.session.prompt_async(
                     label + "：",
-                    completer=WordCompleter(choices, sentence=True),
+                    completer=FuzzyCompleter(
+                        WordCompleter(choices, sentence=True, match_middle=True, ignore_case=True)
+                    ),
                     default="",
                     multiline=False,
                     pre_run=pre_run,

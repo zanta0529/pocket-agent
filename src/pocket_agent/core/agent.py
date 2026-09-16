@@ -193,43 +193,10 @@ class Agent:
             from pocket_agent.engines import EngineFactory
 
             engine = EngineFactory.create(provider, self.client, self.model)
-            hint = engine.parse_api_error(e)
-
-            # Extract JSON message if possible
-            err_msg = str(e)
-            try:
-                error_dict = None
-                body = getattr(e, "body", None)
-                if isinstance(body, dict):
-                    error_dict = body.get("error")
-
-                if not isinstance(error_dict, dict):
-                    import ast
-                    import re
-
-                    match = re.search(r"\{.*\}", err_msg, re.DOTALL)
-                    if match:
-                        parsed = ast.literal_eval(match.group())
-                        if isinstance(parsed, dict):
-                            error_dict = parsed.get("error")
-
-                if isinstance(error_dict, dict):
-                    err_msg = error_dict.get("message", err_msg)
-            except Exception:
-                pass
 
             self.history.pop()
 
-            if e.status_code == 429:
-                msg = f"API 請求頻率限制 / 額度耗盡 (Rate Limit Exceeded)\n\n伺服器回傳：{err_msg}"
-            elif e.status_code == 402:
-                msg = f"API 帳戶餘額不足 (Payment Required)\n\n伺服器回傳：{err_msg}"
-            else:
-                msg = f"API 錯誤 ({e.status_code})\n\n伺服器回傳：{err_msg}"
-
-            if hint:
-                msg += hint
-
+            msg = engine.format_api_error(e)
             raise RuntimeError(msg)
 
         if self.last_images:
@@ -248,6 +215,32 @@ class Agent:
         self.history.append({"role": "assistant", "content": reply})
 
         if not self._is_subagent:
+            # --- Auto-Learn Mechanism ---
+            from pocket_agent.system.config import config
+
+            if config.get("auto_learn") is True:
+                # 簡單判定：如果最後的回覆帶有成功或修復等正面字眼，或者沒有連續錯誤
+                if "成功" in reply or "修復" in reply or "完成" in reply:
+                    log.info("Auto-Learn 觸發：背景進行知識萃取...")
+                    try:
+                        # 不 await 阻塞主流程，直接丟入背景 task
+                        async def background_learn():
+                            skill_md = await self.extract_skill()
+                            if skill_md and "對話歷史不足" not in skill_md:
+                                import time
+
+                                from pocket_agent.system.paths import user_dir
+
+                                skill_dir = user_dir() / "skills"
+                                skill_dir.mkdir(parents=True, exist_ok=True)
+                                fname = f"auto_skill_{int(time.time())}.md"
+                                (skill_dir / fname).write_text(skill_md, encoding="utf-8")
+                                log.info(f"Auto-Learn 完成：已寫入 {fname}")
+
+                        asyncio.create_task(background_learn())
+                    except Exception as e:
+                        log.warning(f"Auto-Learn 背景作業失敗: {e}")
+
             await asyncio.to_thread(
                 run_hooks,
                 "after_response",
@@ -376,6 +369,34 @@ class Agent:
         }
         tools.append(ask_question)
 
+        # --- Fan-out: Parallel Subagents ---
+        run_subagents_parallel = {
+            "type": "function",
+            "name": "run_subagents_parallel",
+            "description": (
+                "平行派發任務給多個子代理，並等待所有子代理完成後匯總結果。"
+                "適用於需要多角色同時進行檢索或規劃的大型任務。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "子代理名稱"},
+                                "task": {"type": "string", "description": "交辦任務"},
+                            },
+                            "required": ["name", "task"],
+                        },
+                    }
+                },
+                "required": ["tasks"],
+            },
+        }
+        tools.append(run_subagents_parallel)
+
         # 子代理不能再開子代理，避免無限遞迴
         if not self._is_subagent:
             tools += subagent_tools()
@@ -392,6 +413,14 @@ class Agent:
             for wd in self.workspace_dirs:
                 extra += f"- {wd}\n"
             base += extra
+
+        # --- Verification Prompts 規則 ---
+        base += (
+            "\n\n[安全規範] 若你在本輪對話中修改了程式碼，在最終回覆總結時，"
+            "請務必以 markdown code block 條列出相關的測試或 CLI 驗證指令"
+            "（如 pytest, npm test 等），並提醒使用者手動複製執行以驗證修改結果，"
+            "絕對不要自行透過 run_command 執行測試！"
+        )
 
         return base + skills_index_prompt(self.workspace_dirs)
 
@@ -592,6 +621,22 @@ class Agent:
 
                     if is_skill_tool(fc["name"]):
                         result = call_skill_tool(args, self.workspace_dirs)
+                    elif fc["name"] == "run_subagents_parallel":
+                        tasks = args.get("tasks", [])
+                        if not tasks:
+                            result = "[ERROR] 未提供任何子代理任務。"
+                        else:
+                            coros = [self._run_subagent(t) for t in tasks]
+                            results = await asyncio.gather(*coros, return_exceptions=True)
+
+                            combined = []
+                            for idx, res in enumerate(results):
+                                t_name = tasks[idx].get("name", f"Subagent-{idx}")
+                                if isinstance(res, Exception):
+                                    combined.append(f"【子代理 {t_name} 錯誤】\n{res}")
+                                else:
+                                    combined.append(res)
+                            result = "\n\n".join(combined)
                     elif fc["name"] == "ask_question":
                         loop = asyncio.get_running_loop()
                         fut = loop.create_future()
