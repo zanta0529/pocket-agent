@@ -259,14 +259,15 @@ class CliRenderer:
             if summary:
                 parts.append((f" {plain(summary)}", ""))
 
-            if not self.console.is_terminal:
-                self.console.print(Text.assemble(*parts))
-            else:
-                # 使用暫態狀態 (Status) 顯示工具執行，避免洗版
+            # 參照 Antigravity 設計：將工具呼叫明確印出並常駐在畫面上，不再自動隱藏
+            tool_text = Text.assemble(*parts)
+            self.console.print(tool_text)
+
+            if self.console.is_terminal:
                 self._stop_status()
                 from rich.status import Status
 
-                self._active_status = Status(Text.assemble(*parts), spinner="dots", console=self.console)
+                self._active_status = Status("執行工具中…", spinner="dots", console=self.console)
                 self._active_status.start()
 
         elif kind == "ask_question":
