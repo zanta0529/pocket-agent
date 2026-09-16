@@ -114,6 +114,11 @@ class CliRenderer:
                     or parsed.get("directory")
                     or ""
                 )
+            elif "subagent" in name_lower:
+                if "tasks" in parsed and isinstance(parsed["tasks"], list) and parsed["tasks"]:
+                    val = parsed["tasks"][0].get("task", "")
+                else:
+                    val = parsed.get("task", "")
             else:
                 # 通用 fallback：取第一個非空的 value
                 val = next((str(v) for v in parsed.values() if v), "")
@@ -351,4 +356,15 @@ class CliRenderer:
                         formatted_name = f"[{sa_name}] {real_name}"
                     else:
                         formatted_name = name
-                    self.console.print(Text(f"  ✗ {formatted_name}", style="red"))
+
+                    result_text = str(data.get("result", ""))
+                    if result_text.startswith("[ERROR]"):
+                        result_text = result_text[7:].strip()
+                    elif result_text.startswith("Error:"):
+                        result_text = result_text[6:].strip()
+
+                    error_summary = result_text.split("\n")[0][:80]
+                    if error_summary:
+                        self.console.print(Text(f"  ✗ {formatted_name} - {error_summary}", style="red"))
+                    else:
+                        self.console.print(Text(f"  ✗ {formatted_name}", style="red"))

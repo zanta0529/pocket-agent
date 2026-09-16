@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 class CommandResult:
     action: str = "handled"
     prompt: str = ""
+    display_text: str | None = None
 
 
 async def switch_model(
@@ -521,13 +522,20 @@ class CommandHandler:
                 task = await self.reader.read(message="👉 請輸入要交辦的任務描述 (Esc+Enter 換行, Enter 送出): ")
                 if not task:
                     return CommandResult("handled")
+
+                display_text = f"/subagent {subagent_name} {task}"
             else:
                 parts = args.split(maxsplit=1)
                 subagent_name = parts[0]
                 task = parts[1] if len(parts) > 1 else "請執行你的預設任務"
+                display_text = None
 
-            prompt = f"請使用 `run_subagent` 工具，委派 `{subagent_name}` 子代理來處理以下任務：\n{task}"
-            return CommandResult("chat", prompt)
+            prompt = (
+                f"指令要求：請「直接且立即」使用 `run_subagent` 工具，委派 `{subagent_name}` 子代理來處理以下任務。\n"
+                f"（注意：系統已確認該代理存在，請勿自行尋找、讀取或檢查任何子代理設定檔！）\n\n"
+                f"任務內容：\n{task}"
+            )
+            return CommandResult("chat", prompt, display_text)
         elif name == "session":
             await self.session(args)
         elif name == "compact":

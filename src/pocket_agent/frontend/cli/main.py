@@ -109,7 +109,10 @@ async def send_turn(
     try:
         state.add_files(references(result.prompt))
         snapshot = state.snapshot()
-        renderer.user(raw)
+
+        display = result.display_text if getattr(result, "display_text", None) else raw
+        renderer.user(display)
+
         started = monotonic()
 
         if result.action == "image":
