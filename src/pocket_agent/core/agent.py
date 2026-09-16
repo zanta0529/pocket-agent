@@ -193,43 +193,10 @@ class Agent:
             from pocket_agent.engines import EngineFactory
 
             engine = EngineFactory.create(provider, self.client, self.model)
-            hint = engine.parse_api_error(e)
-
-            # Extract JSON message if possible
-            err_msg = str(e)
-            try:
-                error_dict = None
-                body = getattr(e, "body", None)
-                if isinstance(body, dict):
-                    error_dict = body.get("error")
-
-                if not isinstance(error_dict, dict):
-                    import ast
-                    import re
-
-                    match = re.search(r"\{.*\}", err_msg, re.DOTALL)
-                    if match:
-                        parsed = ast.literal_eval(match.group())
-                        if isinstance(parsed, dict):
-                            error_dict = parsed.get("error")
-
-                if isinstance(error_dict, dict):
-                    err_msg = error_dict.get("message", err_msg)
-            except Exception:
-                pass
 
             self.history.pop()
 
-            if e.status_code == 429:
-                msg = f"API 請求頻率限制 / 額度耗盡 (Rate Limit Exceeded)\n\n伺服器回傳：{err_msg}"
-            elif e.status_code == 402:
-                msg = f"API 帳戶餘額不足 (Payment Required)\n\n伺服器回傳：{err_msg}"
-            else:
-                msg = f"API 錯誤 ({e.status_code})\n\n伺服器回傳：{err_msg}"
-
-            if hint:
-                msg += hint
-
+            msg = engine.format_api_error(e)
             raise RuntimeError(msg)
 
         if self.last_images:

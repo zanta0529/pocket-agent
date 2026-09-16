@@ -66,6 +66,49 @@ class BaseEngine:
         """
         return None
 
+    def format_api_error(self, exc: Exception) -> str:
+        """
+        Strategy method to format the API error into a human-readable message.
+        Implementations include the status code (e.g., 429, 402) and any specific hints.
+        """
+        import ast
+        import re
+
+        status_code = getattr(exc, "status_code", "Unknown")
+        err_msg = str(exc)
+
+        try:
+            error_dict = None
+            body = getattr(exc, "body", None)
+            if isinstance(body, dict):
+                error_dict = body.get("error")
+
+            if not isinstance(error_dict, dict):
+                match = re.search(r"\{.*\}", err_msg, re.DOTALL)
+                if match:
+                    parsed = ast.literal_eval(match.group())
+                    if isinstance(parsed, dict):
+                        error_dict = parsed.get("error")
+
+            if isinstance(error_dict, dict):
+                err_msg = error_dict.get("message", err_msg)
+        except Exception:
+            pass
+
+        hint = self.parse_api_error(exc)
+
+        if status_code == 429:
+            msg = f"API 請求頻率限制 / 額度耗盡 (HTTP 429 Rate Limit Exceeded)\n\n伺服器回傳：{err_msg}"
+        elif status_code == 402:
+            msg = f"API 帳戶餘額不足 (HTTP 402 Payment Required)\n\n伺服器回傳：{err_msg}"
+        else:
+            msg = f"API 錯誤 (HTTP {status_code})\n\n伺服器回傳：{err_msg}"
+
+        if hint:
+            msg += hint
+
+        return msg
+
     @staticmethod
     def format_chat_tools(tools: list) -> Any:
         """
