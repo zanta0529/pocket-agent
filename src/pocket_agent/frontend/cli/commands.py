@@ -290,7 +290,7 @@ class CommandHandler:
                 self.renderer.message(f"已加入待送：{path}")
         elif name == "attachments":
             self.attachments(args)
-        elif name in ("add-dir", "workspace", "model", "learn"):
+        elif name in ("add-dir", "workspace", "model", "learn", "config", "undo"):
             from pocket_agent.system.sys_commands import sys_registry
 
             result = sys_registry.execute(f"/{name} {args}", self.agent)
@@ -313,6 +313,86 @@ class CommandHandler:
                     self.renderer.message(f"✓ 已授權：{result.payload['target_dir']}，可透過工具讀寫。", "green")
                 else:
                     self.renderer.message("⚠ 已拒絕授權。", "yellow")
+            elif result.status == "interactive_undo":
+                mapping = result.payload.get("mapping", {})
+                if not mapping:
+                    self.renderer.message("目前沒有可用的備份紀錄。")
+                    return CommandResult()
+
+                # 列出所有可用的還原選項，加入時間標籤
+                choices = []
+                choice_map = {}
+                from pathlib import Path
+
+                for orig, bkup in reversed(mapping.items()):
+                    bkup_name = Path(bkup).name
+                    parts = bkup_name.split("_")
+                    if len(parts) >= 2 and len(parts[0]) == 8 and len(parts[1]) == 6:
+                        d_date = f"{parts[0][:4]}-{parts[0][4:6]}-{parts[0][6:8]}"
+                        d_time = f"{parts[1][:2]}:{parts[1][2:4]}:{parts[1][4:6]}"
+                        d_str = f"{d_date} {d_time}"
+                        display = f"[{d_str}] {orig}"
+                    else:
+                        display = orig
+                    choices.append(display)
+                    choice_map[display] = orig
+
+                choices.append("取消")
+
+                selected = await self.reader.choose("選擇要還原的檔案 (標籤為備份當下時間)", choices)
+                if not selected or selected == "取消":
+                    self.renderer.message("已取消還原。")
+                    return CommandResult()
+
+                orig_path_str = choice_map[selected]
+                backup_path_str = mapping[orig_path_str]
+
+                # --- Diff 預覽 ---
+                import difflib
+                from pathlib import Path
+
+                from rich.syntax import Syntax
+
+                try:
+                    op = Path(orig_path_str)
+                    bp = Path(backup_path_str)
+                    orig_lines = op.read_text(encoding="utf-8").splitlines(keepends=True) if op.exists() else []
+                    bkup_lines = bp.read_text(encoding="utf-8").splitlines(keepends=True) if bp.exists() else []
+
+                    diff = list(
+                        difflib.unified_diff(
+                            orig_lines, bkup_lines, fromfile=f"Current: {op.name}", tofile=f"Backup: {bp.name}", n=5
+                        )
+                    )
+
+                    if not diff:
+                        self.renderer.message("檔案內容無差異，無需還原。", "yellow")
+                        return CommandResult()
+
+                    self.renderer.console.print("\n[bold cyan]─── 檔案差異預覽 (還原將套用以下變更) ───[/bold cyan]")
+                    self.renderer.console.print(
+                        Syntax("".join(diff), "diff", theme="monokai", background_color="default")
+                    )
+                    self.renderer.console.print(
+                        "[bold cyan]───────────────────────────────────────────────[/bold cyan]\n"
+                    )
+                except UnicodeDecodeError:
+                    self.renderer.message("⚠ 二進制檔案或不支援的編碼，無法預覽差異。", "yellow")
+                except Exception as e:
+                    self.renderer.message(f"⚠ 產生差異預覽時發生錯誤: {e}", "yellow")
+
+                # --- 二次確認 ---
+                confirm = await self.reader.choose("確定要執行上述還原覆蓋嗎？", ["確認還原", "取消"])
+                if confirm != "確認還原":
+                    self.renderer.message("已取消還原。")
+                    return CommandResult()
+
+                # 重新遞送 /undo <path> 來執行還原
+                restore_result = sys_registry.execute(f"/undo {orig_path_str}", self.agent)
+                if restore_result.status == "success":
+                    self.renderer.message(restore_result.message, "green")
+                else:
+                    self.renderer.message(restore_result.message, "red")
             elif result.status == "interactive_menu":
                 if name == "model":
                     await self.model(args)

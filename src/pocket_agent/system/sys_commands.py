@@ -104,6 +104,7 @@ class UndoCommand(SysCommand):
     def execute(self, args_str: str, agent: Any) -> CommandResult:
         import json
         import shutil
+        from pathlib import Path
 
         from pocket_agent.system.paths import user_dir
 
@@ -118,21 +119,31 @@ class UndoCommand(SysCommand):
             if not mapping:
                 return CommandResult("error", "⚠ 備份紀錄為空。")
 
-            # 取出最後一筆紀錄
-            original_path_str, backup_path_str = list(mapping.items())[-1]
-            original_path = Path(original_path_str)
-            backup_path = Path(backup_path_str)
+            if not args_str.strip():
+                return CommandResult("interactive_undo", "選擇要還原的檔案", {"mapping": mapping})
+
+            # 有提供 args_str，視為指定還原的路徑
+            target_path_str = args_str.strip()
+            if target_path_str not in mapping:
+                return CommandResult("error", f"⚠ 備份紀錄中找不到該檔案：{target_path_str}")
+
+            backup_path = Path(mapping[target_path_str])
+            original_path = Path(target_path_str)
 
             if not backup_path.exists():
                 return CommandResult("error", f"⚠ 備份檔已遺失：{backup_path}")
 
+            size = backup_path.stat().st_size
+            bkup_name = backup_path.name
+
             shutil.copy2(backup_path, original_path)
 
             # 從紀錄中移除並回寫
-            mapping.pop(original_path_str)
+            mapping.pop(target_path_str)
             mapping_file.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
 
-            return CommandResult("success", f"✓ 已成功還原檔案：{original_path.name}")
+            msg = f"✓ 已成功還原檔案！\n  從備份檔: {bkup_name} ({size} bytes)\n  覆蓋回到: {original_path.resolve()}"
+            return CommandResult("success", msg)
         except Exception as e:
             return CommandResult("error", f"⚠ 還原失敗：{e}")
 
