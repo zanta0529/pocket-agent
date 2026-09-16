@@ -372,11 +372,10 @@ class CliFrontend(FrontendStrategy):
                 from rich.panel import Panel
                 from rich.text import Text
 
-                from pocket_agent.system.auth import load_config, save_config
+                from pocket_agent.system.permissions import add_command_to_allowlist, is_command_allowed
 
-                # 1. 檢查全域「永遠信任」
-                config = load_config()
-                if config.get("always_allow_shell") is True:
+                # 1. 檢查白名單 (前綴比對包含內建唯讀清單與使用者自訂清單)
+                if is_command_allowed(command):
                     return True
 
                 # 2. 檢查「本次 Session 信任」
@@ -399,7 +398,7 @@ class CliFrontend(FrontendStrategy):
                 renderer.console.print(panel)
 
                 try:
-                    ans = input("允許？[y: 單次 | a: 本次對話 | A: 永遠 | N: 拒絕] ").strip()
+                    ans = input("允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | N: 拒絕] ").strip()
 
                     if status:
                         status.start()
@@ -411,12 +410,9 @@ class CliFrontend(FrontendStrategy):
                         renderer.message("✓ 已同意本次對話中自動執行指令", "green")
                         return True
                     elif ans == "A":
+                        prefix = add_command_to_allowlist(command)
                         renderer._ensure_newline()
-                        renderer.message(
-                            "[警告] 您選擇了「永遠允許」，未來所有指令將自動執行。此設定已存於設定檔。", "red"
-                        )
-                        config["always_allow_shell"] = True
-                        save_config(config)
+                        renderer.message(f"✓ 已將「{prefix}」加入指令白名單，未來具備此字首的指令將自動執行。", "green")
                         return True
                     return False
                 except (EOFError, KeyboardInterrupt):
