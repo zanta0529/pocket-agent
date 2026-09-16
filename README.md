@@ -51,6 +51,8 @@
 - [Hooks 生命週期機制](docs/hooks-lifecycle.md)
 - [MCP 伺服器掛載與安全注入機制](docs/mcp-architecture.md)
 - [工具呼叫與 Subagent 委派機制](docs/tool-subagent-mechanism.md)
+- [Subagent 與 Skill 差異比較](docs/subagents-skills-comparison.md)
+- [分層配置與上下文探索機制 (Agent Configuration Standards)](docs/agent-configuration-standards.md)
 - [BM25 向量檢索與記憶機制](docs/bm25-visual-explanation.md)
 - [CLI 操作與限制說明 (CLI Usage & Limitations)](docs/cli-usage-limitations.md)
 
@@ -140,6 +142,11 @@ python -m pocket_agent
 - `/model <provider> <model_name>`：即時切換後端 API (支援 `openai`、`openrouter` 或 `ollama`)。
 - `/subagent <name>`：強制委派任務給指定的子代理（例如 `/subagent researcher 查資料`）。另外也支援直接使用 `/<name>` 作為動態捷徑（例如 `/researcher 查資料`）。
 - `/session [list | load <id> | save | delete <id>]`：管理歷史對話 (Session)。無參數時啟動互動式光棒選單，支援儲存與讀取持久化紀錄。
+- `/skills [name]`：列出目前可用的所有全域與專案技能，或檢視特定技能內容。
+- `/learn`：自動萃取當前對話中的知識或流程，互動式引導將其儲存為可重複使用的 Skill。
+- `/config`：啟動互動式設定選單，用以編輯全域設定與 API Key。
+- `/undo`：啟動互動式還原選單，可檢視檔案備份差異並執行還原。
+- `/add-dir <路徑>` / `/workspace`：授權並新增額外的工作目錄。
 - `/compact`：讓 AI 自動摘要並壓縮中間的對話歷史，快速回收 Context 上限空間。
 - `/clear`：清除當前記憶體的對話歷史。
 - `/logout`：清除本機端的 OAuth Token 憑證。
@@ -165,6 +172,11 @@ python -m pocket_agent --resume
 | /subagent、/<name>         | 委派任務給子代理（例如 /researcher）           |
 | /model                     | 互動式光棒選單切換提供者與模型，Esc 返回       |
 | /session                   | 互動式光棒選單分頁瀏覽並管理歷史對話           |
+| /skills                    | 列出或檢視可用的技能 (Skills)                  |
+| /learn                     | 將當前對話萃取為新技能                         |
+| /config                    | 互動式編輯系統設定檔                           |
+| /undo                      | 互動式檢視檔案備份並執行還原                   |
+| /add-dir                   | 授權並新增工作目錄                             |
 | /compact                   | 自動摘要並壓縮對話紀錄                         |
 | /attachments               | 列出本次待送附件與編號                         |
 | /attachments remove <編號> | 移除單一待送附件，不刪除檔案                   |
