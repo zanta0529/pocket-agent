@@ -236,7 +236,8 @@ class CliRenderer:
                 name = str(data)
                 args_raw = ""
 
-            name_lower = name.lower()
+            real_name = name.split("::")[-1]
+            name_lower = real_name.lower()
             native_tools = {
                 "read_file",
                 "write_to_file",
@@ -247,7 +248,7 @@ class CliRenderer:
                 "search_web",
                 "read_url_content",
             }
-            is_native = name in native_tools
+            is_native = real_name in native_tools
 
             if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep"]):
                 action = "Read"
@@ -261,7 +262,19 @@ class CliRenderer:
             bullet_color = "bold red" if action == "Write" or not is_native else "bold green"
             summary = self._summarise_args(name, args_raw)
 
-            parts = [("● ", bullet_color), (action, action_color), (" (", ""), (name, name_color), (")", "")]
+            if "::" in name:
+                sa_name, _ = name.split("::", 1)
+                parts = [
+                    ("● ", bullet_color),
+                    (action, action_color),
+                    (f" [{sa_name}]", "bold magenta"),
+                    (" (", ""),
+                    (real_name, name_color),
+                    (")", ""),
+                ]
+            else:
+                parts = [("● ", bullet_color), (action, action_color), (" (", ""), (real_name, name_color), (")", "")]
+
             if summary:
                 parts.append((f" {plain(summary)}", ""))
 
@@ -333,4 +346,9 @@ class CliRenderer:
                 name = data.get("name", "")
                 ok = data.get("ok", True)
                 if not ok:
-                    self.console.print(Text(f"  ✗ {name}", style="red"))
+                    if "::" in name:
+                        sa_name, real_name = name.split("::", 1)
+                        formatted_name = f"[{sa_name}] {real_name}"
+                    else:
+                        formatted_name = name
+                    self.console.print(Text(f"  ✗ {formatted_name}", style="red"))
