@@ -505,11 +505,27 @@ class CommandHandler:
                 else:
                     self.renderer.message("已取消儲存。")
         elif name == "subagent":
+            from pocket_agent.core.subagents import list_subagents
+
             if not args:
-                raise ValueError("用法：/subagent <子代理名稱> [任務描述]")
-            parts = args.split(maxsplit=1)
-            subagent_name = parts[0]
-            task = parts[1] if len(parts) > 1 else "請執行你的預設任務"
+                sa_list = list_subagents()
+                if not sa_list:
+                    raise ValueError("目前沒有可用的子代理。")
+
+                choices = [sa["name"] for sa in sa_list]
+                subagent_name = await self.reader.choose("請選擇要委派的子代理", choices)
+                if not subagent_name:
+                    return CommandResult("handled")
+
+                self.renderer.console.print(f"[bold cyan]已選擇子代理：[/bold cyan] {subagent_name}")
+                task = await self.reader.read(message="👉 請輸入要交辦的任務描述 (Esc+Enter 換行, Enter 送出): ")
+                if not task:
+                    return CommandResult("handled")
+            else:
+                parts = args.split(maxsplit=1)
+                subagent_name = parts[0]
+                task = parts[1] if len(parts) > 1 else "請執行你的預設任務"
+
             prompt = f"請使用 `run_subagent` 工具，委派 `{subagent_name}` 子代理來處理以下任務：\n{task}"
             return CommandResult("chat", prompt)
         elif name == "session":

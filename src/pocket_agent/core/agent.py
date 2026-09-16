@@ -349,9 +349,12 @@ class Agent:
             "type": "function",
             "name": "ask_question",
             "description": (
-                "Use this tool to ask the user one or more multiple-choice questions to clarify "
-                "requirements or solicit design feedback. This will block execution and show a "
-                "modal dialog to the user."
+                "Use this tool to ask the user one or more questions to clarify requirements, "
+                "solicit design feedback, or explicitly confirm critical decisions (e.g., asking for permission "
+                "to overwrite a file or proceed with a destructive action). "
+                "You can provide multiple-choice options, but the user is also allowed to provide a "
+                "free-text custom response. "
+                "Execution will pause until the user answers."
             ),
             "parameters": {
                 "type": "object",
@@ -411,10 +414,12 @@ class Agent:
         """system prompt + skill 目錄（每輪重算，skill 可熱加）。"""
         base = self.system_prompt
 
+        from pathlib import Path
+
+        base += f"\n\n[系統資訊] 目前終端機的工作目錄為：{Path.cwd()}"
+
         if self.workspace_dirs:
-            extra = (
-                "\n\n[系統資訊] 使用者已授權本次會話可讀寫以下額外工作區目錄，請在搜尋或讀取檔案時主動將其納入考量：\n"
-            )
+            extra = "\n\n使用者已授權本次會話可額外讀寫以下工作區目錄，請在搜尋或讀取檔案時主動將其納入考量：\n"
             for wd in self.workspace_dirs:
                 extra += f"- {wd}\n"
             base += extra
@@ -452,6 +457,7 @@ class Agent:
             max_tool_rounds=self.max_tool_rounds,
             is_subagent=True,
         )
+        sub.workspace_dirs = list(self.workspace_dirs)
 
         def subagent_stream_forwarder(kind: str, data: object = ""):
             if kind == "thinking":
