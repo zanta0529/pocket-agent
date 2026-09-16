@@ -51,6 +51,7 @@
 - [Hooks 生命週期機制](docs/hooks-lifecycle.md)
 - [MCP 伺服器掛載與安全注入機制](docs/mcp-architecture.md)
 - [工具呼叫與 Subagent 委派機制](docs/tool-subagent-mechanism.md)
+- [BM25 向量檢索與記憶機制](docs/bm25-visual-explanation.md)
 - [CLI 操作與限制說明 (CLI Usage & Limitations)](docs/cli-usage-limitations.md)
 
 ### 7. 打包版本的專案客製化 (Customizing Packaged Versions)
