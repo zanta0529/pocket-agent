@@ -60,9 +60,15 @@ class CommandHandler:
 
         if args:
             parts = args.split()
-            if len(parts) != 2:
-                raise ValueError(f"用法：/model <{'|'.join(SUPPORTED_PROVIDERS)}> <模型名稱>")
-            provider, model = parts
+            if len(parts) == 1:
+                from pocket_agent.system.config import config
+
+                provider = config.get("provider", "openai")
+                model = parts[0]
+            elif len(parts) == 2:
+                provider, model = parts
+            else:
+                raise ValueError(f"用法：/model [<{'|'.join(SUPPORTED_PROVIDERS)}>] <模型名稱>")
         else:
             provider = await self.reader.choose(f"提供者 {' / '.join(SUPPORTED_PROVIDERS)}", SUPPORTED_PROVIDERS)
             if not provider:
@@ -173,6 +179,8 @@ class CommandHandler:
                 data = load_session(selected["id"])
                 if data is None:
                     raise ValueError(f"找不到 session：{selected['id']}")
+                if self.agent.history:
+                    save_session(self.state.session_id, self.agent.history)
                 self.agent.history = data["history"]
                 self.state.session_id = data["id"]
                 self.renderer.message(
@@ -184,6 +192,11 @@ class CommandHandler:
                 data = load_session(selected["id"])
                 title = data.get("title", selected["id"]) if data else selected["id"]
                 delete_session(selected["id"])
+                if self.state.session_id == selected["id"]:
+                    import uuid
+
+                    self.agent.history = []
+                    self.state.session_id = str(uuid.uuid4())
                 self.renderer.message(f"已刪除：{title}")
 
         elif sub == "load":
@@ -192,6 +205,8 @@ class CommandHandler:
             data = load_session(sub_arg)
             if data is None:
                 raise ValueError(f"找不到 session：{sub_arg}")
+            if self.agent.history:
+                save_session(self.state.session_id, self.agent.history)
             self.agent.history = data["history"]
             self.state.session_id = data["id"]
             self.renderer.message(
@@ -212,6 +227,11 @@ class CommandHandler:
             data = load_session(sub_arg)
             title = data.get("title", sub_arg) if data else sub_arg
             delete_session(sub_arg)
+            if self.state.session_id == sub_arg:
+                import uuid
+
+                self.agent.history = []
+                self.state.session_id = str(uuid.uuid4())
             self.renderer.message(f"已刪除：{title}")
 
         else:
@@ -428,7 +448,8 @@ class CommandHandler:
                         new_key = await self.reader.read("設定鍵名 (Key): ")
                         if not new_key:
                             continue
-                        new_val = await self.reader.read(f"設定值 (Value) [{new_key}]: ")
+                        is_secret_key = any(x in new_key.lower() for x in ("key", "token", "password", "secret"))
+                        new_val = await self.reader.read(f"設定值 (Value) [{new_key}]: ", is_password=is_secret_key)
                         if new_val:
                             res = sys_registry.execute(f"/config set {new_key.strip()} {new_val.strip()}", self.agent)
                             self.renderer.message(res.message, "cyan")
@@ -442,7 +463,7 @@ class CommandHandler:
                     default_edit = "" if is_secret else current_val
 
                     prompt_msg = f"編輯 {key} (機密欄位留空則不修改): " if is_secret else f"編輯 {key}: "
-                    new_val = await self.reader.read(prompt_msg, default=default_edit)
+                    new_val = await self.reader.read(prompt_msg, default=default_edit, is_password=is_secret)
 
                     if new_val is not None and new_val.strip() and new_val != current_val:
                         res = sys_registry.execute(f"/config set {key} {new_val.strip()}", self.agent)

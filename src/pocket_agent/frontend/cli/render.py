@@ -155,13 +155,15 @@ class CliRenderer:
         self.console.print(Text("› " + "\n".join(plain(line) for line in raw.split("\n")), style="bold blue"))
 
     def reply(self, reply: str, seconds: float, tokens: int, streamed: bool = False) -> None:
-        if not streamed:
-            # 非串流模式（fallback）：印標頭 + 完整 Markdown 回答
+        if not streamed or (streamed and not self._stream_has_content and reply):
+            # 非串流模式（fallback）或沒有產生任何文字（例如純後補產出）：印標頭 + 完整 Markdown 回答
+            if self._stream_has_content:
+                self.console.print()
             self.console.print()
             self.message("● Pocket Agent", "bold #B8860B")
             self.console.print(Markdown(reply))
         else:
-            # 串流模式：內容已逐字印出，確保換行後只印 footer
+            # 串流模式且有印出文字：內容已逐字印出，確保換行後只印 footer
             if self._stream_has_content:
                 self.console.print()  # 確保 footer 從新行開始
 
@@ -193,6 +195,10 @@ class CliRenderer:
             self.console.print(panel)
             self.console.print()
 
+        elif kind in ("image_saved", "file_saved"):
+            self._ensure_newline()
+            self.message(f"已儲存檔案：{data}", "green")
+
         elif kind == "round_start":
             # 工具呼叫後重跑：若已串流了文字，換行確認，再開始新輪
             if self._stream_has_content:
@@ -208,7 +214,7 @@ class CliRenderer:
                 label = f"● Pocket Agent ({self._state.model})" if self._state is not None else "● Pocket Agent"
                 self.console.print(Text(label, style="bold #B8860B"))
                 self._stream_header_printed = True
-            self.console.print(str(data), end="", highlight=False)
+            self.console.print(str(data), end="", highlight=False, markup=False)
             self._stream_has_content = True
 
         elif kind == "thinking":
@@ -306,9 +312,9 @@ class CliRenderer:
 
                     if callback:
                         callback({"answers": answers})
-                except Exception as e:
+                except BaseException as e:
                     if callback:
-                        callback({"error": str(e)})
+                        callback({"error": str(e) or "User cancelled"})
 
             import threading
 

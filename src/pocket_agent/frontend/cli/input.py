@@ -256,12 +256,13 @@ class CliInput:
             color_depth=ColorDepth.DEPTH_1_BIT if "NO_COLOR" in os.environ or not sys.stdout.isatty() else None,
         )
 
-    async def read(self, message: str = "› ", default: str = "") -> str:
+    async def read(self, message: str = "› ", default: str = "", is_password: bool = False) -> str:
         return await self.session.prompt_async(
             message,
             default=default,
-            completer=self.completer,
-            multiline=True,
+            completer=self.completer if not is_password else None,
+            multiline=not is_password,
+            is_password=is_password,
         )
 
     async def choose(self, label: str, choices: list[str]) -> str | None:

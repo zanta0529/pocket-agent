@@ -68,22 +68,16 @@ class ModelCommand(SysCommand):
         if len(parts) >= 2:
             provider = parts[0].lower()
             model_name = parts[1]
+            # 將參數交還給前端處理，以確保 UI 狀態同步與連線清理
+            return CommandResult("interactive_menu", "", payload={"args": args_str})
         elif len(parts) == 1:
             from pocket_agent.system.config import config
 
             provider = config.get("provider", "openai")
             model_name = parts[0]
+            return CommandResult("interactive_menu", "", payload={"args": f"{provider} {model_name}"})
         else:
             return CommandResult("interactive_menu", "請選擇模型")
-
-        try:
-            from pocket_agent.system.auth import get_openai_client
-
-            agent.client = get_openai_client(provider=provider, model=model_name)
-            agent.model = model_name
-            return CommandResult("success", f"✓ 當次對話已切換為：{provider.upper()} - {model_name}")
-        except Exception as e:
-            return CommandResult("error", f"⚠ 切換模型失敗：{e}")
 
 
 class LearnCommand(SysCommand):
@@ -175,7 +169,9 @@ class ConfigCommand(SysCommand):
                 val = val_str
 
             config.set(key, val)
-            return CommandResult("success", f"✓ 已將 {key} 設定為 {val}")
+            is_secret = any(x in key.lower() for x in ("key", "token", "password", "secret"))
+            display_val = "********" if is_secret else val
+            return CommandResult("success", f"✓ 已將 {key} 設定為 {display_val}")
 
         return CommandResult("error", "⚠ 用法：/config 顯示設定，或 /config set <key> <value> 更改設定")
 
