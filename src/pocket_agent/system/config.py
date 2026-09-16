@@ -41,6 +41,7 @@ class EnvConfigProvider(ConfigProvider):
         "openai_image_wrapper_model": "OPENAI_IMAGE_WRAPPER_MODEL",
         "use_sandbox": "USE_SANDBOX",
         "sandbox_container": "SANDBOX_CONTAINER",
+        "auto_learn": "POCKET_AGENT_AUTO_LEARN",
     }
 
     def get(self, key: str) -> Optional[Any]:
