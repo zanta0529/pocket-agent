@@ -158,14 +158,9 @@ class ConfigCommand(SysCommand):
 
         parts = args_str.split()
         if not parts:
-            # 顯示當前設定
+            # 交由前端 CLI 渲染互動式選單
             data = config.json_provider._data
-            if not data:
-                return CommandResult("success", "【全域設定檔】\n(目前沒有自訂設定)")
-            lines = ["【全域設定檔】"]
-            for k, v in data.items():
-                lines.append(f"  {k}: {v}")
-            return CommandResult("success", "\n".join(lines))
+            return CommandResult("interactive_config", "", payload={"data": data})
 
         if len(parts) >= 3 and parts[0].lower() == "set":
             key = parts[1]

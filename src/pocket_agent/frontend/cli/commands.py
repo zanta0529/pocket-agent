@@ -298,7 +298,10 @@ class CommandHandler:
             if result.status == "error":
                 raise ValueError(result.message)
             elif result.status == "success":
-                self.renderer.message(result.message, "green" if name == "add-dir" else "cyan")
+                if name == "config":
+                    self.renderer.console.print(result.message)
+                else:
+                    self.renderer.message(result.message, "green" if name == "add-dir" else "cyan")
             elif result.status == "needs_auth":
                 from rich.text import Text
 
@@ -393,6 +396,58 @@ class CommandHandler:
                     self.renderer.message(restore_result.message, "green")
                 else:
                     self.renderer.message(restore_result.message, "red")
+            elif result.status == "interactive_config":
+                while True:
+                    from pocket_agent.system.config import config
+
+                    data = config.json_provider._data
+
+                    choices = []
+                    keys_list = []
+                    for k, v in data.items():
+                        k_lower = k.lower()
+                        if "key" in k_lower or "token" in k_lower or "password" in k_lower or "secret" in k_lower:
+                            if isinstance(v, str) and len(v) > 6:
+                                display_v = f"{v[:3]}********{v[-3:]}"
+                            else:
+                                display_v = "********"
+                        else:
+                            display_v = str(v)
+                        choices.append(f"{k} = {display_v}")
+                        keys_list.append(k)
+
+                    choices.append("➕ 新增設定項")
+                    choices.append("離開")
+
+                    selected = await self.reader.choose("【全域設定檔】(選擇項目以編輯)", choices)
+                    if not selected or selected == "離開":
+                        self.renderer.message("已離開設定選單。")
+                        return CommandResult()
+
+                    if selected == "➕ 新增設定項":
+                        new_key = await self.reader.read("設定鍵名 (Key): ")
+                        if not new_key:
+                            continue
+                        new_val = await self.reader.read(f"設定值 (Value) [{new_key}]: ")
+                        if new_val:
+                            res = sys_registry.execute(f"/config set {new_key.strip()} {new_val.strip()}", self.agent)
+                            self.renderer.message(res.message, "cyan")
+                        continue
+
+                    # 編輯現有項目
+                    idx = choices.index(selected)
+                    key = keys_list[idx]
+                    current_val = str(data[key])
+                    is_secret = any(x in key.lower() for x in ("key", "token", "password", "secret"))
+                    default_edit = "" if is_secret else current_val
+
+                    prompt_msg = f"編輯 {key} (機密欄位留空則不修改): " if is_secret else f"編輯 {key}: "
+                    new_val = await self.reader.read(prompt_msg, default=default_edit)
+
+                    if new_val is not None and new_val.strip() and new_val != current_val:
+                        res = sys_registry.execute(f"/config set {key} {new_val.strip()}", self.agent)
+                        self.renderer.message(res.message, "cyan")
+
             elif result.status == "interactive_menu":
                 if name == "model":
                     await self.model(args)
