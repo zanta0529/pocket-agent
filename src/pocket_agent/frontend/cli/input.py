@@ -265,7 +265,7 @@ class CliInput:
         )
 
     async def choose(self, label: str, choices: list[str]) -> str | None:
-        from prompt_toolkit.completion import WordCompleter
+        from prompt_toolkit.completion import FuzzyCompleter, WordCompleter
 
         self.selecting = True
 
@@ -277,7 +277,9 @@ class CliInput:
             return (
                 await self.session.prompt_async(
                     label + "：",
-                    completer=WordCompleter(choices, sentence=True),
+                    completer=FuzzyCompleter(
+                        WordCompleter(choices, sentence=True, match_middle=True, ignore_case=True)
+                    ),
                     default="",
                     multiline=False,
                     pre_run=pre_run,
