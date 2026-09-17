@@ -7,7 +7,7 @@
 ## 1. 專案定位與技術棧
 
 - PocketAgent 是本機 Python AI 代理應用，提供 CLI 模式，README 宣告支援 Windows、macOS、Linux。
-- README 最低版本為 Python 3.11；一般 CI 與 Windows 發布流程也使用 Python 3.11。
+- README 最低版本為 Python 3.14；一般 CI 與 Windows 發布流程也使用 Python 3.14。
 - 入口為 `main.py`，使用 Click；CLI 使用 Rich／prompt_toolkit。
 - 引擎包含 OpenAI Responses API 與 Ollama Chat Completions；非同步流程使用 asyncio。
 - 認證包含 OAuth PKCE；相關依賴包含 OpenAI SDK、httpx、FastAPI、uvicorn、keyring。
@@ -17,21 +17,21 @@
 
 ## 2. 目錄與責任邊界
 
-| 路徑                                                                                        | 用途與修改原則                                                                                           |
-| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `src/pocket_agent/main.py`                                                                  | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                             |
-| `src/pocket_agent/core/`                                                                    | 核心業務邏輯：Agent 協調、對話紀錄 (sessions)、上下文與錯誤處理 (exceptions)。                           |
-| `src/pocket_agent/engines/`                                                                 | LLM 引擎實作：BaseEngine、OpenAI、OpenRouter、Ollama 與 Factory。                                        |
-| `src/pocket_agent/frontend/`                                                                | 使用者介面策略：目前實作 `cli/` (包含 input、render、state、commands 等模組)。                           |
-| `src/pocket_agent/system/`                                                                  | 系統基礎設施：認證 (auth)、路徑解析 (paths)、設定管理 (config) 與初始設定精靈 (wizard)。                 |
-| `src/pocket_agent/extensions/`                                                              | 擴充功能：MCP (Model Context Protocol) 伺服器生命週期與掛載管理。                                        |
-| `src/pocket_agent/tools/`                                                                   | 內建工具實作：Shell 執行、原生檔案操作 (files)、網路請求 (web)、圖片生成 (image)、文件產出 (document)。  |
+| 路徑                           | 用途與修改原則                                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `src/pocket_agent/main.py`     | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                            |
+| `src/pocket_agent/core/`       | 核心業務邏輯：Agent 協調、對話紀錄 (sessions)、上下文與錯誤處理 (exceptions)。                          |
+| `src/pocket_agent/engines/`    | LLM 引擎實作：BaseEngine、OpenAI、OpenRouter、Ollama 與 Factory。                                       |
+| `src/pocket_agent/frontend/`   | 使用者介面策略：目前實作 `cli/` (包含 input、render、state、commands 等模組)。                          |
+| `src/pocket_agent/system/`     | 系統基礎設施：認證 (auth)、路徑解析 (paths)、設定管理 (config) 與初始設定精靈 (wizard)。                |
+| `src/pocket_agent/extensions/` | 擴充功能：MCP (Model Context Protocol) 伺服器生命週期與掛載管理。                                       |
+| `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行、原生檔案操作 (files)、網路請求 (web)、圖片生成 (image)、文件產出 (document)。 |
 
-| `skills/`、`subagents/`、`commands/`                                                           | 產品隨附的技能、子代理與命令，不等同開發代理規範。                                                       |
-| `.subagents/skills/`                                                                           | 開發代理技能；維持通用性，專案差異放在本指南。                                                           |
-| `tests/`                                                                                    | pytest 回歸測試。                                                                                        |
-| `build_portable.py`、`PocketAgent.spec`                                                     | portable 與 PyInstaller 包裝設定。                                                                       |
-| `docs/`                                                                                     | 工程規範與文件；代理入口見根目錄 `AGENTS.md`、`.subagents/AGENTS.md` 與 `.github/copilot-instructions.md`。 |
+| `skills/`、`subagents/`、`commands/` | 產品隨附的技能、子代理與命令，不等同開發代理規範。 |
+| `.agents/skills/` | 開發代理技能；維持通用性，專案差異放在本指南。 |
+| `tests/` | pytest 回歸測試。 |
+| `build_portable.py`、`PocketAgent.spec` | portable 與 PyInstaller 包裝設定。 |
+| `docs/` | 工程規範與文件；代理入口見根目錄 `AGENTS.md`、`.agents/AGENTS.md` 與 `.github/copilot-instructions.md`。 |
 
 ### 2.1 架構設計原則：Adapter／Strategy／Factory
 
@@ -46,7 +46,7 @@
 | Adapter（轉接器） | `BaseEngine`、`OpenAIResponsesEngine`、`OllamaChatEngine` | 將供應商的請求格式、SDK 呼叫與串流回應轉換為統一的 `stream_chat` 與 `Event*` 契約。 |
 | Strategy（策略）  | `FrontendStrategy`、`CliFrontend`                         | 封裝前端的啟動與互動方式；共同業務流程交由核心處理。                                |
 | Factory（工廠）   | `EngineFactory.create(provider, client, model)`           | 集中選擇及建立引擎，避免各呼叫端自行判斷供應商並建構具體實作。                      |
-| 共用流程協調      | `src/pocket_agent/core/agent.py` 與既有共用模組                 | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依供應商複製流程。      |
+| 共用流程協調      | `src/pocket_agent/core/agent.py` 與既有共用模組           | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依供應商複製流程。      |
 
 以上描述為現有抽象的設計角色與後續修改準則，不代表所有歷史程式碼均已完全解耦。修改前仍須確認實際呼叫路徑與契約，不得只依類別名稱推定行為。
 
@@ -72,7 +72,7 @@
 - Python 使用 4 空白縮排、UTF-8、LF 與檔尾換行；行長以 120 為準。
 - Python 格式以 `pyproject.toml` 的 Ruff 設定為準：雙引號、E／F／I 規則；
   `.editorconfig` 的 single quote 提示不覆寫 Python formatter。
-- 新增程式以 Python 3.11 相容為基準，不使用僅在更高版本提供的語法或標準庫 API。
+- 新增程式以 Python 3.14 相容為基準，不使用僅在更高版本提供的語法或標準庫 API。
 - 新增／修改介面補型別與必要的錯誤處理，不為型別改善擴大重構既有程式。
 - 保留 `BaseEngine.stream_chat` 的 Event 型別契約；修改串流事件時同步檢查兩個 provider 與所有消費端。
 - 避免在 GUI 執行緒阻塞網路與長時間操作；更新元件沿用既有排程模式。
@@ -99,7 +99,7 @@
 
 ### 5.1 專案政策
 
-- **原生工具優先**：Pocket Agent 已內建 `src/pocket_agent/tools/files.py` 與 `src/pocket_agent/tools/web.py`。進行檔案讀寫、全域搜尋 (grep/find)、或網頁搜尋時，**必須優先使用系統提供的原生工具**。嚴禁使用 `run_command` 包裝 `echo`、`sed`、`grep` 或 `python -c` 腳本來處理單純的 I/O 操作，以避免觸發 EDR 警報與跳脫字元錯誤。
+- **原生工具優先**：Pocket Agent 已內建 `src/pocket_agent/tools/fs.py` 與 `src/pocket_agent/tools/web.py`。進行檔案讀寫、全域搜尋 (grep/find)、或網頁搜尋時，**必須優先使用系統提供的原生工具**。嚴禁使用 `run_command` 包裝 `echo`、`sed`、`grep` 或 `python -c` 腳本來處理單純的 I/O 操作，以避免觸發 EDR 警報與跳脫字元錯誤。
 - 對中文文件明確使用 UTF-8，不以有損解碼結果覆蓋原檔。
 - 既有檔案覆寫前需透過原生工具進行確認；缺少工具時，僅可依第 5.2 節所列條件申請替代方式；未取得授權或受權限限制時，停止並交付手動方案，不得繞過限制。
 - 開發代理不得自動執行測試、Lint、格式化、建置或 pre-commit；只提供手動命令。
@@ -128,12 +128,12 @@
 - `requirements.in` 為直接依賴來源，`requirements.txt` 是 pip-compile 產出的鎖定結果；不要手改鎖定版本。
 - 依賴異動先說明必要性、相容性與影響，再由使用者於授權環境重新產生並檢閱鎖定檔。
 - 不直接重播鎖定檔註記的 `--no-index` 指令；該選項是否可用取決於本機套件來源。
-- 發布 workflow 在 Windows／Python 3.11 執行 `build_portable.py`，v\* tag 會觸發 release。
+- 發布 workflow 在 Windows／Python 3.14 執行 `build_portable.py`，v\* tag 會觸發 release。
 - 修改打包或資源路徑時須考慮原始碼、portable 與 PyInstaller 模式；不直接修改 dist 成品。
 
 ## 7. 驗證方式與手動命令
 
-一般 CI 在 Ubuntu／Python 3.11 執行 Ruff 格式檢查、Lint 與 pytest。
+一般 CI 在 Windows／Python 3.14 執行 Ruff 格式檢查、Lint 與 pytest。
 既有測試涵蓋 auth／Ollama、CLI commands／flow／input／render／state、MCP manager 與 shell sandbox；
 這不代表打包或所有 provider 均已有完整覆蓋。
 
@@ -157,9 +157,3 @@ venv\Scripts\python.exe -m pytest tests/test_cli_flow.py
 
 回報時分開列出：文件／差異檢閱、實際執行的命令與結果、未執行項目及原因。
 本機僅提供命令不等於測試通過；打包相關變更仍需使用者額外人工驗證。
-
-## 8. 專案入口與設定基準
-
-- Python 程式碼格式與靜態檢查以 `pyproject.toml` 的 Ruff 設定為準；執行時相容性以 Python 3.11 為基準。若設定不一致，先回報差異，不自行調整版本或重建鎖定檔。
-- 根目錄 `AGENTS.md`、`.subagents/AGENTS.md` 等皆為薄入口，應統一引導讀取 `docs/AI_INSTRUCTIONS.md` 與本專案指南，不重複維護工程與工具政策。
-- 各平台入口的自動載入狀態需依實際工具讀取結果判定，不可僅依賴代理的口頭宣稱。
