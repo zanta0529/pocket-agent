@@ -135,12 +135,24 @@ async def send_turn(
 
             chat_task = asyncio.ensure_future(agent.chat(result.prompt, attachments=snapshot))
             try:
-                _, reply, _ = await chat_task
+                while not chat_task.done():
+                    try:
+                        done, pending = await asyncio.wait([chat_task], return_when=asyncio.FIRST_COMPLETED)
+                        if done:
+                            break
+                    except asyncio.CancelledError, KeyboardInterrupt:
+                        is_main_stopped = agent.request_stop()
+                        if not is_main_stopped:
+                            renderer.message("⏸ 已中斷執行中的子代理，主代理接續處理中...", "yellow")
+                            continue
+                        else:
+                            raise
+                _, reply, _ = chat_task.result()
             except asyncio.CancelledError, KeyboardInterrupt:
                 agent.request_stop()
                 chat_task.cancel()
                 renderer._stop_status()
-                renderer.message("⏹ 已停止", "yellow")
+                renderer.message("⏹ 已停止主代理", "yellow")
                 state.last_failed_input = raw
                 return
             finally:

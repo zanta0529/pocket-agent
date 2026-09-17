@@ -105,6 +105,7 @@ class Agent:
         self.last_images: list[Path] = []  # 本輪 chat 產生的圖片路徑（GUI 顯示用）
         self.last_files: list[Path] = []  # 本輪 chat 產生的文件路徑（GUI 顯示用）
         self.workspace_dirs: list[str] = []  # CLI 與 GUI 共用的工作區路徑清單
+        self.active_subagents: list["Agent"] = []  # 追蹤執行中的子代理，用於連動取消與狀態監控
 
         # 串流回呼：callable(kind, data)，從背景 asyncio thread 呼叫，
         # GUI 端需自行轉回主執行緒。kind 與 data 的對應：
@@ -257,9 +258,18 @@ class Agent:
 
         return thinking, reply, usage_str
 
-    def request_stop(self) -> None:
-        """要求停止本輪工作（從 GUI 執行緒呼叫）。迴圈會在安全點檢查並收尾。"""
+    def request_stop(self) -> bool:
+        """要求停止本輪工作（從 GUI 執行緒呼叫）。
+        若有執行中的子代理，僅中斷子代理（保留主代理繼續處理其部分結果）。
+        回傳 True 代表中斷了主代理；False 代表僅中斷子代理。
+        """
+        if self.active_subagents:
+            for sub in self.active_subagents:
+                sub.request_stop()
+            return False
+
         self.cancel_requested = True
+        return True
 
     @staticmethod
     def _stopped_reply(text: str) -> str:
@@ -501,11 +511,15 @@ class Agent:
 
         log.info("SUBAGENT run %s task=%r", name, task[:80])
 
+        self.active_subagents.append(sub)
         try:
             _thinking, reply, _usage_str = await sub.chat(task)
         except Exception as e:
             log.exception("subagent 執行失敗")
             return f"[ERROR] 子代理「{name}」執行失敗：{e}"
+        finally:
+            if sub in self.active_subagents:
+                self.active_subagents.remove(sub)
 
         return f"【子代理 {name} 的結果】\n{reply}"
 
