@@ -1,6 +1,6 @@
 # PocketAgent 🤖
 
-[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#)
 
@@ -84,7 +84,7 @@ PocketAgent 會在每次啟動時自動載入此檔案，作為底層的通用�
 
 ### 系統需求
 
-- **Python 3.11 或以上版本**
+- **Python 3.14 或以上版本**
 - 若於 Windows 環境執行，請確保安裝 Python 時勾選了 `tcl/tk` 以支援 Tkinter GUI 元件。
 
 ### 快速啟動腳本 (一鍵自動化)

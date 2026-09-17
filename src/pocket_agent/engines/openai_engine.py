@@ -136,7 +136,7 @@ class OpenAIResponsesEngine(BaseEngine):
                         parsed = ast.literal_eval(match.group())
                         if isinstance(parsed, dict):
                             error = parsed.get("error")
-                    except (ValueError, SyntaxError):
+                    except ValueError, SyntaxError:
                         pass
 
             if not isinstance(error, dict):

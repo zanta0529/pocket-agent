@@ -286,7 +286,7 @@ class CliInput:
                     pre_run=pre_run,
                 )
             ).strip()
-        except (KeyboardInterrupt, EOFError):
+        except KeyboardInterrupt, EOFError:
             return None
         finally:
             self.selecting = False

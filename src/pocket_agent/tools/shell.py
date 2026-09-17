@@ -54,7 +54,7 @@ def _decode(raw: bytes) -> str:
     for enc in _decode_candidates():
         try:
             return raw.decode(enc)
-        except (UnicodeDecodeError, LookupError):
+        except UnicodeDecodeError, LookupError:
             continue
     return raw.decode("utf-8", errors="replace")
 
@@ -132,7 +132,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
 
     try:
         timeout = min(int(args.get("timeout_sec") or 60), 600)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         timeout = 60
 
     # GUI 程式底下跑 console 指令不要閃出黑視窗

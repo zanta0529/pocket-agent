@@ -47,7 +47,7 @@ def _format_usage_limit_hint(exc: BaseException) -> list[str] | None:
                     err = parsed.get("error")
                     if isinstance(err, dict):
                         return err
-            except (ValueError, SyntaxError):
+            except ValueError, SyntaxError:
                 pass
 
         return None
@@ -136,7 +136,7 @@ async def send_turn(
             chat_task = asyncio.ensure_future(agent.chat(result.prompt, attachments=snapshot))
             try:
                 _, reply, _ = await chat_task
-            except (asyncio.CancelledError, KeyboardInterrupt):
+            except asyncio.CancelledError, KeyboardInterrupt:
                 agent.request_stop()
                 chat_task.cancel()
                 renderer._stop_status()
@@ -418,7 +418,7 @@ class CliFrontend(FrontendStrategy):
                         renderer.message(f"✓ 已將「{prefix}」加入指令白名單，未來具備此字首的指令將自動執行。", "green")
                         return True
                     return False
-                except (EOFError, KeyboardInterrupt):
+                except EOFError, KeyboardInterrupt:
                     if status:
                         status.start()
                     return False

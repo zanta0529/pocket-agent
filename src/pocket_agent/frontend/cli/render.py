@@ -96,7 +96,7 @@ class CliRenderer:
         if args_raw:
             try:
                 parsed = json.loads(args_raw)
-            except (json.JSONDecodeError, ValueError):
+            except json.JSONDecodeError, ValueError:
                 parsed = None
 
         if parsed and isinstance(parsed, dict):
