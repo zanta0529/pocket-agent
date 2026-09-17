@@ -74,15 +74,18 @@ def main():
     )
     parser.add_argument("src", type=str, nargs="*", default=["src"], help="Source directories to scan (default: src)")
     parser.add_argument(
-        "--req", type=str, default="requirements.in", help="Requirements file (default: requirements.in)"
+        "--req",
+        type=str,
+        action="append",
+        help="Requirements files to check against (can be used multiple times, default: requirements.in)",
     )
     parser.add_argument("--ignore", type=str, nargs="*", default=[], help="Packages to ignore")
     args = parser.parse_args()
 
     args.src = args.src or ["src"]
+    args.req = args.req or ["requirements.in"]
 
     repo_root = Path(__file__).parent.parent
-    req_file = repo_root / args.req
 
     all_imports = set()
     print("🔍 開始依賴套件掃描...")
@@ -98,7 +101,10 @@ def main():
 
     print("...")
 
-    reqs = get_requirements(req_file)
+    reqs = set()
+    for req_path in args.req:
+        req_file = repo_root / req_path
+        reqs.update(get_requirements(req_file))
 
     missing = []
     # Project's own modules (e.g. pocket_agent) should be ignored

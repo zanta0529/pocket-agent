@@ -29,6 +29,6 @@ repos:
         pass_filenames: false
       - id: check-imports-dev
         name: Check Missing Imports (Development)
-        entry: python scripts/check_imports.py tests --req requirements-dev.in
+        entry: python scripts/check_imports.py tests --req requirements.in --req requirements-dev.in
         language: system
         pass_filenames: false
