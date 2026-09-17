@@ -380,12 +380,21 @@ class Agent:
         tools.append(ask_question)
 
         # --- Fan-out: Parallel Subagents ---
+        from pocket_agent.core.subagents import list_subagents
+
+        available_subagents = [a["name"] for a in list_subagents()]
+        available_str = "、".join(available_subagents) or "（無可用子代理）"
+
+        name_prop = {"type": "string", "description": "子代理名稱"}
+        if available_subagents:
+            name_prop["enum"] = available_subagents
+
         run_subagents_parallel = {
             "type": "function",
             "name": "run_subagents_parallel",
             "description": (
                 "平行派發任務給多個子代理，並等待所有子代理完成後匯總結果。"
-                "適用於需要多角色同時進行檢索或規劃的大型任務。"
+                f"適用於需要多角色同時進行檢索或規劃的大型任務。目前可用：{available_str}"
             ),
             "parameters": {
                 "type": "object",
@@ -395,7 +404,7 @@ class Agent:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "name": {"type": "string", "description": "子代理名稱"},
+                                "name": name_prop,
                                 "task": {"type": "string", "description": "交辦任務"},
                             },
                             "required": ["name", "task"],
@@ -405,10 +414,9 @@ class Agent:
                 "required": ["tasks"],
             },
         }
-        tools.append(run_subagents_parallel)
-
         # 子代理不能再開子代理，避免無限遞迴
         if not self._is_subagent:
+            tools.append(run_subagents_parallel)
             tools += subagent_tools()
         return tools
 
