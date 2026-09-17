@@ -64,7 +64,7 @@ class CommandHandler:
             if len(parts) == 1:
                 from pocket_agent.system.config import config
 
-                provider = config.get("provider", "openai")
+                provider = config.get("active_provider", "openai")
                 model = parts[0]
             elif len(parts) == 2:
                 provider, model = parts
@@ -421,11 +421,21 @@ class CommandHandler:
                 while True:
                     from pocket_agent.system.config import config
 
-                    data = config.json_provider._data
+                    def flatten(d, parent_key="", sep="."):
+                        items = []
+                        for k, v in d.items():
+                            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                            if isinstance(v, dict):
+                                items.extend(flatten(v, new_key, sep=sep).items())
+                            else:
+                                items.append((new_key, v))
+                        return dict(items)
+
+                    flat_data = flatten(config.json_provider._data)
 
                     choices = []
                     keys_list = []
-                    for k, v in data.items():
+                    for k, v in flat_data.items():
                         k_lower = k.lower()
                         if "key" in k_lower or "token" in k_lower or "password" in k_lower or "secret" in k_lower:
                             if isinstance(v, str) and len(v) > 6:
@@ -446,7 +456,7 @@ class CommandHandler:
                         return CommandResult()
 
                     if selected == "➕ 新增設定項":
-                        new_key = await self.reader.read("設定鍵名 (Key): ")
+                        new_key = await self.reader.read("設定鍵名 (Key, 可用點表示法): ")
                         if not new_key:
                             continue
                         is_secret_key = any(x in new_key.lower() for x in ("key", "token", "password", "secret"))
@@ -459,7 +469,7 @@ class CommandHandler:
                     # 編輯現有項目
                     idx = choices.index(selected)
                     key = keys_list[idx]
-                    current_val = str(data[key])
+                    current_val = str(flat_data[key])
                     is_secret = any(x in key.lower() for x in ("key", "token", "password", "secret"))
                     default_edit = "" if is_secret else current_val
 

@@ -188,6 +188,14 @@ python -m pocket_agent --resume
 
 ## ⚙️ 進階設定 (Advanced Configuration)
 
+### 全域系統設定 (Global Configuration)
+
+PocketAgent 的全域設定自動產生並存放在 `~/.pocket-agent/config.json` 中，採用結構化的巢狀 JSON 格式。您可以直接編輯該檔案，或是使用 CLI 的 `/config` 指令進行互動式修改（支援使用點表示法，如 `system.log_level`）。
+預設包含以下核心參數：
+- `system.max_tool_rounds`：預設為 `20`，控制模型單次對話可連續呼叫工具的最高次數，防止因幻覺導致無限迴圈。
+- `system.log_level`：預設為 `"WARNING"`。若需深入追查 API 請求或除錯，可將其改為 `"DEBUG"` 或 `"INFO"`。
+- `active_provider` / `active_model`：當前預設的服務提供者與模型名稱。
+
 ### 外部 MCP 伺服器掛載
 
 如需橋接外部工具或資料庫，請複製根目錄的 `mcp_config.example.yaml` 並重新命名為 `mcp_config.yaml`（該檔已受 `.gitignore` 保護，避免機密外流）：

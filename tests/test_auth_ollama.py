@@ -92,7 +92,7 @@ def test_explicit_ollama_client_uses_env():
     with (
         patch(
             "pocket_agent.system.config.config.get",
-            side_effect=lambda k, d=None: "http://environment:11434" if k == "ollama_base_url" else "ollama",
+            side_effect=lambda k, d=None: "http://environment:11434" if k == "providers.ollama.base_url" else "ollama",
         ),
         patch("dotenv.load_dotenv"),
         patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://environment:11434"}),

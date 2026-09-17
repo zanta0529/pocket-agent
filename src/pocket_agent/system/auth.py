@@ -37,16 +37,21 @@ from pocket_agent.system.config import config
 # ── OAuth 設定 ────────────────────────────────────
 DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-OPENAI_AUTH_URL = "https://auth.openai.com/oauth/authorize"
-OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
-REDIRECT_URI = "http://localhost:1455/auth/callback"
-OPENAI_SCOPE = "openid profile email offline_access"
+OPENAI_AUTH_URL = config.get("providers.openai.auth_url", "https://auth.openai.com/oauth/authorize")
+OPENAI_TOKEN_URL = config.get("providers.openai.token_url", "https://auth.openai.com/oauth/token")
+REDIRECT_URI = config.get("providers.openai.redirect_uri", "http://localhost:1455/auth/callback")
+OPENAI_SCOPE = config.get("providers.openai.scope", "openid profile email offline_access")
 
-CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+CODEX_BASE_URL = config.get("providers.openai.codex_base_url", "https://chatgpt.com/backend-api/codex")
 
-ORIGINATOR = config.get("openai_originator") or "pocket-agent"
-ADD_ORGANIZATIONS = str(config.get("openai_add_organizations", "1")).strip().lower() not in ("0", "false", "no", "off")
-USE_SIMPLIFIED_FLOW = str(config.get("openai_codex_simplified_flow", "1")).strip().lower() not in (
+ORIGINATOR = config.get("providers.openai.originator") or "pocket-agent"
+ADD_ORGANIZATIONS = str(config.get("providers.openai.add_organizations", "1")).strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+USE_SIMPLIFIED_FLOW = str(config.get("providers.openai.simplified_flow", "1")).strip().lower() not in (
     "0",
     "false",
     "no",
@@ -338,12 +343,13 @@ def get_openai_client(provider: str = None, model: str = None):
     # 在此讀取 .env 以確保 os.getenv 能拿到最新的環境變數，配合 ConfigManager
     load_dotenv(env_path(), override=True)
 
-    if provider is None:
-        provider = config.get("provider", "openai")
+    if not provider:
+        provider = config.get("active_provider", "openai")
+    provider = provider.lower()
 
     http_client = None
     if provider == "ollama":
-        base_url = config.get("ollama_base_url")
+        base_url = config.get("providers.ollama.base_url")
         if base_url:
             base_url = base_url.rstrip("/")
             if not base_url.endswith("/v1"):
@@ -352,14 +358,14 @@ def get_openai_client(provider: str = None, model: str = None):
         extra_headers = {}
         http_client = httpx.AsyncClient(trust_env=False, timeout=httpx.Timeout(timeout=1800.0, connect=60.0))
     elif provider == "openrouter":
-        base_url = config.get("openrouter_base_url")
+        base_url = config.get("providers.openrouter.base_url")
         if not base_url:
             raise ValueError("未設定 OpenRouter Base URL。請先透過 `agent setup` 或 GUI 設定。")
         base_url = base_url.rstrip("/")
-        api_key = config.get("openrouter_api_key") or ""
+        api_key = config.get("providers.openrouter.api_key") or ""
         extra_headers = {
-            "HTTP-Referer": "https://github.com/zanta0529/pocket-agent",
-            "X-Title": "Pocket Agent",
+            "HTTP-Referer": config.get("providers.openrouter.referer", "https://github.com/pocket-agent"),
+            "X-Title": config.get("providers.openrouter.title", "Pocket Agent"),
         }
     else:
         # 預設 OpenAI (Codex 後端)
@@ -393,32 +399,37 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
 
     if provider == "ollama":
         try:
-            base_url = config.get("ollama_base_url")
-            if not base_url:
-                return []
-            base_url = base_url.rstrip("/")
-            if base_url.endswith("/v1"):
-                base_url = base_url[:-3]
+            base_url = config.get("providers.ollama.base_url")
+            if base_url:
+                base_url = base_url.rstrip("/")
+                if base_url.endswith("/v1"):
+                    base_url = base_url[:-3]
+            else:
+                base_url = "http://localhost:11434"
+
             with httpx.Client(trust_env=False) as client:
                 resp = client.get(f"{base_url}/api/tags", timeout=10)
             if resp.status_code == 200:
                 return [m["name"] for m in resp.json().get("models", [])]
+            return []
         except Exception as e:
             import logging
 
             logging.getLogger("pocket-agent").error(f"Ollama fetch tags error: {e}")
-        return []
+            return []
 
     if provider == "openrouter":
         try:
-            base_url = config.get("openrouter_base_url")
-            if not base_url:
-                return []
-            base_url = base_url.rstrip("/")
+            base_url = config.get("providers.openrouter.base_url")
+            if base_url:
+                base_url = base_url.rstrip("/")
+            else:
+                base_url = "https://openrouter.ai/api/v1"
             with httpx.Client() as client:
                 resp = client.get(f"{base_url}/models", timeout=10)
             if resp.status_code == 200:
                 return [m["id"] for m in resp.json().get("data", [])]
+            return []
         except Exception as e:
             import logging
 
@@ -428,7 +439,7 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
     # OpenAI 原有邏輯
     token = _load_token("openai")
     if token and _is_expired(token):
-        client_id = config.get("openai_client_id") or DEFAULT_CLIENT_ID
+        client_id = config.get("providers.openai.client_id") or DEFAULT_CLIENT_ID
         token = _try_refresh("openai", token, client_id)
     if not token:
         return []
@@ -511,7 +522,7 @@ def get_user_info(provider: str = "openai") -> dict:
 def get_model() -> str:
     from pocket_agent.system.config import config
 
-    return config.get("model", "gpt-6-astra")
+    return config.get("active_model", "gpt-6-astra")
 
 
 def load_config() -> dict:

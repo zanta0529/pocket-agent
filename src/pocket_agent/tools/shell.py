@@ -54,7 +54,10 @@ def _decode(raw: bytes) -> str:
     for enc in _decode_candidates():
         try:
             return raw.decode(enc)
-        except UnicodeDecodeError, LookupError:
+        except (
+            UnicodeDecodeError,
+            LookupError,
+        ):
             continue
     return raw.decode("utf-8", errors="replace")
 
@@ -132,7 +135,10 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
 
     try:
         timeout = min(int(args.get("timeout_sec") or 60), 600)
-    except TypeError, ValueError:
+    except (
+        TypeError,
+        ValueError,
+    ):
         timeout = 60
 
     # GUI 程式底下跑 console 指令不要閃出黑視窗
@@ -140,9 +146,9 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
 
     log.debug("CLI run: %s", command)
 
-    from pocket_agent.system.config import config
+    from pocket_agent.system.config import config  # 依照系統設定決定 sandbox 模式
 
-    sandbox_mode = config.get("use_sandbox", "none").lower()
+    sandbox_mode = config.get("system.use_sandbox", "none").lower()
 
     cmd_args = command
     is_shell = True
@@ -152,7 +158,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         is_shell = False
         log.debug("Using WSL Sandbox")
     elif sandbox_mode == "docker":
-        container_name = config.get("sandbox_container", "pocket_sandbox")
+        container_name = config.get("system.sandbox_container", "pocket_sandbox")
         cmd_args = ["docker", "exec", container_name, "sh", "-c", command]
         is_shell = False
         log.debug("Using Docker Sandbox")

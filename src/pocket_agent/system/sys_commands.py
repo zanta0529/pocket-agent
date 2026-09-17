@@ -73,7 +73,7 @@ class ModelCommand(SysCommand):
         elif len(parts) == 1:
             from pocket_agent.system.config import config
 
-            provider = config.get("provider", "openai")
+            provider = config.get("active_provider", "openai")
             model_name = parts[0]
             return CommandResult("interactive_menu", "", payload={"args": f"{provider} {model_name}"})
         else:

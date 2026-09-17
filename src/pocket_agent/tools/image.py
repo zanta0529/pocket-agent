@@ -94,7 +94,7 @@ async def generate_image(
     client = get_openai_client(provider="openai")
     from pocket_agent.system.config import config
 
-    wrapper_model = config.get("openai_image_wrapper_model") or get_model()
+    wrapper_model = config.get("providers.openai.image_wrapper_model") or get_model()
 
     content: list[dict] = [{"type": "input_text", "text": prompt}]
     for img in input_images or []:

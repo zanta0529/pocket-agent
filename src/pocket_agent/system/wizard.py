@@ -45,7 +45,7 @@ def _step_provider() -> str:
     console.print(Rule("① 選擇服務供應商 (Provider)"))
     console.print()
 
-    current_provider = config.get("provider", "openai")
+    current_provider = config.get("active_provider", "openai")
 
     providers = SUPPORTED_PROVIDERS
     for i, p in enumerate(providers, 1):
@@ -59,7 +59,7 @@ def _step_provider() -> str:
     )
     selected = providers[int(choice) - 1]
 
-    config.set("provider", selected)
+    config.set("active_provider", selected)
     console.print(f"[green]✓ 已設定為 {selected.upper()}[/green]\n")
     return selected
 
@@ -86,26 +86,26 @@ def _step_login(provider: str) -> None:
     elif provider == "openrouter":
         console.print(Rule("② 設定 OpenRouter"))
         console.print()
-        current_key = config.get("openrouter_api_key", "")
-        current_url = config.get("openrouter_base_url", "https://openrouter.ai/api/v1")
+        current_key = config.get("providers.openrouter.api_key", "")
+        current_url = config.get("providers.openrouter.base_url", "https://openrouter.ai/api/v1")
 
         console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
         new_url = Prompt.ask("請輸入 Base URL", default=current_url)
-        config.set("openrouter_base_url", new_url)
+        config.set("providers.openrouter.base_url", new_url)
 
         key_hint = "*" * 10 + current_key[-4:] if current_key and len(current_key) > 4 else "未設定"
         console.print(f"[dim]目前 API Key: {key_hint}[/dim]")
         new_key = Prompt.ask("請輸入 API Key (直接 Enter 保持原狀)", default="")
         if new_key.strip():
-            config.set("openrouter_api_key", new_key.strip())
+            config.set("providers.openrouter.api_key", new_key.strip())
         console.print("[green]✓ OpenRouter 設定已更新[/green]\n")
     elif provider == "ollama":
         console.print(Rule("② 設定 Ollama"))
         console.print()
-        current_url = config.get("ollama_base_url", "http://localhost:11434")
+        current_url = config.get("providers.ollama.base_url", "http://localhost:11434")
         console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
         new_url = Prompt.ask("請輸入 Ollama 連線位址", default=current_url)
-        config.set("ollama_base_url", new_url)
+        config.set("providers.ollama.base_url", new_url)
         console.print("[green]✓ Ollama 設定已更新[/green]\n")
 
 
@@ -115,7 +115,7 @@ def _step_model(provider: str) -> None:
     console.print(Rule("③ 預設模型"))
     console.print()
 
-    current = config.get("model", "gpt-4o")
+    current = config.get("active_model", "gpt-4o")
     console.print(f"[dim]目前：{current}[/dim]\n")
 
     # 嘗試動態取得遠端/本地可用模型
@@ -148,7 +148,7 @@ def _step_model(provider: str) -> None:
         else:
             model = provider_models[int(choice) - 1][0]
 
-    config.set("model", model)
+    config.set("active_model", model)
     console.print(f"[green]✓ 已設定預設模型為 {model}[/green]\n")
 
 

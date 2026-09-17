@@ -28,7 +28,7 @@ if sys.stderr is not None:
 
 # 預設 INFO。要深入追查時可設定 POCKET_AGENT_LOG_LEVEL=DEBUG，
 # 這樣 HTTP payload、工具呼叫細節都會印出來。
-_LOG_LEVEL = config.get("log_level", "INFO").upper()
+_LOG_LEVEL = config.get("system.log_level", "WARNING").upper()
 
 logging.basicConfig(
     level=getattr(logging, _LOG_LEVEL, logging.INFO),
@@ -71,7 +71,7 @@ from pocket_agent.tools.image import image_tool, save_image_b64  # noqa: E402
 from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: E402
 from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_web_tool  # noqa: E402
 
-DEFAULT_MAX_TOOL_ROUNDS = 10
+DEFAULT_MAX_TOOL_ROUNDS = 20
 
 
 class Agent:
@@ -92,11 +92,11 @@ class Agent:
         self.mcp = mcp
         self._is_subagent = is_subagent
         self.allowed_tools = allowed_tools
-        self.model = model or config.get("model", "gpt-6-astra")
+        self.model = model or config.get("active_model", "gpt-6-astra")
         self.system_prompt = system_prompt
         self.reasoning_effort = reasoning_effort
 
-        rounds_val = max_tool_rounds or config.get("max_tool_rounds")
+        rounds_val = max_tool_rounds or config.get("system.max_tool_rounds")
         self.max_tool_rounds = int(rounds_val) if rounds_val is not None else DEFAULT_MAX_TOOL_ROUNDS
 
         self.files = FileUploader(client)
@@ -222,7 +222,7 @@ class Agent:
             # --- Auto-Learn Mechanism ---
             from pocket_agent.system.config import config
 
-            if config.get("auto_learn") is True:
+            if config.get("system.auto_learn") is True:
                 # 簡單判定：如果最後的回覆帶有成功或修復等正面字眼，或者沒有連續錯誤
                 if "成功" in reply or "修復" in reply or "完成" in reply:
                     log.info("Auto-Learn 觸發：背景進行知識萃取...")

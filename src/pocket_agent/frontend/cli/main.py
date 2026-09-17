@@ -292,8 +292,8 @@ class CliFrontend(FrontendStrategy):
         # 若開發者明確設定 DEBUG 等級則尊重，不抑制
         from pocket_agent.system.config import config
 
-        _lvl = config.get("log_level", "INFO").upper()
-        if _lvl == "INFO":
+        _lvl = config.get("system.log_level", "WARNING").upper()
+        if _lvl == "WARNING":
             for h in logging.getLogger("pocket-agent").handlers:
                 if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
                     h.setLevel(logging.WARNING)
