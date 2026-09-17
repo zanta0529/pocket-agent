@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-lint:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository
@@ -17,7 +17,7 @@ jobs:
       - name: Set up Python 3.14
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: '3.14'
           cache: 'pip'
 
       - name: Install dependencies
@@ -37,6 +37,6 @@ jobs:
 
       - name: Check Missing Imports (Production)
         run: python scripts/check_imports.py src scripts --req requirements.in
-        
+
       - name: Check Missing Imports (Development)
         run: python scripts/check_imports.py tests --req requirements-dev.in
