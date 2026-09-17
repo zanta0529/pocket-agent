@@ -531,7 +531,8 @@ class Agent:
         try:
             _thinking, reply, _usage_str = await sub.chat(task)
         except Exception as e:
-            log.exception("subagent 執行失敗")
+            log.error("子代理「%s」執行失敗：%s", name, e)
+            log.debug("子代理執行失敗完整 Traceback：", exc_info=True)
             return f"[ERROR] 子代理「{name}」執行失敗：{e}"
         finally:
             if sub in self.active_subagents:
