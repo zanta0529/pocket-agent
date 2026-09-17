@@ -47,7 +47,9 @@ def _format_usage_limit_hint(exc: BaseException) -> list[str] | None:
                     err = parsed.get("error")
                     if isinstance(err, dict):
                         return err
-            except ValueError, SyntaxError:
+            except ValueError:
+                pass
+            except SyntaxError:
                 pass
 
         return None
@@ -140,7 +142,14 @@ async def send_turn(
                         done, pending = await asyncio.wait([chat_task], return_when=asyncio.FIRST_COMPLETED)
                         if done:
                             break
-                    except asyncio.CancelledError, KeyboardInterrupt:
+                    except asyncio.CancelledError:
+                        is_main_stopped = agent.request_stop()
+                        if not is_main_stopped:
+                            renderer.message("⏸ 已中斷執行中的子代理，主代理接續處理中...", "yellow")
+                            continue
+                        else:
+                            raise
+                    except KeyboardInterrupt:
                         is_main_stopped = agent.request_stop()
                         if not is_main_stopped:
                             renderer.message("⏸ 已中斷執行中的子代理，主代理接續處理中...", "yellow")
@@ -148,7 +157,14 @@ async def send_turn(
                         else:
                             raise
                 _, reply, _ = chat_task.result()
-            except asyncio.CancelledError, KeyboardInterrupt:
+            except asyncio.CancelledError:
+                agent.request_stop()
+                chat_task.cancel()
+                renderer._stop_status()
+                renderer.message("⏹ 已停止主代理", "yellow")
+                state.last_failed_input = raw
+                return
+            except KeyboardInterrupt:
                 agent.request_stop()
                 chat_task.cancel()
                 renderer._stop_status()
@@ -430,7 +446,11 @@ class CliFrontend(FrontendStrategy):
                         renderer.message(f"✓ 已將「{prefix}」加入指令白名單，未來具備此字首的指令將自動執行。", "green")
                         return True
                     return False
-                except EOFError, KeyboardInterrupt:
+                except EOFError:
+                    if status:
+                        status.start()
+                    return False
+                except KeyboardInterrupt:
                     if status:
                         status.start()
                     return False
