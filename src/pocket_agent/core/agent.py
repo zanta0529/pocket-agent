@@ -84,12 +84,14 @@ class Agent:
         reasoning_effort: str = "medium",  # none/low/medium/high/xhigh
         max_tool_rounds: int | None = None,  # 未指定時讀 MAX_TOOL_ROUNDS 環境變數
         is_subagent: bool = False,  # 子代理不觸發 hooks、不能再開子代理
+        allowed_tools: list[str] | None = None,  # 限定可使用的工具清單（None 代表全開）
     ):
         from pocket_agent.system.config import config
 
         self.client = client
         self.mcp = mcp
         self._is_subagent = is_subagent
+        self.allowed_tools = allowed_tools
         self.model = model or config.get("model", "gpt-6-astra")
         self.system_prompt = system_prompt
         self.reasoning_effort = reasoning_effort
@@ -418,6 +420,10 @@ class Agent:
         if not self._is_subagent:
             tools.append(run_subagents_parallel)
             tools += subagent_tools()
+
+        if self.allowed_tools is not None:
+            tools = [t for t in tools if t.get("name") in self.allowed_tools]
+
         return tools
 
     def _instructions(self, query: str = "") -> str:
@@ -464,8 +470,9 @@ class Agent:
             model=sa["model"] or self.model,
             system_prompt=sa["prompt"] or "You are a helpful assistant.",
             reasoning_effort=sa["reasoning_effort"] or self.reasoning_effort,
-            max_tool_rounds=self.max_tool_rounds,
+            max_tool_rounds=sa["max_tool_rounds"] or self.max_tool_rounds,
             is_subagent=True,
+            allowed_tools=sa["allowed_tools"],
         )
         sub.workspace_dirs = list(self.workspace_dirs)
 
