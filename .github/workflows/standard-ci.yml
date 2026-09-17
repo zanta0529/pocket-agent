@@ -24,7 +24,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff pytest
+          pip install -r requirements-dev.txt
 
       - name: Check formatting with Ruff
         run: ruff format --check .
@@ -34,3 +34,9 @@ jobs:
 
       - name: Run Pytest (Smoke Tests)
         run: pytest tests/
+
+      - name: Check Missing Imports (Production)
+        run: python scripts/check_imports.py src scripts --req requirements.in
+        
+      - name: Check Missing Imports (Development)
+        run: python scripts/check_imports.py tests --req requirements-dev.in

@@ -204,6 +204,54 @@ _(💡 提示：若工具需使用敏感的 API Key，可利用 `inject` 參數�
 
 ---
 
+## 🛠️ 開發與貢獻 (Development & Contributing)
+
+本專案提供了一系列輔助工具來維持程式碼的品質與穩定性，包含針對依賴套件管理的專屬檢查腳本。
+
+### 本機文件解析工具 (`convert_to_md.py`)
+
+在將內部文件或外部參考資料放入 RAG (檢索增強生成) 資料庫，或是餵給 AI 作為上下文之前，將二進位文件無損轉換為純文字是非常重要的一環。`scripts/convert_to_md.py` 是一個零成本的命令列小工具，底層直接呼叫了專案內建的 `read_document` 引擎，可以在本地端瞬間將文件轉換為精準的 Markdown 格式（支援表格完美還原）。
+
+**支援格式**：`.pdf`, `.docx`, `.pptx`
+
+**使用方式**：
+```bash
+python scripts/convert_to_md.py <輸入檔案路徑> [-o <輸出檔案路徑>]
+
+# 範例 (自動在同目錄產生 N3A_1_DM.md)：
+python scripts/convert_to_md.py D:\_Personal\Downloads\insurance\N3A_1_DM.pdf
+```
+
+### 依賴套件檢查工具 (`check_imports.py`)
+
+為了避免開發者在撰寫新功能時引用了未記錄的第三方套件，專案內建了靜態分析腳本 `scripts/check_imports.py`。該腳本會掃描目錄下的所有 Python 檔案，並與 `requirements.in` 進行比對，以確保沒有遺漏的依賴。本專案將「正式環境」與「開發測試環境」分離，因此在 CI 流程中會分別進行檢查。
+
+**優點**：
+
+- **預防套件遺漏 (Missing Dependencies)**：利用 AST 靜態分析所有的 `import`，精準攔截未註冊的套件。
+- **自動化防呆**：內建 PyPI 名稱轉換對應（例如 `PIL` -> `pillow`），減少誤判。
+- **CI/CD 無縫整合**：已經整合至專案的 GitHub Actions 與 Git Pre-commit hook 中。當發現遺漏時，會自動回傳 Exit Code `1` 阻擋 Commit 或是讓 CI 亮紅燈。
+
+**使用方式**：
+
+```bash
+python scripts/check_imports.py [掃描目錄...] [參數]
+
+# 範例 1：檢查正式環境 (Production) 依賴
+python scripts/check_imports.py src scripts
+
+# 範例 2：檢查測試環境 (Development) 依賴
+python scripts/check_imports.py tests --req requirements-dev.in
+```
+
+**參數與引數**：
+
+- `[掃描目錄...]`：(位置引數) 指定要掃描的原始碼目錄 (預設為 `src`)。支援傳入多個目錄。
+- `--req <路徑>`：指定要比對的 requirements 檔案 (預設為 `requirements.in`)。
+- `--ignore <套件名稱>`：忽略特定套件的檢查警告 (支援傳入多個名稱，以空白分隔)。
+
+---
+
 ## 📦 發布與建置 (Build & Deployment)
 
 專案提供免安裝 Python 依賴的可攜帶版本 (Portable) 打包方案，適合在無法連上外網的內網環境中快速部署：

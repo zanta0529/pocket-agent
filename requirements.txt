@@ -35,9 +35,13 @@ click==8.5.0
     #   -r requirements.in
     #   uvicorn
 cryptography==50.0.1
-    # via pyjwt
+    # via
+    #   -r requirements.in
+    #   pyjwt
 fastapi==0.141.1
     # via -r requirements.in
+flatbuffers==25.12.19
+    # via onnxruntime
 greenlet==3.5.5
     # via playwright
 h11==0.16.0
@@ -90,10 +94,20 @@ more-itertools==11.1.0
     # via
     #   jaraco-classes
     #   jaraco-functools
+networkx==3.6.1
+    # via pymupdf-layout
+numpy==2.5.3
+    # via
+    #   onnxruntime
+    #   pymupdf-layout
+onnxruntime==1.30.0
+    # via pymupdf-layout
 openai==3.8.0
     # via -r requirements.in
 opentelemetry-api==1.44.0
     # via mcp
+packaging==26.3
+    # via onnxruntime
 pillow==12.3.0
     # via
     #   -r requirements.in
@@ -103,6 +117,10 @@ playwright==1.62.0
     # via -r requirements.in
 prompt-toolkit==3.0.53
     # via -r requirements.in
+protobuf==7.36.1
+    # via onnxruntime
+psutil==7.2.2
+    # via pymupdf4llm
 pycparser==3.0
     # via cffi
 pydantic==2.13.5
@@ -119,6 +137,14 @@ pygments==2.21.0
     # via rich
 pyjwt[crypto]==2.13.0
     # via mcp
+pymupdf==1.28.2
+    # via
+    #   pymupdf-layout
+    #   pymupdf4llm
+pymupdf-layout==1.28.2
+    # via pymupdf4llm
+pymupdf4llm==1.28.2
+    # via -r requirements.in
 pypdf==6.17.0
     # via -r requirements.in
 python-docx==1.2.0
@@ -131,12 +157,14 @@ python-multipart==0.0.32
     #   mcp
 python-pptx==1.0.2
     # via -r requirements.in
-pywin32==312 ; sys_platform == 'win32'
+pywin32==312
     # via mcp
-pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
+pywin32-ctypes==0.2.3
     # via keyring
 pyyaml==6.0.3
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   pymupdf-layout
 referencing==0.37.0
     # via
     #   jsonschema
@@ -158,6 +186,8 @@ starlette==1.6.0
     #   fastapi
     #   mcp
     #   sse-starlette
+tabulate==0.10.0
+    # via pymupdf4llm
 truststore==0.10.4
     # via
     #   -r requirements.in

@@ -65,6 +65,7 @@ from pocket_agent.extensions.skills import (  # noqa: E402
     skills_index_prompt,
 )
 from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool, is_doc_tool  # noqa: E402
+from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool, is_document_tool  # noqa: E402
 from pocket_agent.tools.fs import FS_TOOLS, call_fs_tool, is_fs_tool  # noqa: E402
 from pocket_agent.tools.image import image_tool, save_image_b64  # noqa: E402
 from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: E402
@@ -334,6 +335,7 @@ class Agent:
         tools = (
             list(self.mcp.openai_tools() or [])
             + DOC_TOOLS
+            + DOCUMENT_TOOLS
             + SHELL_TOOLS
             + FS_TOOLS
             + WEB_TOOLS
@@ -687,6 +689,8 @@ class Agent:
                         result = await asyncio.to_thread(
                             call_fs_tool, fc["name"], args, self.on_confirm, self.workspace_dirs
                         )
+                    elif is_document_tool(fc["name"]):
+                        result = await asyncio.to_thread(call_document_tool, fc["name"], args, self.workspace_dirs)
                     elif is_web_tool(fc["name"]):
                         result = await asyncio.to_thread(call_web_tool, fc["name"], args)
                     elif is_doc_tool(fc["name"]):
