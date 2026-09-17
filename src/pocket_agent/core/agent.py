@@ -486,9 +486,25 @@ class Agent:
         )
         sub.workspace_dirs = list(self.workspace_dirs)
 
+        text_buffer: list[str] = []
+
         def subagent_stream_forwarder(kind: str, data: object = ""):
             if kind == "thinking":
                 self._emit("thinking", f"[{name}] {data}")
+            elif kind == "text":
+                text_buffer.append(str(data))
+                current = "".join(text_buffer)
+                if "\n" in current:
+                    lines = current.split("\n")
+                    for line in lines[:-1]:
+                        if line.strip():
+                            self._emit("thinking", f"[{name}] {line.strip()}")
+                    text_buffer.clear()
+                    if lines[-1]:
+                        text_buffer.append(lines[-1])
+                elif len(current) > 60:
+                    self._emit("thinking", f"[{name}] {current.strip()}")
+                    text_buffer.clear()
             elif kind == "tool_start":
                 if isinstance(data, dict):
                     new_data = dict(data)
@@ -505,7 +521,7 @@ class Agent:
                     self._emit("tool_done", f"{name}::{data}")
             elif kind == "image_saved":
                 self._emit("image_saved", data)
-            # 刻意不轉發 "text" 與 "round_start"，讓 UI 維持在 spinner 狀態，避免內文與主代理衝突
+            # 刻意不將 "round_start" 轉發，讓 UI 維持在 spinner 狀態，避免內文與主代理衝突
 
         sub.on_stream = subagent_stream_forwarder
 

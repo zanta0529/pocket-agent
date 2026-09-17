@@ -294,7 +294,7 @@ class CommandHandler:
             return CommandResult("chat", raw)
         head, *tail = text.split(maxsplit=1)
         name, args = head[1:], tail[0] if tail else ""
-        if name in ("quit", "logout", "clear", "compact", "help", "tools") and args:
+        if name in ("quit", "logout", "clear", "compact", "help", "tools", "agents") and args:
             raise ValueError(f"/{name} 不接受參數")
         if name == "quit":
             return CommandResult("quit")
@@ -505,6 +505,38 @@ class CommandHandler:
                     self.renderer.message(f"✓ 已儲存 Skill 至: {save_path}", "green")
                 else:
                     self.renderer.message("已取消儲存。")
+        elif name == "agents":
+            from rich.text import Text
+
+            from pocket_agent.core.subagents import list_subagents
+
+            sa_list = list_subagents()
+            if not sa_list:
+                self.renderer.message("目前沒有可用的子代理。")
+                return CommandResult()
+
+            self.renderer.console.print()
+            header = Text("Available Subagents\n", style="bold magenta")
+            header.append(f"{len(sa_list)} subagents registered", style="dim")
+            self.renderer.console.print(header)
+            self.renderer.console.print()
+
+            for sa in sa_list:
+                title = Text(f"🤖 {sa['name']}", style="bold cyan")
+                self.renderer.console.print(title)
+                self.renderer.console.print(f"   [dim]描述:[/dim] {sa['description']}")
+                if sa.get("model"):
+                    self.renderer.console.print(f"   [dim]模型:[/dim] {sa['model']}")
+                if sa.get("allowed_tools"):
+                    tools_str = ", ".join(sa["allowed_tools"])
+                    self.renderer.console.print(f"   [dim]工具權限:[/dim] {tools_str}")
+                else:
+                    self.renderer.console.print("   [dim]工具權限:[/dim] 全開 (無限制)")
+
+                rounds = sa.get("max_tool_rounds") or self.agent.max_tool_rounds
+                self.renderer.console.print(f"   [dim]最大輪數:[/dim] {rounds}\n")
+
+            return CommandResult()
         elif name == "subagent":
             from pocket_agent.core.subagents import list_subagents
 

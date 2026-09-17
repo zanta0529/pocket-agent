@@ -17,6 +17,7 @@ from pocket_agent.frontend.cli.state import CliState
 
 BUILTINS = {
     "add-dir": "單次會話內，將外部資料夾加入工作範圍",
+    "agents": "列出目前所有可用的子代理清單與能力",
     "attachments": "查看／移除待送附件",
     "clear": "清除對話，保留附件",
     "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
@@ -286,7 +287,9 @@ class CliInput:
                     pre_run=pre_run,
                 )
             ).strip()
-        except KeyboardInterrupt, EOFError:
+        except KeyboardInterrupt:
+            return None
+        except EOFError:
             return None
         finally:
             self.selecting = False

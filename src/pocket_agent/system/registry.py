@@ -3,6 +3,8 @@ import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+import yaml
+
 log = logging.getLogger("pocket-agent")
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
@@ -16,11 +18,14 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     if not match:
         return {}, text
 
-    meta: dict = {}
-    for line in match.group(1).splitlines():
-        if ":" in line:
-            key, _, value = line.partition(":")
-            meta[key.strip()] = value.strip()
+    try:
+        meta = yaml.safe_load(match.group(1)) or {}
+        if not isinstance(meta, dict):
+            meta = {}
+    except Exception as e:
+        log.warning("YAML 解析失敗: %s", e)
+        meta = {}
+
     return meta, text[match.end() :]
 
 
