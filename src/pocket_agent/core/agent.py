@@ -569,6 +569,8 @@ class Agent:
         else:
             provider = "ollama"
 
+        from contextlib import aclosing
+
         from pocket_agent.engines import (
             EngineFactory,
             EventImageGenerationDone,
@@ -615,45 +617,46 @@ class Agent:
                 build_tools_callback=self._build_tools,
             )
 
-            async for event in stream:
-                if self.cancel_requested:
-                    break
+            async with aclosing(stream):
+                async for event in stream:
+                    if self.cancel_requested:
+                        break
 
-                if isinstance(event, EventThinking):
-                    thinking_chunks.append(event.delta)
-                    self._emit("thinking", event.delta)
+                    if isinstance(event, EventThinking):
+                        thinking_chunks.append(event.delta)
+                        self._emit("thinking", event.delta)
 
-                elif isinstance(event, EventText):
-                    text_chunks.append(event.delta)
-                    self._emit("text", event.delta)
+                    elif isinstance(event, EventText):
+                        text_chunks.append(event.delta)
+                        self._emit("text", event.delta)
 
-                elif isinstance(event, EventToolCallStart):
-                    func_calls[event.call_id] = {
-                        "call_id": event.call_id,
-                        "name": event.name,
-                        "arguments": "",
-                    }
-                    log.debug("TOOL item.added call_id=%s name=%s", event.call_id, event.name)
+                    elif isinstance(event, EventToolCallStart):
+                        func_calls[event.call_id] = {
+                            "call_id": event.call_id,
+                            "name": event.name,
+                            "arguments": "",
+                        }
+                        log.debug("TOOL item.added call_id=%s name=%s", event.call_id, event.name)
 
-                elif isinstance(event, EventToolCallDelta):
-                    if event.call_id in func_calls:
-                        func_calls[event.call_id]["arguments"] += event.delta
-                    log.debug("TOOL args.delta call_id=%s delta=%r", event.call_id, event.delta)
+                    elif isinstance(event, EventToolCallDelta):
+                        if event.call_id in func_calls:
+                            func_calls[event.call_id]["arguments"] += event.delta
+                        log.debug("TOOL args.delta call_id=%s delta=%r", event.call_id, event.delta)
 
-                elif isinstance(event, EventToolCallDone):
-                    if event.call_id in func_calls:
-                        func_calls[event.call_id]["arguments"] = event.full_args
-                    log.debug("TOOL item.done call_id=%s full_args=%r", event.call_id, event.full_args)
+                    elif isinstance(event, EventToolCallDone):
+                        if event.call_id in func_calls:
+                            func_calls[event.call_id]["arguments"] = event.full_args
+                        log.debug("TOOL item.done call_id=%s full_args=%r", event.call_id, event.full_args)
 
-                elif isinstance(event, EventImageGenerationDone):
-                    path = save_image_b64(event.b64)
-                    self.last_images.append(path)
-                    log.debug("IMAGE saved %s", path)
-                    self._emit("image_saved", str(path))
+                    elif isinstance(event, EventImageGenerationDone):
+                        path = save_image_b64(event.b64)
+                        self.last_images.append(path)
+                        log.debug("IMAGE saved %s", path)
+                        self._emit("image_saved", str(path))
 
-                # ── 串流結束，提取用量 ────────────────
-                elif isinstance(event, EventUsage):
-                    self.total_tokens += event.total_tokens
+                    # ── 串流結束，提取用量 ────────────────
+                    elif isinstance(event, EventUsage):
+                        self.total_tokens += event.total_tokens
 
             thinking = "".join(thinking_chunks)
             text = "".join(text_chunks)
