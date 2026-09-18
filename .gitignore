@@ -18,3 +18,6 @@ generated_files/
 .agents/context/
 .agents/logs/
 .agents/cache/
+
+# AI Agent plans
+.agents/plans/
