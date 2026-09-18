@@ -458,6 +458,9 @@ def call_fs_tool(
 
         return f"[ERROR] 未知的工具名稱: {name}"
 
-    except Exception as e:
-        log.exception(f"FS Tool {name} 執行失敗")
+    except ValueError as e:
+        log.warning(f"FS Tool {name} 執行失敗: {e}")
         return f"[ERROR] 檔案操作失敗: {e}"
+    except Exception as e:
+        log.exception(f"FS Tool {name} 執行發生未預期錯誤")
+        return f"[ERROR] 檔案操作發生未預期錯誤: {e}"
