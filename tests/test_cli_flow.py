@@ -95,7 +95,7 @@ def test_frontend_cleans_up_clients_and_mcp(startup_fails, tmp_path, monkeypatch
     with (
         patch("pocket_agent.system.auth.get_openai_client", return_value=client),
         patch("pocket_agent.system.auth.get_model", return_value="model"),
-        patch("pocket_agent.system.auth.load_config", return_value={"provider": "openai"}),
+        patch("pocket_agent.system.auth.load_config", return_value={"active_provider": "openai"}),
         patch("pocket_agent.system.auth.fetch_available_models", return_value=["model"]),
         patch("pocket_agent.extensions.mcp.MCPManager", return_value=mcp),
         patch("pocket_agent.core.agent.Agent", return_value=agent),
@@ -147,7 +147,7 @@ def test_frontend_mcp_startup_messages(result, message, style, tmp_path, monkeyp
         patch("pocket_agent.system.paths.user_dir", return_value=tmp_path),
         patch("pocket_agent.system.auth.get_openai_client", return_value=client),
         patch("pocket_agent.system.auth.get_model", return_value="model"),
-        patch("pocket_agent.system.auth.load_config", return_value={"provider": "openai"}),
+        patch("pocket_agent.system.auth.load_config", return_value={"active_provider": "openai"}),
         patch("pocket_agent.system.auth.fetch_available_models", return_value=["model"]),
         patch("pocket_agent.extensions.mcp.MCPManager", return_value=mcp),
         patch("pocket_agent.core.agent.Agent", return_value=agent),

@@ -383,7 +383,7 @@ class CliFrontend(FrontendStrategy):
                 )
             else:
                 renderer.message("MCP 初始化失敗，請檢查設定或上述錯誤訊息。", "red")
-            state = CliState(load_config().get("provider", "openai"), get_model())
+            state = CliState(load_config().get("active_provider", "openai"), get_model())
             try:
                 available = fetch_available_models(state.provider)
             except Exception:
