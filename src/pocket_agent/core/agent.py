@@ -662,6 +662,7 @@ class Agent:
                             "arguments": "",
                         }
                         log.debug("TOOL item.added call_id=%s name=%s", event.call_id, event.name)
+                        self._emit("thinking", f"準備執行 {event.name} 工具，正在產生參數 (這可能需要一些時間)...")
 
                     elif isinstance(event, EventToolCallDelta):
                         if event.call_id in func_calls:
