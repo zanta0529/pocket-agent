@@ -256,6 +256,53 @@ async def conversation(
                 agent.request_stop()
                 state.last_failed_input = raw
                 renderer.message("⏹ 已停止", "yellow")
+        elif result.action == "direct_subagents_parallel":
+            tasks = result.extra.get("tasks", []) if result.extra else []
+            agent.history.append({"role": "user", "content": f"/parallel {result.prompt}"})
+            try:
+                with renderer.console.status(f"系統路由：正在平行執行 {len(tasks)} 個子代理...", spinner="dots"):
+                    import asyncio
+
+                    coros = [agent._run_subagent(t) for t in tasks]
+                    results = await asyncio.gather(*coros, return_exceptions=True)
+
+                    combined = []
+                    for idx, res in enumerate(results):
+                        t_name = tasks[idx]["name"]
+                        t_task = tasks[idx]["task"]
+                        if isinstance(res, Exception):
+                            combined.append(f"【子代理 {t_name} (任務: {t_task}) 錯誤】\n{res}")
+                        else:
+                            combined.append(f"【子代理 {t_name} 回報 (任務: {t_task})】\n{res}")
+                    raw_combined = "\n\n---\n\n".join(combined)
+
+                with renderer.console.status("系統路由：正在彙整多份子代理報告...", spinner="dots"):
+                    from pocket_agent.core.agent import Agent
+
+                    summarizer = Agent(
+                        client=agent.client,
+                        mcp=agent.mcp,
+                        model=agent.model,
+                        system_prompt=(
+                            "你是一個專業的報告彙整助手。請閱讀以下由多個平行子代理回傳的獨立原始報告，"
+                            "並為使用者彙整成一份結構清晰、去蕪存菁的最終總結報告。請直接輸出報告內容，不需多餘的問候語。"
+                        ),
+                        is_subagent=True,
+                        reasoning_effort="none",
+                    )
+                    try:
+                        _, reply, _ = await summarizer.chat(raw_combined)
+                        if not reply or not reply.strip():
+                            raise ValueError("彙整回傳為空")
+                    except Exception as e:
+                        reply = f"*(彙整失敗，以下為原始報告：{e})*\n\n" + raw_combined
+
+                agent.history.append({"role": "assistant", "content": reply})
+                renderer.reply(reply, 0, 0, streamed=False)
+            except KeyboardInterrupt:
+                agent.request_stop()
+                state.last_failed_input = raw
+                renderer.message("⏹ 已停止", "yellow")
         elif result.action in ("chat", "image"):
             try:
                 await send_turn(agent, state, renderer, raw, result)

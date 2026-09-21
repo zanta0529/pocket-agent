@@ -14,6 +14,7 @@ class CommandResult:
     action: str = "handled"
     prompt: str = ""
     display_text: str | None = None
+    extra: dict | None = None
 
 
 async def switch_model(
@@ -578,6 +579,29 @@ class CommandHandler:
                 f"任務內容：\n{task}"
             )
             return CommandResult("chat", prompt, display_text)
+        elif name == "parallel":
+            if not args:
+                raise ValueError(
+                    "用法: /parallel <子代理1>:<任務1> | <子代理2>:<任務2>\n"
+                    "範例: /parallel researcher:查市場趨勢 | coder:寫分析腳本\n"
+                    "提示: 請使用管線符號 '|' 來分隔不同子代理的任務。"
+                )
+
+            tasks = []
+            for part in args.split("|"):
+                part = part.strip()
+                if not part:
+                    continue
+                if ":" in part:
+                    sub_name, sub_task = part.split(":", 1)
+                    tasks.append({"name": sub_name.strip(), "task": sub_task.strip()})
+                else:
+                    raise ValueError(f"平行任務格式錯誤，缺少冒號 (子代理名稱:任務內容) => 錯誤段落: {part}")
+
+            if not tasks:
+                raise ValueError("解析不到有效的平行任務。請確保使用管線符號 '|' 分隔。")
+
+            return CommandResult("direct_subagents_parallel", prompt=args, display_text=None, extra={"tasks": tasks})
         elif name == "session":
             await self.session(args)
         elif name == "compact":

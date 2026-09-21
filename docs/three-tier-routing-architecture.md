@@ -21,9 +21,10 @@ PocketAgent 的 CLI 在接收到使用者的指令（如 `/researcher`, `/factor
 * **執行者**：主代理（搭配外部工具呼叫）。
 
 ### 第三層：系統級子代理 (Zero-Token Subagents)
-* **代表範例**：`/researcher 尋找驗證漏洞`
-* **運作機制**：這是最深層的隔離路由。CLI 在底層攔截到此指令後，**完全不經過主代理的 LLM 推理**，直接在背景啟動一個全新的 `Agent(is_subagent=True)`。該子代理套用專屬的人設與工具（例如只具備讀取權限的研究員），在獨立且乾淨的 Context 下執行，完成後僅將總結報告回傳給主會話。
-* **執行者**：獨立的子代理。
+* **代表範例**：`/researcher 尋找驗證漏洞` 或 `/parallel researcher:任務A | coder:任務B`
+* **運作機制**：這是最深層的隔離路由。CLI 在底層攔截到此指令後，**完全不經過主代理的 LLM 推理**，直接在背景啟動一個全新的 `Agent(is_subagent=True)`。該子代理套用專屬的人設與工具，在獨立且乾淨的 Context 下執行。
+* **Map-Reduce 彙整機制**：若使用 `/parallel` 平行啟動多個子代理 (Fan-out)，系統會在收集完所有原始報告後，於背景啟動另一個**獨立的輕量彙整代理 (Summarizer/Reducer)** 進行總結 (Fan-in)。最終只將去蕪存菁的報告回傳給主會話，完美阻絕雜訊污染。
+* **執行者**：獨立的子代理群 (包含 Worker 與 Reducer)。
 
 ### 💡 核心差異解析：預先載入 (Eager) vs 惰性載入 (Lazy) 與自主性
 雖然第一層 (Command) 與第二層 (Skill) 都在主代理中執行，但兩者有著本質的差異：

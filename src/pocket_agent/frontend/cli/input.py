@@ -27,6 +27,7 @@ BUILTINS = {
     "learn": "從近期對話萃取為共用技能",
     "logout": "登出",
     "model": "切換當次提供者與模型",
+    "parallel": "手動平行啟動多個子代理 (用法: /parallel <name>:<task> | <name>:<task>)",
     "quit": "離開",
     "session": "查看／載入歷史對話",
     "skills": "列出目前所有可用的全域與專案技能",
