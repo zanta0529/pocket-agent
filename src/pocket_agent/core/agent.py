@@ -172,10 +172,21 @@ class Agent:
             ):
                 log.info("Context exceeded intercepted.")
                 self.history.pop()  # Remove the failed user input from history
-                raise RuntimeError(
-                    "Context Exceeded (上下文長度超出上限)\n\n"
-                    "輸入的內容或附加檔案過長，已超出當前模型的處理極限。\n"
-                    "請縮小附加的檔案數量或拆分內容後再試一次。"
+                notice = {
+                    "role": "system",
+                    "content": (
+                        "[System] 發生 Context Exceeded (上下文超載) 錯誤。"
+                        "請改用 `run_subagents_parallel` 派發子代理，"
+                        "或使用 `indexed_search` 進行精準檢索。"
+                    ),
+                }
+                self.history.append(notice)
+                return (
+                    "",
+                    "⚠️ **上下文超載 (Context Exceeded)**\n\n"
+                    "系統已自動攔截此錯誤並保護您的對話脈絡。\n"
+                    "建議作法：請明確指示我「**委派子代理**」或「**改用精準搜尋**」來拆解這個大型任務。",
+                    "",
                 )
             else:
                 raise
@@ -344,6 +355,8 @@ class Agent:
 
     def _build_tools(self) -> list:
         """MCP 工具 + hosted 生圖工具 + 本地文件工具 + shell 工具 + 原生檔案工具 + 網路工具 + skill / subagent 工具。"""
+        from pocket_agent.tools.rag import INDEXED_SEARCH_TOOL
+
         tools = (
             list(self.mcp.openai_tools() or [])
             + DOC_TOOLS
@@ -351,6 +364,7 @@ class Agent:
             + SHELL_TOOLS
             + FS_TOOLS
             + WEB_TOOLS
+            + [INDEXED_SEARCH_TOOL]
             + skill_tools(self.workspace_dirs)
         )
 
@@ -773,6 +787,10 @@ class Agent:
                         result, fpath = call_doc_tool(fc["name"], args)
                         if fpath:
                             self.last_files.append(fpath)
+                    elif fc["name"] == "indexed_search":
+                        from pocket_agent.tools.rag import call_indexed_search
+
+                        result = await asyncio.to_thread(call_indexed_search, args, self.workspace_dirs)
                     else:
                         result = await self.mcp.call(fc["name"], args)
                     log.debug("TOOL result=%r", result)
