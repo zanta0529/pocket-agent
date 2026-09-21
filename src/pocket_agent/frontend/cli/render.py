@@ -231,7 +231,20 @@ class CliRenderer:
             self._ensure_newline()
             self.console.print(Text.assemble(("● ", "bold green"), ("Read", "bold yellow"), (f" ({plain(data)})", "")))
 
+        elif kind == "tool_stream_start":
+            self._ensure_newline()
+            msg = f"準備執行 {data} 工具，正在產生參數..."
+            if self._active_status:
+                self._active_status.update(msg)
+            else:
+                from rich.status import Status
+
+                status = Status(msg, spinner="dots", console=self.console)
+                self._active_status = status
+                status.start()
+
         elif kind == "tool_start":
+            self._stop_status()
             self._ensure_newline()
 
             if isinstance(data, dict):

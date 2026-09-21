@@ -246,10 +246,23 @@ async def conversation(
             break
         if result.action == "direct_subagent":
             sub_name = result.display_text
+            display = (
+                result.display_text
+                if getattr(result, "display_text", None) and getattr(result, "display_text").startswith("/")
+                else raw
+            )
+            renderer.user(display)
             agent.history.append({"role": "user", "content": f"/{sub_name} {result.prompt}"})
             try:
-                with renderer.console.status(f"系統路由：正在執行子代理 `{sub_name}`...", spinner="dots"):
+                from rich.status import Status
+
+                status = Status(f"系統路由：正在執行子代理 `{sub_name}`...", spinner="dots", console=renderer.console)
+                renderer._active_status = status
+                status.start()
+                try:
                     reply = await agent._run_subagent({"name": sub_name, "task": result.prompt})
+                finally:
+                    renderer._stop_status()
                 agent.history.append({"role": "assistant", "content": reply})
                 renderer.reply(reply, 0, 0, streamed=False)
             except KeyboardInterrupt:
@@ -258,9 +271,22 @@ async def conversation(
                 renderer.message("⏹ 已停止", "yellow")
         elif result.action == "direct_subagents_parallel":
             tasks = result.extra.get("tasks", []) if result.extra else []
+            display = (
+                result.display_text
+                if getattr(result, "display_text", None) and getattr(result, "display_text").startswith("/")
+                else raw
+            )
+            renderer.user(display)
             agent.history.append({"role": "user", "content": f"/parallel {result.prompt}"})
             try:
-                with renderer.console.status(f"系統路由：正在平行執行 {len(tasks)} 個子代理...", spinner="dots"):
+                from rich.status import Status
+
+                status = Status(
+                    f"系統路由：正在平行執行 {len(tasks)} 個子代理...", spinner="dots", console=renderer.console
+                )
+                renderer._active_status = status
+                status.start()
+                try:
                     import asyncio
 
                     coros = [agent._run_subagent(t) for t in tasks]
@@ -275,8 +301,13 @@ async def conversation(
                         else:
                             combined.append(f"【子代理 {t_name} 回報 (任務: {t_task})】\n{res}")
                     raw_combined = "\n\n---\n\n".join(combined)
+                finally:
+                    renderer._stop_status()
 
-                with renderer.console.status("系統路由：正在彙整多份子代理報告...", spinner="dots"):
+                status = Status("系統路由：正在彙整多份子代理報告...", spinner="dots", console=renderer.console)
+                renderer._active_status = status
+                status.start()
+                try:
                     from pocket_agent.core.agent import Agent
 
                     summarizer = Agent(
@@ -296,6 +327,8 @@ async def conversation(
                             raise ValueError("彙整回傳為空")
                     except Exception as e:
                         reply = f"*(彙整失敗，以下為原始報告：{e})*\n\n" + raw_combined
+                finally:
+                    renderer._stop_status()
 
                 agent.history.append({"role": "assistant", "content": reply})
                 renderer.reply(reply, 0, 0, streamed=False)

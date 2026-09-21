@@ -516,6 +516,8 @@ class Agent:
         def subagent_stream_forwarder(kind: str, data: object = ""):
             if kind == "thinking":
                 self._emit("thinking", f"[{name}] {data}")
+            elif kind == "tool_stream_start":
+                self._emit("tool_stream_start", f"[{name}] {data}")
             elif kind == "text":
                 text_buffer.append(str(data))
                 current = "".join(text_buffer)
@@ -662,7 +664,7 @@ class Agent:
                             "arguments": "",
                         }
                         log.debug("TOOL item.added call_id=%s name=%s", event.call_id, event.name)
-                        self._emit("thinking", f"準備執行 {event.name} 工具，正在產生參數 (這可能需要一些時間)...")
+                        self._emit("tool_stream_start", event.name)
 
                     elif isinstance(event, EventToolCallDelta):
                         if event.call_id in func_calls:
