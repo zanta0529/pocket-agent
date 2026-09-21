@@ -146,8 +146,11 @@ def call_web_tool(name: str, args: dict) -> str:
             # 限制長度避免爆 Context
             max_len = 15000
             if len(text) > max_len:
-                return text[:max_len] + f"\n\n... (內容過長，已截斷前 {max_len} 字元)"
-            return text
+                inner = text[:max_len] + f"\n\n... (內容過長，已截斷前 {max_len} 字元)"
+            else:
+                inner = text
+
+            return f"<external_content>\n{inner}\n</external_content>"
 
         return f"[ERROR] 未知的工具名稱: {name}"
 

@@ -132,7 +132,8 @@ def call_indexed_search(args: dict[str, Any], workspace_dirs: list[str] | None =
             if not results:
                 return f"找不到包含 '{query}' 的相關程式碼。"
 
-            return "【RAG 檢索結果】\n" + "-" * 40 + "\n" + "\n".join(results)
+            inner = "【RAG 檢索結果】\n" + "-" * 40 + "\n" + "\n".join(results)
+            return f"<external_content>\n{inner}\n</external_content>"
         except sqlite3.OperationalError as e:
             log.warning("FTS5 查詢失敗: %s", e)
             return f"[ERROR] 檢索失敗: {e}"

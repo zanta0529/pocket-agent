@@ -309,20 +309,22 @@ def call_fs_tool(
                 max_lines = 500
                 if total_lines > max_lines:
                     sliced = lines[:max_lines]
-                    result = "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(sliced))
-                    result += (
+                    inner = "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(sliced))
+                    inner += (
                         f"\n\n...（內容過長，共 {total_lines} 行，目前僅顯示前 {max_lines} 行。"
                         "請使用 start_line/end_line 繼續讀取）"
                     )
-                    return result
+                    return f"<external_content>\n{inner}\n</external_content>"
                 else:
-                    return "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(lines))
+                    inner = "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(lines))
+                    return f"<external_content>\n{inner}\n</external_content>"
 
             start_idx = max(0, int(start) - 1) if start else 0
             end_idx = min(total_lines, int(end)) if end else total_lines
 
             sliced = lines[start_idx:end_idx]
-            return "\n".join(f"{start_idx + i + 1:4}| {line.rstrip()}" for i, line in enumerate(sliced))
+            inner = "\n".join(f"{start_idx + i + 1:4}| {line.rstrip()}" for i, line in enumerate(sliced))
+            return f"<external_content>\n{inner}\n</external_content>"
 
         elif name == "write_to_file":
             content = args.get("content", "")
