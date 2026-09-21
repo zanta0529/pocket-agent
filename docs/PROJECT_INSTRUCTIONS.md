@@ -69,7 +69,8 @@
 
 ## 3. 編碼與相容性要求
 
-- Python 使用 4 空白縮排、UTF-8、LF 與檔尾換行；行長以 120 為準。
+- Python 使用 4 空白縮排、UTF-8、LF 與檔尾換行；行長嚴格限制為 120 字元以內。
+- **Ruff E501 警告防範**：若字串或程式碼超過 120 字元，必定會觸發 Ruff `E501 (Line too long)` 警告。撰寫長字串（如系統提示詞、日誌訊息或系統備註）時，務必利用 Python 隱式字串拼接（Implicit string concatenation）將其拆分為多行。
 - Python 格式以 `pyproject.toml` 的 Ruff 設定為準：雙引號、E／F／I 規則；
   `.editorconfig` 的 single quote 提示不覆寫 Python formatter。
 - 新增程式以 Python 3.14 相容為基準，不使用僅在更高版本提供的語法或標準庫 API。
