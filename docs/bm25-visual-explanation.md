@@ -150,11 +150,13 @@ n(t) = 包含詞 t 的文件數（不是該詞的總出現次數）
 
 ## 7. PocketAgent 中的 BM25 實作應用
 
-在 PocketAgent 中，為了在有限的 LLM Token 上限下提供最相關的 `SKILL.md` 操作手冊，我們採用了 **純本地、零依賴** 的 SQLite FTS5 擴充模組來實作 BM25 向量檢索：
+在 PocketAgent 中，為了在有限的 LLM Token 上限下提供最相關的 `SKILL.md` 操作手冊與程式碼片段，我們採用了 **純本地、零依賴** 的 SQLite FTS5 擴充模組來實作 BM25 檢索：
 
-1. **記憶檢索 (Retrieval)**：
-   當使用者輸入指令時，系統會動態擷取最新的 `query` 關鍵字，交由 SQLite FTS5 的 `MATCH` 語法計算 BM25 分數。僅挑選 `Top-K`（預設前 5 名）最相關的 Skill 注入到 System Prompt，有效避免 Context Overflow 與雜訊干擾。
-2. **惰性校驗同步 (Lazy Sync with Mtime)**：
-   與其維護肥大且容易碎片化的資料庫，系統採用「拋棄式快取 (Disposable Cache)」策略。每次搜尋前，系統僅花 1 毫秒比對所有 `SKILL.md` 檔案的最後修改時間 (mtime) 指紋。若發現檔案有外部新增或修改，則直接**物理刪除舊的 `.db` 檔案並瞬間重建**，確保零碎片且資料 100% 即時同步。
+1. **技能記憶檢索 (Skill Retrieval)**：
+   當使用者輸入指令時，系統會動態擷取最新的 `query` 關鍵字，交由 SQLite FTS5 計算 BM25 分數。僅挑選 `Top-K`（預設前 5 名）最相關的 Skill 注入到 System Prompt，有效避免 Context Overflow。
+2. **程式碼庫檢索 (RAG Codebase Search)**：
+   透過內建的 `indexed_search` 工具，系統會針對工作區內的原始碼建立 FTS5 虛擬索引。當模型遇到需要跨檔案尋找某個類別或函式時，這項機制能以毫秒級速度找出最匹配的程式碼片段 (Snippet)，取代緩慢且消耗大量 Token 的傳統 `grep_search`。
+3. **惰性校驗同步 (Lazy Sync with Mtime)**：
+   與其維護肥大且容易碎片化的資料庫，系統採用「拋棄式快取 (Disposable Cache)」策略。每次搜尋前，系統僅花 1 毫秒比對所有檔案的最後修改時間 (mtime) 指紋。若發現檔案有外部新增或修改，則直接**物理刪除舊的 `.db` 檔案並瞬間重建**，確保零碎片且資料 100% 即時同步。
 
 > 一句話記住：BM25 = 詞彙稀有度 × 經詞頻飽和與文件長度調整的命中貢獻，再對查詢詞加總。
