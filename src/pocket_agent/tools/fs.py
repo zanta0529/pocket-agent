@@ -12,6 +12,7 @@ FS_TOOLS = [
         "description": (
             "Read the contents of a file. Optionally provide start_line and end_line "
             "to read a specific range. Lines are 1-indexed. Large files default to max 500 lines. "
+            "If unsure of the path, use list_dir or find_by_name first to avoid errors. "
             "If truncated, do NOT rewrite blindly. Use grep_search to find keywords or use start_line/end_line."
         ),
         "parameters": {
@@ -59,7 +60,8 @@ FS_TOOLS = [
         "name": "replace_file_content",
         "description": (
             "Safely replace a specific target string within a file. The target must match EXACTLY "
-            "(including whitespace) and should be unique within the file or within the specified line range."
+            "(including whitespace). If you encounter a mismatch error, DO NOT guess again. "
+            "Use read_file with start_line/end_line to capture the exact spaces and indentation first."
         ),
         "parameters": {
             "type": "object",

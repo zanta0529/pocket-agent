@@ -684,7 +684,34 @@ class Agent:
 
                 try:
                     raw = fc["arguments"].strip()
-                    args = json.loads(raw) if raw else {}
+                    try:
+                        args = json.loads(raw) if raw else {}
+                    except json.JSONDecodeError as e:
+                        log.error("JSONDecodeError on args: %r", raw)
+                        result = (
+                            f"[ERROR] JSON 解碼失敗: {e}。"
+                            "請檢查跳脫字元，特別是 Windows 路徑中的反斜線，建議改用正斜線 (/)。"
+                        )
+                        self._emit(
+                            "tool_done",
+                            {
+                                "call_id": fc["call_id"],
+                                "name": fc["name"],
+                                "result": result,
+                                "ok": False,
+                            },
+                        )
+                        input_items.append(
+                            {
+                                "type": "function_call",
+                                "call_id": fc["call_id"],
+                                "name": fc["name"],
+                                "arguments": fc["arguments"],
+                            }
+                        )
+                        input_items.append({"type": "function_call_output", "call_id": fc["call_id"], "output": result})
+                        continue
+
                     log.debug("TOOL calling %s args=%r", fc["name"], args)
 
                     if not self._is_subagent:
