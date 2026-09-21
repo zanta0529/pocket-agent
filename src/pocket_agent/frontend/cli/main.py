@@ -244,7 +244,19 @@ async def conversation(
             continue
         if result.action == "quit":
             break
-        if result.action in ("chat", "image"):
+        if result.action == "direct_subagent":
+            sub_name = result.display_text
+            agent.history.append({"role": "user", "content": f"/{sub_name} {result.prompt}"})
+            try:
+                with renderer.console.status(f"系統路由：正在執行子代理 `{sub_name}`...", spinner="dots"):
+                    reply = await agent._run_subagent({"name": sub_name, "task": result.prompt})
+                agent.history.append({"role": "assistant", "content": reply})
+                renderer.reply(reply, 0, 0, streamed=False)
+            except KeyboardInterrupt:
+                agent.request_stop()
+                state.last_failed_input = raw
+                renderer.message("⏹ 已停止", "yellow")
+        elif result.action in ("chat", "image"):
             try:
                 await send_turn(agent, state, renderer, raw, result)
             except KeyboardInterrupt:

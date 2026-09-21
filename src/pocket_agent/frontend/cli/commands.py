@@ -701,12 +701,8 @@ class CommandHandler:
 
             sa_dict = {sa["name"]: sa for sa in list_subagents()}
             if name in sa_dict:
-                prompt = f"請使用 `run_subagent` 工具，委派 `{name}` 子代理來處理以下任務"
-                if args:
-                    prompt += f"：\n{args}"
-                else:
-                    prompt += "。"
-                return CommandResult("chat", prompt)
+                task = args if args else "請執行你的預設任務"
+                return CommandResult("direct_subagent", prompt=task, display_text=name)
 
             raise ValueError(f"找不到指令、技能或子代理 /{name}；輸入 /help 查看說明")
         return CommandResult()

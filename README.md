@@ -30,13 +30,15 @@
 - **子代理 (Subagents)**：允許在設定檔定義多種人設 (例如：架構師、研究員)，主 Agent 在面對複雜情境時會自動委派任務，實現多代理協同作業。
 - **事件攔截與鉤子 (Hooks)**：支援在 `before_send`, `after_response`, `before_tool`, `after_tool` 綁定並執行本機腳本，達成高度客製化。
 - **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，輕鬆掛載本地檔案系統、資料庫或遠端工具。自帶 `browser_mcp.py` 支援網頁自動化瀏覽與 Session 狀態繼承。
+- **CLI 動態捷徑 (Zero-Token Routing)**：除了主 Agent 自行決定外，使用者可直接輸入 `/subagent <name>` 或動態捷徑 `/<name>`。系統會**攔截指令並直接在底層啟動子代理**，完美跳過主代理的 LLM 推理，達成零 Token 消耗的高速派發。
 
 ### 4. 企業級安全治理 (Enterprise Governance)
 
 - **CLI 指令執行確認**：在終端機模式下，當 AI 嘗試呼叫 Shell 工具執行系統指令時，會強制暫停並提示使用者輸入 `[y/N]` 進行確認，防止不可逆的危險操作。
 - **指令沙盒 (Shell Sandbox)**：透過啟用 `.env` 中的 `USE_SANDBOX=wsl` 或 `docker`，徹底隔離 AI 的終端機執行權限。
 - **Artifacts 全域隔離**：強制將 AI 自動生成的專案計畫與文檔寫入 `~/.pocket-agent/artifacts/`，避免污染既有專案程式碼。
-- **Context Overflow 滑動視窗**：當上下文超過 12 萬字元時，自動觸發首尾保留截斷機制，防止 Token 上限導致的模型崩潰。
+- **Context Overflow 滑動視窗與防護網**：當上下文超過 12 萬字元時，自動觸發首尾保留截斷機制。若模型 API 仍拋出超載錯誤，系統會自動攔截崩潰、退回該次輸入，並注入 `[System]` 提示指導 AI 改用平行子代理或精準搜尋，確保對話永不中斷。
+- **程式碼檢索增強 (RAG Codebase Search)**：內建 `indexed_search` 工具，利用本地 SQLite FTS5 建立輕量級程式碼庫索引，取代低效的 `grep_search`，實現極速且精準的片段擷取。
 
 ### 5. 工作區環境規範 (Workspace Context)
 
