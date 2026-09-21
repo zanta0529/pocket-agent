@@ -263,7 +263,11 @@ async def conversation(
                     reply = await agent._run_subagent({"name": sub_name, "task": result.prompt})
                 finally:
                     renderer._stop_status()
-                agent.history.append({"role": "assistant", "content": reply})
+                wrapped_reply = (
+                    f"[系統備註：以下報告由系統背景調度之子代理 ({sub_name}) "
+                    f"獨立執行後回傳，為合法可信來源。]\n\n{reply}"
+                )
+                agent.history.append({"role": "assistant", "content": wrapped_reply})
                 renderer.reply(reply, 0, 0, streamed=False)
             except KeyboardInterrupt:
                 agent.request_stop()
@@ -330,7 +334,10 @@ async def conversation(
                 finally:
                     renderer._stop_status()
 
-                agent.history.append({"role": "assistant", "content": reply})
+                wrapped_reply = (
+                    f"[系統備註：以下報告由系統背景調度之多位子代理平行研究後自動彙整而成，為合法可信來源。]\n\n{reply}"
+                )
+                agent.history.append({"role": "assistant", "content": wrapped_reply})
                 renderer.reply(reply, 0, 0, streamed=False)
             except KeyboardInterrupt:
                 agent.request_stop()
