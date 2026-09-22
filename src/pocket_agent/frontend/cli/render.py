@@ -250,23 +250,14 @@ class CliRenderer:
             if isinstance(data, dict):
                 name = data.get("name", str(data))
                 args_raw = data.get("arguments", "") or ""
+                is_safe_read = data.get("is_safe_read", False)
             else:
                 name = str(data)
                 args_raw = ""
+                is_safe_read = False
 
             real_name = name.split("::")[-1]
             name_lower = real_name.lower()
-            native_tools = {
-                "read_file",
-                "write_to_file",
-                "replace_file_content",
-                "list_dir",
-                "find_by_name",
-                "grep_search",
-                "search_web",
-                "read_url_content",
-            }
-            is_native = real_name in native_tools
 
             if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep"]):
                 action = "Read"
@@ -276,8 +267,8 @@ class CliRenderer:
                 action = "Action"
 
             action_color = "bold yellow"
-            name_color = "bold green" if is_native else "bold cyan"
-            bullet_color = "bold red" if action == "Write" or not is_native else "bold green"
+            name_color = "bold green" if is_safe_read else "bold cyan"
+            bullet_color = "bold red" if action == "Write" or not is_safe_read else "bold green"
             summary = self._summarise_args(name, args_raw)
 
             if "::" in name:

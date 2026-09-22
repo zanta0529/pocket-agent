@@ -155,4 +155,5 @@ INDEXED_SEARCH_TOOL = {
         },
         "required": ["query"],
     },
+    "_is_safe_read": True,
 }

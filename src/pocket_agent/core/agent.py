@@ -451,7 +451,15 @@ class Agent:
         if self.allowed_tools is not None:
             tools = [t for t in tools if t.get("name") in self.allowed_tools]
 
-        return tools
+        self._safe_read_tools = set()
+        cleaned_tools = []
+        for t in tools:
+            tc = dict(t)
+            if tc.pop("_is_safe_read", False):
+                self._safe_read_tools.add(tc.get("name"))
+            cleaned_tools.append(tc)
+
+        return cleaned_tools
 
     def _instructions(self, query: str = "") -> str:
         """system prompt + skill 目錄（每輪重算，skill 可熱加）。"""
@@ -710,6 +718,7 @@ class Agent:
                         "call_id": fc["call_id"],
                         "name": fc["name"],
                         "arguments": fc["arguments"],
+                        "is_safe_read": fc["name"] in getattr(self, "_safe_read_tools", set()),
                     },
                 )
 

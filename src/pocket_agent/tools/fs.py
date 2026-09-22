@@ -24,6 +24,7 @@ FS_TOOLS = [
             },
             "required": ["path"],
         },
+        "_is_safe_read": True,
     },
     {
         "type": "function",
@@ -96,6 +97,7 @@ FS_TOOLS = [
             },
             "required": ["path"],
         },
+        "_is_safe_read": True,
     },
     {
         "type": "function",
@@ -106,6 +108,7 @@ FS_TOOLS = [
             "properties": {"path": {"type": "string", "description": "Absolute or relative path to the file."}},
             "required": ["path"],
         },
+        "_is_safe_read": True,
     },
     {
         "type": "function",
@@ -119,6 +122,7 @@ FS_TOOLS = [
             },
             "required": ["path", "pattern"],
         },
+        "_is_safe_read": True,
     },
     {
         "type": "function",
@@ -132,6 +136,7 @@ FS_TOOLS = [
             },
             "required": ["path", "query"],
         },
+        "_is_safe_read": True,
     },
 ]
 

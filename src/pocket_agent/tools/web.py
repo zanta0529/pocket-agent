@@ -18,6 +18,7 @@ WEB_TOOLS = [
             "properties": {"query": {"type": "string", "description": "The search query."}},
             "required": ["query"],
         },
+        "_is_safe_read": True,
     },
     {
         "type": "function",
@@ -30,6 +31,7 @@ WEB_TOOLS = [
             "properties": {"url": {"type": "string", "description": "The absolute URL to fetch."}},
             "required": ["url"],
         },
+        "_is_safe_read": True,
     },
 ]
 
