@@ -106,6 +106,7 @@ class Agent:
         self.last_files: list[Path] = []  # 本輪 chat 產生的文件路徑（GUI 顯示用）
         self.workspace_dirs: list[str] = []  # CLI 與 GUI 共用的工作區路徑清單
         self.active_subagents: list["Agent"] = []  # 追蹤執行中的子代理，用於連動取消與狀態監控
+        self._bg_tasks: set[asyncio.Task] = set()  # 追蹤背景任務以防垃圾回收
 
         # 串流回呼：callable(kind, data)，從背景 asyncio thread 呼叫，
         # GUI 端需自行轉回主執行緒。kind 與 data 的對應：
@@ -257,7 +258,9 @@ class Agent:
 
                                 sync_index(self.workspace_dirs)
 
-                        asyncio.create_task(background_learn())
+                        task = asyncio.create_task(background_learn())
+                        self._bg_tasks.add(task)
+                        task.add_done_callback(self._bg_tasks.discard)
                     except Exception as e:
                         log.warning(f"Auto-Learn 背景作業失敗: {e}")
 

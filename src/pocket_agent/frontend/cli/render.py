@@ -294,7 +294,12 @@ class CliRenderer:
                 parts = [("● ", bullet_color), (action, action_color), (" (", ""), (real_name, name_color), (")", "")]
 
             if summary:
-                parts.append((f" {plain(summary)}", ""))
+                summary_text = plain(summary)
+                if summary_text.startswith("【安全警告】"):
+                    parts.append((" 【安全警告】", "bold red"))
+                    parts.append((summary_text[6:], ""))
+                else:
+                    parts.append((f" {summary_text}", ""))
 
             # 參照 Antigravity 設計：將工具呼叫明確印出並常駐在畫面上，不再自動隱藏
             tool_text = Text.assemble(*parts)

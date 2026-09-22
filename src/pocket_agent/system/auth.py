@@ -89,13 +89,13 @@ def _extract_account_id(access_token: str) -> str | None:
 
 def _get_encryption_key() -> bytes:
     import base64
+    import getpass
     import hashlib
-    import os
     import platform
 
     # 建立本機綁定的金鑰
     try:
-        login = os.getlogin()
+        login = getpass.getuser()
     except Exception:
         login = "unknown_user"
     material = f"{platform.node()}-{login}-pocket-agent".encode("utf-8")
