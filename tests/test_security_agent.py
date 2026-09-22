@@ -1,13 +1,10 @@
 from unittest.mock import MagicMock
 
-import pytest
-
 from pocket_agent.core.agent import Agent
 from pocket_agent.extensions.mcp import MCPManager
 
 
-@pytest.mark.asyncio
-async def test_agent_instructions_contains_security_boundaries():
+def test_agent_instructions_contains_security_boundaries():
     """測試主代理與子代理的 system prompt 是否成功注入外部資料防禦條款。"""
     mock_client = MagicMock()
     mock_mcp = MagicMock(spec=MCPManager)

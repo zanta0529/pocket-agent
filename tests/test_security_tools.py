@@ -75,7 +75,7 @@ def test_fs_grep_search_dos_protection(tmp_path):
         mock_stat_result.st_size = 6 * 1024 * 1024  # 模擬 6 MB (大於 5MB 上限)
         mock_stat.return_value = mock_stat_result
 
-        args = {"query": "secret_keyword"}
+        args = {"query": "secret_keyword", "path": str(workspace)}
         # 由於檔案過大，搜尋應自動跳過，所以找不到內容
         result = call_fs_tool("grep_search", args, on_confirm=None, workspace_dirs=[str(workspace)])
 
