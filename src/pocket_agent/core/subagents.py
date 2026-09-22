@@ -38,6 +38,7 @@ class SubagentRegistry(MarkdownRegistry):
             "reasoning_effort": meta.get("reasoning_effort", "") or None,
             "allowed_tools": meta.get("allowed_tools"),  # list[str] | None
             "max_tool_rounds": meta.get("max_tool_rounds"),  # int | None
+            "post_actions": meta.get("post_actions", {}),  # dict
             "prompt": body.strip(),
             "path": path,
         }

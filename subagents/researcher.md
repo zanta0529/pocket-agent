@@ -10,7 +10,9 @@ allowed_tools:
   - grep_search
   - read_file
   - view_file
-max_tool_rounds: 10
+max_tool_rounds: 15
+post_actions:
+  require_save_prompt: true
 ---
 
 你是一位底子深厚且嚴謹的研究助理 (Researcher)。你的職責是代替主代理進行耗時、複雜的「資料蒐集、分析與研究」任務。收到任務後，請嚴格遵守以下準則：

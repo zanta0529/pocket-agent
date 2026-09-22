@@ -772,13 +772,27 @@ class Agent:
                             results = await asyncio.gather(*coros, return_exceptions=True)
 
                             combined = []
+                            require_save_prompt = False
                             for idx, res in enumerate(results):
                                 t_name = tasks[idx].get("name", f"Subagent-{idx}")
+                                sa_def = get_subagent(t_name)
+                                if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
+                                    require_save_prompt = True
+
                                 if isinstance(res, Exception):
                                     combined.append(f"【子代理 {t_name} 錯誤】\n{res}")
                                 else:
                                     combined.append(res)
                             result = "\n\n".join(combined)
+
+                            if require_save_prompt:
+                                result += (
+                                    "\n\n[系統指示 (System Instruction)]\n"
+                                    "上述平行子任務已全數完成並彙整。根據系統設定，你現在**必須**根據報告內容，"
+                                    "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
+                                    "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
+                                    "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
+                                )
                     elif fc["name"] == "ask_question":
                         loop = asyncio.get_running_loop()
                         fut = loop.create_future()
@@ -798,6 +812,15 @@ class Agent:
                         result = json.dumps(result_dict, ensure_ascii=False)
                     elif is_subagent_tool(fc["name"]):
                         result = await self._run_subagent(args)
+                        sa_def = get_subagent(args.get("name", ""))
+                        if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
+                            result += (
+                                "\n\n[系統指示 (System Instruction)]\n"
+                                "上述子任務已完成。根據系統設定，你現在**必須**根據報告內容，"
+                                "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
+                                "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
+                                "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
+                            )
                     elif is_shell_tool(fc["name"]):
                         # 阻塞的 subprocess + 確認視窗等待 → 丟到 thread 跑
                         result = await asyncio.to_thread(call_shell_tool, fc["name"], args, self.on_confirm)
