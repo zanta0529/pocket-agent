@@ -269,6 +269,23 @@ async def conversation(
                 )
                 agent.history.append({"role": "assistant", "content": wrapped_reply})
                 renderer.reply(reply, 0, 0, streamed=False)
+
+                from pocket_agent.core.subagents import get_subagent
+
+                sa_def = get_subagent(sub_name)
+                if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
+                    auto_prompt = (
+                        "[系統指示 (System Instruction)]\n"
+                        "上述子任務已完成。根據系統設定，你現在**必須**根據該報告內容，"
+                        "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
+                        "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
+                        "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
+                    )
+                    from pocket_agent.frontend.cli.commands import CommandResult
+
+                    await send_turn(
+                        agent, state, renderer, "(系統自動觸發存檔流程)", CommandResult("chat", prompt=auto_prompt)
+                    )
             except KeyboardInterrupt:
                 agent.request_stop()
                 state.last_failed_input = raw
@@ -339,6 +356,29 @@ async def conversation(
                 )
                 agent.history.append({"role": "assistant", "content": wrapped_reply})
                 renderer.reply(reply, 0, 0, streamed=False)
+
+                require_save = False
+                from pocket_agent.core.subagents import get_subagent
+
+                for t in tasks:
+                    sa_def = get_subagent(t["name"])
+                    if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
+                        require_save = True
+                        break
+
+                if require_save:
+                    auto_prompt = (
+                        "[系統指示 (System Instruction)]\n"
+                        "上述平行子任務已完成並彙整。根據系統設定，你現在**必須**根據該報告內容，"
+                        "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
+                        "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
+                        "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
+                    )
+                    from pocket_agent.frontend.cli.commands import CommandResult
+
+                    await send_turn(
+                        agent, state, renderer, "(系統自動觸發存檔流程)", CommandResult("chat", prompt=auto_prompt)
+                    )
             except KeyboardInterrupt:
                 agent.request_stop()
                 state.last_failed_input = raw
