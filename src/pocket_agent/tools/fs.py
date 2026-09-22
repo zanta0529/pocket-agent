@@ -149,9 +149,9 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
         raise ValueError(f"無效的路徑格式: {e}")
 
     # 黑名單：防止存取敏感設定或版本控制資料
-    sensitive_names = {".env", ".git", ".pocket-agent"}
+    sensitive_exact = {".git", ".pocket-agent"}
     for part in target.parts:
-        if part in sensitive_names:
+        if part in sensitive_exact or part.startswith(".env"):
             raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
 
     # 工作區監禁 (Workspace Jail)
@@ -444,6 +444,13 @@ def call_fs_tool(
             for p in target.rglob("*"):
                 if not p.is_file() or any(ex in p.parts for ex in excludes):
                     continue
+                # DoS 防護：略過超過 5 MB 的大檔
+                try:
+                    if p.stat().st_size > 5 * 1024 * 1024:
+                        continue
+                except Exception:
+                    continue
+
                 try:
                     lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
                     for i, line in enumerate(lines):

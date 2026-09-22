@@ -131,6 +131,19 @@ def call_web_tool(name: str, args: dict) -> str:
             if parsed.scheme not in ("http", "https"):
                 return "[ERROR] 僅支援 http / https 網址"
 
+            # SSRF 防護：檢查 IP 是否為內部或保留網段
+            try:
+                import ipaddress
+                import socket
+
+                hostname = parsed.hostname or ""
+                ip_str = socket.gethostbyname(hostname)
+                ip_obj = ipaddress.ip_address(ip_str)
+                if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
+                    return f"[ERROR] 安全限制：禁止存取內部或保留網段 ({hostname} -> {ip_str})"
+            except Exception as e:
+                return f"[ERROR] DNS 解析失敗或位址無效: {e}"
+
             resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=15.0)
             resp.raise_for_status()
 

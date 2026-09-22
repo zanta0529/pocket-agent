@@ -112,9 +112,10 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     import re
 
     # 阻擋 rm -rf /, del /s /q (根目錄或全磁碟), format, mkfs 等毀滅性關鍵字
+    # 注意：此為最後防線，容易被混淆繞過。真實防禦仍需依賴 Sandbox 或確認機制。
     danger_patterns = [
-        r"rm\s+-r[fv]*\s+/?(\*|\s*$)",  # rm -rf / or rm -rf /*
-        r"del\s+(/[sqf]\s*)+\s*[A-Za-z]:\\",  # del /s /q C:\
+        r"rm\s+-[A-Za-z]*r[A-Za-z]*[fFv]*\s+(?:/[A-Za-z0-9_]*|\*|\s*$)",  # 更廣泛的 rm -rf 攔截
+        r"del\s+(/[sqf]\s*)+\s*(?:[A-Za-z]:\\|\*)",  # 涵蓋 del /s /q *
         r"format\s+[A-Za-z]:",  # format C:
         r"mkfs",  # mkfs.*
     ]

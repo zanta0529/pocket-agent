@@ -31,11 +31,13 @@ def call_document_tool(name: str, args: dict, workspace_dirs: list[str] | None =
     if not path_str:
         return "[ERROR] 缺少必填參數 'path'"
 
-    # 簡單驗證路徑
+    # 驗證路徑與套用工作區監禁 (Workspace Jail)
     try:
-        target = Path(path_str).expanduser().resolve(strict=False)
+        from pocket_agent.tools.fs import _validate_safe_path
+
+        target = _validate_safe_path(path_str, workspace_dirs)
     except Exception as e:
-        return f"[ERROR] 無效的路徑格式: {e}"
+        return f"[ERROR] {e}"
 
     if not target.exists() or not target.is_file():
         return f"[ERROR] 檔案不存在或不是一般檔案: {target}"
