@@ -508,17 +508,18 @@ class Agent:
         sub = Agent(
             client=self.client,
             mcp=self.mcp,
-            model=sub_config.get("model", self.model),
+            model=sub_config.get("model") or self.model,
             system_prompt=sub_config.get("system_prompt") or sub_config.get("prompt", "You are a helpful assistant."),
-            workspace_dirs=list(self.workspace_dirs),
             is_subagent=True,
             allowed_tools=sub_config.get("allowed_tools"),
             reasoning_effort=sub_config.get("reasoning_effort") or self.reasoning_effort,
+            max_tool_rounds=sub_config.get("max_tool_rounds") or self.max_tool_rounds,
         )
+        sub.workspace_dirs = list(self.workspace_dirs)
 
         text_buffer = []
 
-        async def subagent_stream_forwarder(kind: str, data: dict | str):
+        def subagent_stream_forwarder(kind: str, data: dict | str):
             if kind == "text":
                 self._emit("text", data)
             elif kind == "thinking":
@@ -562,8 +563,7 @@ class Agent:
         try:
             _thinking, reply, _usage_str = await sub.chat(task)
         except Exception as e:
-            log.error("子代理「%s」執行失敗：%s", name, e)
-            log.debug("子代理執行失敗完整 Traceback：", exc_info=True)
+            log.debug("子代理「%s」執行失敗：%s", name, e, exc_info=True)
             raise  # Let the caller handle the exception for proper CLI rendering
         finally:
             if sub in self.active_subagents:
