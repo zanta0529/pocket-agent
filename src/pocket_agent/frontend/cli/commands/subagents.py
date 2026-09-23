@@ -112,6 +112,31 @@ async def execute_subagent_flow(ctx: CommandContext, subagent_name: str, task: s
         ctx.agent.request_stop()
         ctx.state.last_failed_input = display_text
         ctx.renderer.message("⏹ 已停止", "yellow")
+    except Exception as exc:
+        ctx.state.last_failed_input = display_text
+        ctx.renderer._ensure_newline()
+        ctx.renderer._stop_status()
+
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+
+        from pocket_agent.frontend.cli.main import _format_usage_limit_hint
+
+        err_text = f"子代理「{subagent_name}」執行失敗：{exc}"
+        hint_lines = _format_usage_limit_hint(exc)
+        if hint_lines:
+            err_text += "\n\n" + "\n".join(hint_lines)
+
+        panel = Panel(
+            Markdown(err_text),
+            title="⚠️ 本輪未完成 (錯誤)",
+            title_align="left",
+            border_style="bold red",
+            expand=False,
+        )
+        ctx.renderer.console.print()
+        ctx.renderer.console.print(panel)
+        ctx.renderer.message("待送附件保留；本輪可能部分完成，重送前請檢查結果。未自動重試。", "yellow")
 
     return CommandResult("handled")
 

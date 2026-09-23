@@ -196,6 +196,7 @@ async def send_turn(
         panel = Panel(
             Markdown(err_text),
             title="⚠️ 本輪未完成 (錯誤)",
+            title_align="left",
             border_style="bold red",
             expand=False,
         )

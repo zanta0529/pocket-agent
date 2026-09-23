@@ -495,41 +495,35 @@ class Agent:
         return base + skills_index_prompt(self.workspace_dirs, query)
 
     async def _run_subagent(self, args: dict) -> str:
-        """委派任務給子代理，回傳其最終回覆。"""
-        name = str(args.get("name", "")).strip()
+        name = args.get("name")
         task = str(args.get("task", "")).strip()
 
-        sa = get_subagent(name)
-        if sa is None:
-            from pocket_agent.core.subagents import list_subagents
+        if not name:
+            raise ValueError("Subagent name is required")
 
-            available = "、".join(a["name"] for a in list_subagents()) or "（無）"
-            return f"[ERROR] 找不到子代理「{name}」。可用：{available}"
-        if not task:
-            return "[ERROR] 沒有提供交辦任務。"
-
-        sub_prompt = sa["prompt"] or "You are a helpful assistant."
+        sub_config = get_subagent(name)
+        if not sub_config:
+            raise ValueError(f"Unknown subagent: {name}")
 
         sub = Agent(
             client=self.client,
             mcp=self.mcp,
-            model=sa["model"] or self.model,
-            system_prompt=sub_prompt,
-            reasoning_effort=sa["reasoning_effort"] or self.reasoning_effort,
-            max_tool_rounds=sa["max_tool_rounds"] or self.max_tool_rounds,
+            model=sub_config.get("model", self.model),
+            system_prompt=sub_config.get("system_prompt") or sub_config.get("prompt", "You are a helpful assistant."),
+            workspace_dirs=list(self.workspace_dirs),
             is_subagent=True,
-            allowed_tools=sa["allowed_tools"],
+            allowed_tools=sub_config.get("allowed_tools"),
+            reasoning_effort=sub_config.get("reasoning_effort") or self.reasoning_effort,
         )
-        sub.workspace_dirs = list(self.workspace_dirs)
 
-        text_buffer: list[str] = []
+        text_buffer = []
 
-        def subagent_stream_forwarder(kind: str, data: object = ""):
-            if kind == "thinking":
-                self._emit("thinking", f"[{name}] {data}")
-            elif kind == "tool_stream_start":
-                self._emit("tool_stream_start", f"[{name}] {data}")
-            elif kind == "text":
+        async def subagent_stream_forwarder(kind: str, data: dict | str):
+            if kind == "text":
+                self._emit("text", data)
+            elif kind == "thinking":
+                # For reasoning models, they output thinking directly.
+                # Just buffer and emit occasionally, or emit line by line.
                 text_buffer.append(str(data))
                 current = "".join(text_buffer)
                 if "\n" in current:
@@ -559,7 +553,6 @@ class Agent:
                     self._emit("tool_done", f"{name}::{data}")
             elif kind == "image_saved":
                 self._emit("image_saved", data)
-            # 刻意不將 "round_start" 轉發，讓 UI 維持在 spinner 狀態，避免內文與主代理衝突
 
         sub.on_stream = subagent_stream_forwarder
 
@@ -571,7 +564,7 @@ class Agent:
         except Exception as e:
             log.error("子代理「%s」執行失敗：%s", name, e)
             log.debug("子代理執行失敗完整 Traceback：", exc_info=True)
-            return f"[ERROR] 子代理「{name}」執行失敗：{e}"
+            raise  # Let the caller handle the exception for proper CLI rendering
         finally:
             if sub in self.active_subagents:
                 self.active_subagents.remove(sub)
