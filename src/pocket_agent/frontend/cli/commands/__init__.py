@@ -4,6 +4,7 @@ from pocket_agent.frontend.cli.commands.core import CliCommandRegistry, CommandC
 from pocket_agent.frontend.cli.commands.misc import (
     AttachmentsCommand,
     ClearCommand,
+    CodeSearchCommand,
     FileCommand,
     GoalCommand,
     HelpCommand,
@@ -43,6 +44,10 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("help", HelpCommand())
     registry.register("plan", PlanCommand())
     registry.register("goal", GoalCommand())
+
+    cs_cmd = CodeSearchCommand()
+    registry.register("codesearch", cs_cmd)
+    registry.register("cs", cs_cmd)
 
     for sys_cmd in ("add-dir", "workspace", "model", "learn", "config", "undo"):
         registry.register(sys_cmd, SysRegistryCommand(sys_cmd))

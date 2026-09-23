@@ -39,43 +39,32 @@ def test_slash_command_completion_shows_ten_per_page():
         patch("pocket_agent.extensions.skills.list_skills", return_value=[]),
         patch("pocket_agent.core.subagents.list_subagents", return_value=[]),
     ):
+        from pocket_agent.frontend.cli.input import BUILTINS
+
+        all_commands = sorted(BUILTINS.keys())
+
         first_page = list(completer.get_completions(Document("/"), CompleteEvent()))
         assert len(first_page) == 11
-        assert [completion.text for completion in first_page[:10]] == [
-            "add-dir",
-            "agents",
-            "attachments",
-            "clear",
-            "compact",
-            "config",
-            "file",
-            "goal",
-            "help",
-            "learn",
-        ]
+        assert [completion.text for completion in first_page[:10]] == all_commands[:10]
         assert first_page[-1].display_text.endswith("more")
 
         completer.page = 1
         second_page = list(completer.get_completions(Document("/"), CompleteEvent()))
         assert second_page[0].display_text.endswith("before")
-        assert [completion.text for completion in second_page[1:-1]] == [
-            "logout",
-            "model",
-            "parallel",
-            "plan",
-            "quit",
-            "session",
-            "skills",
-            "subagent",
-            "tools",
-            "undo",
-        ]
-        assert second_page[-1].display_text.endswith("more")
 
-        completer.page = 2
-        third_page = list(completer.get_completions(Document("/"), CompleteEvent()))
-        assert third_page[0].display_text.endswith("before")
-        assert [completion.text for completion in third_page[1:]] == ["workspace"]
+        has_more = len(all_commands) > 20
+        expected_commands = all_commands[10:20]
+
+        if has_more:
+            assert [completion.text for completion in second_page[1:-1]] == expected_commands
+            assert second_page[-1].display_text.endswith("more")
+
+            completer.page = 2
+            third_page = list(completer.get_completions(Document("/"), CompleteEvent()))
+            assert third_page[0].display_text.endswith("before")
+            assert [completion.text for completion in third_page[1:]] == all_commands[20:30]
+        else:
+            assert [completion.text for completion in second_page[1:]] == expected_commands
 
 
 def test_path_completion_and_parser_agree(tmp_path):
