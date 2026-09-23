@@ -62,6 +62,7 @@ class CliRenderer:
         self._active_status = None
         # 當前 CLI 狀態引用（啟動後由 cli.py 設定），用於標頭顯示 model 名稱
         self._state: CliState | None = None
+        self._thinking_buffer: str = ""
 
     def _stop_status(self) -> None:
         """停止思考中 spinner（若仍在執行），確保不與串流輸出衝突。"""
@@ -175,6 +176,7 @@ class CliRenderer:
         # 重置串流狀態
         self._stream_header_printed = False
         self._stream_has_content = False
+        self._thinking_buffer = ""
         self.message(f"本輪已返回 · {seconds:.1f} 秒 · {tokens} tokens")
 
     def event(self, kind: str, data: object) -> None:
@@ -210,6 +212,7 @@ class CliRenderer:
                 self.console.print()
             self._stream_header_printed = False
             self._stream_has_content = False
+            self._thinking_buffer = ""
 
         elif kind == "text":
             if not self._stream_header_printed:
@@ -223,9 +226,12 @@ class CliRenderer:
             self._stream_has_content = True
 
         elif kind == "thinking":
-            snippet = str(data).strip().split("\n")[0][:80]
-            if snippet:
-                self.console.print(Text(f"  ∴ {snippet}", style="dim italic"))
+            self._thinking_buffer += str(data)
+            if self._active_status:
+                snippet = self._thinking_buffer.replace("\n", " ").strip()
+                if len(snippet) > 60:
+                    snippet = "..." + snippet[-57:]
+                self._active_status.update(f"思考中… {snippet}")
 
         elif kind == "read":
             self._ensure_newline()
@@ -246,6 +252,7 @@ class CliRenderer:
         elif kind == "tool_start":
             self._stop_status()
             self._ensure_newline()
+            self._thinking_buffer = ""
 
             if isinstance(data, dict):
                 name = data.get("name", str(data))

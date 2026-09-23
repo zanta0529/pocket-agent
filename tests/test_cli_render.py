@@ -134,27 +134,31 @@ def test_tool_done_fail_prints_cross():
 # ── F3: thinking 縮排顯示 ─────────────────────────────
 
 
-def test_thinking_event_shows_first_line():
-    """thinking 只顯示首行，最多 80 字元。"""
-    stream = StringIO()
-    renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=120))
-    renderer.event("thinking", "Line one\nLine two\nLine three")
-    output = stream.getvalue()
-    assert "∴" in output
-    assert "Line one" in output
-    assert "Line two" not in output
+def test_thinking_event_buffers_and_updates_spinner():
+    """thinking 不再逐行印出，而是動態更新至 spinner。"""
+    from unittest.mock import Mock
+
+    renderer = CliRenderer(Console(file=StringIO(), force_terminal=False, no_color=True, width=120))
+    renderer._active_status = Mock()
+    renderer.event("thinking", " Line one\n")
+    renderer.event("thinking", "Line two ")
+
+    assert renderer._thinking_buffer == " Line one\nLine two "
+    renderer._active_status.update.assert_called_with("思考中… Line one Line two")
 
 
 def test_thinking_event_truncates_long_line():
-    """thinking 首行超過 80 字元時截斷。"""
-    stream = StringIO()
-    renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=120))
+    """thinking buffer 超過 60 字元時截斷前方，保留最後。"""
+    from unittest.mock import Mock
+
+    renderer = CliRenderer(Console(file=StringIO(), force_terminal=False, no_color=True, width=120))
+    renderer._active_status = Mock()
     long_line = "A" * 100
     renderer.event("thinking", long_line)
-    output = stream.getvalue()
-    # 只應顯示 80 個 A
-    assert "A" * 80 in output
-    assert "A" * 81 not in output
+
+    # "..." (3) + A*57 (57) = 60
+    expected = "..." + ("A" * 57)
+    renderer._active_status.update.assert_called_with(f"思考中… {expected}")
 
 
 def test_thinking_empty_does_not_print():
