@@ -129,7 +129,7 @@ class SlashCommandCompleter(Completer):
             if name.startswith(text[1:]):
                 matches.append((name, description))
 
-        PAGE_SIZE = 5
+        PAGE_SIZE = 10
         total = len(matches)
 
         if total == 0:

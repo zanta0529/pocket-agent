@@ -32,6 +32,45 @@ def test_completion_tracks_provider():
         assert not list(completer.get_completions(Document("/im"), CompleteEvent()))
 
 
+def test_slash_command_completion_shows_ten_per_page():
+    completer = SlashCommandCompleter(CliState("ollama", "model"))
+    with (
+        patch("pocket_agent.system.commands.list_commands", return_value=[]),
+        patch("pocket_agent.extensions.skills.list_skills", return_value=[]),
+        patch("pocket_agent.core.subagents.list_subagents", return_value=[]),
+    ):
+        first_page = list(completer.get_completions(Document("/"), CompleteEvent()))
+        assert len(first_page) == 11
+        assert [completion.text for completion in first_page[:10]] == [
+            "add-dir",
+            "agents",
+            "attachments",
+            "clear",
+            "compact",
+            "config",
+            "file",
+            "help",
+            "learn",
+            "logout",
+        ]
+        assert first_page[-1].display_text.endswith("more")
+
+        completer.page = 1
+        second_page = list(completer.get_completions(Document("/"), CompleteEvent()))
+        assert second_page[0].display_text.endswith("before")
+        assert [completion.text for completion in second_page[1:]] == [
+            "model",
+            "parallel",
+            "quit",
+            "session",
+            "skills",
+            "subagent",
+            "tools",
+            "undo",
+            "workspace",
+        ]
+
+
 def test_path_completion_and_parser_agree(tmp_path):
     path = tmp_path / "中文 file.txt"
     path.write_text("data")
