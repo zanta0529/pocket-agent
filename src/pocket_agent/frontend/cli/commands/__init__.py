@@ -1,25 +1,21 @@
 from typing import TYPE_CHECKING
 
-from pocket_agent.frontend.cli.command_core import CliCommandRegistry, CommandContext, CommandResult
-from pocket_agent.frontend.cli.command_impls import (
-    AgentsCommand,
+from pocket_agent.frontend.cli.commands.core import CliCommandRegistry, CommandContext, CommandResult
+from pocket_agent.frontend.cli.commands.misc import (
     AttachmentsCommand,
     ClearCommand,
-    CompactCommand,
     FileCommand,
     GoalCommand,
     HelpCommand,
     LogoutCommand,
-    ParallelCommand,
     PlanCommand,
     QuitCommand,
-    SessionCommand,
     SkillsCommand,
-    SubagentCommand,
-    SysRegistryCommand,
     ToolsCommand,
-    switch_model,
 )
+from pocket_agent.frontend.cli.commands.session import CompactCommand, SessionCommand
+from pocket_agent.frontend.cli.commands.subagents import AgentsCommand, ParallelCommand, SubagentCommand
+from pocket_agent.frontend.cli.commands.system import SysRegistryCommand, switch_model
 from pocket_agent.frontend.cli.input import CliInput
 from pocket_agent.frontend.cli.render import CliRenderer
 from pocket_agent.frontend.cli.state import CliState
