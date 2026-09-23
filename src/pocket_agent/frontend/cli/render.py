@@ -388,6 +388,8 @@ class CliRenderer:
                         text = q.get("question", "")
                         options = q.get("options", [])
                         is_multi = q.get("is_multi_select", False)
+
+                        self.console.print()
                         self.console.print(
                             Panel(Text(text), title="🤔 代理提問", title_align="left", border_style="bold blue")
                         )
@@ -461,6 +463,7 @@ class CliRenderer:
                     else:
                         content = Text(result_text, style="red")
 
+                    self.console.print()
                     self.console.print(
                         Panel(
                             content,
