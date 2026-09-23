@@ -694,12 +694,26 @@ class CommandHandler:
             self.renderer.message("Enter 送出 · Esc 後 Enter 換行 · Ctrl+C 清空輸入 · 空輸入 Ctrl+D 離開")
             for command in list_commands():
                 self.renderer.message("/" + command["name"] + "  " + command["description"])
-        elif name == "image":
-            if self.state.provider != "openai":
-                raise ValueError("/image 目前僅支援 openai")
+        elif name == "plan":
             if not args:
-                raise ValueError("用法：/image <描述>")
-            return CommandResult("image", args)
+                raise ValueError("用法：/plan <任務描述>")
+            plan_prompt = (
+                f"[System] 使用者啟動了 /plan 指令。請你為以下任務擬定一份詳細的實作計畫（Plan）。\n"
+                f"在開始任何實際的檔案修改或指令執行之前，請你「必須」先使用 `ask_question` 工具將計畫摘要給使用者，"
+                f"並提供「核准 (Approve)」與「拒絕 (Reject)」等選項，等待使用者同意後再繼續。\n\n"
+                f"任務內容：\n{args}"
+            )
+            return CommandResult("chat", plan_prompt, display_text=f"/plan {args}")
+        elif name == "goal":
+            if not args:
+                raise ValueError("用法：/goal <長期目標描述>")
+            goal_prompt = (
+                f"[System] 使用者啟動了 /goal 指令。這是一個長期且可能包含多個步驟的目標。\n"
+                f"請你獨立作業，持續使用工具直到達成目標為止。期間若遇到錯誤，請自行嘗試修復，"
+                f"除非遇到需要人類授權或完全無法繞過的阻礙，否則請不要提早結束你的回應。\n\n"
+                f"終極目標：\n{args}"
+            )
+            return CommandResult("chat", goal_prompt, display_text=f"/goal {args}")
         else:
             from pocket_agent.extensions.skills import list_skills
             from pocket_agent.system.commands import expand_command, get_command

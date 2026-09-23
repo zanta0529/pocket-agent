@@ -12,6 +12,66 @@ from rich.text import Text
 from pocket_agent.frontend.cli.state import CliState
 
 
+class MultiStatus:
+    """支援多個子代理平行執行的動態表格 Spinner。"""
+
+    def __init__(self, title, task_names, console):
+        from rich.live import Live
+
+        self.title = title
+        self.console = console
+        self.task_names = task_names
+
+        self._states = {name: "啟動中..." for name in task_names}
+        self._live = Live(self._build_table(), console=console, refresh_per_second=10)
+        self.is_running = False
+
+    def _build_table(self):
+        from rich.console import Group
+        from rich.spinner import Spinner
+        from rich.table import Table
+        from rich.text import Text
+
+        table = Table(show_header=False, show_edge=False, box=None)
+        table.add_column("Spinner", width=3)
+        table.add_column("Name", style="bold cyan", width=15)
+        table.add_column("Status")
+
+        for name in self.task_names:
+            state = self._states[name]
+
+            if "完成" in state or "✓" in state:
+                icon = Text("✓", style="bold green")
+            elif "錯誤" in state or "失敗" in state or "✗" in state:
+                icon = Text("✗", style="bold red")
+            else:
+                icon = Spinner("dots")
+
+            table.add_row(icon, Text(f"[{name}]", style="bold cyan"), state)
+
+        return Group(Text(self.title, style="default"), table)
+
+    def start(self):
+        self._live.start()
+        self.is_running = True
+
+    def stop(self):
+        if self.is_running:
+            self._live.stop()
+            self.is_running = False
+
+    def update(self, status: str, **kwargs):
+        import re
+
+        match = re.match(r"^\[(.*?)\]\s+(.*)", status)
+        if match:
+            name, real_status = match.groups()
+            if name in self._states:
+                self._states[name] = real_status[:80]
+        if self.is_running:
+            self._live.update(self._build_table())
+
+
 def plain(value: object) -> str:
     return "".join(c if c.isprintable() else " " for c in str(value))
 
@@ -42,7 +102,7 @@ def toolbar(state: CliState, width: int) -> FormattedText:
     else:
         tokens_str = ""
 
-    model = f"{state.provider}/{state.model}"
+    model = f"[ {state.provider} ] {state.model}"
     budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
     line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
 
@@ -97,7 +157,9 @@ class CliRenderer:
         if args_raw:
             try:
                 parsed = json.loads(args_raw)
-            except json.JSONDecodeError, ValueError:
+            except json.JSONDecodeError:
+                parsed = None
+            except ValueError:
                 parsed = None
 
         if parsed and isinstance(parsed, dict):
@@ -138,6 +200,7 @@ class CliRenderer:
             self.message("Pocket Agent", "bold #B8860B")
         else:
             # Pocket Agent 標誌與口號
+            self.message("─" * min(width, 80), "")
             self.console.print(
                 Text.assemble(
                     ("╭──────╮\n", ""),
@@ -152,7 +215,7 @@ class CliRenderer:
         self.message("─" * min(width, 80), "")
 
     def welcome(self, state: CliState, tools: list[str]) -> None:
-        self.message(f"{state.provider} / {state.model} · {len(tools)} 個 MCP 工具 · 就緒")
+        self.message(f"[ {state.provider} ] {state.model} · {len(tools)} 個 MCP 工具 · 就緒")
         self.message("/ 指令 · @ 檔案 · Tab 補全 · Enter 送出 · Esc 後 Enter 換行")
 
     def user(self, raw: str) -> None:
@@ -195,6 +258,7 @@ class CliRenderer:
             panel = Panel(
                 Text(text, style="white"),
                 title=f"⚠️ {title}",
+                title_align="left",
                 border_style="bold red",
                 expand=False,
             )
@@ -319,19 +383,17 @@ class CliRenderer:
 
             def _ask_worker():
                 try:
-                    from prompt_toolkit import prompt
                     from rich.panel import Panel
-                    from rich.text import Text
 
-                    self.console.print()
                     answers = []
                     for q in questions:
                         text = q.get("question", "")
                         options = q.get("options", [])
                         is_multi = q.get("is_multi_select", False)
 
+                        self.console.print()
                         self.console.print(
-                            Panel(Text(text), title="🤔 代理提問 (ask_question)", border_style="bold blue")
+                            Panel(Text(text), title="🤔 代理提問", title_align="left", border_style="bold blue")
                         )
                         for i, opt in enumerate(options):
                             self.console.print(f"  [{i + 1}] {opt}")
@@ -340,7 +402,14 @@ class CliRenderer:
                         if is_multi:
                             hint += " (多選可用逗號分隔)"
 
+                        from prompt_toolkit import prompt
+
                         ans = prompt(f"👉 {hint}: ")
+
+                        # 若輸入為編號，嘗試轉換為對應選項文字，讓模型更好理解
+                        if ans.isdigit() and 1 <= int(ans) <= len(options):
+                            ans = options[int(ans) - 1]
+
                         answers.append(ans)
                         self.console.print()
 
@@ -374,13 +443,35 @@ class CliRenderer:
                         formatted_name = name
 
                     result_text = str(data.get("result", ""))
-                    if result_text.startswith("[ERROR]"):
-                        result_text = result_text[7:].strip()
-                    elif result_text.startswith("Error:"):
-                        result_text = result_text[6:].strip()
 
-                    error_summary = result_text.split("\n")[0][:80]
-                    if error_summary:
-                        self.console.print(Text(f"  ✗ {formatted_name} - {error_summary}", style="red"))
+                    from rich.panel import Panel
+                    from rich.syntax import Syntax
+
+                    # 嘗試以 Syntax 高亮，若為 JSON 格式
+                    is_json = False
+                    if result_text.strip().startswith("{") or result_text.strip().startswith("["):
+                        try:
+                            import json
+
+                            json.loads(result_text)
+                            is_json = True
+                        except Exception:
+                            pass
+
+                    if is_json:
+                        content = Syntax(
+                            result_text, "json", theme="monokai", background_color="default", word_wrap=True
+                        )
                     else:
-                        self.console.print(Text(f"  ✗ {formatted_name}", style="red"))
+                        content = Text(result_text, style="red")
+
+                    self.console.print()
+                    self.console.print(
+                        Panel(
+                            content,
+                            title=f"✗ 工具執行失敗：{formatted_name}",
+                            title_align="left",
+                            border_style="bold red",
+                            expand=False,
+                        )
+                    )

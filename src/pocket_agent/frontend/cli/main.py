@@ -300,10 +300,11 @@ async def conversation(
             renderer.user(display)
             agent.history.append({"role": "user", "content": f"/parallel {result.prompt}"})
             try:
-                from rich.status import Status
+                from pocket_agent.frontend.cli.render import MultiStatus
 
-                status = Status(
-                    f"系統路由：正在平行執行 {len(tasks)} 個子代理...", spinner="dots", console=renderer.console
+                task_names = [t["name"] for t in tasks]
+                status = MultiStatus(
+                    f"系統路由：正在平行執行 {len(tasks)} 個子代理...", task_names, console=renderer.console
                 )
                 renderer._active_status = status
                 status.start()
@@ -324,6 +325,8 @@ async def conversation(
                     raw_combined = "\n\n---\n\n".join(combined)
                 finally:
                     renderer._stop_status()
+
+                from rich.status import Status
 
                 status = Status("系統路由：正在彙整多份子代理報告...", spinner="dots", console=renderer.console)
                 renderer._active_status = status
