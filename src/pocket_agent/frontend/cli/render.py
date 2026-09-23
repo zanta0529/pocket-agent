@@ -12,6 +12,65 @@ from rich.text import Text
 from pocket_agent.frontend.cli.state import CliState
 
 
+class MultiStatus:
+    """支援多個子代理平行執行的動態表格 Spinner。"""
+
+    def __init__(self, title, task_names, console):
+        from rich.live import Live
+
+        self.title = title
+        self.console = console
+        self.task_names = task_names
+
+        self._states = {name: "啟動中..." for name in task_names}
+        self._live = Live(self._build_table(), console=console, refresh_per_second=10)
+        self.is_running = False
+
+    def _build_table(self):
+        from rich.spinner import Spinner
+        from rich.table import Table
+        from rich.text import Text
+
+        table = Table(title=self.title, title_justify="left", show_header=False, show_edge=False, box=None)
+        table.add_column("Spinner", width=3)
+        table.add_column("Name", style="bold cyan", width=15)
+        table.add_column("Status")
+
+        for name in self.task_names:
+            state = self._states[name]
+
+            if "完成" in state or "✓" in state:
+                icon = Text("✓", style="bold green")
+            elif "錯誤" in state or "失敗" in state or "✗" in state:
+                icon = Text("✗", style="bold red")
+            else:
+                icon = Spinner("dots")
+
+            table.add_row(icon, f"[{name}]", state)
+
+        return table
+
+    def start(self):
+        self._live.start()
+        self.is_running = True
+
+    def stop(self):
+        if self.is_running:
+            self._live.stop()
+            self.is_running = False
+
+    def update(self, status: str, **kwargs):
+        import re
+
+        match = re.match(r"^\[(.*?)\]\s+(.*)", status)
+        if match:
+            name, real_status = match.groups()
+            if name in self._states:
+                self._states[name] = real_status[:80]
+        if self.is_running:
+            self._live.update(self._build_table())
+
+
 def plain(value: object) -> str:
     return "".join(c if c.isprintable() else " " for c in str(value))
 
@@ -97,7 +156,9 @@ class CliRenderer:
         if args_raw:
             try:
                 parsed = json.loads(args_raw)
-            except json.JSONDecodeError, ValueError:
+            except json.JSONDecodeError:
+                parsed = None
+            except ValueError:
                 parsed = None
 
         if parsed and isinstance(parsed, dict):
@@ -188,6 +249,7 @@ class CliRenderer:
             self._stop_status()
 
             from rich.panel import Panel
+            from rich.text import Text
 
             title = data.get("title", "錯誤") if isinstance(data, dict) else "錯誤"
             text = data.get("text", str(data)) if isinstance(data, dict) else str(data)
@@ -319,30 +381,60 @@ class CliRenderer:
 
             def _ask_worker():
                 try:
-                    from prompt_toolkit import prompt
+                    from prompt_toolkit.shortcuts import checkboxlist_dialog, input_dialog, radiolist_dialog
                     from rich.panel import Panel
                     from rich.text import Text
 
-                    self.console.print()
                     answers = []
                     for q in questions:
                         text = q.get("question", "")
                         options = q.get("options", [])
                         is_multi = q.get("is_multi_select", False)
 
-                        self.console.print(
-                            Panel(Text(text), title="🤔 代理提問 (ask_question)", border_style="bold blue")
-                        )
-                        for i, opt in enumerate(options):
-                            self.console.print(f"  [{i + 1}] {opt}")
+                        CUSTOM_OPT = "__CUSTOM_INPUT__"
 
-                        hint = "請輸入選項編號，或自由作答"
                         if is_multi:
-                            hint += " (多選可用逗號分隔)"
+                            vals = [(opt, opt) for opt in options]
+                            result = checkboxlist_dialog(
+                                title="🤔 代理提問 (多選)",
+                                text=text + "\n(按 Space 勾選，Enter 確認)",
+                                values=vals,
+                            ).run()
 
-                        ans = prompt(f"👉 {hint}: ")
-                        answers.append(ans)
-                        self.console.print()
+                            if result is None:
+                                raise ValueError("使用者取消")
+                            answers.append(", ".join(result))
+                        else:
+                            vals = [(opt, opt) for opt in options]
+                            vals.append((CUSTOM_OPT, "✏️ 自由作答 (Custom Input)"))
+
+                            result = radiolist_dialog(
+                                title="🤔 代理提問",
+                                text=text + "\n(按上下鍵選擇，Enter 確認)",
+                                values=vals,
+                            ).run()
+
+                            if result is None:
+                                raise ValueError("使用者取消")
+
+                            if result == CUSTOM_OPT:
+                                custom_ans = input_dialog(title="✏️ 自由作答", text="請輸入您的回答：").run()
+                                if custom_ans is None:
+                                    raise ValueError("使用者取消")
+                                answers.append(custom_ans)
+                            else:
+                                answers.append(result)
+
+                    self.console.print()
+                    for q, ans in zip(questions, answers):
+                        msg = Text.assemble(
+                            ("🤔 提問：", "bold blue"),
+                            (q.get("question", "")[:100], ""),
+                            ("\n👉 回答：", "bold green"),
+                            (str(ans), ""),
+                        )
+                        self.console.print(Panel(msg, border_style="dim", expand=False))
+                    self.console.print()
 
                     if callback:
                         callback({"answers": answers})
@@ -374,13 +466,19 @@ class CliRenderer:
                         formatted_name = name
 
                     result_text = str(data.get("result", ""))
-                    if result_text.startswith("[ERROR]"):
-                        result_text = result_text[7:].strip()
-                    elif result_text.startswith("Error:"):
-                        result_text = result_text[6:].strip()
 
-                    error_summary = result_text.split("\n")[0][:80]
-                    if error_summary:
-                        self.console.print(Text(f"  ✗ {formatted_name} - {error_summary}", style="red"))
+                    from rich.panel import Panel
+                    from rich.syntax import Syntax
+                    from rich.text import Text
+
+                    # 嘗試以 Syntax 高亮，若為 JSON 格式
+                    if result_text.strip().startswith("{") or result_text.strip().startswith("["):
+                        content = Syntax(
+                            result_text, "json", theme="monokai", background_color="default", word_wrap=True
+                        )
                     else:
-                        self.console.print(Text(f"  ✗ {formatted_name}", style="red"))
+                        content = Text(result_text, style="red")
+
+                    self.console.print(
+                        Panel(content, title=f"✗ 工具執行失敗：{formatted_name}", border_style="bold red", expand=False)
+                    )
