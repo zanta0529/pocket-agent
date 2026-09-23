@@ -256,6 +256,7 @@ class CliRenderer:
             panel = Panel(
                 Text(text, style="white"),
                 title=f"⚠️ {title}",
+                title_align="left",
                 border_style="bold red",
                 expand=False,
             )
