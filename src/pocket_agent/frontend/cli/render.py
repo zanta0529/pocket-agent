@@ -199,6 +199,7 @@ class CliRenderer:
             self.message("Pocket Agent", "bold #B8860B")
         else:
             # Pocket Agent 標誌與口號
+            self.message("─" * min(width, 80), "")
             self.console.print(
                 Text.assemble(
                     ("╭──────╮\n", ""),
