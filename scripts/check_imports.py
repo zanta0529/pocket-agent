@@ -19,6 +19,7 @@ PACKAGE_MAPPING = {
     "multipart": "python-multipart",
     "dateutil": "python-dateutil",
     "cv2": "opencv-python",
+    "win32clipboard": "pywin32",
 }
 
 
@@ -54,7 +55,8 @@ def get_requirements(req_file: Path) -> set[str]:
             # Skip comments and empty lines
             if not line or line.startswith("#") or line.startswith("-"):
                 continue
-            # Strip version specifiers
+            # Strip environment markers and version specifiers
+            line = line.split(";")[0]
             pkg = line.split(">")[0].split("=")[0].split("<")[0].split("~")[0].strip()
             # Normalize package name (pip treats '-' and '_' identically)
             reqs.add(pkg.lower().replace("_", "-"))
