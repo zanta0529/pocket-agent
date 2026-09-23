@@ -27,11 +27,12 @@ class MultiStatus:
         self.is_running = False
 
     def _build_table(self):
+        from rich.console import Group
         from rich.spinner import Spinner
         from rich.table import Table
         from rich.text import Text
 
-        table = Table(title=self.title, title_justify="left", show_header=False, show_edge=False, box=None)
+        table = Table(show_header=False, show_edge=False, box=None)
         table.add_column("Spinner", width=3)
         table.add_column("Name", style="bold cyan", width=15)
         table.add_column("Status")
@@ -48,7 +49,7 @@ class MultiStatus:
 
             table.add_row(icon, Text(f"[{name}]", style="bold cyan"), state)
 
-        return table
+        return Group(Text(self.title, style="default"), table)
 
     def start(self):
         self._live.start()
