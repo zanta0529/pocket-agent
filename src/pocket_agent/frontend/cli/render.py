@@ -102,7 +102,7 @@ def toolbar(state: CliState, width: int) -> FormattedText:
     else:
         tokens_str = ""
 
-    model = f"{state.provider}/{state.model}"
+    model = f"[ {state.provider} ] {state.model}"
     budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
     line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
 
