@@ -13,6 +13,7 @@ from pocket_agent.frontend.cli.commands.misc import (
     QuitCommand,
     SkillsCommand,
     ToolsCommand,
+    UsageCommand,
 )
 from pocket_agent.frontend.cli.commands.session import CompactCommand, SessionCommand
 from pocket_agent.frontend.cli.commands.subagents import AgentsCommand, ParallelCommand, SubagentCommand
@@ -30,6 +31,11 @@ __all__ = ["CommandHandler", "CommandResult", "switch_model"]
 def _build_registry() -> CliCommandRegistry:
     registry = CliCommandRegistry()
     registry.register("quit", QuitCommand())
+    registry.register("exit", QuitCommand())
+
+    usage_cmd = UsageCommand()
+    registry.register("usage", usage_cmd)
+    registry.register("quota", usage_cmd)
     registry.register("logout", LogoutCommand())
     registry.register("clear", ClearCommand())
     registry.register("file", FileCommand())

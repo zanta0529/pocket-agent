@@ -23,6 +23,7 @@ BUILTINS = {
     "codesearch": "搜尋程式碼片段並加入對話上下文",
     "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
     "config": "顯示或更改全域設定檔 (/config set <key> <value>)",
+    "exit": "離開",
     "file": "附加一般檔案",
     "goal": "設定長期目標，Agent 會持續嘗試完成任務不輕易中斷",
     "help": "指令說明",
@@ -31,12 +32,12 @@ BUILTINS = {
     "model": "切換當次提供者與模型",
     "parallel": "手動平行啟動多個子代理 (用法: /parallel <name>:<task> | <name>:<task>)",
     "plan": "要求 Agent 先擬定計畫，並使用 ask_question 等待核准後再執行",
-    "quit": "離開",
     "session": "查看／載入歷史對話",
     "skills": "列出目前所有可用的全域與專案技能",
     "subagent": "強制委派任務給指定的子代理",
     "tools": "工具清單",
     "undo": "時光機：還原上一次被 AI 修改的檔案",
+    "usage": "顯示當前對話累計 Token 用量",
     "workspace": "顯示目前的工作區路徑清單",
 }
 QUOTE = chr(34)
@@ -133,6 +134,10 @@ class SlashCommandCompleter(Completer):
                 matches.append((name, description))
             elif name == "codesearch" and "cs".startswith(text[1:]):
                 matches.append((name, description))
+            elif name == "exit" and "quit".startswith(text[1:]):
+                matches.append((name, description))
+            elif name == "usage" and "quota".startswith(text[1:]):
+                matches.append((name, description))
 
         PAGE_SIZE = 10
         total = len(matches)
@@ -158,7 +163,13 @@ class SlashCommandCompleter(Completer):
             )
 
         for name, description in page_items:
-            display_name = "codesearch (cs)" if name == "codesearch" else name
+            display_name = name
+            if name == "codesearch":
+                display_name = "codesearch (cs)"
+            elif name == "exit":
+                display_name = "exit (quit)"
+            elif name == "usage":
+                display_name = "usage (quota)"
             yield Completion(
                 name, start_position=-(len(text) - 1), display=display_name, display_meta=plain(description)
             )

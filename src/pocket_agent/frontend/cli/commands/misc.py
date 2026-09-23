@@ -10,8 +10,16 @@ from pocket_agent.frontend.cli.input import BUILTINS, file_argument
 class QuitCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/quit 不接受參數")
+            raise ValueError("此指令不接受參數")
         return CommandResult("quit")
+
+
+class UsageCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if args:
+            raise ValueError("/usage 不接受參數")
+        ctx.renderer.message(f"目前對話累計 Token 用量: {ctx.state.session_tokens}", "cyan")
+        return CommandResult()
 
 
 class LogoutCommand(CliCommand):
