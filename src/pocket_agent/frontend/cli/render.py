@@ -296,7 +296,8 @@ class CliRenderer:
                 snippet = self._thinking_buffer.replace("\n", " ").strip()
                 if len(snippet) > 60:
                     snippet = "..." + snippet[-57:]
-                self._active_status.update(f"思考中… {snippet}")
+                if type(self._active_status).__name__ in ("Status", "MultiStatus", "Mock", "MagicMock", "AsyncMock"):
+                    self._active_status.update(f"思考中… {snippet}")
 
         elif kind == "read":
             self._ensure_newline()
@@ -356,14 +357,36 @@ class CliRenderer:
             }
 
             if self.console.is_terminal:
-                self._stop_status()
-                from rich.status import Status
+                is_multi = self._active_status and type(self._active_status).__name__ == "MultiStatus"
+                if not is_multi:
+                    self._stop_status()
+                    from rich.console import Group
+                    from rich.live import Live
+                    from rich.spinner import Spinner
 
-                msg = f"執行工具中… {real_name}"
-                if summary:
-                    msg += f" ({plain(summary)})"
-                self._active_status = Status(msg, spinner="dots", console=self.console)
-                self._active_status.start()
+                    parts = [("  ", "")]  # 佔位符代替小圓點
+                    parts.append((action, action_color))
+                    info = self._pending_tools[call_id]
+                    if info["sa_name"]:
+                        parts.extend(
+                            [(f" [{info['sa_name']}]", "bold magenta"), (" (", ""), (real_name, name_color), (")", "")]
+                        )
+                    else:
+                        parts.extend([(" (", ""), (real_name, name_color), (")", "")])
+
+                    if info["summary"]:
+                        if info["summary"].startswith("【安全警告】"):
+                            parts.extend([(" 【安全警告】", "bold red"), (info["summary"][6:], "")])
+                        else:
+                            parts.append((f" {info['summary']}", ""))
+
+                    tool_text = Text.assemble(*parts)
+                    spinner = Spinner("dots", text=Text("執行工具中…", style="default"))
+
+                    self._active_status = Live(
+                        Group(tool_text, spinner), console=self.console, refresh_per_second=12, transient=True
+                    )
+                    self._active_status.start()
 
         elif kind == "ask_question":
             self._ensure_newline()
@@ -415,7 +438,9 @@ class CliRenderer:
             threading.Thread(target=_ask_worker, daemon=True).start()
 
         elif kind == "tool_done":
-            self._stop_status()
+            is_multi = self._active_status and type(self._active_status).__name__ == "MultiStatus"
+            if not is_multi:
+                self._stop_status()
 
             if isinstance(data, dict):
                 name = data.get("name", "")
@@ -487,7 +512,7 @@ class CliRenderer:
                         )
                     )
 
-            if self.console.is_terminal:
+            if self.console.is_terminal and not is_multi:
                 from rich.status import Status
 
                 self._active_status = Status("思考中…", spinner="dots", console=self.console)

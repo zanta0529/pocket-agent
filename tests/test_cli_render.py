@@ -56,9 +56,12 @@ def test_banner_narrow_and_wide():
 def test_event_tool_classification():
     stream = StringIO()
     renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=80))
-    renderer.event("tool_start", {"name": "read_file"})
-    renderer.event("tool_start", {"name": "write_to_file"})
-    renderer.event("tool_start", {"name": "run_command"})
+    renderer.event("tool_start", {"name": "read_file", "is_safe_read": True})
+    renderer.event("tool_done", {"name": "read_file", "ok": True})
+    renderer.event("tool_start", {"name": "write_to_file", "is_safe_read": False})
+    renderer.event("tool_done", {"name": "write_to_file", "ok": True})
+    renderer.event("tool_start", {"name": "run_command", "is_safe_read": False})
+    renderer.event("tool_done", {"name": "run_command", "ok": True})
     renderer.event("read", "path.txt")
 
     output = stream.getvalue()
