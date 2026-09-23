@@ -198,6 +198,15 @@ class GoalCommand(CliCommand):
         return CommandResult("chat", goal_prompt, display_text=f"/goal {args}")
 
 
+class ImageCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if not args:
+            raise ValueError("用法：/image <描述>")
+        if ctx.state.provider != "openai":
+            raise ValueError("產生圖片功能目前僅限使用 openai (Codex) 引擎時支援")
+        return CommandResult("image", args)
+
+
 class CodeSearchCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         import asyncio

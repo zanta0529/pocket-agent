@@ -8,6 +8,7 @@ from pocket_agent.frontend.cli.commands.misc import (
     FileCommand,
     GoalCommand,
     HelpCommand,
+    ImageCommand,
     LogoutCommand,
     PlanCommand,
     QuitCommand,
@@ -57,6 +58,8 @@ def _build_registry() -> CliCommandRegistry:
 
     for sys_cmd in ("add-dir", "workspace", "model", "learn", "config", "undo"):
         registry.register(sys_cmd, SysRegistryCommand(sys_cmd))
+
+    registry.register("image", ImageCommand())
 
     return registry
 
