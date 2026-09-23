@@ -213,7 +213,7 @@ class CliRenderer:
         self.message("─" * min(width, 80), "")
 
     def welcome(self, state: CliState, tools: list[str]) -> None:
-        self.message(f"{state.provider} / {state.model} · {len(tools)} 個 MCP 工具 · 就緒")
+        self.message(f"[ {state.provider} ] {state.model} · {len(tools)} 個 MCP 工具 · 就緒")
         self.message("/ 指令 · @ 檔案 · Tab 補全 · Enter 送出 · Esc 後 Enter 換行")
 
     def user(self, raw: str) -> None:
@@ -249,7 +249,6 @@ class CliRenderer:
             self._stop_status()
 
             from rich.panel import Panel
-            from rich.text import Text
 
             title = data.get("title", "錯誤") if isinstance(data, dict) else "錯誤"
             text = data.get("text", str(data)) if isinstance(data, dict) else str(data)
@@ -383,7 +382,6 @@ class CliRenderer:
                 try:
                     from prompt_toolkit.shortcuts import checkboxlist_dialog, input_dialog, radiolist_dialog
                     from rich.panel import Panel
-                    from rich.text import Text
 
                     answers = []
                     for q in questions:
@@ -469,7 +467,6 @@ class CliRenderer:
 
                     from rich.panel import Panel
                     from rich.syntax import Syntax
-                    from rich.text import Text
 
                     # 嘗試以 Syntax 高亮，若為 JSON 格式
                     if result_text.strip().startswith("{") or result_text.strip().startswith("["):
