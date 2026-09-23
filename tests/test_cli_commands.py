@@ -64,7 +64,7 @@ def test_model_selection_unavailable_allows_manual_entry():
     handler = CommandHandler(Mock(), state, reader, Mock(), [])
     with (
         patch("pocket_agent.system.auth.fetch_available_models", return_value=[]),
-        patch("pocket_agent.frontend.cli.commands.switch_model", new_callable=AsyncMock) as switch,
+        patch("pocket_agent.frontend.cli.command_impls.switch_model", new_callable=AsyncMock) as switch,
     ):
         asyncio.run(handler.dispatch("/model"))
         switch.assert_awaited_once()
