@@ -10,8 +10,16 @@ from pocket_agent.frontend.cli.input import BUILTINS, file_argument
 class QuitCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/quit 不接受參數")
+            raise ValueError("此指令不接受參數")
         return CommandResult("quit")
+
+
+class UsageCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if args:
+            raise ValueError("/usage 不接受參數")
+        ctx.renderer.message(f"目前對話累計 Token 用量: {ctx.state.session_tokens}", "cyan")
+        return CommandResult()
 
 
 class LogoutCommand(CliCommand):
@@ -35,7 +43,50 @@ class ClearCommand(CliCommand):
 
 class FileCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
-        for path in ctx.state.add_files([file_argument(args)]):
+        from pathlib import Path
+
+        path_str = file_argument(args)
+
+        try:
+            resolved_path = Path(path_str).expanduser().resolve(strict=True)
+        except Exception:
+            raise ValueError(f"找不到檔案：{path_str}")
+
+        if not resolved_path.is_file():
+            raise ValueError(f"不是一般檔案：{path_str}")
+
+        status, msg, target_dir = ctx.agent.check_new_workspace_dir(str(resolved_path.parent))
+
+        if status not in ("in_default", "already_authorized"):
+            from rich.panel import Panel
+            from rich.text import Text
+
+            ctx.renderer._ensure_newline()
+            panel = Panel(
+                Text(f"檔案不在目前工作區內：\n  📄 {resolved_path}", style="yellow"),
+                title="【安全警告】工作區權限請求",
+                title_align="left",
+                border_style="bold red",
+                expand=False,
+            )
+            ctx.renderer.console.print(panel)
+            try:
+                ans = input("\n是否將它所在的資料夾加入工作區並掛載？[y/N] ").strip().lower()
+                if ans == "y":
+                    if target_dir:
+                        ctx.agent.add_workspace_dir(target_dir)
+                    ctx.renderer.message("✓ 已授權並加入附件。")
+                else:
+                    ctx.renderer.message("✗ 已取消加入。")
+                    return CommandResult()
+            except KeyboardInterrupt:
+                ctx.renderer.message("\n✗ 已取消操作。")
+                return CommandResult()
+            except EOFError:
+                ctx.renderer.message("\n✗ 已取消操作。")
+                return CommandResult()
+
+        for path in ctx.state.add_files([str(resolved_path)]):
             ctx.renderer.message(f"已加入待送：{path}")
         return CommandResult()
 
@@ -188,3 +239,70 @@ class GoalCommand(CliCommand):
             f"終極目標：\n{args}"
         )
         return CommandResult("chat", goal_prompt, display_text=f"/goal {args}")
+
+
+class ImageCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if not args:
+            raise ValueError("用法：/image <描述>")
+        if ctx.state.provider != "openai":
+            raise ValueError("產生圖片功能目前僅限使用 openai (Codex) 引擎時支援")
+        return CommandResult("image", args)
+
+
+class CodeSearchCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        import asyncio
+
+        from rich.panel import Panel
+
+        from pocket_agent.tools.rag import call_indexed_search
+
+        query = args.strip()
+        if not query:
+            try:
+                query = await ctx.reader.read("請輸入搜尋關鍵字（或按 Ctrl+C 取消）：")
+                query = query.strip()
+            except KeyboardInterrupt:
+                return CommandResult()
+            except EOFError:
+                return CommandResult()
+            if not query:
+                return CommandResult()
+
+        ctx.renderer.message(f"正在搜尋工作區：'{query}'...", "yellow")
+
+        result = await asyncio.to_thread(call_indexed_search, {"query": query, "top_k": 5}, ctx.agent.workspace_dirs)
+
+        clean_result = result
+        if clean_result.startswith("<external_content>"):
+            clean_result = clean_result.replace("<external_content>\n", "").replace("\n</external_content>", "")
+
+        if "[ERROR]" in clean_result:
+            ctx.renderer.console.print()
+            ctx.renderer.console.print(
+                Panel(clean_result, title="搜尋失敗", title_align="left", border_style="bold red")
+            )
+        else:
+            ctx.renderer.console.print()
+            ctx.renderer.console.print(
+                Panel(clean_result, title="🔎 程式碼搜尋結果", title_align="left", border_style="bold green")
+            )
+
+            context_msg = (
+                f"【系統提示】使用者剛剛使用了程式碼檢索功能，找到了以下關於 `{query}` 的片段。\n"
+                "請在後續的回答、分析或修改中，將這些片段作為可信的參考資料：\n\n" + clean_result
+            )
+            ctx.agent.history.append({"role": "user", "content": context_msg})
+            ctx.agent.history.append(
+                {
+                    "role": "assistant",
+                    "content": "好的，我已經將這些程式碼片段載入記憶中。請告訴我接下來需要怎麼分析或處理它們？",
+                }
+            )
+
+            ctx.renderer.message(
+                "💡 (提示) 搜尋結果已自動加入上下文，您可以直接請 AI 對這些片段進行分析或修改。", "cyan"
+            )
+
+        return CommandResult()

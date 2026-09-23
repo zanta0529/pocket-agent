@@ -4,14 +4,17 @@ from pocket_agent.frontend.cli.commands.core import CliCommandRegistry, CommandC
 from pocket_agent.frontend.cli.commands.misc import (
     AttachmentsCommand,
     ClearCommand,
+    CodeSearchCommand,
     FileCommand,
     GoalCommand,
     HelpCommand,
+    ImageCommand,
     LogoutCommand,
     PlanCommand,
     QuitCommand,
     SkillsCommand,
     ToolsCommand,
+    UsageCommand,
 )
 from pocket_agent.frontend.cli.commands.session import CompactCommand, SessionCommand
 from pocket_agent.frontend.cli.commands.subagents import AgentsCommand, ParallelCommand, SubagentCommand
@@ -29,6 +32,11 @@ __all__ = ["CommandHandler", "CommandResult", "switch_model"]
 def _build_registry() -> CliCommandRegistry:
     registry = CliCommandRegistry()
     registry.register("quit", QuitCommand())
+    registry.register("exit", QuitCommand())
+
+    usage_cmd = UsageCommand()
+    registry.register("usage", usage_cmd)
+    registry.register("quota", usage_cmd)
     registry.register("logout", LogoutCommand())
     registry.register("clear", ClearCommand())
     registry.register("file", FileCommand())
@@ -44,8 +52,14 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("plan", PlanCommand())
     registry.register("goal", GoalCommand())
 
+    cs_cmd = CodeSearchCommand()
+    registry.register("codesearch", cs_cmd)
+    registry.register("cs", cs_cmd)
+
     for sys_cmd in ("add-dir", "workspace", "model", "learn", "config", "undo"):
         registry.register(sys_cmd, SysRegistryCommand(sys_cmd))
+
+    registry.register("image", ImageCommand())
 
     return registry
 

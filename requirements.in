@@ -21,3 +21,4 @@ pypdf>=5.1.0
 prompt_toolkit>=3.0.40
 pymupdf4llm>=0.0.17
 cryptography>=41.0.0
+pywin32; sys_platform == "win32"
