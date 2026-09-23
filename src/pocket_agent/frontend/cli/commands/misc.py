@@ -203,7 +203,9 @@ class CodeSearchCommand(CliCommand):
             try:
                 query = await ctx.reader.read("請輸入搜尋關鍵字（或按 Ctrl+C 取消）：")
                 query = query.strip()
-            except KeyboardInterrupt, EOFError:
+            except KeyboardInterrupt:
+                return CommandResult()
+            except EOFError:
                 return CommandResult()
             if not query:
                 return CommandResult()
@@ -217,9 +219,15 @@ class CodeSearchCommand(CliCommand):
             clean_result = clean_result.replace("<external_content>\n", "").replace("\n</external_content>", "")
 
         if "[ERROR]" in clean_result:
-            ctx.renderer.console.print(Panel(clean_result, title="搜尋失敗", border_style="bold red"))
+            ctx.renderer.console.print()
+            ctx.renderer.console.print(
+                Panel(clean_result, title="搜尋失敗", title_align="left", border_style="bold red")
+            )
         else:
-            ctx.renderer.console.print(Panel(clean_result, title="🔎 程式碼搜尋結果", border_style="bold green"))
+            ctx.renderer.console.print()
+            ctx.renderer.console.print(
+                Panel(clean_result, title="🔎 程式碼搜尋結果", title_align="left", border_style="bold green")
+            )
 
             context_msg = (
                 f"【系統提示】使用者剛剛使用了程式碼檢索功能，找到了以下關於 `{query}` 的片段。\n"

@@ -149,6 +149,7 @@ python -m pocket_agent
 - `/learn`：自動萃取當前對話中的知識或流程，互動式引導將其儲存為可重複使用的 Skill。
 - `/config`：啟動互動式設定選單，用以編輯全域設定與 API Key。
 - `/undo`：啟動互動式還原選單，可檢視檔案備份差異並執行還原。
+- `/codesearch <關鍵字>` (或 `/cs`)：快速搜尋工作區的程式碼片段，並隱式加入對話上下文供 AI 參考。
 - `/add-dir <路徑>` / `/workspace`：授權並新增額外的工作目錄。
 - `/compact`：讓 AI 自動摘要並壓縮中間的對話歷史，快速回收 Context 上限空間。
 - `/clear`：清除當前記憶體的對話歷史。
@@ -172,6 +173,7 @@ python -m pocket_agent --resume
 | Ctrl+C（輸入期間）         | 有文字時清空輸入，空白時提示退出方式；不清附件 |
 | Ctrl+D（空輸入）或 /quit   | 離開                                           |
 | /help、/tools              | 查看指令、MCP 工具清單                         |
+| /codesearch、/cs           | 快速搜尋工作區的程式碼片段並加入上下文         |
 | /subagent、/<name>         | 委派任務給單一子代理（例如 /researcher）           |
 | /parallel                  | 平行委派給多個子代理，使用 `\|` 分隔 (需注意分隔符號) |
 | /model                     | 互動式光棒選單切換提供者與模型，Esc 返回       |

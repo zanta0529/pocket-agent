@@ -20,10 +20,9 @@ BUILTINS = {
     "agents": "列出目前所有可用的子代理清單與能力",
     "attachments": "查看／移除待送附件",
     "clear": "清除對話，保留附件",
-    "codesearch": "搜尋工作區程式碼片段並加入對話上下文 (alias: cs)",
+    "codesearch": "搜尋程式碼片段並加入對話上下文",
     "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
     "config": "顯示或更改全域設定檔 (/config set <key> <value>)",
-    "cs": "搜尋程式碼並加入上下文 (同 /codesearch)",
     "file": "附加一般檔案",
     "goal": "設定長期目標，Agent 會持續嘗試完成任務不輕易中斷",
     "help": "指令說明",
@@ -132,6 +131,8 @@ class SlashCommandCompleter(Completer):
         for name, description in commands.items():
             if name.startswith(text[1:]):
                 matches.append((name, description))
+            elif name == "codesearch" and "cs".startswith(text[1:]):
+                matches.append((name, description))
 
         PAGE_SIZE = 10
         total = len(matches)
@@ -157,7 +158,10 @@ class SlashCommandCompleter(Completer):
             )
 
         for name, description in page_items:
-            yield Completion(name, start_position=-(len(text) - 1), display_meta=plain(description))
+            display_name = "codesearch (cs)" if name == "codesearch" else name
+            yield Completion(
+                name, start_position=-(len(text) - 1), display=display_name, display_meta=plain(description)
+            )
 
         if end_idx < total:
             yield Completion(
