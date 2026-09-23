@@ -46,7 +46,7 @@ class MultiStatus:
             else:
                 icon = Spinner("dots")
 
-            table.add_row(icon, f"[{name}]", state)
+            table.add_row(icon, Text(f"[{name}]", style="bold cyan"), state)
 
         return table
 
@@ -380,7 +380,6 @@ class CliRenderer:
 
             def _ask_worker():
                 try:
-                    from prompt_toolkit.shortcuts import checkboxlist_dialog, input_dialog, radiolist_dialog
                     from rich.panel import Panel
 
                     answers = []
@@ -388,51 +387,26 @@ class CliRenderer:
                         text = q.get("question", "")
                         options = q.get("options", [])
                         is_multi = q.get("is_multi_select", False)
-
-                        CUSTOM_OPT = "__CUSTOM_INPUT__"
-
-                        if is_multi:
-                            vals = [(opt, opt) for opt in options]
-                            result = checkboxlist_dialog(
-                                title="🤔 代理提問 (多選)",
-                                text=text + "\n(按 Space 勾選，Enter 確認)",
-                                values=vals,
-                            ).run()
-
-                            if result is None:
-                                raise ValueError("使用者取消")
-                            answers.append(", ".join(result))
-                        else:
-                            vals = [(opt, opt) for opt in options]
-                            vals.append((CUSTOM_OPT, "✏️ 自由作答 (Custom Input)"))
-
-                            result = radiolist_dialog(
-                                title="🤔 代理提問",
-                                text=text + "\n(按上下鍵選擇，Enter 確認)",
-                                values=vals,
-                            ).run()
-
-                            if result is None:
-                                raise ValueError("使用者取消")
-
-                            if result == CUSTOM_OPT:
-                                custom_ans = input_dialog(title="✏️ 自由作答", text="請輸入您的回答：").run()
-                                if custom_ans is None:
-                                    raise ValueError("使用者取消")
-                                answers.append(custom_ans)
-                            else:
-                                answers.append(result)
-
-                    self.console.print()
-                    for q, ans in zip(questions, answers):
-                        msg = Text.assemble(
-                            ("🤔 提問：", "bold blue"),
-                            (q.get("question", "")[:100], ""),
-                            ("\n👉 回答：", "bold green"),
-                            (str(ans), ""),
+                        self.console.print(
+                            Panel(Text(text), title="🤔 代理提問", title_align="left", border_style="bold blue")
                         )
-                        self.console.print(Panel(msg, border_style="dim", expand=False))
-                    self.console.print()
+                        for i, opt in enumerate(options):
+                            self.console.print(f"  [{i + 1}] {opt}")
+
+                        hint = "請輸入選項編號，或自由作答"
+                        if is_multi:
+                            hint += " (多選可用逗號分隔)"
+
+                        from prompt_toolkit import prompt
+
+                        ans = prompt(f"👉 {hint}: ")
+
+                        # 若輸入為編號，嘗試轉換為對應選項文字，讓模型更好理解
+                        if ans.isdigit() and 1 <= int(ans) <= len(options):
+                            ans = options[int(ans) - 1]
+
+                        answers.append(ans)
+                        self.console.print()
 
                     if callback:
                         callback({"answers": answers})
@@ -469,7 +443,17 @@ class CliRenderer:
                     from rich.syntax import Syntax
 
                     # 嘗試以 Syntax 高亮，若為 JSON 格式
+                    is_json = False
                     if result_text.strip().startswith("{") or result_text.strip().startswith("["):
+                        try:
+                            import json
+
+                            json.loads(result_text)
+                            is_json = True
+                        except Exception:
+                            pass
+
+                    if is_json:
                         content = Syntax(
                             result_text, "json", theme="monokai", background_color="default", word_wrap=True
                         )
@@ -477,5 +461,11 @@ class CliRenderer:
                         content = Text(result_text, style="red")
 
                     self.console.print(
-                        Panel(content, title=f"✗ 工具執行失敗：{formatted_name}", border_style="bold red", expand=False)
+                        Panel(
+                            content,
+                            title=f"✗ 工具執行失敗：{formatted_name}",
+                            title_align="left",
+                            border_style="bold red",
+                            expand=False,
+                        )
                     )

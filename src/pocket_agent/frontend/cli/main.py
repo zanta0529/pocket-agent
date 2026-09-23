@@ -326,6 +326,8 @@ async def conversation(
                 finally:
                     renderer._stop_status()
 
+                from rich.status import Status
+
                 status = Status("系統路由：正在彙整多份子代理報告...", spinner="dots", console=renderer.console)
                 renderer._active_status = status
                 status.start()
