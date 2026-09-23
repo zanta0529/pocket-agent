@@ -43,7 +43,7 @@ class AgentsCommand(CliCommand):
 
 class SubagentCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
-        from pocket_agent.core.subagents import get_subagent, list_subagents
+        from pocket_agent.core.subagents import list_subagents
 
         if not args:
             sa_list = list_subagents()
@@ -66,58 +66,54 @@ class SubagentCommand(CliCommand):
             task = parts[1] if len(parts) > 1 else "請執行你的預設任務"
             display_text = f"/subagent {args}"
 
-        ctx.renderer.user(display_text)
+        return await execute_subagent_flow(ctx, subagent_name, task, display_text)
 
-        # 這是指令要真正處理的任務內容 (直接以自然語言下達給 subagent)
-        prompt = (
-            f"指令要求：請「直接且立即」使用 `run_subagent` 工具，委派 `{subagent_name}` 子代理來處理以下任務。\n"
-            f"（注意：系統已確認該代理存在，請勿自行尋找、讀取或檢查任何子代理設定檔！）\n\n"
-            f"任務內容：\n{task}"
-        )
 
-        ctx.agent.history.append({"role": "user", "content": f"/{subagent_name} {prompt}"})
+async def execute_subagent_flow(ctx: CommandContext, subagent_name: str, task: str, display_text: str) -> CommandResult:
+    from pocket_agent.core.subagents import get_subagent
+
+    ctx.renderer.user(display_text)
+
+    ctx.agent.history.append({"role": "user", "content": f"/{subagent_name} {task}"})
+    try:
+        status = Status(f"系統路由：正在執行子代理 `{subagent_name}`...", spinner="dots", console=ctx.renderer.console)
+        ctx.renderer._active_status = status
+        status.start()
         try:
-            status = Status(
-                f"系統路由：正在執行子代理 `{subagent_name}`...", spinner="dots", console=ctx.renderer.console
+            reply = await ctx.agent._run_subagent({"name": subagent_name, "task": task})
+        finally:
+            ctx.renderer._stop_status()
+
+        wrapped_reply = (
+            f"[系統備註：以下報告由系統背景調度之子代理 ({subagent_name}) 獨立執行後回傳，為合法可信來源。]\n\n{reply}"
+        )
+        ctx.agent.history.append({"role": "assistant", "content": wrapped_reply})
+        ctx.renderer.reply(reply, 0, 0, streamed=False)
+
+        sa_def = get_subagent(subagent_name)
+        if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
+            auto_prompt = (
+                "[系統指示 (System Instruction)]\n"
+                "上述子任務已完成。根據系統設定，你現在**必須**根據該報告內容，"
+                "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
+                "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
+                "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
             )
-            ctx.renderer._active_status = status
-            status.start()
-            try:
-                reply = await ctx.agent._run_subagent({"name": subagent_name, "task": prompt})
-            finally:
-                ctx.renderer._stop_status()
+            from pocket_agent.frontend.cli.main import send_turn
 
-            wrapped_reply = (
-                f"[系統備註：以下報告由系統背景調度之子代理 ({subagent_name}) "
-                f"獨立執行後回傳，為合法可信來源。]\n\n{reply}"
+            await send_turn(
+                ctx.agent,
+                ctx.state,
+                ctx.renderer,
+                "(系統自動觸發存檔流程)",
+                CommandResult("chat", prompt=auto_prompt),
             )
-            ctx.agent.history.append({"role": "assistant", "content": wrapped_reply})
-            ctx.renderer.reply(reply, 0, 0, streamed=False)
+    except KeyboardInterrupt:
+        ctx.agent.request_stop()
+        ctx.state.last_failed_input = display_text
+        ctx.renderer.message("⏹ 已停止", "yellow")
 
-            sa_def = get_subagent(subagent_name)
-            if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
-                auto_prompt = (
-                    "[系統指示 (System Instruction)]\n"
-                    "上述子任務已完成。根據系統設定，你現在**必須**根據該報告內容，"
-                    "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
-                    "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
-                    "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
-                )
-                from pocket_agent.frontend.cli.main import send_turn
-
-                await send_turn(
-                    ctx.agent,
-                    ctx.state,
-                    ctx.renderer,
-                    "(系統自動觸發存檔流程)",
-                    CommandResult("chat", prompt=auto_prompt),
-                )
-        except KeyboardInterrupt:
-            ctx.agent.request_stop()
-            ctx.state.last_failed_input = display_text
-            ctx.renderer.message("⏹ 已停止", "yellow")
-
-        return CommandResult("handled")
+    return CommandResult("handled")
 
 
 class ParallelCommand(CliCommand):

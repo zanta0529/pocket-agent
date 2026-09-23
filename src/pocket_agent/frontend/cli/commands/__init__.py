@@ -111,6 +111,8 @@ class CommandHandler:
         sa_dict = {sa["name"]: sa for sa in list_subagents()}
         if name in sa_dict:
             task = args if args else "請執行你的預設任務"
-            return CommandResult("direct_subagent", prompt=task, display_text=name)
+            from pocket_agent.frontend.cli.commands.subagents import execute_subagent_flow
+
+            return await execute_subagent_flow(self.context, name, task, raw)
 
         raise ValueError(f"找不到指令、技能或子代理 /{name}；輸入 /help 查看說明")
