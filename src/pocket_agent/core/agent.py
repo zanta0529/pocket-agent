@@ -518,10 +518,16 @@ class Agent:
         sub.workspace_dirs = list(self.workspace_dirs)
 
         text_buffer = []
+        is_first_text = True
 
         def subagent_stream_forwarder(kind: str, data: dict | str):
+            nonlocal is_first_text
             if kind == "text":
-                self._emit("text", data)
+                if is_first_text:
+                    self._emit("text", f"【子代理 {name} 回報】\n\n{data}")
+                    is_first_text = False
+                else:
+                    self._emit("text", data)
             elif kind == "thinking":
                 # For reasoning models, they output thinking directly.
                 # Just buffer and emit occasionally, or emit line by line.

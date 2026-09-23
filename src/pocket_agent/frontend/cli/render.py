@@ -123,6 +123,7 @@ class CliRenderer:
         # 當前 CLI 狀態引用（啟動後由 cli.py 設定），用於標頭顯示 model 名稱
         self._state: CliState | None = None
         self._thinking_buffer: str = ""
+        self._pending_tools: dict[str, dict] = {}
 
     def _stop_status(self) -> None:
         """停止思考中 spinner（若仍在執行），確保不與串流輸出衝突。"""
@@ -322,10 +323,12 @@ class CliRenderer:
                 name = data.get("name", str(data))
                 args_raw = data.get("arguments", "") or ""
                 is_safe_read = data.get("is_safe_read", False)
+                call_id = data.get("call_id", name)
             else:
                 name = str(data)
                 args_raw = ""
                 is_safe_read = False
+                call_id = name
 
             real_name = name.split("::")[-1]
             name_lower = real_name.lower()
@@ -339,39 +342,27 @@ class CliRenderer:
 
             action_color = "bold yellow"
             name_color = "bold green" if is_safe_read else "bold cyan"
-            bullet_color = "bold red" if action == "Write" or not is_safe_read else "bold green"
             summary = self._summarise_args(name, args_raw)
 
-            if "::" in name:
-                sa_name, _ = name.split("::", 1)
-                parts = [
-                    ("● ", bullet_color),
-                    (action, action_color),
-                    (f" [{sa_name}]", "bold magenta"),
-                    (" (", ""),
-                    (real_name, name_color),
-                    (")", ""),
-                ]
-            else:
-                parts = [("● ", bullet_color), (action, action_color), (" (", ""), (real_name, name_color), (")", "")]
-
-            if summary:
-                summary_text = plain(summary)
-                if summary_text.startswith("【安全警告】"):
-                    parts.append((" 【安全警告】", "bold red"))
-                    parts.append((summary_text[6:], ""))
-                else:
-                    parts.append((f" {summary_text}", ""))
-
-            # 參照 Antigravity 設計：將工具呼叫明確印出並常駐在畫面上，不再自動隱藏
-            tool_text = Text.assemble(*parts)
-            self.console.print(tool_text)
+            # 暫存供 tool_done 使用
+            self._pending_tools[call_id] = {
+                "name": name,
+                "real_name": real_name,
+                "action": action,
+                "action_color": action_color,
+                "name_color": name_color,
+                "summary": plain(summary) if summary else "",
+                "sa_name": name.split("::", 1)[0] if "::" in name else None,
+            }
 
             if self.console.is_terminal:
                 self._stop_status()
                 from rich.status import Status
 
-                self._active_status = Status("執行工具中…", spinner="dots", console=self.console)
+                msg = f"執行工具中… {real_name}"
+                if summary:
+                    msg += f" ({plain(summary)})"
+                self._active_status = Status(msg, spinner="dots", console=self.console)
                 self._active_status.start()
 
         elif kind == "ask_question":
@@ -426,15 +417,35 @@ class CliRenderer:
         elif kind == "tool_done":
             self._stop_status()
 
-            # 恢復思考中狀態
-            from rich.status import Status
-
-            self._active_status = Status("思考中…", spinner="dots", console=self.console)
-            self._active_status.start()
-
             if isinstance(data, dict):
                 name = data.get("name", "")
+                call_id = data.get("call_id", name)
                 ok = data.get("ok", True)
+
+                info = self._pending_tools.pop(call_id, None)
+                if info:
+                    bullet_color = "bold green" if ok else "bold red"
+                    parts = [("● ", bullet_color), (info["action"], info["action_color"])]
+                    if info["sa_name"]:
+                        parts.extend(
+                            [
+                                (f" [{info['sa_name']}]", "bold magenta"),
+                                (" (", ""),
+                                (info["real_name"], info["name_color"]),
+                                (")", ""),
+                            ]
+                        )
+                    else:
+                        parts.extend([(" (", ""), (info["real_name"], info["name_color"]), (")", "")])
+
+                    if info["summary"]:
+                        if info["summary"].startswith("【安全警告】"):
+                            parts.extend([(" 【安全警告】", "bold red"), (info["summary"][6:], "")])
+                        else:
+                            parts.append((f" {info['summary']}", ""))
+
+                    self.console.print(Text.assemble(*parts))
+
                 if not ok:
                     if "::" in name:
                         sa_name, real_name = name.split("::", 1)
@@ -475,3 +486,9 @@ class CliRenderer:
                             expand=False,
                         )
                     )
+
+            if self.console.is_terminal:
+                from rich.status import Status
+
+                self._active_status = Status("思考中…", spinner="dots", console=self.console)
+                self._active_status.start()
