@@ -90,8 +90,7 @@ def toolbar(state: CliState, width: int) -> FormattedText:
     if not state.pending_files:
         count = "待送 0"
     else:
-        names = [Path(p).name for p in state.pending_files]
-        count = f"待送 {len(names)} ({', '.join(names)})"
+        count = f"待送 {len(state.pending_files)}"
 
     if state.session_tokens > 0:
         max_tokens = 128000

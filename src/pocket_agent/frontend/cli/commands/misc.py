@@ -43,7 +43,50 @@ class ClearCommand(CliCommand):
 
 class FileCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
-        for path in ctx.state.add_files([file_argument(args)]):
+        from pathlib import Path
+
+        path_str = file_argument(args)
+
+        try:
+            resolved_path = Path(path_str).expanduser().resolve(strict=True)
+        except Exception:
+            raise ValueError(f"找不到檔案：{path_str}")
+
+        if not resolved_path.is_file():
+            raise ValueError(f"不是一般檔案：{path_str}")
+
+        status, msg, target_dir = ctx.agent.check_new_workspace_dir(str(resolved_path.parent))
+
+        if status not in ("in_default", "already_authorized"):
+            from rich.panel import Panel
+            from rich.text import Text
+
+            ctx.renderer._ensure_newline()
+            panel = Panel(
+                Text(f"檔案不在目前工作區內：\n  📄 {resolved_path}", style="yellow"),
+                title="【安全警告】工作區權限請求",
+                title_align="left",
+                border_style="bold red",
+                expand=False,
+            )
+            ctx.renderer.console.print(panel)
+            try:
+                ans = input("\n是否將它所在的資料夾加入工作區並掛載？[y/N] ").strip().lower()
+                if ans == "y":
+                    if target_dir:
+                        ctx.agent.add_workspace_dir(target_dir)
+                    ctx.renderer.message("✓ 已授權並加入附件。")
+                else:
+                    ctx.renderer.message("✗ 已取消加入。")
+                    return CommandResult()
+            except KeyboardInterrupt:
+                ctx.renderer.message("\n✗ 已取消操作。")
+                return CommandResult()
+            except EOFError:
+                ctx.renderer.message("\n✗ 已取消操作。")
+                return CommandResult()
+
+        for path in ctx.state.add_files([str(resolved_path)]):
             ctx.renderer.message(f"已加入待送：{path}")
         return CommandResult()
 

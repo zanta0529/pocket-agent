@@ -92,7 +92,7 @@ def test_keyboard_input(keys, expected):
                 input=pipe,
                 output=DummyOutput(),
                 multiline=True,
-                key_bindings=key_bindings(lambda: False),
+                key_bindings=key_bindings(lambda: False, state=None, agent=None),
             )
             pipe.send_text(keys)
             return await asyncio.wait_for(session.prompt_async(), timeout=3)
@@ -139,7 +139,7 @@ def test_empty_input_interrupts(keys, exception):
                 input=pipe,
                 output=DummyOutput(),
                 multiline=True,
-                key_bindings=key_bindings(lambda: False),
+                key_bindings=key_bindings(lambda: False, state=None, agent=None),
             )
             pipe.send_text(keys)
             await asyncio.wait_for(session.prompt_async(), timeout=3)

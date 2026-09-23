@@ -494,7 +494,9 @@ class CliFrontend(FrontendStrategy):
                     renderer.message("沒有找到歷史 session，以全新對話啟動。", "dim")
 
             # F6：Ctrl+L 清屏後重印 banner
-            await conversation(agent, state, CliInput(state, on_clear_screen=renderer.banner), renderer, tools)
+            await conversation(
+                agent, state, CliInput(state, agent=agent, on_clear_screen=renderer.banner), renderer, tools
+            )
         except Exception as exc:
             renderer.message(f"CLI 執行失敗：{exc}", "red")
         finally:
