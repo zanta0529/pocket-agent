@@ -433,9 +433,12 @@ class CliFrontend(FrontendStrategy):
                 if status:
                     status.stop()
 
+                renderer.console.print()
+
                 panel = Panel(
                     Text(f"預計執行：\n{command}", style="yellow"),
                     title="【安全警告】系統要求執行指令",
+                    title_align="left",
                     border_style="bold red",
                     expand=False,
                 )
