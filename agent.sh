@@ -76,5 +76,6 @@ else
     echo "============================================================"
 fi
 
-export PYTHONPATH="$(pwd)/src"
+PYTHONPATH="$(pwd)/src"
+export PYTHONPATH
 "$RUN_PY" -m pocket_agent "$@"

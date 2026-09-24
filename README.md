@@ -270,13 +270,15 @@ python scripts/check_imports.py tests --req requirements-dev.in
 
 ## 📦 發布與建置 (Build & Deployment)
 
-專案提供免安裝 Python 依賴的可攜帶版本 (Portable) 打包方案，適合在無法連上外網的內網環境中快速部署：
+專案提供了統一的發布建置腳本，包含兩種打包方案供使用者選擇：
 
 ```cmd
 build.bat
 ```
 
-執行後，腳本將自動將運行環境與所有相依套件打包至 `dist/PocketAgent-portable.zip`，使用者解壓縮後雙擊即可直接執行。
+執行後，將出現互動式選單讓您選擇打包模式：
+1. **舊版 PyInstaller (Legacy)**：將專案編譯為單一二進位執行檔。請注意，此方案產出的 `.exe` 無官方數位簽章，極易觸發企業級防毒軟體（如 Symantec）的信譽隔離。
+2. **新版 Portable (Modern)**：【推薦】免安裝的可攜式發佈包。將官方 Python 執行環境與所有相依套件完整複製並打包至 `dist/PocketAgent-portable.zip`，完美避開防毒軟體的誤判，適合在嚴格的內網環境快速部署。使用者解壓縮後雙擊 `start.bat` 即可執行。
 
 ---
 

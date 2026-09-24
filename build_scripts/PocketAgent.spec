@@ -1,10 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller onedir 打包設定。
+r"""PyInstaller onedir 打包設定。
 
 用 onedir 而非 onefile：onefile 每次啟動都要把整包解壓到 temp（慢），
 而且防毒對 onefile 的誤判率明顯高很多，公司環境容易直接被攔。
 
-    pyinstaller --noconfirm PocketAgent.spec
+    pyinstaller --noconfirm build_scripts\PocketAgent.spec
 
 產出 dist/PocketAgent/，整個資料夾壓成 zip 就能發佈。
 """
@@ -12,7 +12,8 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-ROOT = Path(SPECPATH)
+# 因為本設定檔放在 build_scripts/ 下，所以專案根目錄為上一層
+ROOT = Path(SPECPATH).parent
 
 # 隨程式發佈的唯讀資源。
 # 要和 pocket_agent/system/paths.py 的 bundle_dir() 假設一致。
@@ -32,7 +33,7 @@ hiddenimports = (
 )
 
 a = Analysis(
-    ["src/pocket_agent/main.py"],
+    [str(ROOT / "src" / "pocket_agent" / "main.py")],
     pathex=[str(ROOT / "src")],
     binaries=[],
     datas=datas,

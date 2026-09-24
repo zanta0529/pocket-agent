@@ -13,22 +13,26 @@ Unproven.LowPrevalence 直接隔離。改用這個做法後，實際被執行的
     ├── python/              CPython 複本（含 tkinter、tcl/tk）
     └── app/                 原始碼與內建資源
 
-用法： venv\\Scripts\\python.exe build_portable.py
+用法： venv\Scripts\python.exe build_scripts\build_portable.py
 """
 
+import os
 import shutil
+import stat
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+# 因為本腳本放在 build_scripts/ 下，所以專案根目錄是上一層
+ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "dist" / "PocketAgent"
 
 # base_prefix 才是真正的 Python 安裝位置（venv 的 prefix 指向 venv 自己）
 BASE_PYTHON = Path(sys.base_prefix)
 VENV_SITE_PACKAGES = ROOT / "venv" / "Lib" / "site-packages"
 
-# 執行期用不到，佔空間就砍。tcl/ 不能砍——tkinter 要用。
+# 執行期用不到。
 PYTHON_EXCLUDES = {
     "Doc",
     "Tools",
@@ -37,14 +41,14 @@ PYTHON_EXCLUDES = {
     "Scripts",
     "test",
     "idlelib",
-    "tkinter/test",
+    "tkinter",
+    "tcl",
 }
 
 # 要帶進 app/ 的原始碼與資源
 APP_ITEMS = [
     "src",
     "mcp_servers",
-    "gui",
     "skills",
     "commands",
     "subagents",
@@ -53,7 +57,7 @@ APP_ITEMS = [
     "requirements.txt",  # 讓「自動更新」之後能對照/補裝新套件
 ]
 
-START_BAT = """@echo off
+START_BAT = r"""@echo off
 REM Launcher for the portable build.
 REM
 REM pythonw.exe (not python.exe) so no console window appears.
@@ -65,7 +69,7 @@ setlocal
 cd /d "%~dp0"
 
 REM Isolate from whatever Python the user already has. Without this the
-REM bundled interpreter still picks up %APPDATA%\\Python\\PythonXY\\site-packages
+REM bundled interpreter still picks up %APPDATA%\Python\PythonXY\site-packages
 REM and %PYTHONPATH%, so a colleague with a different uvicorn or httpx
 REM installed gets different behaviour from what we shipped and tested.
 REM PYTHONHOME would be worse still: it repoints at another installation.
@@ -73,7 +77,7 @@ set PYTHONNOUSERSITE=1
 set PYTHONPATH=%~dp0app\src
 set PYTHONHOME=
 
-start "" "%~dp0python\\pythonw.exe" -m pocket_agent %*
+start "" "%~dp0python\pythonw.exe" -m pocket_agent %*
 endlocal
 """
 
@@ -82,6 +86,11 @@ def _ignore(path, names):
     """複製時略過不需要的目錄與 __pycache__。"""
     skip = {n for n in names if n in PYTHON_EXCLUDES or n == "__pycache__"}
     return skip
+
+
+def _remove_readonly(func, path, _):
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
 
 
 def main() -> int:
@@ -94,7 +103,13 @@ def main() -> int:
     print(f"基礎 Python： {BASE_PYTHON}")
     if OUT.exists():
         print("清除舊的 dist/PocketAgent ...")
-        shutil.rmtree(OUT)
+        try:
+            shutil.rmtree(OUT, onerror=_remove_readonly)
+        except PermissionError as e:
+            print(f"\n[錯誤] 無法清除舊的目錄：{e}")
+            print("       這通常是因為你目前有開啟（或背景仍在執行）發布版目錄內的 Python。")
+            print("       請先關閉所有執行中的 Pocket Agent（或從工作管理員強制結束 pythonw.exe），再重新執行。")
+            return 1
     OUT.mkdir(parents=True)
 
     # 1. Python 本體
@@ -106,9 +121,6 @@ def main() -> int:
     target_sp = OUT / "python" / "Lib" / "site-packages"
     target_sp.mkdir(parents=True, exist_ok=True)
     for item in VENV_SITE_PACKAGES.iterdir():
-        # pip/setuptools/wheel 保留：自動更新之後要能在原地補裝新套件
-        # （agent/updater.py 的 _maybe_update_deps 靠 python -m pip 運作）。
-        # PyInstaller 只是舊的打包工具鏈，純屬佔空間，跳過。
         if item.name in {"__pycache__", "PyInstaller"}:
             continue
         if item.name.startswith("pyinstaller"):
@@ -142,8 +154,18 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    # 5. 打包
-    print("[5/5] 壓縮 ...")
+    # 5. 產生說明書
+    print("[5/6] 產生操作說明書 ...")
+    try:
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "generate_manual.py")], check=True)
+        manual_src = ROOT / "dist" / "PocketAgent_Manual.md"
+        if manual_src.exists():
+            shutil.copy2(manual_src, OUT / "PocketAgent_Manual.md")
+    except Exception as e:
+        print(f"      ! 產生說明書失敗：{e}")
+
+    # 6. 打包
+    print("[6/6] 壓縮 ...")
     zip_path = ROOT / "dist" / "PocketAgent-portable.zip"
     zip_path.unlink(missing_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -154,7 +176,6 @@ def main() -> int:
     size_mb = zip_path.stat().st_size / 1024 / 1024
     print()
     print(f"完成： {zip_path}  （{size_mb:.0f} MB）")
-    print("同事解壓縮後雙擊 PocketAgent\\start.bat 即可。")
     return 0
 
 
