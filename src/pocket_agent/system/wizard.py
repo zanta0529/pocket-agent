@@ -68,6 +68,8 @@ def _step_provider() -> str:
 def _step_login(provider: str) -> None:
     from pocket_agent.system.config import config
     from pocket_agent.system.constants import (
+        PROVIDER_GEMINI,
+        PROVIDER_GEMINI_OAUTH,
         PROVIDER_OLLAMA,
         PROVIDER_OLLAMACLOUD,
         PROVIDER_OPENAI,
@@ -130,6 +132,53 @@ def _step_login(provider: str) -> None:
         if new_key.strip():
             config.set("providers.ollama_cloud.api_key", new_key.strip())
         console.print("[green]✓ Ollama Cloud 設定已更新[/green]\n")
+    elif provider == PROVIDER_GEMINI:
+        console.print(Rule("② 設定 Gemini (Google AI Studio)"))
+        console.print()
+        current_key = config.get("providers.gemini.api_key", "")
+        key_hint = "*" * 10 + current_key[-4:] if current_key and len(current_key) > 4 else "未設定"
+        console.print(f"[dim]目前 API Key: {key_hint}[/dim]")
+        new_key = Prompt.ask("請輸入 Gemini API Key (直接 Enter 保持原狀)", default="")
+        if new_key.strip():
+            config.set("providers.gemini.api_key", new_key.strip())
+        console.print("[green]✓ Gemini API Key 設定已更新[/green]\n")
+    elif provider == PROVIDER_GEMINI_OAUTH:
+        console.print(Rule("② 登入 GEMINI (OAuth)"))
+        console.print()
+
+        current_client_id = config.get("providers.gemini.client_id", "")
+        console.print(f"[dim]目前 Google OAuth Client ID: {current_client_id or '未設定'}[/dim]")
+        new_client_id = Prompt.ask("請輸入 Client ID (直接 Enter 保持原狀)", default="")
+        if new_client_id.strip():
+            config.set("providers.gemini.client_id", new_client_id.strip())
+
+        current_client_secret = config.get("providers.gemini.client_secret", "")
+        console.print(
+            f"[dim]目前 Google OAuth Client Secret (選填): {'***' if current_client_secret else '未設定'}[/dim]"
+        )
+        new_client_secret = Prompt.ask("請輸入 Client Secret (直接 Enter 保持原狀)", default="")
+        if new_client_secret.strip():
+            config.set("providers.gemini.client_secret", new_client_secret.strip())
+
+        from pocket_agent.system.auth import _is_expired, _load_token
+
+        token = _load_token(provider)
+        if token and not _is_expired(token):
+            console.print("[green]✓ 已登入 GEMINI-OAUTH（token 有效）[/green]")
+            if not Confirm.ask("要重新登入嗎？", default=False):
+                console.print()
+                return
+            logout(provider)
+
+        client_id_check = config.get("providers.gemini.client_id")
+        if not client_id_check:
+            console.print("[red]✗ 必須提供 Client ID 才能進行 OAuth 授權，請重試。[/red]")
+            return
+
+        console.print("即將開啟瀏覽器，請用你的 [bold]Google 帳號[/bold] 登入並授權…\n")
+        input("按 Enter 繼續…")
+        get_access_token(provider=provider)
+        console.print()
 
 
 def _step_model(provider: str) -> None:

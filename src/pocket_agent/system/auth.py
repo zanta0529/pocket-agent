@@ -170,7 +170,12 @@ def _try_refresh(provider: str, token: dict, client_id: str, client_secret: str 
     refresh = token.get("refresh_token")
     if not refresh:
         return None
-    token_url = OPENAI_TOKEN_URL
+
+    if provider == "gemini-oauth":
+        token_url = "https://oauth2.googleapis.com/token"
+    else:
+        token_url = OPENAI_TOKEN_URL
+
     data = {
         "grant_type": "refresh_token",
         "client_id": client_id,
@@ -195,9 +200,15 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
     verifier, challenge = _pkce_pair()
     expected_state = secrets.token_urlsafe(16)
 
-    auth_url_base = OPENAI_AUTH_URL
-    token_url = OPENAI_TOKEN_URL
-    scope = OPENAI_SCOPE
+    if provider == "gemini-oauth":
+        auth_url_base = "https://accounts.google.com/o/oauth2/v2/auth"
+        token_url = "https://oauth2.googleapis.com/token"
+        scope = "https://www.googleapis.com/auth/generative-language"
+    else:
+        auth_url_base = OPENAI_AUTH_URL
+        token_url = OPENAI_TOKEN_URL
+        scope = OPENAI_SCOPE
+
     params = {
         "response_type": "code",
         "client_id": client_id,
@@ -206,12 +217,14 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
         "state": expected_state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
-        "originator": ORIGINATOR,
     }
-    if ADD_ORGANIZATIONS:
-        params["id_token_add_organizations"] = "true"
-    if USE_SIMPLIFIED_FLOW:
-        params["codex_cli_simplified_flow"] = "true"
+
+    if provider != "gemini-oauth":
+        params["originator"] = ORIGINATOR
+        if ADD_ORGANIZATIONS:
+            params["id_token_add_organizations"] = "true"
+        if USE_SIMPLIFIED_FLOW:
+            params["codex_cli_simplified_flow"] = "true"
 
     auth_url = auth_url_base + "?" + urlencode(params)
     bucket: dict = {}
@@ -313,8 +326,14 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
 
 
 def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=None) -> str:
-    client_id = config.get("openai_client_id") or DEFAULT_CLIENT_ID
-    client_secret = ""
+    if provider == "gemini-oauth":
+        client_id = config.get("providers.gemini.client_id")
+        client_secret = config.get("providers.gemini.client_secret", "")
+        if not client_id:
+            raise ValueError("請先在設定檔設定 `providers.gemini.client_id` (Google OAuth Client ID)。")
+    else:
+        client_id = config.get("openai_client_id") or DEFAULT_CLIENT_ID
+        client_secret = ""
 
     token = _load_token(provider)
 
