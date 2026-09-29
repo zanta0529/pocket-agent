@@ -8,7 +8,7 @@
 
 **PocketAgent** 是一款具備企業級擴充性與安全性的本機端 Python AI 代理工具，提供極簡、高效且專注於開發者體驗的命令列 (CLI) 介面。
 
-本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API**，並內建強大的本地端大語言模型 (Ollama) 支援，滿足對資料隱私具高度要求的離線開發場景。
+本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API**，並內建強大的本地端大語言模型 (Ollama) 與 **Ollama Cloud** API Key 串接支援，滿足對資料隱私具高度要求的離線開發及雲端混合場景。
 
 ---
 
@@ -141,7 +141,7 @@ python -m pocket_agent
 
 - `/file <路徑>`：附加本機檔案（支援程式碼、PDF 等）作為上下文。
 - `/image <描述>`：呼叫模型進行圖像生成 (可附加參考圖作為 Context 進行圖生圖)。
-- `/model <provider> <model_name>`：即時切換後端 API (支援 `openai`、`openrouter` 或 `ollama`)。
+- `/model <provider> <model_name>`：即時切換後端 API (支援 `openai`、`openrouter`、`ollama` 或 `ollamacloud`)。
 - `/subagent <name>`：強制委派任務給指定的子代理（例如 `/subagent researcher 查資料`）。另外也支援直接使用 `/<name>` 作為動態捷徑（例如 `/researcher 查資料`）。
 - `/parallel <name:task> | <name:task>`：手動平行啟動多個子代理 (Map-Reduce 模式)。背景會自動彙整成單一最終報告。請留意**必須使用管線符號 `|` 作為分隔**。例如：`/parallel researcher:查庫存 | coder:寫測試`。
 - `/session [list | load <id> | save | delete <id>]`：管理歷史對話 (Session)。無參數時啟動互動式光棒選單，支援儲存與讀取持久化紀錄。
@@ -165,30 +165,30 @@ python -m pocket_agent --resume
 
 命令列介面採可捲動對話版面；首屏只列目前專案、模型與 MCP 工具數，詳細清單按需查看。底端狀態列（Toolbar）會即時顯示當次對話累計的 Token 用量。
 
-| 操作                       | 說明                                           |
-| -------------------------- | ---------------------------------------------- |
-| Enter                      | 送出整段輸入                                   |
-| Esc 後 Enter（Meta+Enter） | 插入換行；多行貼上先保留於編輯器               |
-| Tab／方向鍵                | 補全與選擇光棒選單；輸入歷史保留               |
-| Ctrl+L                     | 清除終端機畫面顯示，但不清除對話歷史           |
-| Ctrl+C（輸入期間）         | 有文字時清空輸入，空白時提示退出方式；不清附件 |
-| Ctrl+D（空輸入）或 /exit、/quit | 離開                                           |
-| /help、/tools              | 查看指令、MCP 工具清單                         |
-| /usage、/quota             | 顯示當前對話累計 Token 用量                    |
-| /codesearch、/cs           | 快速搜尋工作區的程式碼片段並加入上下文         |
-| /subagent、/<name>         | 委派任務給單一子代理（例如 /researcher）           |
-| /parallel                  | 平行委派給多個子代理，使用 `\|` 分隔 (需注意分隔符號) |
-| /model                     | 互動式光棒選單切換提供者與模型，Esc 返回       |
-| /session                   | 互動式光棒選單分頁瀏覽並管理歷史對話           |
-| /skills                    | 列出或檢視可用的技能 (Skills)                  |
-| /learn                     | 將當前對話萃取為新技能                         |
-| /config                    | 互動式編輯系統設定檔                           |
-| /undo                      | 互動式檢視檔案備份並執行還原                   |
-| /add-dir                   | 授權並新增工作目錄                             |
-| /compact                   | 自動摘要並壓縮對話紀錄                         |
-| /attachments               | 列出本次待送附件與編號                         |
-| /attachments remove <編號> | 移除單一待送附件，不刪除檔案                   |
-| /attachments clear         | 清空待送佇列，不刪除檔案                       |
+| 操作                            | 說明                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| Enter                           | 送出整段輸入                                          |
+| Esc 後 Enter（Meta+Enter）      | 插入換行；多行貼上先保留於編輯器                      |
+| Tab／方向鍵                     | 補全與選擇光棒選單；輸入歷史保留                      |
+| Ctrl+L                          | 清除終端機畫面顯示，但不清除對話歷史                  |
+| Ctrl+C（輸入期間）              | 有文字時清空輸入，空白時提示退出方式；不清附件        |
+| Ctrl+D（空輸入）或 /exit、/quit | 離開                                                  |
+| /help、/tools                   | 查看指令、MCP 工具清單                                |
+| /usage、/quota                  | 顯示當前對話累計 Token 用量                           |
+| /codesearch、/cs                | 快速搜尋工作區的程式碼片段並加入上下文                |
+| /subagent、/<name>              | 委派任務給單一子代理（例如 /researcher）              |
+| /parallel                       | 平行委派給多個子代理，使用 `\|` 分隔 (需注意分隔符號) |
+| /model                          | 互動式光棒選單切換提供者與模型，Esc 返回              |
+| /session                        | 互動式光棒選單分頁瀏覽並管理歷史對話                  |
+| /skills                         | 列出或檢視可用的技能 (Skills)                         |
+| /learn                          | 將當前對話萃取為新技能                                |
+| /config                         | 互動式編輯系統設定檔                                  |
+| /undo                           | 互動式檢視檔案備份並執行還原                          |
+| /add-dir                        | 授權並新增工作目錄                                    |
+| /compact                        | 自動摘要並壓縮對話紀錄                                |
+| /attachments                    | 列出本次待送附件與編號                                |
+| /attachments remove <編號>      | 移除單一待送附件，不刪除檔案                          |
+| /attachments clear              | 清空待送佇列，不刪除檔案                              |
 
 > 💡 關於 CLI 介面的附件處理、路徑解析、影像生成細節，以及系統錯誤與中斷時的邊界行為，請詳閱：[CLI 操作與限制說明](docs/cli-usage-limitations.md)。
 
@@ -200,6 +200,7 @@ python -m pocket_agent --resume
 
 PocketAgent 的全域設定自動產生並存放在 `~/.pocket-agent/config.json` 中，採用結構化的巢狀 JSON 格式。您可以直接編輯該檔案，或是使用 CLI 的 `/config` 指令進行互動式修改（支援使用點表示法，如 `system.log_level`）。
 預設包含以下核心參數：
+
 - `system.max_tool_rounds`：預設為 `20`，控制模型單次對話可連續呼叫工具的最高次數，防止因幻覺導致無限迴圈。
 - `system.log_level`：預設為 `"WARNING"`。若需深入追查 API 請求或除錯，可將其改為 `"DEBUG"` 或 `"INFO"`。
 - `active_provider` / `active_model`：當前預設的服務提供者與模型名稱。
@@ -231,6 +232,7 @@ _(💡 提示：若工具需使用敏感的 API Key，可利用 `inject` 參數�
 **支援格式**：`.pdf`, `.docx`, `.pptx`
 
 **使用方式**：
+
 ```bash
 python scripts/convert_to_md.py <輸入檔案路徑> [-o <輸出檔案路徑>]
 
@@ -277,6 +279,7 @@ build.bat
 ```
 
 執行後，將出現互動式選單讓您選擇打包模式：
+
 1. **舊版 PyInstaller (Legacy)**：將專案編譯為單一二進位執行檔。請注意，此方案產出的 `.exe` 無官方數位簽章，極易觸發企業級防毒軟體（如 Symantec）的信譽隔離。
 2. **新版 Portable (Modern)**：【推薦】免安裝的可攜式發佈包。將官方 Python 執行環境與所有相依套件完整複製並打包至 `dist/PocketAgent-portable.zip`，完美避開防毒軟體的誤判，適合在嚴格的內網環境快速部署。使用者解壓縮後雙擊 `start.bat` 即可執行。
 

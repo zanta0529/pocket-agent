@@ -40,7 +40,8 @@ def run_setup() -> None:
 
 
 def _step_provider() -> str:
-    from pocket_agent.system.config import SUPPORTED_PROVIDERS, config
+    from pocket_agent.system.config import config
+    from pocket_agent.system.constants import SUPPORTED_PROVIDERS
 
     console.print(Rule("① 選擇服務供應商 (Provider)"))
     console.print()
@@ -66,8 +67,14 @@ def _step_provider() -> str:
 
 def _step_login(provider: str) -> None:
     from pocket_agent.system.config import config
+    from pocket_agent.system.constants import (
+        PROVIDER_OLLAMA,
+        PROVIDER_OLLAMACLOUD,
+        PROVIDER_OPENAI,
+        PROVIDER_OPENROUTER,
+    )
 
-    if provider == "openai":
+    if provider == PROVIDER_OPENAI:
         console.print(Rule("② 登入 OPENAI"))
         console.print()
         from pocket_agent.system.auth import _is_expired, _load_token
@@ -83,7 +90,7 @@ def _step_login(provider: str) -> None:
         input("按 Enter 繼續…")
         get_access_token(provider=provider)
         console.print()
-    elif provider == "openrouter":
+    elif provider == PROVIDER_OPENROUTER:
         console.print(Rule("② 設定 OpenRouter"))
         console.print()
         current_key = config.get("providers.openrouter.api_key", "")
@@ -99,14 +106,30 @@ def _step_login(provider: str) -> None:
         if new_key.strip():
             config.set("providers.openrouter.api_key", new_key.strip())
         console.print("[green]✓ OpenRouter 設定已更新[/green]\n")
-    elif provider == "ollama":
-        console.print(Rule("② 設定 Ollama"))
+    elif provider == PROVIDER_OLLAMA:
+        console.print(Rule("② 設定 Ollama (Local)"))
         console.print()
         current_url = config.get("providers.ollama.base_url", "http://localhost:11434")
         console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
         new_url = Prompt.ask("請輸入 Ollama 連線位址", default=current_url)
         config.set("providers.ollama.base_url", new_url)
         console.print("[green]✓ Ollama 設定已更新[/green]\n")
+    elif provider == PROVIDER_OLLAMACLOUD:
+        console.print(Rule("② 設定 Ollama Cloud"))
+        console.print()
+        current_key = config.get("providers.ollama_cloud.api_key", "")
+        current_url = config.get("providers.ollama_cloud.base_url", "https://ollama.com/v1")
+
+        console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
+        new_url = Prompt.ask("請輸入 Base URL", default=current_url)
+        config.set("providers.ollama_cloud.base_url", new_url)
+
+        key_hint = "*" * 10 + current_key[-4:] if current_key and len(current_key) > 4 else "未設定"
+        console.print(f"[dim]目前 API Key: {key_hint}[/dim]")
+        new_key = Prompt.ask("請輸入 API Key (直接 Enter 保持原狀)", default="")
+        if new_key.strip():
+            config.set("providers.ollama_cloud.api_key", new_key.strip())
+        console.print("[green]✓ Ollama Cloud 設定已更新[/green]\n")
 
 
 def _step_model(provider: str) -> None:

@@ -333,151 +333,34 @@ def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=No
 
 
 def get_openai_client(provider: str = None, model: str = None):
-    """建立 OpenAI 相容的 client，根據 provider 切換 Base URL 與 Auth。"""
+    """建立 OpenAI 相容的 client，根據 provider 透過 Provider Strategy 切換 Base URL 與 Auth。"""
     from dotenv import load_dotenv
-    from openai import AsyncOpenAI
 
     from pocket_agent.system.config import config
     from pocket_agent.system.paths import env_path
+    from pocket_agent.system.providers import get_provider_strategy
 
     # 在此讀取 .env 以確保 os.getenv 能拿到最新的環境變數，配合 ConfigManager
     load_dotenv(env_path(), override=True)
 
     if not provider:
         provider = config.get("active_provider", "openai")
-    provider = provider.lower()
 
-    http_client = None
-    if provider == "ollama":
-        base_url = config.get("providers.ollama.base_url")
-        if base_url:
-            base_url = base_url.rstrip("/")
-            if not base_url.endswith("/v1"):
-                base_url = f"{base_url}/v1"
-        api_key = "ollama"
-        extra_headers = {}
-        http_client = httpx.AsyncClient(trust_env=False, timeout=httpx.Timeout(timeout=1800.0, connect=60.0))
-    elif provider == "openrouter":
-        base_url = config.get("providers.openrouter.base_url")
-        if not base_url:
-            raise ValueError("未設定 OpenRouter Base URL。請先透過 `agent setup` 或 GUI 設定。")
-        base_url = base_url.rstrip("/")
-        api_key = config.get("providers.openrouter.api_key") or ""
-        extra_headers = {
-            "HTTP-Referer": config.get("providers.openrouter.referer", "https://github.com/pocket-agent"),
-            "X-Title": config.get("providers.openrouter.title", "Pocket Agent"),
-        }
-    else:
-        # 預設 OpenAI (Codex 後端)
-        base_url = CODEX_BASE_URL
-        api_key = get_access_token(provider="openai")
-        account_id = _extract_account_id(api_key)
-        extra_headers = {
-            "originator": "pocket-agent",
-            "OpenAI-Beta": "responses=experimental",
-        }
-        if account_id:
-            extra_headers["chatgpt-account-id"] = account_id
-
-    return AsyncOpenAI(
-        api_key=api_key,
-        base_url=base_url,
-        default_headers=extra_headers,
-        http_client=http_client,
-        timeout=httpx.Timeout(timeout=1800.0, connect=60.0),  # 防止長文本生成與巨大工具呼叫斷線
-    )
+    strategy = get_provider_strategy(provider)
+    return strategy.get_client()
 
 
 def fetch_available_models(provider: str = "openai") -> list[str]:
     """取得可用模型列表。"""
     from dotenv import load_dotenv
 
-    from pocket_agent.system.config import config
     from pocket_agent.system.paths import env_path
+    from pocket_agent.system.providers import get_provider_strategy
 
     load_dotenv(env_path(), override=True)
 
-    if provider == "ollama":
-        try:
-            base_url = config.get("providers.ollama.base_url")
-            if base_url:
-                base_url = base_url.rstrip("/")
-                if base_url.endswith("/v1"):
-                    base_url = base_url[:-3]
-            else:
-                base_url = "http://localhost:11434"
-
-            with httpx.Client(trust_env=False) as client:
-                resp = client.get(f"{base_url}/api/tags", timeout=10)
-            if resp.status_code == 200:
-                return [m["name"] for m in resp.json().get("models", [])]
-            return []
-        except Exception as e:
-            import logging
-
-            logging.getLogger("pocket-agent").error(f"Ollama fetch tags error: {e}")
-            return []
-
-    if provider == "openrouter":
-        try:
-            base_url = config.get("providers.openrouter.base_url")
-            if base_url:
-                base_url = base_url.rstrip("/")
-            else:
-                base_url = "https://openrouter.ai/api/v1"
-            with httpx.Client() as client:
-                resp = client.get(f"{base_url}/models", timeout=10)
-            if resp.status_code == 200:
-                return [m["id"] for m in resp.json().get("data", [])]
-            return []
-        except Exception as e:
-            import logging
-
-            logging.getLogger("pocket-agent").error(f"OpenRouter fetch models error: {e}")
-        return []
-
-    # OpenAI 原有邏輯
-    token = _load_token("openai")
-    if token and _is_expired(token):
-        client_id = config.get("providers.openai.client_id") or DEFAULT_CLIENT_ID
-        token = _try_refresh("openai", token, client_id)
-    if not token:
-        return []
-
-    access_token = token["access_token"]
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "originator": "pocket-agent",
-    }
-    account_id = _extract_account_id(access_token)
-    if account_id:
-        headers["chatgpt-account-id"] = account_id
-
-    try:
-        resp = httpx.get(
-            f"{CODEX_BASE_URL}/models",
-            params={"client_version": "99.0.0"},
-            headers=headers,
-            timeout=10,
-            verify=_SSL_VERIFY,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception:
-        return []
-
-    items = data.get("models", data.get("data", [])) if isinstance(data, dict) else data
-    slugs: list[str] = []
-    for item in items or []:
-        if isinstance(item, str):
-            slug = item
-        elif isinstance(item, dict):
-            slug = item.get("slug") or item.get("id") or item.get("model") or ""
-        else:
-            continue
-        if slug and "review" not in slug and slug not in slugs:
-            slugs.append(slug)
-    return slugs
+    strategy = get_provider_strategy(provider)
+    return strategy.fetch_models()
 
 
 def logout(provider: str = "openai") -> None:

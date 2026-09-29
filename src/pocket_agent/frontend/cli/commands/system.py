@@ -16,7 +16,7 @@ async def switch_model(
     renderer,
 ) -> None:
     from pocket_agent.system.auth import get_openai_client
-    from pocket_agent.system.config import SUPPORTED_PROVIDERS
+    from pocket_agent.system.constants import SUPPORTED_PROVIDERS
 
     if provider not in SUPPORTED_PROVIDERS or not model or any(c.isspace() for c in model):
         raise ValueError(f"用法：/model <{'|'.join(SUPPORTED_PROVIDERS)}> <模型名稱>")
@@ -34,7 +34,7 @@ async def switch_model(
 
 async def do_model_flow(ctx: CommandContext, args: str) -> None:
     from pocket_agent.system.auth import fetch_available_models
-    from pocket_agent.system.config import SUPPORTED_PROVIDERS
+    from pocket_agent.system.constants import SUPPORTED_PROVIDERS
 
     if args:
         parts = args.split()

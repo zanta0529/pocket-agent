@@ -9,8 +9,6 @@ log = logging.getLogger("pocket-agent")
 
 CONFIG_PATH = Path.home() / ".pocket-agent" / "config.json"
 
-SUPPORTED_PROVIDERS = ["openai", "ollama", "openrouter"]
-
 
 def _get_nested(d: dict, key: str) -> Any:
     parts = key.split(".")
@@ -60,6 +58,7 @@ DEFAULT_CONFIG = {
             "title": "Pocket Agent",
         },
         "ollama": {"base_url": "http://localhost:11434"},
+        "ollama_cloud": {"api_key": "", "base_url": "https://ollama.com/v1"},
     },
 }
 

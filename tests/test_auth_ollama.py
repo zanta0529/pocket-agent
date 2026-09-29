@@ -10,6 +10,8 @@ from pocket_agent.system.auth import fetch_available_models
 
 def test_fetch_available_models_ollama():
     """測試抓取 Ollama 模型時是否能正確處理 OLLAMA_BASE_URL 與 API 回應"""
+    from pocket_agent.system.config import config
+
     # 模擬 httpx.Client 與其 get 方法
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -23,8 +25,8 @@ def test_fetch_available_models_ollama():
     mock_client_class.return_value.__enter__.return_value = mock_client_instance
 
     with (
-        patch("pocket_agent.system.auth.httpx.Client", mock_client_class),
-        patch("pocket_agent.system.auth.load_config", return_value={}),
+        patch("pocket_agent.system.providers.ollama.httpx.Client", mock_client_class),
+        patch.object(config.json_provider, "get", return_value=None),
         patch("dotenv.load_dotenv"),
     ):
         with patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://192.168.1.100:11434"}):
@@ -45,6 +47,8 @@ def test_fetch_available_models_ollama():
 
 def test_fetch_available_models_ollama_v1_suffix():
     """測試若 OLLAMA_BASE_URL 以 /v1 結尾，是否能正確處理 (避免打向 /v1/api/tags)"""
+    from pocket_agent.system.config import config
+
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"models": [{"name": "gemma:2b"}]}
@@ -56,8 +60,8 @@ def test_fetch_available_models_ollama_v1_suffix():
     mock_client_class.return_value.__enter__.return_value = mock_client_instance
 
     with (
-        patch("pocket_agent.system.auth.httpx.Client", mock_client_class),
-        patch("pocket_agent.system.auth.load_config", return_value={}),
+        patch("pocket_agent.system.providers.ollama.httpx.Client", mock_client_class),
+        patch.object(config.json_provider, "get", return_value=None),
         patch("dotenv.load_dotenv"),
     ):
         with patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://192.168.1.100:11434/v1"}):
@@ -78,8 +82,8 @@ def test_fetch_available_models_ollama_exception():
     mock_client_class.return_value.__enter__.return_value = mock_client_instance
 
     with (
-        patch("pocket_agent.system.auth.httpx.Client", mock_client_class),
-        patch("pocket_agent.system.auth.load_config", return_value={}),
+        patch("pocket_agent.system.providers.ollama.httpx.Client", mock_client_class),
+        patch("pocket_agent.system.config.config.get", return_value=None),
         patch("dotenv.load_dotenv"),
     ):
         models = fetch_available_models(provider="ollama")
@@ -96,8 +100,8 @@ def test_explicit_ollama_client_uses_env():
         ),
         patch("dotenv.load_dotenv"),
         patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://environment:11434"}),
-        patch("pocket_agent.system.auth.httpx.AsyncClient") as http,
-        patch("openai.AsyncOpenAI") as client,
+        patch("pocket_agent.system.providers.ollama.httpx.AsyncClient") as http,
+        patch("pocket_agent.system.providers.ollama.AsyncOpenAI") as client,
     ):
         result = get_openai_client(provider="ollama", model="test-model")
         http.assert_called_once_with(trust_env=False, timeout=ANY)
@@ -118,7 +122,7 @@ def test_explicit_openai_client_preserves_headers():
         patch("pocket_agent.system.config.config.get", return_value="openai"),
         patch("pocket_agent.system.auth.get_access_token", return_value="mock-token") as token,
         patch("pocket_agent.system.auth._extract_account_id", return_value="mock-account"),
-        patch("openai.AsyncOpenAI") as client,
+        patch("pocket_agent.system.providers.openai_provider.AsyncOpenAI") as client,
     ):
         get_openai_client(provider="openai")
         token.assert_called_once_with(provider="openai")
@@ -143,8 +147,8 @@ def test_explicit_ollama_environment_fallback():
         patch.object(config.json_provider, "get", return_value=None),
         patch("dotenv.load_dotenv"),
         patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://environment:11434/"}),
-        patch("pocket_agent.system.auth.httpx.AsyncClient"),
-        patch("openai.AsyncOpenAI") as client,
+        patch("pocket_agent.system.providers.ollama.httpx.AsyncClient"),
+        patch("pocket_agent.system.providers.ollama.AsyncOpenAI") as client,
     ):
         # Allow ConfigManager to do its job reading from EnvConfigProvider
         get_openai_client(provider="ollama")
