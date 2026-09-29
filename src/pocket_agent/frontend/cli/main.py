@@ -212,6 +212,18 @@ async def send_turn(
     else:
         turn_tokens = getattr(agent, "total_tokens", 0)
         state.session_tokens += turn_tokens
+
+        # 背景更新額度資訊
+        if hasattr(agent, "get_quota"):
+            try:
+                quota = await agent.get_quota()
+                if quota:
+                    state.quota_supported = quota.is_supported
+                    state.quota_limit = quota.limit
+                    state.quota_remaining = quota.remaining
+            except Exception:
+                pass
+
         renderer.reply(reply, monotonic() - started, turn_tokens, streamed=True)
 
 

@@ -19,6 +19,26 @@ class UsageCommand(CliCommand):
         if args:
             raise ValueError("/usage 不接受參數")
         ctx.renderer.message(f"目前對話累計 Token 用量: {ctx.state.session_tokens}", "cyan")
+
+        if hasattr(ctx.agent, "get_quota"):
+            try:
+                quota = await ctx.agent.get_quota()
+                if quota and quota.is_supported:
+                    for line in quota.get_display_lines():
+                        ctx.renderer.message(line, "green")
+
+                    # 同步更新狀態列 (只取大額度供精簡顯示)
+                    ctx.state.quota_supported = True
+                    ctx.state.quota_limit = quota.limit
+                    ctx.state.quota_remaining = quota.remaining
+                else:
+                    msg = getattr(quota, "message", None) if quota else None
+                    ctx.renderer.message(msg or "此 Provider 不支援透過 API 查詢額度。", "yellow")
+            except Exception as e:
+                ctx.renderer.message(f"查詢額度失敗: {e}", "red")
+        else:
+            ctx.renderer.message("此 Provider 或引擎尚未支援額度查詢。", "yellow")
+
         return CommandResult()
 
 

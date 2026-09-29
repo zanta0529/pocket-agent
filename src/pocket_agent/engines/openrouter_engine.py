@@ -9,6 +9,7 @@ from pocket_agent.engines.base import (
     EventToolCallDone,
     EventToolCallStart,
     EventUsage,
+    QuotaInfo,
 )
 
 log = logging.getLogger("pocket-agent")
@@ -17,6 +18,55 @@ log = logging.getLogger("pocket-agent")
 class OpenRouterEngine(BaseEngine):
     """OpenRouter uses the standard chat.completions API.
     We implement `<think>` tag parsing to support reasoning models (e.g. DeepSeek-R1)."""
+
+    async def get_quota(self) -> QuotaInfo:
+        import httpx
+
+        try:
+            api_key = self.client.api_key
+        except AttributeError:
+            return QuotaInfo(is_supported=False, message="無法取得 API Key")
+
+        async with httpx.AsyncClient() as http_client:
+            try:
+                response = await http_client.get(
+                    "https://openrouter.ai/api/v1/key", headers={"Authorization": f"Bearer {api_key}"}, timeout=10.0
+                )
+                response.raise_for_status()
+                data = response.json().get("data", {})
+
+                limit = data.get("limit")
+                remaining = data.get("limit_remaining")
+
+                used = None
+                if limit is not None and remaining is not None:
+                    used = limit - remaining
+
+                daily_used = data.get("usage_daily")
+
+                free_limit = None
+                free_remaining = None
+                free_used = None
+
+                free_reqs = data.get("free_model_daily_requests")
+                if isinstance(free_reqs, dict):
+                    free_limit = free_reqs.get("limit")
+                    free_remaining = free_reqs.get("remaining")
+                    free_used = free_reqs.get("used")
+
+                return QuotaInfo(
+                    is_supported=True,
+                    limit=limit,
+                    remaining=remaining,
+                    used=used,
+                    daily_used=daily_used,
+                    free_requests_limit=free_limit,
+                    free_requests_remaining=free_remaining,
+                    free_requests_used=free_used,
+                )
+            except Exception as e:
+                log.error(f"Failed to fetch OpenRouter quota: {e}")
+                return QuotaInfo(is_supported=False, message=f"查詢 OpenRouter 額度失敗：{str(e)}")
 
     async def stream_chat(
         self,

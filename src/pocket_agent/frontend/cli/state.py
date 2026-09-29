@@ -20,6 +20,9 @@ class CliState:
     session_id: str = field(default_factory=_new_session_id)
     session_tokens: int = 0  # 本 session 累計 token 用量（供 toolbar 顯示）
     session_approved_commands: bool = False  # 是否同意本次對話中自動執行指令
+    quota_supported: bool = False
+    quota_limit: float | None = None
+    quota_remaining: float | None = None
 
     def add_files(self, paths: list[str]) -> list[str]:
         # Validate the whole batch before committing, including readability.

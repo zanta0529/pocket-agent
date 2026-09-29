@@ -285,6 +285,22 @@ class Agent:
         self.cancel_requested = True
         return True
 
+    async def get_quota(self):
+        url_str = str(self.client.base_url)
+        if "openai.com" in url_str or "chatgpt.com" in url_str:
+            provider = "openai"
+        elif "openrouter.ai" in url_str:
+            provider = "openrouter"
+        else:
+            provider = "ollama"
+
+        from pocket_agent.engines import EngineFactory
+
+        engine = EngineFactory.create(provider, self.client, self.model)
+        if hasattr(engine, "get_quota"):
+            return await engine.get_quota()
+        return None
+
     @staticmethod
     def _stopped_reply(text: str) -> str:
         return (f"{text}\n\n" if text.strip() else "") + "⏹ 已由使用者停止"

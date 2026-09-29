@@ -41,10 +41,59 @@ class EventUsage:
     total_tokens: int
 
 
+@dataclass
+class QuotaInfo:
+    is_supported: bool
+    limit: Optional[float] = None
+    remaining: Optional[float] = None
+    used: Optional[float] = None
+    message: Optional[str] = None
+
+    # 擴充欄位（選填）
+    daily_used: Optional[float] = None
+    free_requests_limit: Optional[int] = None
+    free_requests_remaining: Optional[int] = None
+    free_requests_used: Optional[int] = None
+
+    def get_display_lines(self) -> list[str]:
+        """
+        將額度資訊格式化為多行字串，供前端一致性呼叫與顯示。
+        設計模式：開放給主程式統一呼叫的介面，將格式化邏輯封裝在此。
+        """
+        if not self.is_supported:
+            return [self.message or "此 Provider 不支援透過 API 查詢額度。"]
+
+        lines = []
+        if self.limit is not None and self.remaining is not None and self.used is not None:
+            lines.append(f"API 帳戶額度: 已用 ${self.used:.4f} / 上限 ${self.limit:.4f} (剩餘 ${self.remaining:.4f})")
+
+        if self.daily_used is not None:
+            lines.append(f"今日花費: ${self.daily_used:.4f}")
+
+        if self.free_requests_limit is not None and self.free_requests_remaining is not None:
+            used = (
+                self.free_requests_used
+                if self.free_requests_used is not None
+                else (self.free_requests_limit - self.free_requests_remaining)
+            )
+            lines.append(
+                f"免費模型今日請求次數: 已用 {used} 次 / "
+                f"上限 {self.free_requests_limit} 次 (剩餘 {self.free_requests_remaining} 次)"
+            )
+
+        return lines
+
+
 class BaseEngine:
     def __init__(self, client: Any, model: str):
         self.client = client
         self.model = model
+
+    async def get_quota(self) -> QuotaInfo:
+        """
+        查詢當前 Provider 的額度狀態。預設為不支援。
+        """
+        return QuotaInfo(is_supported=False, message="此 Provider 不支援透過 API 直接查詢額度。")
 
     async def stream_chat(
         self,
