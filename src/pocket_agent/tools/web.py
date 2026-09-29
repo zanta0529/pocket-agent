@@ -97,8 +97,14 @@ def call_web_tool(name: str, args: dict) -> str:
 
             # DuckDuckGo HTML 介面
             url = "https://html.duckduckgo.com/html/"
-            resp = httpx.post(url, data={"q": query}, headers=headers, follow_redirects=True, timeout=15.0)
-            resp.raise_for_status()
+            try:
+                from curl_cffi import requests as c_requests
+
+                resp = c_requests.post(url, data={"q": query}, headers=headers, impersonate="chrome", timeout=15.0)
+                resp.raise_for_status()
+            except ImportError:
+                resp = httpx.post(url, data={"q": query}, headers=headers, follow_redirects=True, timeout=15.0)
+                resp.raise_for_status()
 
             # 手動解析 DuckDuckGo 結果 (提取 .result__snippet 和 .result__url)
             html = resp.text
@@ -146,8 +152,19 @@ def call_web_tool(name: str, args: dict) -> str:
             except Exception as e:
                 return f"[ERROR] DNS 解析失敗或位址無效: {e}"
 
-            resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=15.0)
-            resp.raise_for_status()
+            warning_msg = ""
+            try:
+                from curl_cffi import requests as c_requests
+
+                resp = c_requests.get(url, headers=headers, impersonate="chrome", timeout=15.0)
+                resp.raise_for_status()
+            except ImportError:
+                warning_msg = (
+                    "\n\n(提示：強烈建議使用 run_command 執行 pip install curl_cffi，"
+                    "以模擬真實瀏覽器指紋，避免遭遇 403 Forbidden)"
+                )
+                resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=15.0)
+                resp.raise_for_status()
 
             content_type = resp.headers.get("content-type", "")
             if "text/html" in content_type:
@@ -164,6 +181,8 @@ def call_web_tool(name: str, args: dict) -> str:
                 inner = text[:max_len] + f"\n\n... (內容過長，已截斷前 {max_len} 字元)"
             else:
                 inner = text
+
+            inner += warning_msg
 
             return f"<external_content>\n{inner}\n</external_content>"
 

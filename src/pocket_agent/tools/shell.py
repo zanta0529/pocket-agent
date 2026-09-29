@@ -68,9 +68,10 @@ SHELL_TOOLS = [
         "name": "run_command",
         "description": (
             "在使用者的電腦上執行 CLI 指令並回傳輸出。"
-            "適合查看檔案、執行腳本、git 操作、安裝套件等。"
-            "注意：Windows 環境用 cmd.exe 執行（此電腦的群組原則封鎖 "
-            "PowerShell，請勿使用 PowerShell 語法）。"
+            "適合執行腳本、git 操作、編譯建置或安裝套件等。"
+            "【強烈警告】嚴禁使用此工具進行檔案讀寫或目錄搜尋（如 cat、ls、grep、sed、find 等），"
+            "若需操作檔案請務必改用原生的 fs 檔案工具。"
+            "注意：Windows 環境用 cmd.exe 執行（此電腦的群組原則封鎖 PowerShell，請勿使用 PowerShell 語法）。"
             "危險或不可逆的操作（刪除、覆蓋、對外發送）請先向使用者說明再執行。"
         ),
         "parameters": {

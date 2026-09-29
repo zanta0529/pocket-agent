@@ -119,7 +119,7 @@ def func_b():
         name="replace_file_content", args=args_fail, on_confirm=lambda _: True, workspace_dirs=[str(tmp_path)]
     )
     assert "[ERROR]" in result_fail
-    assert "請提供更多上下文或指定 start_line/end_line 確保唯一性" in result_fail
+    assert "請設定 allow_multiple=true、提供更多上下文，或指定 start_line/end_line 確保唯一性" in result_fail
 
     # 指定範圍，僅替換 func_b (約第 4-6 行) 中的內容
     args_success = {

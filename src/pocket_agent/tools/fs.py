@@ -61,7 +61,8 @@ FS_TOOLS = [
         "name": "replace_file_content",
         "description": (
             "Safely replace a specific target string within a file. The target must match EXACTLY "
-            "(including whitespace). If you encounter a mismatch error, DO NOT guess again. "
+            "(including whitespace). If allow_multiple is true, all occurrences will be replaced. "
+            "If you encounter a mismatch error, DO NOT guess again. "
             "Use read_file with start_line/end_line to capture the exact spaces and indentation first."
         ),
         "parameters": {
@@ -70,6 +71,10 @@ FS_TOOLS = [
                 "path": {"type": "string", "description": "Absolute or relative path to the file."},
                 "target": {"type": "string", "description": "The exact string sequence to replace."},
                 "replacement": {"type": "string", "description": "The new content to replace the target with."},
+                "allow_multiple": {
+                    "type": "boolean",
+                    "description": "If true, replaces all occurrences. If false, errors on multiple matches.",
+                },
                 "start_line": {
                     "type": "integer",
                     "description": "Optional start line to narrow the search scope (1-indexed).",
@@ -181,6 +186,32 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
         raise ValueError(f"安全限制：路徑 {target} 超出允許的工作區範圍")
 
     return target
+
+
+def _get_ignore_spec(target_dir: Path):
+    """嘗試讀取目標目錄的 .gitignore 並回傳 pathspec 的 PathSpec 物件。若無則回傳 None。"""
+    try:
+        import pathspec
+    except ImportError:
+        return None
+
+    gitignore_path = target_dir / ".gitignore"
+    if not gitignore_path.exists():
+        # 往上層找
+        curr = target_dir
+        while curr.parent != curr:
+            curr = curr.parent
+            if (curr / ".gitignore").exists():
+                gitignore_path = curr / ".gitignore"
+                break
+
+    if gitignore_path.exists():
+        try:
+            with open(gitignore_path, "r", encoding="utf-8") as f:
+                return pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, f)
+        except Exception:
+            return None
+    return None
 
 
 def _backup_file(target: Path) -> None:
@@ -370,6 +401,7 @@ def call_fs_tool(
             replacement = args.get("replacement", "")
             start_line = args.get("start_line")
             end_line = args.get("end_line")
+            allow_multiple = args.get("allow_multiple", False)
 
             if not target_str:
                 return "[ERROR] 缺少必填參數 'target'"
@@ -390,8 +422,11 @@ def call_fs_tool(
                 count = target_scope.count(target_str)
                 if count == 0:
                     return f"[ERROR] 在指定的行數範圍內 ({start_idx + 1}-{end_idx}) 找不到 target 字串。"
-                elif count > 1:
-                    return f"[ERROR] 在指定的行數範圍內找到 {count} 處相符的 target 字串，請再縮小範圍以確保唯一性。"
+                elif count > 1 and not allow_multiple:
+                    return (
+                        f"[ERROR] 在指定的行數範圍內找到 {count} 處相符的 target 字串，"
+                        "請設定 allow_multiple=true 或再縮小範圍以確保唯一性。"
+                    )
 
                 new_scope = target_scope.replace(target_str, replacement)
                 new_content = prefix_content + new_scope + suffix_content
@@ -399,10 +434,10 @@ def call_fs_tool(
                 count = content.count(target_str)
                 if count == 0:
                     return "[ERROR] 找不到指定的 target 字串。請確保字元與空白完全相符。"
-                elif count > 1:
+                elif count > 1 and not allow_multiple:
                     return (
                         f"[ERROR] 找到 {count} 處相符的 target 字串。"
-                        "請提供更多上下文或指定 start_line/end_line 確保唯一性。"
+                        "請設定 allow_multiple=true、提供更多上下文，或指定 start_line/end_line 確保唯一性。"
                     )
                 new_content = content.replace(target_str, replacement)
 
@@ -422,12 +457,17 @@ def call_fs_tool(
                 return "[ERROR] 缺少必填參數 'pattern'"
 
             results = []
-            # 排除常見不相關的目錄
             excludes = {".git", "node_modules", "venv", "__pycache__", ".pocket-agent"}
+            spec = _get_ignore_spec(target)
+
             for p in target.rglob(pattern):
                 if any(ex in p.parts for ex in excludes):
                     continue
-                results.append(str(p.relative_to(target)))
+                rel_path = str(p.relative_to(target))
+                if spec and spec.match_file(rel_path):
+                    continue
+
+                results.append(rel_path)
                 if len(results) >= 50:
                     results.append("... (結果過多，僅顯示前 50 筆)")
                     break
@@ -445,10 +485,16 @@ def call_fs_tool(
 
             results = []
             excludes = {".git", "node_modules", "venv", "__pycache__", ".pocket-agent"}
-            # 遍歷所有檔案 (僅限一般檔案，且避開排除名單)
+            spec = _get_ignore_spec(target)
+
             for p in target.rglob("*"):
                 if not p.is_file() or any(ex in p.parts for ex in excludes):
                     continue
+
+                rel_path = str(p.relative_to(target))
+                if spec and spec.match_file(rel_path):
+                    continue
+
                 # DoS 防護：略過超過 5 MB 的大檔
                 try:
                     if p.stat().st_size > 5 * 1024 * 1024:
@@ -460,7 +506,6 @@ def call_fs_tool(
                     lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
                     for i, line in enumerate(lines):
                         if query in line:
-                            rel_path = p.relative_to(target)
                             results.append(f"{rel_path}:{i + 1}: {line.strip()}")
                             if len(results) >= 100:
                                 results.append("... (結果過多，僅顯示前 100 筆)")

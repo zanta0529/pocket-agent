@@ -22,3 +22,5 @@ prompt_toolkit>=3.0.40
 pymupdf4llm>=0.0.17
 cryptography>=41.0.0
 pywin32; sys_platform == "win32"
+curl_cffi>=0.7.4
+pathspec>=0.12.1

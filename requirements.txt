@@ -24,10 +24,13 @@ attrs==26.1.0
 certifi==2026.7.22
     # via
     #   -r requirements.in
+    #   curl-cffi
     #   httpcore
     #   httpx
 cffi==2.1.1
-    # via cryptography
+    # via
+    #   cryptography
+    #   curl-cffi
 charset-normalizer==3.5.1
     # via reportlab
 click==8.5.0
@@ -38,6 +41,8 @@ cryptography==50.0.1
     # via
     #   -r requirements.in
     #   pyjwt
+curl-cffi==0.16.3
+    # via -r requirements.in
 fastapi==0.141.1
     # via -r requirements.in
 flatbuffers==25.12.19
@@ -108,6 +113,8 @@ opentelemetry-api==1.44.0
     # via mcp
 packaging==26.3
     # via onnxruntime
+pathspec==1.1.1
+    # via -r requirements.in
 pillow==12.3.0
     # via
     #   -r requirements.in
@@ -157,8 +164,10 @@ python-multipart==0.0.32
     #   mcp
 python-pptx==1.0.2
     # via -r requirements.in
-pywin32==312
-    # via mcp
+pywin32==312 ; sys_platform == "win32"
+    # via
+    #   -r requirements.in
+    #   mcp
 pywin32-ctypes==0.2.3
     # via keyring
 pyyaml==6.0.3

@@ -75,7 +75,7 @@ def _read_pdf(path: Path) -> str:
     except ImportError:
         return (
             "[ERROR] 尚未安裝 pymupdf4llm 或 pypdf 套件。為了獲得最佳解析效果（包含表格），"
-            "強烈建議執行： pip install pymupdf4llm"
+            "強烈建議使用 run_command 執行： pip install pymupdf4llm"
         )
 
     reader = PdfReader(str(path))
@@ -92,7 +92,7 @@ def _read_docx(path: Path) -> str:
     try:
         from docx import Document
     except ImportError:
-        return "[ERROR] 尚未安裝 python-docx 套件，請執行 pip install python-docx"
+        return "[ERROR] 尚未安裝 python-docx 套件，請使用 run_command 執行 pip install python-docx"
 
     doc = Document(str(path))
     content = []
@@ -114,7 +114,7 @@ def _read_pptx(path: Path) -> str:
     try:
         from pptx import Presentation
     except ImportError:
-        return "[ERROR] 尚未安裝 python-pptx 套件，請執行 pip install python-pptx"
+        return "[ERROR] 尚未安裝 python-pptx 套件，請使用 run_command 執行 pip install python-pptx"
 
     prs = Presentation(str(path))
     content = []
