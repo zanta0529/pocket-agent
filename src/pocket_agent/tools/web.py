@@ -86,8 +86,17 @@ def call_web_tool(name: str, args: dict) -> str:
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+            ),
+            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
         }
 
         if name == "search_web":
@@ -100,11 +109,20 @@ def call_web_tool(name: str, args: dict) -> str:
             try:
                 from curl_cffi import requests as c_requests
 
-                resp = c_requests.post(url, data={"q": query}, headers=headers, impersonate="chrome", timeout=15.0)
+                resp = c_requests.post(
+                    url, data={"q": query}, headers=headers, impersonate="chrome", timeout=15.0, verify=False
+                )
                 resp.raise_for_status()
-            except ImportError:
+            except Exception as curl_e:
+                # 若 curl_cffi 失敗 (缺套件、SSL 憑證、403等)，降級使用 httpx
                 resp = httpx.post(url, data={"q": query}, headers=headers, follow_redirects=True, timeout=15.0)
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except Exception as httpx_e:
+                    return (
+                        f"[ERROR] 網路操作失敗 (curl_cffi: {curl_e} | httpx: {httpx_e})\n\n"
+                        "(提示：如果您頻繁被擋，可以嘗試使用 Browser 等其他工具)"
+                    )
 
             # 手動解析 DuckDuckGo 結果 (提取 .result__snippet 和 .result__url)
             html = resp.text
@@ -156,15 +174,20 @@ def call_web_tool(name: str, args: dict) -> str:
             try:
                 from curl_cffi import requests as c_requests
 
-                resp = c_requests.get(url, headers=headers, impersonate="chrome", timeout=15.0)
+                resp = c_requests.get(url, headers=headers, impersonate="chrome", timeout=15.0, verify=False)
                 resp.raise_for_status()
-            except ImportError:
-                warning_msg = (
-                    "\n\n(提示：強烈建議使用 run_command 執行 pip install curl_cffi，"
-                    "以模擬真實瀏覽器指紋，避免遭遇 403 Forbidden)"
-                )
+            except Exception as curl_e:
+                if isinstance(curl_e, ImportError):
+                    warning_msg = (
+                        "\n\n(提示：強烈建議使用 run_command 執行 pip install curl_cffi，"
+                        "以模擬真實瀏覽器指紋，避免遭遇 403 Forbidden)"
+                    )
+                # 降級使用 httpx
                 resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=15.0)
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except Exception as httpx_e:
+                    return f"[ERROR] 網路操作失敗 (curl_cffi: {curl_e} | httpx: {httpx_e}){warning_msg}"
 
             content_type = resp.headers.get("content-type", "")
             if "text/html" in content_type:
