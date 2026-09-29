@@ -12,7 +12,7 @@ def test_model_switch_commits_state_and_closes_old_client():
     old, new = SimpleNamespace(close=AsyncMock()), SimpleNamespace(close=AsyncMock())
     agent = SimpleNamespace(client=old, model="old", history=["preserve"])
     state = CliState("openai", "old", ["pending"])
-    with patch("pocket_agent.system.auth.get_openai_client", return_value=new):
+    with patch("pocket_agent.system.auth.get_provider_client", return_value=new):
         asyncio.run(switch_model(agent, state, "ollama", "new", Mock()))
     assert agent.client is new
     assert (state.provider, state.model, agent.model) == ("ollama", "new", "new")
@@ -25,7 +25,7 @@ def test_failed_switch_preserves_state():
     old = SimpleNamespace(close=AsyncMock())
     agent = SimpleNamespace(client=old, model="old")
     state = CliState("openai", "old")
-    with patch("pocket_agent.system.auth.get_openai_client", side_effect=RuntimeError("offline")):
+    with patch("pocket_agent.system.auth.get_provider_client", side_effect=RuntimeError("offline")):
         with pytest.raises(RuntimeError):
             asyncio.run(switch_model(agent, state, "ollama", "new", Mock()))
     assert agent.client is old
@@ -76,7 +76,7 @@ def test_model_selection_cancel_keeps_state():
     state = CliState("openai", "old")
     reader = SimpleNamespace(choose=AsyncMock(return_value=None))
     handler = CommandHandler(Mock(), state, reader, Mock(), [])
-    with patch("pocket_agent.system.auth.get_openai_client") as create:
+    with patch("pocket_agent.system.auth.get_provider_client") as create:
         asyncio.run(handler.dispatch("/model"))
         create.assert_not_called()
     assert state.model == "old"
@@ -87,7 +87,7 @@ def test_old_client_cleanup_failure_does_not_rollback():
     new = SimpleNamespace(close=AsyncMock())
     agent = SimpleNamespace(client=old, model="old")
     state = CliState("openai", "old")
-    with patch("pocket_agent.system.auth.get_openai_client", return_value=new):
+    with patch("pocket_agent.system.auth.get_provider_client", return_value=new):
         asyncio.run(switch_model(agent, state, "ollama", "new", Mock()))
     assert agent.client is new and state.model == "new"
 

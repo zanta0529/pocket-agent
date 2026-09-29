@@ -18,13 +18,13 @@ _load_dotenv(_env_path())
 from pocket_agent.core.agent import Agent  # noqa: E402
 from pocket_agent.core.files import FileUploader  # noqa: E402
 from pocket_agent.extensions.mcp import MCPManager  # noqa: E402
-from pocket_agent.system.auth import get_access_token, get_model, get_openai_client, logout  # noqa: E402
+from pocket_agent.system.auth import get_access_token, get_model, get_provider_client, logout  # noqa: E402
 from pocket_agent.system.wizard import run_setup  # noqa: E402
 from pocket_agent.tools.image import generate_image  # noqa: E402
 
 __all__ = [
     "Agent",
-    "get_openai_client",
+    "get_provider_client",
     "get_model",
     "get_access_token",
     "logout",

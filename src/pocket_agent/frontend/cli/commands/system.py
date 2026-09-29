@@ -15,12 +15,12 @@ async def switch_model(
     model: str,
     renderer,
 ) -> None:
-    from pocket_agent.system.auth import get_openai_client
-    from pocket_agent.system.constants import SUPPORTED_PROVIDERS
+    from pocket_agent.system.auth import get_provider_client
+    from pocket_agent.system.providers import SUPPORTED_PROVIDERS
 
     if provider not in SUPPORTED_PROVIDERS or not model or any(c.isspace() for c in model):
         raise ValueError(f"用法：/model <{'|'.join(SUPPORTED_PROVIDERS)}> <模型名稱>")
-    new_client = get_openai_client(provider=provider, model=model)
+    new_client = get_provider_client(provider=provider, model=model)
     old_client = agent.client
     # No await between construction and commit: all consumers see one state.
     agent.client, agent.model = new_client, model
@@ -34,7 +34,7 @@ async def switch_model(
 
 async def do_model_flow(ctx: CommandContext, args: str) -> None:
     from pocket_agent.system.auth import fetch_available_models
-    from pocket_agent.system.constants import SUPPORTED_PROVIDERS
+    from pocket_agent.system.providers import SUPPORTED_PROVIDERS
 
     if args:
         parts = args.split()

@@ -296,7 +296,7 @@ class CliFrontend(FrontendStrategy):
         from pocket_agent.frontend.cli.input import CliInput
         from pocket_agent.frontend.cli.render import CliRenderer
         from pocket_agent.frontend.cli.state import CliState
-        from pocket_agent.system.auth import fetch_available_models, get_model, get_openai_client, load_config
+        from pocket_agent.system.auth import fetch_available_models, get_model, get_provider_client, load_config
         from pocket_agent.system.paths import user_dir
 
         renderer = CliRenderer(Console())
@@ -376,7 +376,7 @@ class CliFrontend(FrontendStrategy):
             if _ctx_file and "工作區規範" in system_prompt:
                 renderer.message(f"已載入工作區規範：{_ctx_file.name}")
 
-            client = get_openai_client()
+            client = get_provider_client()
             mcp = MCPManager()
             startup = await mcp.start(on_start=lambda count: renderer.message("正在初始化 MCP 服務…"))
             if startup.configured_servers == 0:

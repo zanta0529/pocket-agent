@@ -91,7 +91,7 @@ def test_fetch_available_models_ollama_exception():
 
 
 def test_explicit_ollama_client_uses_env():
-    from pocket_agent.system.auth import get_openai_client
+    from pocket_agent.system.auth import get_provider_client
 
     with (
         patch(
@@ -103,7 +103,7 @@ def test_explicit_ollama_client_uses_env():
         patch("pocket_agent.system.providers.ollama.httpx.AsyncClient") as http,
         patch("pocket_agent.system.providers.ollama.AsyncOpenAI") as client,
     ):
-        result = get_openai_client(provider="ollama", model="test-model")
+        result = get_provider_client(provider="ollama", model="test-model")
         http.assert_called_once_with(trust_env=False, timeout=ANY)
         client.assert_called_once_with(
             api_key="ollama",
@@ -116,7 +116,7 @@ def test_explicit_ollama_client_uses_env():
 
 
 def test_explicit_openai_client_preserves_headers():
-    from pocket_agent.system.auth import CODEX_BASE_URL, get_openai_client
+    from pocket_agent.system.auth import CODEX_BASE_URL, get_provider_client
 
     with (
         patch("pocket_agent.system.config.config.get", return_value="openai"),
@@ -124,7 +124,7 @@ def test_explicit_openai_client_preserves_headers():
         patch("pocket_agent.system.auth._extract_account_id", return_value="mock-account"),
         patch("pocket_agent.system.providers.openai_provider.AsyncOpenAI") as client,
     ):
-        get_openai_client(provider="openai")
+        get_provider_client(provider="openai")
         token.assert_called_once_with(provider="openai")
         client.assert_called_once_with(
             api_key="mock-token",
@@ -140,7 +140,7 @@ def test_explicit_openai_client_preserves_headers():
 
 
 def test_explicit_ollama_environment_fallback():
-    from pocket_agent.system.auth import get_openai_client
+    from pocket_agent.system.auth import get_provider_client
     from pocket_agent.system.config import config
 
     with (
@@ -151,5 +151,5 @@ def test_explicit_ollama_environment_fallback():
         patch("pocket_agent.system.providers.ollama.AsyncOpenAI") as client,
     ):
         # Allow ConfigManager to do its job reading from EnvConfigProvider
-        get_openai_client(provider="ollama")
+        get_provider_client(provider="ollama")
         assert client.call_args.kwargs["base_url"] == "http://environment:11434/v1"

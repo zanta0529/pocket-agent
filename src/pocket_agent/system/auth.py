@@ -171,10 +171,9 @@ def _try_refresh(provider: str, token: dict, client_id: str, client_secret: str 
     if not refresh:
         return None
 
-    if provider == "gemini-oauth":
-        token_url = "https://oauth2.googleapis.com/token"
-    else:
-        token_url = OPENAI_TOKEN_URL
+    from pocket_agent.system.constants import OAUTH_TOKEN_URLS
+
+    token_url = OAUTH_TOKEN_URLS.get(provider, OPENAI_TOKEN_URL)
 
     data = {
         "grant_type": "refresh_token",
@@ -351,7 +350,7 @@ def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=No
     return token["access_token"]
 
 
-def get_openai_client(provider: str = None, model: str = None):
+def get_provider_client(provider: str = None, model: str = None):
     """建立 OpenAI 相容的 client，根據 provider 透過 Provider Strategy 切換 Base URL 與 Auth。"""
     from dotenv import load_dotenv
 
