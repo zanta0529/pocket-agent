@@ -7,7 +7,6 @@ PROVIDER_OLLAMA: Final[str] = "ollama"
 PROVIDER_GEMINI: Final[str] = "gemini"
 PROVIDER_GEMINI_OAUTH: Final[str] = "gemini-oauth"
 PROVIDER_GROQ: Final[str] = "groq"
-PROVIDER_GITHUB: Final[str] = "github"
 PROVIDER_SAMBANOVA: Final[str] = "sambanova"
 PROVIDER_MISTRAL: Final[str] = "mistral"
 
@@ -19,7 +18,6 @@ SUPPORTED_PROVIDERS: Final[list[str]] = [
     PROVIDER_GEMINI,
     PROVIDER_GEMINI_OAUTH,
     PROVIDER_GROQ,
-    PROVIDER_GITHUB,
     PROVIDER_SAMBANOVA,
     PROVIDER_MISTRAL,
 ]

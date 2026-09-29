@@ -1,7 +1,6 @@
 from pocket_agent.system.constants import (
     PROVIDER_GEMINI,
     PROVIDER_GEMINI_OAUTH,
-    PROVIDER_GITHUB,
     PROVIDER_GROQ,
     PROVIDER_MISTRAL,
     PROVIDER_OLLAMA,
@@ -12,7 +11,6 @@ from pocket_agent.system.constants import (
 )
 from pocket_agent.system.providers.base import BaseProvider
 from pocket_agent.system.providers.gemini_provider import GeminiOAuthProvider, GeminiProvider
-from pocket_agent.system.providers.github_provider import GitHubProvider
 from pocket_agent.system.providers.groq_provider import GroqProvider
 from pocket_agent.system.providers.mistral_provider import MistralProvider
 from pocket_agent.system.providers.ollama import OllamaLocalProvider
@@ -31,7 +29,6 @@ def get_provider_strategy(provider_name: str) -> BaseProvider:
         PROVIDER_GEMINI: GeminiProvider,
         PROVIDER_GEMINI_OAUTH: GeminiOAuthProvider,
         PROVIDER_GROQ: GroqProvider,
-        PROVIDER_GITHUB: GitHubProvider,
         PROVIDER_SAMBANOVA: SambaNovaProvider,
         PROVIDER_MISTRAL: MistralProvider,
     }
