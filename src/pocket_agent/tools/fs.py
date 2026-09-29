@@ -165,13 +165,21 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
             raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
 
     # 工作區監禁 (Workspace Jail)
-    allowed_roots = [Path.cwd().resolve()]
+    # workspace_dirs 是使用者明確授權的工作目錄，優先加入；
+    # cwd 作為後備，僅在沒有任何 workspace_dirs 時才是唯一基準。
+    allowed_roots: list[Path] = []
     if workspace_dirs:
         for wd in workspace_dirs:
             try:
                 allowed_roots.append(Path(wd).expanduser().resolve())
             except Exception:
                 continue
+
+    # 無論 workspace_dirs 是否存在，cwd 都作為備援允許根
+    try:
+        allowed_roots.append(Path.cwd().resolve())
+    except Exception:
+        pass
 
     is_safe = False
     for root in allowed_roots:
@@ -183,7 +191,12 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
             pass
 
     if not is_safe:
-        raise ValueError(f"安全限制：路徑 {target} 超出允許的工作區範圍")
+        allowed_display = ", ".join(str(r) for r in allowed_roots)
+        raise ValueError(
+            f"安全限制：路徑 {target} 超出允許的工作區範圍。"
+            f"允許的根目錄為：{allowed_display}。"
+            "如需存取其他目錄，請使用 /add-dir 指令將其加入工作區。"
+        )
 
     return target
 

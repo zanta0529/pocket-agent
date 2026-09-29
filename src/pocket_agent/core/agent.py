@@ -104,7 +104,8 @@ class Agent:
         self.cancel_requested = False  # 使用者按「停止」時設為 True（跨執行緒安全）
         self.last_images: list[Path] = []  # 本輪 chat 產生的圖片路徑（GUI 顯示用）
         self.last_files: list[Path] = []  # 本輪 chat 產生的文件路徑（GUI 顯示用）
-        self.workspace_dirs: list[str] = []  # CLI 與 GUI 共用的工作區路徑清單
+        self.workspace_dirs: list[str] = []  # CLI 與 GUI 共用的工作區路徑清單（使用者透過 /add-dir 明確授權）
+
         self.active_subagents: list["Agent"] = []  # 追蹤執行中的子代理，用於連動取消與狀態監控
         self._bg_tasks: set[asyncio.Task] = set()  # 追蹤背景任務以防垃圾回收
 

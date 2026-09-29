@@ -329,4 +329,21 @@ def call_skill_tool(args: dict, workspace_dirs: list[str] | None = None) -> str:
         available = ", ".join(s["name"] for s in list_skills(workspace_dirs)) or "（無）"
         return f"[ERROR] 找不到 skill「{name}」。可用：{available}"
 
-    return f"# Skill: {name}\n\n{body}"
+    # 注入工作區上下文，防止模型幻覺出錯誤的絕對路徑。
+    # workspace_dirs 是使用者明確授權的目錄；若為空則退回 cwd。
+    import os
+
+    if workspace_dirs:
+        roots = workspace_dirs
+    else:
+        roots = [os.getcwd()]
+
+    roots_display = "\n".join(f"  - {r}" for r in roots)
+    workspace_context = (
+        f"[System] Current workspace roots (use these as the base for ALL file paths):\n"
+        f"{roots_display}\n"
+        f"NEVER construct file paths from memory or training data. "
+        f"Always derive paths relative to the workspace roots listed above.\n\n"
+    )
+
+    return f"# Skill: {name}\n\n{workspace_context}{body}"
