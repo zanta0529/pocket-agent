@@ -70,6 +70,7 @@ def _step_login(provider: str) -> None:
     from pocket_agent.system.constants import (
         PROVIDER_GEMINI,
         PROVIDER_GEMINI_OAUTH,
+        PROVIDER_GROQ,
         PROVIDER_OLLAMA,
         PROVIDER_OLLAMACLOUD,
         PROVIDER_OPENAI,
@@ -179,6 +180,16 @@ def _step_login(provider: str) -> None:
         input("按 Enter 繼續…")
         get_access_token(provider=provider)
         console.print()
+    elif provider == PROVIDER_GROQ:
+        console.print(Rule("② 設定 Groq Cloud"))
+        console.print()
+        current_key = config.get("providers.groq.api_key", "")
+        key_hint = "*" * 10 + current_key[-4:] if current_key and len(current_key) > 4 else "未設定"
+        console.print(f"[dim]目前 API Key: {key_hint}[/dim]")
+        new_key = Prompt.ask("請輸入 Groq API Key (直接 Enter 保持原狀)", default="")
+        if new_key.strip():
+            config.set("providers.groq.api_key", new_key.strip())
+        console.print("[green]✓ Groq API Key 設定已更新[/green]\n")
 
 
 def _step_model(provider: str) -> None:

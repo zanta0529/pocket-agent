@@ -8,7 +8,7 @@
 
 **PocketAgent** 是一款具備企業級擴充性與安全性的本機端 Python AI 代理工具，提供極簡、高效且專注於開發者體驗的命令列 (CLI) 介面。
 
-本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API** 與 **Gemini (Google AI Studio)**（支援 API Key 與 Google OAuth 雙軌登入），並內建強大的本地端大語言模型 (Ollama) 與 **Ollama Cloud** API Key 串接支援，滿足對資料隱私具高度要求的離線開發及雲端混合場景。
+本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API**、**Gemini (Google AI Studio)**（支援 API Key 與 Google OAuth 雙軌登入）與高速的 **Groq Cloud API**，並內建強大的本地端大語言模型 (Ollama) 與 **Ollama Cloud** API Key 串接支援，滿足對資料隱私具高度要求的離線開發及雲端混合場景。
 
 ---
 
@@ -141,7 +141,7 @@ python -m pocket_agent
 
 - `/file <路徑>`：附加本機檔案（支援程式碼、PDF 等）作為上下文。
 - `/image <描述>`：呼叫模型進行圖像生成 (可附加參考圖作為 Context 進行圖生圖)。
-- `/model <provider> <model_name>`：即時切換後端 API (支援 `openai`、`openrouter`、`ollama`、`ollamacloud`、`gemini` 或 `gemini-oauth`)。
+- `/model <provider> <model_name>`：即時切換後端 API (支援 `openai`、`openrouter`、`ollama`、`ollamacloud`、`gemini`、`gemini-oauth` 或 `groq`)。
 - `/subagent <name>`：強制委派任務給指定的子代理（例如 `/subagent researcher 查資料`）。另外也支援直接使用 `/<name>` 作為動態捷徑（例如 `/researcher 查資料`）。
 - `/parallel <name:task> | <name:task>`：手動平行啟動多個子代理 (Map-Reduce 模式)。背景會自動彙整成單一最終報告。請留意**必須使用管線符號 `|` 作為分隔**。例如：`/parallel researcher:查庫存 | coder:寫測試`。
 - `/session [list | load <id> | save | delete <id>]`：管理歷史對話 (Session)。無參數時啟動互動式光棒選單，支援儲存與讀取持久化紀錄。
