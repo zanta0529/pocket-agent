@@ -1,8 +1,8 @@
-# Pocket Agent ChatGPT OAuth 2.0 認證機制
+# Pocket Agent OAuth 2.0 認證機制 (OpenAI / Google Gemini)
 
-本專案（主要實作於 `src/pocket_agent/system/auth.py`）採用了 **OAuth 2.0 PKCE (Proof Key for Code Exchange)** 授權流程來處理 ChatGPT 的登入。
+本專案（主要實作於 `src/pocket_agent/system/auth.py`）採用了 **OAuth 2.0 PKCE (Proof Key for Code Exchange)** 授權流程來處理 ChatGPT 與 Google Gemini 的登入。
 
-這套機制不需要在程式碼中寫死 Client Secret，能有效防止憑證外洩，是原生桌面應用程式或 CLI 工具中最安全、也是業界標準的作法。
+這套機制不需要在程式碼中寫死 Client Secret，能有效防止憑證外洩，是原生桌面應用程式或 CLI 工具中最安全、也是業界標準的作法。我們利用這套通用的認證模組，無縫支援了 OpenAI 與 Google Cloud 的 OAuth 端點。
 
 ## 執行流程視覺化
 
@@ -13,16 +13,16 @@ sequenceDiagram
     participant User as 使用者
     participant Agent as Pocket Agent
     participant Local as 本機服務 (Port 1455)
-    participant OpenAI as OpenAI Auth
+    participant Auth as 授權伺服器 (OpenAI / Google)
 
     Agent->>Agent: 產生 PKCE Verifier 與 Challenge
     Agent->>Local: 背景啟動本機伺服器監聽 (/auth/callback)
     Agent->>User: 自動開啟瀏覽器前往授權頁面
-    User->>OpenAI: 登入帳號並同意授權
-    OpenAI-->>Local: 重導向 (攜帶 Authorization Code)
+    User->>Auth: 登入帳號並同意授權
+    Auth-->>Local: 重導向 (攜帶 Authorization Code)
     Local-->>Agent: 攔截 Code 並安全關閉本機服務
-    Agent->>OpenAI: POST /oauth/token (攜帶 Code 與 Verifier 進行驗證)
-    OpenAI-->>Agent: 核發 Access Token 與 Refresh Token
+    Agent->>Auth: POST /oauth/token (攜帶 Code 與 Verifier 進行驗證)
+    Auth-->>Agent: 核發 Access Token 與 Refresh Token
     Agent->>Agent: 解析 JWT 並儲存 Token (優先寫入 OS Keyring)
     Agent-->>User: 終端機顯示登入成功
 ```
@@ -39,4 +39,4 @@ sequenceDiagram
    優先呼叫作業系統原生的金鑰圈（例如 Windows Credential Manager, macOS Keychain）透過 `keyring` 套件來加密儲存 Token，確保最高層級的安全性。若執行環境不支援原生金鑰圈，系統會優雅降級，將 Token 寫入 `~/.pocket-agent/token.json`。
 
 4. **自動展期與續用 (Auto Refresh)**
-   系統實作了自動展期機制。當應用程式發出請求時，若偵測到當前 Access Token 即將過期（剩餘時間小於 60 秒），便會自動透過 `refresh_token` 向 OpenAI 換發新憑證，確保背景排程與連續對話不會因 Token 過期而中斷。
+   系統實作了自動展期機制。當應用程式發出請求時，若偵測到當前 Access Token 即將過期（剩餘時間小於 60 秒），便會自動透過 `refresh_token` 向授權伺服器換發新憑證，確保背景排程與連續對話不會因 Token 過期而中斷。

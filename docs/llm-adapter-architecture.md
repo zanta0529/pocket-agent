@@ -61,4 +61,4 @@ flowchart TD
 
 1. **無縫切換**：使用者可透過 `/model` 指令即時切換線上 (OpenAI / OpenRouter) 或離線 (Ollama) 模型，上層的渲染邏輯與工具呼叫邏輯完全不需修改。
 2. **平滑相容**：無論底層是否原生支援分離式的 Reasoning 欄位，轉接器都會將其統一收斂為 `EventThinking` 事件，確保跨模型的使用者體驗一致。
-3. **擴充性高**：未來若有新的 API 供應商（如 Anthropic 或 Google Gemini），只需新增對應的 Engine 類別實作 `BaseEngine`，不需修改核心流程。
+3. **擴充性高**：專案採雙層設計，底層認證由 `Provider` 負責，上層解析由 `Engine` 負責。對於相容 OpenAI SDK 的新服務（如我們已整合的 Google Gemini、Groq、SambaNova、Mistral 等），只需新增對應的 `Provider` 提供連線用戶端即可完美運作；未來若遇到規格特異的供應商（如 Anthropic Claude 的原生 API），也只需再新增對應的 `Engine` 類別實作 `BaseEngine`，完全不需修改核心對話與工具呼叫流程。
