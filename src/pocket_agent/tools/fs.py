@@ -268,6 +268,8 @@ def call_fs_tool(
         if name == "list_dir":
             if not target.exists():
                 return f"[ERROR] 目錄不存在: {target}"
+            if target.is_file():
+                return f"[ERROR] {target} 是一個檔案而非目錄。請改用 'read_file' 工具來讀取內容。"
             if not target.is_dir():
                 return f"[ERROR] 路徑不是一個目錄: {target}"
 
@@ -330,8 +332,12 @@ def call_fs_tool(
             return "\n".join(info)
 
         elif name == "read_file":
-            if not target.exists() or not target.is_file():
-                return f"[ERROR] 檔案不存在或不是一般檔案: {target}"
+            if not target.exists():
+                return f"[ERROR] 檔案不存在: {target}"
+            if target.is_dir():
+                return f"[ERROR] {target} 是一個目錄。請改用 'list_dir' 工具來查看該目錄內容。"
+            if not target.is_file():
+                return f"[ERROR] 不是一般檔案: {target}"
 
             content = target.read_text(encoding="utf-8")
             lines = content.splitlines(keepends=True)
