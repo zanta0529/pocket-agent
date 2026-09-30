@@ -151,7 +151,19 @@ class JsonConfigProvider(ConfigProvider):
 
 
 class AuthException(Exception):
-    """授權失敗或缺失金鑰時拋出的例外"""
+    """加密庫已鎖定，需要主密碼解鎖時拋出的例外"""
+
+    pass
+
+
+class MissingKeyException(Exception):
+    """找不到金鑰 (全新安裝或尚未設定) 時拋出的例外"""
+
+    pass
+
+
+class RequireMasterPasswordException(Exception):
+    """金鑰需寫入加密庫，但尚未建立主密碼時拋出的例外"""
 
     pass
 
@@ -160,7 +172,6 @@ class KeyringConfigProvider(ConfigProvider):
     """從作業系統 Keyring 讀取敏感設定的供應器"""
 
     def __init__(self):
-
         self.service_name = "pocket-agent"
 
     def get(self, key: str) -> Optional[Any]:
@@ -174,14 +185,19 @@ class KeyringConfigProvider(ConfigProvider):
                 pass
         return None
 
-    def set(self, key: str, value: str) -> None:
+    def set(self, key: str, value: str) -> bool:
         if "api_key" in key or "token" in key:
             try:
                 import keyring
 
+                # 測試是否為 fail backend (無實際 keyring 功能)
+                if isinstance(keyring.get_keyring(), keyring.backends.fail.Keyring):
+                    return False
                 keyring.set_password(self.service_name, key, value)
+                return True
             except Exception:
-                pass
+                return False
+        return False
 
 
 def _base64url_encode(data: bytes) -> str:
@@ -204,6 +220,7 @@ class EncryptedConfigProvider(ConfigProvider):
         self.path = path
         self._cache = {}
         self._is_unlocked = False
+        self._cek = None
 
     def _derive_key(self, password: str, salt: bytes, t: int, m: int, p: int) -> bytes:
         from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
@@ -253,13 +270,14 @@ class EncryptedConfigProvider(ConfigProvider):
             plaintext = aesgcm.decrypt(iv, ciphertext_and_tag, aad)
 
             self._cache = json.loads(plaintext.decode("utf-8"))
+            self._cek = cek
             self._is_unlocked = True
             return True
         except Exception as e:
             log.warning("JWE 解鎖失敗或密文損壞: %s", e)
             return False
 
-    def save_vault(self, password: str) -> None:
+    def save_vault(self, password: Optional[str] = None) -> None:
         """將記憶體中的設定以 JWE 格式加密存檔 (供設定精靈使用)"""
         import os
 
@@ -269,7 +287,12 @@ class EncryptedConfigProvider(ConfigProvider):
         iv = os.urandom(12)
 
         t, m, p = 2, 65536, 4
-        cek = self._derive_key(password, salt, t, m, p)
+
+        if password:
+            self._cek = self._derive_key(password, salt, t, m, p)
+
+        if not self._cek:
+            raise RequireMasterPasswordException("建立加密庫需要主密碼")
 
         header = {
             "alg": "dir",
@@ -286,7 +309,7 @@ class EncryptedConfigProvider(ConfigProvider):
 
         plaintext = json.dumps(self._cache).encode("utf-8")
 
-        aesgcm = AESGCM(cek)
+        aesgcm = AESGCM(self._cek)
         encrypted_data = aesgcm.encrypt(iv, plaintext, aad)
 
         ciphertext = encrypted_data[:-16]
@@ -305,8 +328,7 @@ class EncryptedConfigProvider(ConfigProvider):
 
     def set(self, key: str, value: str) -> None:
         """此方法僅在已解鎖狀態下能寫入記憶體，實際存檔需呼叫 save_vault"""
-        if self._is_unlocked:
-            self._cache[key] = value
+        self._cache[key] = value
 
 
 class ConfigManager:
@@ -339,20 +361,30 @@ class ConfigManager:
         if val_found is None:
             val_found = default
 
-        # 若需要 api_key 卻找不到，則拋出 AuthException (延遲載入)
-        if ("api_key" in key or "token" in key) and (
-            val_found is None or val_found == "" or val_found == "USE_KEYRING" or val_found == "USE_ENCRYPTED"
-        ):
-            raise AuthException(f"找不到 {key}，請先執行設定或解鎖。")
+        # 若需要 api_key 卻找不到，進行精準延遲載入判斷
+        if "api_key" in key or "token" in key:
+            if val_found == "USE_ENCRYPTED" and not self.encrypted_provider._is_unlocked:
+                raise AuthException(f"需要存取 {key}，加密庫已鎖定，請解鎖。")
+            if val_found is None or val_found == "" or val_found == "USE_KEYRING" or val_found == "USE_ENCRYPTED":
+                raise MissingKeyException(f"找不到 {key}，請先執行設定。")
 
         return val_found
 
     def set(self, key: str, value: Any) -> None:
-        """寫入設定。若是敏感資訊，優先寫入 Keyring"""
+        """寫入設定。若是敏感資訊，優先寫入 Keyring，若失敗則降級至 JWE 加密庫"""
         if "api_key" in key or "token" in key:
-            self.keyring_provider.set(key, str(value))
-            # 此處若 keyring 失敗，理想情況應寫入 encrypted_provider
-            self.json_provider.set(key, "USE_KEYRING")
+            success = self.keyring_provider.set(key, str(value))
+            if success:
+                self.json_provider.set(key, "USE_KEYRING")
+            else:
+                self.json_provider.set(key, "USE_ENCRYPTED")
+                self.encrypted_provider.set(key, str(value))
+                if not self.encrypted_provider._is_unlocked and not self.encrypted_provider._cek:
+                    # 尚未建立過密碼，拋出例外請呼叫端提示使用者，然後再由呼叫端自行呼叫 save_vault(password)
+                    self.json_provider.save()
+                    raise RequireMasterPasswordException("需要設定主密碼以建立加密庫")
+                else:
+                    self.encrypted_provider.save_vault()
         else:
             self.json_provider.set(key, value)
 

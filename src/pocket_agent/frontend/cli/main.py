@@ -378,7 +378,7 @@ class CliFrontend(FrontendStrategy):
 
             from rich.prompt import Prompt
 
-            from pocket_agent.system.config import AuthException, config
+            from pocket_agent.system.config import AuthException, MissingKeyException, config
 
             max_retries = 3
             retry_count = 0
@@ -397,14 +397,15 @@ class CliFrontend(FrontendStrategy):
                     elif not available:
                         renderer.message("無法取得模型清單，使用目前設定。", "yellow")
                     break  # 成功取得 client 與模型，跳出重試迴圈
+                except MissingKeyException as e:
+                    renderer.message(f"【尚未設定金鑰】{e}", "yellow")
+                    renderer.message("請先離開，並在終端機執行 `pocket-agent setup` 完成 API Key 設定。")
+                    return
                 except AuthException as e:
                     renderer.message(f"【安全鎖】{e}", "yellow")
                     password = Prompt.ask("[bold cyan]請輸入主密碼解鎖[/bold cyan]", password=True)
                     if config.unlock(password):
                         renderer.message("解鎖成功，重新連線中...", "green")
-                        # 模擬解除佔位符，讓下一次迴圈能順利通過 (暫時 workaround)
-                        config._is_unlocked = True
-                        # 在真正的 JWE 實作中，此處會讓 config.get 能讀到記憶體中解密的 key
                     else:
                         retry_count += 1
                         renderer.message(f"密碼錯誤或解鎖失敗。剩餘重試次數：{max_retries - retry_count}", "red")
