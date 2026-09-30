@@ -67,12 +67,44 @@ def _step_provider() -> str:
 
 def _prompt_api_key(config_key: str, display_name: str, config) -> None:
     """共用輔助函式：提示並更新 API Key"""
-    current_key = config.get(config_key, "")
+    from pocket_agent.system.config import AuthException, MissingKeyException, RequireMasterPasswordException
+
+    current_key = ""
+    while True:
+        try:
+            current_key = config.get(config_key, "")
+            break
+        except MissingKeyException:
+            current_key = ""
+            break
+        except AuthException:
+            console.print("\n[yellow]加密庫目前處於鎖定狀態，需先解鎖才能讀取或修改金鑰。[/yellow]")
+            pwd = Prompt.ask("請輸入主密碼", password=True)
+            if config.unlock(pwd):
+                console.print("[green]✓ 解鎖成功！[/green]\n")
+                continue
+            else:
+                console.print("[red]密碼錯誤或加密庫損毀，請重試。[/red]")
+
     key_hint = "*" * 10 + current_key[-4:] if current_key and len(current_key) > 4 else "未設定"
     console.print(f"[dim]目前 API Key: {key_hint}[/dim]")
     new_key = Prompt.ask(f"請輸入 {display_name} API Key (直接 Enter 保持原狀)", default="")
+
     if new_key.strip():
-        config.set(config_key, new_key.strip())
+        try:
+            config.set(config_key, new_key.strip())
+        except RequireMasterPasswordException:
+            console.print("\n[yellow]系統不支援原生憑證，即將為您建立高強度的 JWE 加密庫來保護金鑰。[/yellow]")
+            while True:
+                pwd1 = Prompt.ask("請設定您的[bold cyan]主密碼[/bold cyan]", password=True)
+                pwd2 = Prompt.ask("請再次輸入以確認", password=True)
+                if pwd1 == pwd2 and pwd1:
+                    config.encrypted_provider.save_vault(pwd1)
+                    console.print("[green]✓ 加密庫建立成功！[/green]")
+                    break
+                else:
+                    console.print("[red]密碼不一致或為空，請重新輸入。[/red]")
+
     console.print(f"[green]✓ {display_name} API Key 設定已更新[/green]\n")
 
 

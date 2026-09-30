@@ -8,7 +8,7 @@
 
 **PocketAgent** 是一款具備企業級擴充性與安全性的本機端 Python AI 代理工具，提供極簡、高效且專注於開發者體驗的命令列 (CLI) 介面。
 
-本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API**、**Gemini (Google AI Studio)**（支援 API Key 與 Google OAuth 雙軌登入），並廣泛支援各大具備免費開發者額度的雲端推理平台（包含 **Groq Cloud**、**SambaNova Cloud** 與 **Mistral API**）。此外，內建強大的本地端大語言模型 (Ollama) 與 **Ollama Cloud** API Key 串接支援，滿足對資料隱私具高度要求的離線開發及雲端混合場景。
+本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API**、**Gemini (Google AI Studio)**（支援 API Key 與 Google OAuth 雙軌登入），並廣泛支援各大具備免費開發者額度的雲端推理平台（包含 **Groq Cloud**、**SambaNova Cloud** 與 **Mistral AI**）。此外，內建強大的本地端大語言模型 (Ollama) 與 **Ollama Cloud** API Key 串接支援，滿足對資料隱私具高度要求的離線開發及雲端混合場景。
 
 ---
 
@@ -56,6 +56,7 @@
 - [Subagent 與 Skill 差異比較](docs/subagents-skills-comparison.md)
 - [分層配置與上下文探索機制 (Agent Configuration Standards)](docs/agent-configuration-standards.md)
 - [BM25 向量檢索與記憶機制](docs/bm25-visual-explanation.md)
+- [敏感設定加密與 OS Keyring 整合](docs/sensitive-data-protection.md)
 - [CLI 操作與限制說明 (CLI Usage & Limitations)](docs/cli-usage-limitations.md)
 
 ### 7. 打包版本的專案客製化 (Customizing Packaged Versions)

@@ -150,33 +150,256 @@ class JsonConfigProvider(ConfigProvider):
         _set_nested(self._data, key, value)
 
 
+class AuthException(Exception):
+    """加密庫已鎖定，需要主密碼解鎖時拋出的例外"""
+
+    pass
+
+
+class MissingKeyException(Exception):
+    """找不到金鑰 (全新安裝或尚未設定) 時拋出的例外"""
+
+    pass
+
+
+class RequireMasterPasswordException(Exception):
+    """金鑰需寫入加密庫，但尚未建立主密碼時拋出的例外"""
+
+    pass
+
+
+class KeyringConfigProvider(ConfigProvider):
+    """從作業系統 Keyring 讀取敏感設定的供應器"""
+
+    def __init__(self):
+        self.service_name = "pocket-agent"
+
+    def get(self, key: str) -> Optional[Any]:
+        if "api_key" in key or "token" in key:
+            try:
+                import keyring
+
+                val = keyring.get_password(self.service_name, key)
+                return val
+            except Exception:
+                pass
+        return None
+
+    def set(self, key: str, value: str) -> bool:
+        if "api_key" in key or "token" in key:
+            try:
+                import keyring
+
+                # 測試是否為 fail backend (無實際 keyring 功能)
+                if isinstance(keyring.get_keyring(), keyring.backends.fail.Keyring):
+                    return False
+                keyring.set_password(self.service_name, key, value)
+                return True
+            except Exception:
+                return False
+        return False
+
+
+def _base64url_encode(data: bytes) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _base64url_decode(s: str) -> bytes:
+    import base64
+
+    padding = "=" * (4 - (len(s) % 4))
+    return base64.urlsafe_b64decode(s + padding)
+
+
+class EncryptedConfigProvider(ConfigProvider):
+    """基於 JWE (AES-256-GCM + Argon2id) 的加密設定供應器 (Portable 模式)"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._cache = {}
+        self._is_unlocked = False
+        self._cek = None
+
+    def _derive_key(self, password: str, salt: bytes, t: int, m: int, p: int) -> bytes:
+        from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
+
+        kdf = Argon2id(salt=salt, length=32, iterations=t, lanes=p, memory_cost=m)
+        return kdf.derive(password.encode("utf-8"))
+
+    def unlock(self, password: str) -> bool:
+        if not self.path.exists():
+            return False
+
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+            jwe_string = self.path.read_text(encoding="utf-8").strip()
+            parts = jwe_string.split(".")
+            if len(parts) != 5:
+                return False
+
+            header_b64, encrypted_key_b64, iv_b64, ciphertext_b64, tag_b64 = parts
+
+            # 解析 Header
+            header_json = _base64url_decode(header_b64).decode("utf-8")
+            header = json.loads(header_json)
+
+            if header.get("alg") != "dir" or header.get("enc") != "A256GCM":
+                log.warning("不支援的 JWE 演算法")
+                return False
+
+            salt = _base64url_decode(header["salt"])
+            t = int(header["t"])
+            m = int(header["m"])
+            p = int(header["p"])
+
+            # 衍生 256-bit CEK
+            cek = self._derive_key(password, salt, t, m, p)
+
+            # 準備 GCM 參數
+            iv = _base64url_decode(iv_b64)
+            ciphertext = _base64url_decode(ciphertext_b64)
+            tag = _base64url_decode(tag_b64)
+            ciphertext_and_tag = ciphertext + tag
+            aad = header_b64.encode("ascii")
+
+            # GCM 解密 (含完整性驗證)
+            aesgcm = AESGCM(cek)
+            plaintext = aesgcm.decrypt(iv, ciphertext_and_tag, aad)
+
+            self._cache = json.loads(plaintext.decode("utf-8"))
+            self._cek = cek
+            self._is_unlocked = True
+            return True
+        except Exception as e:
+            log.warning("JWE 解鎖失敗或密文損壞: %s", e)
+            return False
+
+    def save_vault(self, password: Optional[str] = None) -> None:
+        """將記憶體中的設定以 JWE 格式加密存檔 (供設定精靈使用)"""
+        import os
+
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        salt = os.urandom(16)
+        iv = os.urandom(12)
+
+        t, m, p = 2, 65536, 4
+
+        if password:
+            self._cek = self._derive_key(password, salt, t, m, p)
+
+        if not self._cek:
+            raise RequireMasterPasswordException("建立加密庫需要主密碼")
+
+        header = {
+            "alg": "dir",
+            "enc": "A256GCM",
+            "kdf": "Argon2id",
+            "salt": _base64url_encode(salt),
+            "t": t,
+            "m": m,
+            "p": p,
+        }
+        header_json = json.dumps(header, separators=(",", ":"))
+        header_b64 = _base64url_encode(header_json.encode("utf-8"))
+        aad = header_b64.encode("ascii")
+
+        plaintext = json.dumps(self._cache).encode("utf-8")
+
+        aesgcm = AESGCM(self._cek)
+        encrypted_data = aesgcm.encrypt(iv, plaintext, aad)
+
+        ciphertext = encrypted_data[:-16]
+        tag = encrypted_data[-16:]
+
+        jwe = f"{header_b64}..{_base64url_encode(iv)}.{_base64url_encode(ciphertext)}.{_base64url_encode(tag)}"
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(jwe, encoding="utf-8")
+        self._is_unlocked = True
+
+    def get(self, key: str) -> Optional[Any]:
+        if not self._is_unlocked:
+            return None
+        return self._cache.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        """此方法僅在已解鎖狀態下能寫入記憶體，實際存檔需呼叫 save_vault"""
+        self._cache[key] = value
+
+
 class ConfigManager:
     """設定檔管理員 (Facade & Chain of Responsibility)"""
 
     def __init__(self):
-        # 責任鏈順序：先找 Env，再找 Json
+        # 責任鏈順序：先找 Env，再找 Keyring，接著找加密庫，最後找 Json
         self.json_provider = JsonConfigProvider(CONFIG_PATH)
+        self.keyring_provider = KeyringConfigProvider()
+
+        SECRETS_PATH = Path.home() / ".pocket-agent" / "secrets.json"
+        self.encrypted_provider = EncryptedConfigProvider(SECRETS_PATH)
+
         self.providers: List[ConfigProvider] = [
             EnvConfigProvider(),
+            self.keyring_provider,
+            self.encrypted_provider,
             self.json_provider,
         ]
 
     def get(self, key: str, default: Any = None) -> Any:
         """依照責任鏈順序取得設定值"""
+        val_found = None
         for provider in self.providers:
             val = provider.get(key)
             if val is not None and val != "":
-                return val
-        return default
+                val_found = val
+                break
+
+        if val_found is None:
+            val_found = default
+
+        # 若需要 api_key 卻找不到，進行精準延遲載入判斷
+        if "api_key" in key or "token" in key:
+            if val_found == "USE_ENCRYPTED" and not self.encrypted_provider._is_unlocked:
+                raise AuthException(f"需要存取 {key}，加密庫已鎖定，請解鎖。")
+            if val_found is None or val_found == "" or val_found == "USE_KEYRING" or val_found == "USE_ENCRYPTED":
+                raise MissingKeyException(f"找不到 {key}，請先執行設定。")
+
+        return val_found
 
     def set(self, key: str, value: Any) -> None:
-        """寫入設定 (一律寫入 JSON)"""
-        self.json_provider.set(key, value)
+        """寫入設定。若是敏感資訊，優先寫入 Keyring，若失敗則降級至 JWE 加密庫"""
+        if "api_key" in key or "token" in key:
+            success = self.keyring_provider.set(key, str(value))
+            if success:
+                self.json_provider.set(key, "USE_KEYRING")
+            else:
+                self.json_provider.set(key, "USE_ENCRYPTED")
+                self.encrypted_provider.set(key, str(value))
+                if not self.encrypted_provider._is_unlocked and not self.encrypted_provider._cek:
+                    # 尚未建立過密碼，拋出例外請呼叫端提示使用者，然後再由呼叫端自行呼叫 save_vault(password)
+                    self.json_provider.save()
+                    raise RequireMasterPasswordException("需要設定主密碼以建立加密庫")
+                else:
+                    self.encrypted_provider.save_vault()
+        else:
+            self.json_provider.set(key, value)
+
         self.json_provider.save()
 
     def reload(self) -> None:
         """重新載入 JSON 檔案"""
         self.json_provider.load()
+
+    def unlock(self, password: str) -> bool:
+        """
+        驗證並解鎖加密金鑰庫 (Portable 模式)。
+        將密碼交由 EncryptedConfigProvider 進行 Argon2id 解密。
+        """
+        return self.encrypted_provider.unlock(password)
 
 
 # 全域單例

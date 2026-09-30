@@ -46,6 +46,7 @@ def build_manual():
         "bm25": read_md(os.path.join(docs_dir, "bm25-visual-explanation.md")),
         "arch_report": read_md(os.path.join(docs_dir, "agent-workspace-architecture-report.md")),
         "routing": read_md(os.path.join(docs_dir, "three-tier-routing-architecture.md")),
+        "crypto": read_md(os.path.join(docs_dir, "sensitive-data-protection.md")),
     }
 
     def extract_section(start_pattern, end_pattern=None):
@@ -106,8 +107,9 @@ def build_manual():
     manual.append("  - [4.3 MCP 伺服器掛載與注入機制](#43-mcp-伺服器掛載與注入機制)")
     manual.append("  - [4.4 工具呼叫與 Subagent 委派機制](#44-工具呼叫與-subagent-委派機制)")
     manual.append("  - [4.5 BM25 向量檢索與記憶機制](#45-bm25-向量檢索與記憶機制)")
-    manual.append("  - [4.6 子代理權限與工作區隔離機制](#46-子代理權限與工作區隔離機制)")
-    manual.append("  - [4.7 三層式路由架構](#47-三層式路由架構)")
+    manual.append("  - [4.6 敏感設定加密與 OS Keyring 整合](#46-敏感設定加密與-os-keyring-整合)")
+    manual.append("  - [4.7 子代理權限與工作區隔離機制](#47-子代理權限與工作區隔離機制)")
+    manual.append("  - [4.8 三層式路由架構](#48-三層式路由架構)")
     manual.append("- [五、疑難排解 (Troubleshooting)](#五疑難排解-troubleshooting)")
     manual.append("  - [5.1 CLI 操作與限制說明](#51-cli-操作與限制說明)\n")
 
@@ -154,10 +156,13 @@ def build_manual():
     manual.append("### 4.5 BM25 向量檢索與記憶機制\n")
     manual.append(demote_headers(strip_title(files["bm25"]), 2) + "\n")
 
-    manual.append("### 4.6 子代理權限與工作區隔離機制\n")
+    manual.append("### 4.6 敏感設定加密與 OS Keyring 整合\n")
+    manual.append(demote_headers(strip_title(files["crypto"]), 2) + "\n")
+
+    manual.append("### 4.7 子代理權限與工作區隔離機制\n")
     manual.append(demote_headers(strip_title(files["arch_report"]), 2) + "\n")
 
-    manual.append("### 4.7 三層式路由架構\n")
+    manual.append("### 4.8 三層式路由架構\n")
     manual.append(demote_headers(strip_title(files["routing"]), 2) + "\n")
 
     manual.append("## 五、疑難排解 (Troubleshooting)\n")
