@@ -45,6 +45,10 @@ def is_command_allowed(command: str) -> bool:
     """檢查指令是否符合白名單前綴（包含內建與自訂）"""
     cmd_lower = command.strip().lower()
 
+    dangerous_chars = ["&", "|", ">", "<", ";", "$", "`"]
+    if any(char in command for char in dangerous_chars):
+        return False
+
     # 檢查內建
     for prefix in BUILTIN_ALLOWLIST:
         if cmd_lower.startswith(prefix):

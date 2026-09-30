@@ -477,11 +477,22 @@ def call_fs_tool(
 
             results = []
             excludes = {".git", "node_modules", "venv", "__pycache__", ".pocket-agent"}
+            sensitive_exact = {".git", ".pocket-agent"}
             spec = _get_ignore_spec(target)
 
             for p in target.rglob(pattern):
                 if any(ex in p.parts for ex in excludes):
                     continue
+                if any(part.startswith(".env") or part in sensitive_exact for part in p.parts):
+                    continue
+
+                if p.is_symlink():
+                    try:
+                        resolved = p.resolve(strict=False)
+                        _validate_safe_path(str(resolved), workspace_dirs)
+                    except Exception:
+                        continue
+
                 rel_path = str(p.relative_to(target))
                 if spec and spec.match_file(rel_path):
                     continue
@@ -504,9 +515,20 @@ def call_fs_tool(
 
             results = []
             excludes = {".git", "node_modules", "venv", "__pycache__", ".pocket-agent"}
+            sensitive_exact = {".git", ".pocket-agent"}
             spec = _get_ignore_spec(target)
 
             for p in target.rglob("*"):
+                if any(part.startswith(".env") or part in sensitive_exact for part in p.parts):
+                    continue
+
+                if p.is_symlink():
+                    try:
+                        resolved = p.resolve(strict=False)
+                        _validate_safe_path(str(resolved), workspace_dirs)
+                    except Exception:
+                        continue
+
                 if not p.is_file() or any(ex in p.parts for ex in excludes):
                     continue
 

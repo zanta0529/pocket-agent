@@ -100,6 +100,7 @@ class OpenRouterEngine(BaseEngine):
 
         in_think_block = False
         tool_calls_buffer = {}
+        content_buffer = ""
 
         try:
             async for chunk in stream:
@@ -136,28 +137,49 @@ class OpenRouterEngine(BaseEngine):
                     yield EventThinking(delta.reasoning_content)
 
                 if delta and delta.content:
-                    text = delta.content
-                    idx = 0
-                    while idx < len(text):
+                    content_buffer += delta.content
+                    while content_buffer:
                         if not in_think_block:
-                            start_pos = text.find("<think>", idx)
+                            start_pos = content_buffer.find("<think>")
                             if start_pos != -1:
-                                if start_pos > idx:
-                                    yield EventText(text[idx:start_pos])
+                                if start_pos > 0:
+                                    yield EventText(content_buffer[:start_pos])
                                 in_think_block = True
-                                idx = start_pos + 7
+                                content_buffer = content_buffer[start_pos + 7 :]
+                                continue
                             else:
-                                yield EventText(text[idx:])
+                                partial_match = False
+                                for i in range(len("<think>") - 1, 0, -1):
+                                    if content_buffer.endswith("<think>"[:i]):
+                                        if len(content_buffer) > i:
+                                            yield EventText(content_buffer[:-i])
+                                        content_buffer = content_buffer[-i:]
+                                        partial_match = True
+                                        break
+                                if not partial_match:
+                                    yield EventText(content_buffer)
+                                    content_buffer = ""
                                 break
                         else:
-                            end_pos = text.find("</think>", idx)
+                            end_pos = content_buffer.find("</think>")
                             if end_pos != -1:
-                                if end_pos > idx:
-                                    yield EventThinking(text[idx:end_pos])
+                                if end_pos > 0:
+                                    yield EventThinking(content_buffer[:end_pos])
                                 in_think_block = False
-                                idx = end_pos + 8
+                                content_buffer = content_buffer[end_pos + 8 :]
+                                continue
                             else:
-                                yield EventThinking(text[idx:])
+                                partial_match = False
+                                for i in range(len("</think>") - 1, 0, -1):
+                                    if content_buffer.endswith("</think>"[:i]):
+                                        if len(content_buffer) > i:
+                                            yield EventThinking(content_buffer[:-i])
+                                        content_buffer = content_buffer[-i:]
+                                        partial_match = True
+                                        break
+                                if not partial_match:
+                                    yield EventThinking(content_buffer)
+                                    content_buffer = ""
                                 break
 
                 if usage:
@@ -166,6 +188,13 @@ class OpenRouterEngine(BaseEngine):
                     )
                     if total_tokens > 0:
                         yield EventUsage(total_tokens)
+
+            # Flush any remaining buffer when stream ends
+            if content_buffer:
+                if not in_think_block:
+                    yield EventText(content_buffer)
+                else:
+                    yield EventThinking(content_buffer)
 
         finally:
             if stream:

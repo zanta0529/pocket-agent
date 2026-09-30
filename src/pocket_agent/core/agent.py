@@ -533,6 +533,7 @@ class Agent:
             max_tool_rounds=sub_config.get("max_tool_rounds") or self.max_tool_rounds,
         )
         sub.workspace_dirs = list(self.workspace_dirs)
+        sub.on_confirm = self.on_confirm
 
         text_buffer = []
 
@@ -629,7 +630,10 @@ class Agent:
 
         engine = EngineFactory.create(provider, self.client, self.model)
 
-        for _ in range(self.max_tool_rounds):
+        max_rounds = self.max_tool_rounds
+        round_idx = 0
+        while round_idx < max_rounds:
+            round_idx += 1
             if self.cancel_requested:
                 return "", self._stopped_reply("")
 
@@ -719,6 +723,29 @@ class Agent:
             for fc in fc_list:
                 if self.cancel_requested:
                     return thinking, self._stopped_reply(text)
+
+                if self.allowed_tools is not None and fc["name"] not in self.allowed_tools:
+                    result = f"[ERROR] 工具 {fc['name']} 未經授權，無法執行。"
+                    self._emit(
+                        "tool_done",
+                        {
+                            "call_id": fc["call_id"],
+                            "name": fc["name"],
+                            "result": result,
+                            "ok": False,
+                        },
+                    )
+                    input_items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": fc["call_id"],
+                            "name": fc["name"],
+                            "arguments": fc["arguments"],
+                        }
+                    )
+                    input_items.append({"type": "function_call_output", "call_id": fc["call_id"], "output": result})
+                    continue
+
                 self._emit(
                     "tool_start",
                     {
@@ -849,7 +876,9 @@ class Agent:
                             ),
                         }
                     )
-                    break
+                    tools = []
+                    max_rounds += 1
+                    continue
             else:
                 consecutive_errors = 0
 
