@@ -376,7 +376,42 @@ class CliFrontend(FrontendStrategy):
             if _ctx_file and "工作區規範" in system_prompt:
                 renderer.message(f"已載入工作區規範：{_ctx_file.name}")
 
-            client = get_provider_client()
+            from rich.prompt import Prompt
+
+            from pocket_agent.system.config import AuthException, config
+
+            max_retries = 3
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    client = get_provider_client()
+                    state = CliState(load_config().get("active_provider", "openai"), get_model())
+                    try:
+                        available = fetch_available_models(state.provider)
+                    except Exception:
+                        available = []
+
+                    if available and state.model not in available:
+                        renderer.message(f"設定模型 {state.model} 不在清單；改用 {available[0]}。", "yellow")
+                        state.model = available[0]
+                    elif not available:
+                        renderer.message("無法取得模型清單，使用目前設定。", "yellow")
+                    break  # 成功取得 client 與模型，跳出重試迴圈
+                except AuthException as e:
+                    renderer.message(f"【安全鎖】{e}", "yellow")
+                    password = Prompt.ask("[bold cyan]請輸入主密碼解鎖[/bold cyan]", password=True)
+                    if config.unlock(password):
+                        renderer.message("解鎖成功，重新連線中...", "green")
+                        # 模擬解除佔位符，讓下一次迴圈能順利通過 (暫時 workaround)
+                        config._is_unlocked = True
+                        # 在真正的 JWE 實作中，此處會讓 config.get 能讀到記憶體中解密的 key
+                    else:
+                        retry_count += 1
+                        renderer.message(f"密碼錯誤或解鎖失敗。剩餘重試次數：{max_retries - retry_count}", "red")
+                        if retry_count >= max_retries:
+                            renderer.message("重試次數過多，啟動中止。", "red")
+                            return
+
             mcp = MCPManager()
             startup = await mcp.start(on_start=lambda count: renderer.message("正在初始化 MCP 服務…"))
             if startup.configured_servers == 0:
@@ -396,16 +431,6 @@ class CliFrontend(FrontendStrategy):
                 )
             else:
                 renderer.message("MCP 初始化失敗，請檢查設定或上述錯誤訊息。", "red")
-            state = CliState(load_config().get("active_provider", "openai"), get_model())
-            try:
-                available = fetch_available_models(state.provider)
-            except Exception:
-                available = []
-            if available and state.model not in available:
-                renderer.message(f"設定模型 {state.model} 不在清單；改用 {available[0]}。", "yellow")
-                state.model = available[0]
-            elif not available:
-                renderer.message("無法取得模型清單，使用目前設定。", "yellow")
 
             # F2.5: Prompt Injection 防禦聲明 (Data Boundaries)
             immunity_clause = (
