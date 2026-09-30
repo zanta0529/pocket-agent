@@ -150,28 +150,81 @@ class JsonConfigProvider(ConfigProvider):
         _set_nested(self._data, key, value)
 
 
+class AuthException(Exception):
+    """授權失敗或缺失金鑰時拋出的例外"""
+
+    pass
+
+
+class KeyringConfigProvider(ConfigProvider):
+    """從作業系統 Keyring 讀取敏感設定的供應器"""
+
+    def __init__(self):
+
+        self.service_name = "pocket-agent"
+
+    def get(self, key: str) -> Optional[Any]:
+        if "api_key" in key or "token" in key:
+            try:
+                import keyring
+
+                val = keyring.get_password(self.service_name, key)
+                return val
+            except Exception:
+                pass
+        return None
+
+    def set(self, key: str, value: str) -> None:
+        if "api_key" in key or "token" in key:
+            try:
+                import keyring
+
+                keyring.set_password(self.service_name, key, value)
+            except Exception:
+                pass
+
+
 class ConfigManager:
     """設定檔管理員 (Facade & Chain of Responsibility)"""
 
     def __init__(self):
-        # 責任鏈順序：先找 Env，再找 Json
+        # 責任鏈順序：先找 Env，再找 Keyring，最後找 Json
         self.json_provider = JsonConfigProvider(CONFIG_PATH)
+        self.keyring_provider = KeyringConfigProvider()
         self.providers: List[ConfigProvider] = [
             EnvConfigProvider(),
+            self.keyring_provider,
             self.json_provider,
         ]
 
     def get(self, key: str, default: Any = None) -> Any:
         """依照責任鏈順序取得設定值"""
+        val_found = None
         for provider in self.providers:
             val = provider.get(key)
             if val is not None and val != "":
-                return val
-        return default
+                val_found = val
+                break
+
+        if val_found is None:
+            val_found = default
+
+        # 若需要 api_key 卻找不到，則拋出 AuthException (延遲載入)
+        if ("api_key" in key or "token" in key) and (
+            val_found is None or val_found == "" or val_found == "USE_KEYRING"
+        ):
+            raise AuthException(f"找不到 {key}，請先執行設定或解鎖。")
+
+        return val_found
 
     def set(self, key: str, value: Any) -> None:
-        """寫入設定 (一律寫入 JSON)"""
-        self.json_provider.set(key, value)
+        """寫入設定。若是敏感資訊，優先寫入 Keyring 並在 JSON 留下佔位符"""
+        if "api_key" in key or "token" in key:
+            self.keyring_provider.set(key, str(value))
+            self.json_provider.set(key, "USE_KEYRING")
+        else:
+            self.json_provider.set(key, value)
+
         self.json_provider.save()
 
     def reload(self) -> None:
