@@ -346,7 +346,10 @@ class CliFrontend(FrontendStrategy):
                             if md_target.exists() and md_target.is_file():
                                 md_content = md_target.read_text(encoding="utf-8").strip()
                                 if md_content:
-                                    _g_ctx += f"\n\n---\n## 自動展開全域文件：{md_target.name}\n" + md_content
+                                    _g_ctx += (
+                                        f"\n\n---\n## [系統提示] 已為您自動載入 {md_target.name}，"
+                                        f"請勿使用檔案工具嘗試讀取此路徑：\n" + md_content
+                                    )
                         except Exception as inner_e:
                             log.debug("展開全域連結文件 %s 失敗：%s", md_rel_path, inner_e)
 
