@@ -10,7 +10,6 @@ from pocket_agent.frontend.cli.commands.misc import (
     HelpCommand,
     ImageCommand,
     LogoutCommand,
-    PlanCommand,
     QuitCommand,
     SkillsCommand,
     ToolsCommand,
@@ -49,7 +48,6 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("tools", ToolsCommand())
     registry.register("skills", SkillsCommand())
     registry.register("help", HelpCommand())
-    registry.register("plan", PlanCommand())
     registry.register("goal", GoalCommand())
 
     cs_cmd = CodeSearchCommand()

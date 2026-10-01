@@ -35,7 +35,6 @@ BUILTINS = {
     "logout": "登出",
     "model": "切換當次提供者與模型",
     "parallel": "手動平行啟動多個子代理 (用法: /parallel <name>:<task> | <name>:<task>)",
-    "plan": "要求 Agent 先擬定計畫，並使用 ask_question 等待核准後再執行",
     "session": "查看／載入歷史對話",
     "skills": "列出目前所有可用的全域與專案技能",
     "subagent": "強制委派任務給指定的子代理",

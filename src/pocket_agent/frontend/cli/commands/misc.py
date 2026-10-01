@@ -235,19 +235,6 @@ class HelpCommand(CliCommand):
         return CommandResult()
 
 
-class PlanCommand(CliCommand):
-    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
-        if not args:
-            raise ValueError("用法：/plan <任務描述>")
-        plan_prompt = (
-            f"[System] 使用者啟動了 /plan 指令。請你為以下任務擬定一份詳細的實作計畫（Plan）。\n"
-            f"在開始任何實際的檔案修改或指令執行之前，請你「必須」先使用 `ask_question` 工具將計畫摘要給使用者，"
-            f"並提供「核准 (Approve)」與「拒絕 (Reject)」等選項，等待使用者同意後再繼續。\n\n"
-            f"任務內容：\n{args}"
-        )
-        return CommandResult("chat", plan_prompt, display_text=f"/plan {args}")
-
-
 class GoalCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if not args:
