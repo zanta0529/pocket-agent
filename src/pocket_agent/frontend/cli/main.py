@@ -316,8 +316,40 @@ class CliFrontend(FrontendStrategy):
         loaded_global_ctx = False
         if global_ctx_file.exists() and global_ctx_file.is_file():
             try:
+                import re
+                from pathlib import Path
+
                 _g_ctx = global_ctx_file.read_text(encoding="utf-8").strip()
                 if _g_ctx:
+                    # 動態展開 instructions.md 內關聯的 Markdown 檔案
+                    linked_mds = re.findall(r"\[.*?\]\((.*?\.md)\)", _g_ctx)
+                    seen = set()
+                    for md_rel_path in linked_mds:
+                        if md_rel_path in seen:
+                            continue
+                        seen.add(md_rel_path)
+                        try:
+                            # 支援 ~ 展開，若非絕對路徑則以 global_ctx_file.parent 為基準
+                            md_target = Path(md_rel_path).expanduser()
+                            if not md_target.is_absolute():
+                                md_target = (global_ctx_file.parent / md_target).resolve()
+                            else:
+                                md_target = md_target.resolve()
+
+                            # 基本安全防護：確認展開的檔案位於使用者家目錄之下
+                            try:
+                                md_target.relative_to(Path.home().resolve())
+                            except ValueError:
+                                log.debug(f"跳過展開 {md_target}：超出家目錄範圍")
+                                continue
+
+                            if md_target.exists() and md_target.is_file():
+                                md_content = md_target.read_text(encoding="utf-8").strip()
+                                if md_content:
+                                    _g_ctx += f"\n\n---\n## 自動展開全域文件：{md_target.name}\n" + md_content
+                        except Exception as inner_e:
+                            log.debug("展開全域連結文件 %s 失敗：%s", md_rel_path, inner_e)
+
                     system_prompt = system_prompt + "\n\n---\n## 全域規範\n" + _g_ctx
                     loaded_global_ctx = True
             except Exception as e:
