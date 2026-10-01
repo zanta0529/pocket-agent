@@ -656,6 +656,22 @@ class Agent:
                                 user_query = part.get("text", "")
                                 break
                     break
+            # 迴圈內動態截斷保護機制：防止工具讀取大量內容導致單次 Payload 過大
+            while sum(len(str(msg)) for msg in input_items) > 100000:
+                longest_idx = -1
+                longest_len = 0
+                for i, msg in enumerate(input_items):
+                    if msg.get("type") == "function_call_output" and isinstance(msg.get("output"), str):
+                        out_len = len(msg["output"])
+                        if out_len > longest_len and out_len > 100:
+                            longest_len = out_len
+                            longest_idx = i
+
+                if longest_idx != -1:
+                    input_items[longest_idx]["output"] = "[System] 先前的工具結果因長度限制已自動截斷，以保護連線。"
+                    log.warning("Context overflow protected: truncated a function_call_output.")
+                else:
+                    break
 
             stream = engine.stream_chat(
                 input_items=input_items,

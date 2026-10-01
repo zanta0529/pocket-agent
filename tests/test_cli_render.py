@@ -89,16 +89,18 @@ def test_stream_text_prints_header_once():
 
 
 def test_stream_round_start_resets_state():
-    """round_start 後再次 text 重新印標頭。"""
+    """round_start 後保留標頭，後續 text 印出中途樣式。"""
     stream = StringIO()
     renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=80))
     renderer.event("text", "first round")
     renderer.event("round_start", "")
-    assert renderer._stream_header_printed is False
+    assert renderer._stream_header_printed is True
+    assert renderer._round_text_printed is False
     assert renderer._stream_has_content is False
     renderer.event("text", "second round")
     output = stream.getvalue()
-    assert output.count("● Pocket Agent") == 2
+    assert output.count("● Pocket Agent") == 1
+    assert "│ 💭 " in output
 
 
 def test_stream_round_start_without_content_no_extra_newline():

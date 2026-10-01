@@ -124,6 +124,7 @@ class CliRenderer:
         self.console = console
         # 串流狀態旗標：追蹤本輪是否已開始串流輸出
         self._stream_header_printed: bool = False
+        self._round_text_printed: bool = False
         self._stream_has_content: bool = False
         # 思考中 spinner：由 send_turn 啟動，由 event("text") 或 send_turn 結束前停止
         self._active_status = None
@@ -282,11 +283,15 @@ class CliRenderer:
             # 工具呼叫後重跑：若已串流了文字，換行確認，再開始新輪
             if self._stream_has_content:
                 self.console.print()
-            self._stream_header_printed = False
+            # 不重置 self._stream_header_printed，讓主標頭保留
+            self._round_text_printed = False
             self._stream_has_content = False
             self._thinking_buffer = ""
 
         elif kind == "text":
+            # 判斷是否為「非首次」的中途輸出文字
+            is_intermediate = self._stream_header_printed and not self._round_text_printed
+
             if not self._stream_header_printed:
                 # 第一個 token 到來：先停止思考中 spinner，再印標頭
                 self._stop_status()
@@ -294,6 +299,18 @@ class CliRenderer:
                 label = f"● Pocket Agent ({self._state.model})" if self._state is not None else "● Pocket Agent"
                 self.console.print(Text(label, style="bold #B8860B"))
                 self._stream_header_printed = True
+                self._round_text_printed = True
+            elif is_intermediate:
+                # 後續的工具迴圈中途有文字輸出
+                self._stop_status()
+                self.console.print("\n[dim]│ 💭 [/dim]", end="", highlight=False, markup=True)
+                self._round_text_printed = True
+
+            # 實際列印內容，若目前正在印中途文字，可以套用 dim
+            # 為了能正確 append 且不換行，使用 rich 的 Text
+            # 也可以直接印字串，我們這裡直接用 str(data) 搭配 Text(..., style="dim") 如果它是中途文字，
+            # 但因為最後一輪我們無法提前預知，所以我們統一印出。
+            # 但為了達成 user 需求，我們就維持打字機印出即可，dim 樣式主要靠前綴 `│ 💭 `。
             self.console.print(str(data), end="", highlight=False, markup=False)
             self._stream_has_content = True
 
