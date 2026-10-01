@@ -303,7 +303,7 @@ class CliRenderer:
             elif is_intermediate:
                 # 後續的工具迴圈中途有文字輸出
                 self._stop_status()
-                self.console.print("\n[dim]│ 💭 [/dim]", end="", highlight=False, markup=True)
+                self.console.print("[dim]│ 💭 [/dim]", end="", highlight=False, markup=True)
                 self._round_text_printed = True
 
             # 實際列印內容，若目前正在印中途文字，可以套用 dim
