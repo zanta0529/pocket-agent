@@ -480,11 +480,9 @@ class Agent:
 
     def _instructions(self, query: str = "") -> str:
         """system prompt + skill 目錄（每輪重算，skill 可熱加）。"""
-        base = self.system_prompt
-
         from pathlib import Path
 
-        base += f"\n\n[系統資訊] 目前終端機的工作目錄為：{Path.cwd()}"
+        base = f"[系統資訊] 目前終端機的工作目錄為：{Path.cwd()}"
 
         if self.workspace_dirs:
             extra = "\n\n使用者已授權本次會話可額外讀寫以下工作區目錄，請在搜尋或讀取檔案時主動將其納入考量：\n"
@@ -519,7 +517,15 @@ class Agent:
             "這樣能防止關鍵資訊在對話歷史過長被系統截斷時遺忘。"
         )
 
-        return base + skills_index_prompt(self.workspace_dirs, query)
+        # 加入技能清單
+        instructions = base + skills_index_prompt(self.workspace_dirs, query)
+
+        # [JIT Context Injection] 將最核心的 system_prompt (包含不可談判的全域阻斷規則)
+        # 置於最後，利用新近效應 (Recency Bias) 確保模型在處理使用者任務前的最後一刻讀到它。
+        if self.system_prompt:
+            instructions += f"\n\n{self.system_prompt}"
+
+        return instructions
 
     async def _run_subagent(self, args: dict) -> str:
         name = args.get("name")
