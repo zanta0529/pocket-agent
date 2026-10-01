@@ -11,9 +11,11 @@ FS_TOOLS = [
         "name": "read_file",
         "description": (
             "Read the contents of a file. Optionally provide start_line and end_line "
-            "to read a specific range. Lines are 1-indexed. Large files default to max 500 lines. "
-            "If unsure of the path, use list_dir or find_by_name first to avoid errors. "
-            "If truncated, do NOT rewrite blindly. Use grep_search to find keywords or use start_line/end_line."
+            "to read a specific range. "
+            "WARNING: Reading entire large files may cause context overflow. "
+            "Always prefer using grep_search first, "
+            "or use start_line/end_line to read only the necessary chunks. "
+            "If truncated, do NOT rewrite blindly."
         ),
         "parameters": {
             "type": "object",
