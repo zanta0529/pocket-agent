@@ -313,10 +313,19 @@ class CliRenderer:
             # 實際列印內容，若目前正在印中途文字，套用 dim
             text_str = str(data)
             if self._round_is_dim:
-                self.console.print(Text(text_str, style="dim"), end="", highlight=False)
+                if "\n" in text_str:
+                    parts = text_str.split("\n", 1)
+                    if parts[0]:
+                        self.console.print(Text(parts[0], style="dim"), end="", highlight=False)
+                    self.console.print("\n", end="", highlight=False, markup=False)
+                    if parts[1]:
+                        self.console.print(parts[1], end="", highlight=False, markup=False)
+                    self._round_is_dim = False
+                else:
+                    self.console.print(Text(text_str, style="dim"), end="", highlight=False)
             else:
                 self.console.print(text_str, end="", highlight=False, markup=False)
-            
+
             self._stream_has_content = True
 
         elif kind == "thinking":
