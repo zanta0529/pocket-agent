@@ -119,29 +119,32 @@ FS_TOOLS = [
     },
     {
         "type": "function",
-        "name": "find_by_name",
-        "description": "Recursively search for files matching a glob pattern (e.g., '*.py') in a directory.",
+        "name": "search_files",
+        "description": (
+            "Search for files by name/pattern and/or text content in a directory. "
+            "Use this for exploring codebases, reading documentation, or finding files. "
+            "If only file_pattern is provided, it returns matching file names. "
+            "If query is provided, it performs a full-text search, optionally filtered by file_pattern."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Directory to search in."},
-                "pattern": {"type": "string", "description": "Glob pattern to match file names."},
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Directory or specific file to search in. Defaults to the current working directory (.)."
+                    ),
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Text query to search for inside files. Leave empty to only search by file name.",
+                },
+                "file_pattern": {
+                    "type": "string",
+                    "description": "Glob pattern to filter files (e.g., '*.py', '*.md').",
+                },
             },
-            "required": ["path", "pattern"],
-        },
-        "_is_safe_read": True,
-    },
-    {
-        "type": "function",
-        "name": "grep_search",
-        "description": "Search for a specific text query within all files in a directory.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Directory to search in."},
-                "query": {"type": "string", "description": "Text query to search for."},
-            },
-            "required": ["path", "query"],
+            "required": [],
         },
         "_is_safe_read": True,
     },
@@ -368,8 +371,10 @@ def call_fs_tool(
                     sliced = lines[:max_lines]
                     inner = "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(sliced))
                     inner += (
-                        f"\n\n...（內容過長，共 {total_lines} 行，目前僅顯示前 {max_lines} 行。"
-                        "請使用 start_line/end_line 繼續讀取）"
+                        f"\n\n...（內容過長，共 {total_lines} 行，已自動截斷前 {max_lines} 行。）\n"
+                        "[系統建議] 若要繼續閱讀後續內容，\n"
+                        "請呼叫 `read_file` 並設定 `start_line` / `end_line`；\n"
+                        "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
                     )
                     return f"<external_content>\n{inner}\n</external_content>"
                 else:
@@ -470,57 +475,26 @@ def call_fs_tool(
             target.write_text(new_content, encoding="utf-8")
             return f"[SUCCESS] 成功替換檔案 {target} 的局部內容"
 
-        elif name == "find_by_name":
-            if not target.exists() or not target.is_dir():
-                return f"[ERROR] 目錄不存在: {target}"
-            pattern = args.get("pattern", "")
-            if not pattern:
-                return "[ERROR] 缺少必填參數 'pattern'"
+        elif name == "search_files":
+            if not target.exists():
+                return f"[ERROR] 目錄或檔案不存在: {target}"
 
-            results = []
-            excludes = {".git", "node_modules", "venv", "__pycache__", ".pocket-agent"}
-            sensitive_exact = {".git", ".pocket-agent"}
-            spec = _get_ignore_spec(target)
-
-            for p in target.rglob(pattern):
-                if any(ex in p.parts for ex in excludes):
-                    continue
-                if any(part.startswith(".env") or part in sensitive_exact for part in p.parts):
-                    continue
-
-                if p.is_symlink():
-                    try:
-                        resolved = p.resolve(strict=False)
-                        _validate_safe_path(str(resolved), workspace_dirs)
-                    except Exception:
-                        continue
-
-                rel_path = str(p.relative_to(target))
-                if spec and spec.match_file(rel_path):
-                    continue
-
-                results.append(rel_path)
-                if len(results) >= 50:
-                    results.append("... (結果過多，僅顯示前 50 筆)")
-                    break
-
-            if not results:
-                return f"找不到符合 {pattern} 的檔案。"
-            return "搜尋結果：\n" + "\n".join(results)
-
-        elif name == "grep_search":
-            if not target.exists() or not target.is_dir():
-                return f"[ERROR] 目錄不存在: {target}"
             query = args.get("query", "")
-            if not query:
-                return "[ERROR] 缺少必填參數 'query'"
+            file_pattern = args.get("file_pattern", "")
 
             results = []
             excludes = {".git", "node_modules", "venv", "__pycache__", ".pocket-agent"}
             sensitive_exact = {".git", ".pocket-agent"}
-            spec = _get_ignore_spec(target)
+            spec = _get_ignore_spec(target) if target.is_dir() else None
 
-            for p in target.rglob("*"):
+            # 決定搜尋範圍
+            if target.is_file():
+                paths_to_search = [target]
+            else:
+                glob_pattern = file_pattern if file_pattern else "*"
+                paths_to_search = target.rglob(glob_pattern)
+
+            for p in paths_to_search:
                 if any(part.startswith(".env") or part in sensitive_exact for part in p.parts):
                     continue
 
@@ -534,10 +508,26 @@ def call_fs_tool(
                 if not p.is_file() or any(ex in p.parts for ex in excludes):
                     continue
 
-                rel_path = str(p.relative_to(target))
-                if spec and spec.match_file(rel_path):
+                if target.is_file():
+                    rel_path = target.name
+                else:
+                    rel_path = str(p.relative_to(target))
+                    if spec and spec.match_file(rel_path):
+                        continue
+
+                # 如果沒有給 query，就只是搜檔名
+                if not query:
+                    results.append(rel_path)
+                    if len(results) >= 100:
+                        results.append(
+                            "... (結果過多，已自動截斷前 100 筆)\n"
+                            "[系統建議] 若要尋找特定內容，請利用 search_files 設定 `query`，\n"
+                            "或利用 `file_pattern` 限縮範圍。"
+                        )
+                        break
                     continue
 
+                # 如果有 query，進行全文檢索
                 # DoS 防護：略過超過 5 MB 的大檔
                 try:
                     if p.stat().st_size > 5 * 1024 * 1024:
@@ -551,13 +541,21 @@ def call_fs_tool(
                         if query in line:
                             results.append(f"{rel_path}:{i + 1}: {line.strip()}")
                             if len(results) >= 100:
-                                results.append("... (結果過多，僅顯示前 100 筆)")
+                                results.append(
+                                    "... (結果過多，已自動截斷前 100 筆)\n"
+                                    "[系統建議] 若要繼續閱讀特定檔案，"
+                                    "請使用 `read_file` 並設定 `start_line`/`end_line`；\n"
+                                    "若要精準搜尋，請在 `search_files` 設定更精確的 `query` 或 `file_pattern`。"
+                                )
                                 return "搜尋結果：\n" + "\n".join(results)
                 except Exception:
                     continue
 
             if not results:
-                return f"找不到包含 '{query}' 的內容。"
+                if query:
+                    return f"找不到包含 '{query}' 的內容。"
+                else:
+                    return f"找不到符合 {file_pattern} 的檔案。"
             return "搜尋結果：\n" + "\n".join(results)
 
         return f"[ERROR] 未知的工具名稱: {name}"

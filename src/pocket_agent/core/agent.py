@@ -510,11 +510,11 @@ class Agent:
         # --- 資源與上下文管理 ---
         base += (
             "\n\n[資源管理] 在處理需閱讀大量原始碼的大型任務時："
-            "\n1. 請優先使用 `grep_search` 或帶有 `start_line`/`end_line` 的 `read_file` "
-            "進行精準檢索，避免一次性讀取過大檔案。"
-            "\n2. 若檢索與分析過程冗長，請適時使用 `write_to_file` 將重要發現寫入 "
-            "`.agents/scratch/` 內的暫存檔中（做筆記）。"
-            "這樣能防止關鍵資訊在對話歷史過長被系統截斷時遺忘。"
+            "\n1. 請優先使用 `search_files` 或帶有 `start_line`/`end_line` 的 `read_file` "
+            "進行精準檢索，避免一次性讀取過大檔案或目錄。"
+            "\n2. 若檢索與分析過程冗長，請務必善用 `write_to_file` 工具，將關鍵資訊、變數名稱與待辦事項 (TODO) "
+            "整理並寫入 `.agents/scratch/notes.md` 等暫存檔中（建立外部草稿區/Scratchpad）。"
+            "這樣能確保重要資訊不受 Context Overflow 截斷影響，建立起長期記憶。"
         )
 
         # 加入技能清單
@@ -704,8 +704,19 @@ class Agent:
                             longest_idx = i
 
                 if longest_idx != -1:
-                    input_items[longest_idx]["output"] = "[System] 先前的工具結果因長度限制已自動截斷，以保護連線。"
-                    log.warning("Context overflow protected: truncated a function_call_output.")
+                    orig_output = input_items[longest_idx]["output"]
+                    new_len = max(500, len(orig_output) // 2)
+                    sliced_output = (
+                        orig_output[:new_len]
+                        + f"\n\n... (輸出過長，已截斷，省略 {len(orig_output) - new_len} 字元) ...\n"
+                        "[系統建議] 若遺失關鍵資訊，請限縮搜尋範圍重試；"
+                        "若任務龐大，建議將進度寫入 `.agents/scratch/notes.md` 草稿區。"
+                    )
+                    input_items[longest_idx]["output"] = sliced_output
+                    log.warning(
+                        "Context overflow protected: partially truncated "
+                        f"a function_call_output (from {len(orig_output)} to {new_len})."
+                    )
                 else:
                     break
 
