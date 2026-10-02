@@ -1,11 +1,30 @@
 """對話 session 持久化：~/.pocket-agent/sessions/*.json，一個檔案一個對話。"""
 
+import hashlib
+import hmac
 import json
 import secrets
 import time
 from pathlib import Path
 
 SESSIONS_DIR = Path.home() / ".pocket-agent" / "sessions"
+
+
+def _get_hmac_key() -> bytes:
+    import getpass
+    import platform
+
+    try:
+        login = getpass.getuser()
+    except Exception:
+        login = "unknown_user"
+    material = f"{platform.node()}-{login}-pocket-agent-session".encode("utf-8")
+    digest = hashlib.sha256(material).digest()
+    return digest
+
+
+def _sign_data(data_str: str) -> str:
+    return hmac.new(_get_hmac_key(), data_str.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def new_session_id() -> str:
@@ -35,12 +54,16 @@ def make_title(history: list[dict]) -> str:
 
 def save_session(session_id: str, history: list[dict], title: str | None = None) -> None:
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    data = {
+    payload = {
         "id": session_id,
         "title": title or make_title(history),
         "updated_at": time.time(),
         "history": history,
     }
+    payload_str = json.dumps(payload, ensure_ascii=False)
+    signature = _sign_data(payload_str)
+
+    data = {"signature": signature, "payload": payload_str}
     _path(session_id).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
@@ -49,7 +72,20 @@ def load_session(session_id: str) -> dict | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if "signature" in data and "payload" in data:
+            expected_sig = _sign_data(data["payload"])
+            if not hmac.compare_digest(expected_sig, data["signature"]):
+                import logging
+
+                logging.getLogger("pocket-agent").warning(
+                    f"Session {session_id} signature mismatch. Data may be tampered."
+                )
+                return None
+            return json.loads(data["payload"])
+        else:
+            # Backwards compatibility for old un-signed sessions
+            return data
     except Exception:
         return None
 
@@ -61,7 +97,12 @@ def list_sessions() -> list[dict]:
     metas = []
     for f in SESSIONS_DIR.glob("*.json"):
         try:
-            d = json.loads(f.read_text(encoding="utf-8"))
+            raw_data = json.loads(f.read_text(encoding="utf-8"))
+            if "signature" in raw_data and "payload" in raw_data:
+                d = json.loads(raw_data["payload"])
+            else:
+                d = raw_data
+
             metas.append(
                 {
                     "id": d["id"],

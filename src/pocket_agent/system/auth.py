@@ -1,7 +1,4 @@
-"""OAuth 2.0 PKCE — 支援 OpenAI (ChatGPT Plus/Pro) 登入。
-
-技術細節參考自 openclaw/openclaw 的 openai-codex provider 實作。
-"""
+"""OAuth 2.0 PKCE — 支援 OpenAI (ChatGPT Plus/Pro) 登入。"""
 
 import base64
 import hashlib
@@ -20,13 +17,17 @@ import certifi
 import httpx
 import keyring
 
-# ── SSL：優先用 OS 系統憑證庫（支援公司 proxy CA）──
+# ── SSL：優先用 OS 系統憑證庫 ──
 try:
     import truststore
 
     truststore.inject_into_ssl()
     _SSL_VERIFY = True  # truststore 已接管，用預設即可
 except ImportError:
+    import sys
+
+    if sys.platform == "win32":
+        raise RuntimeError("Windows 環境下必須安裝 truststore 以確保企業憑證安全。請在環境中安裝 truststore。")
     _SSL_VERIFY = certifi.where()  # fallback：Mozilla CA bundle
 import uvicorn
 from fastapi import FastAPI

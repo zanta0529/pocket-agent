@@ -60,8 +60,10 @@ def test_append_to_file(tmp_path: Path):
 
     args = {"path": str(test_file), "content": "Appended Line\n"}
 
-    # 注意：這裡將 on_confirm 設為 lambda _: True 模擬使用者同意授權
-    result = call_fs_tool(name="append_to_file", args=args, on_confirm=lambda _: True, workspace_dirs=[str(tmp_path)])
+    # 注意：驗證傳遞給 on_confirm 的訊息是否包含正確的風險提示
+    result = call_fs_tool(
+        name="append_to_file", args=args, on_confirm=lambda msg: "附加內容至檔案" in msg, workspace_dirs=[str(tmp_path)]
+    )
 
     assert "[SUCCESS]" in result
 
@@ -116,7 +118,10 @@ def func_b():
     # 如果不指定範圍，因為 "print("Hello")" 有兩個，應該會報錯
     args_fail = {"path": str(test_file), "target": '    print("Hello")', "replacement": '    print("World")'}
     result_fail = call_fs_tool(
-        name="replace_file_content", args=args_fail, on_confirm=lambda _: True, workspace_dirs=[str(tmp_path)]
+        name="replace_file_content",
+        args=args_fail,
+        on_confirm=lambda msg: "局部修改檔案" in msg,
+        workspace_dirs=[str(tmp_path)],
     )
     assert "[ERROR]" in result_fail
     assert "請設定 allow_multiple=true、提供更多上下文，或指定 start_line/end_line 確保唯一性" in result_fail
@@ -130,7 +135,10 @@ def func_b():
         "end_line": 6,
     }
     result_success = call_fs_tool(
-        name="replace_file_content", args=args_success, on_confirm=lambda _: True, workspace_dirs=[str(tmp_path)]
+        name="replace_file_content",
+        args=args_success,
+        on_confirm=lambda msg: "局部修改檔案" in msg,
+        workspace_dirs=[str(tmp_path)],
     )
 
     assert "[SUCCESS]" in result_success
