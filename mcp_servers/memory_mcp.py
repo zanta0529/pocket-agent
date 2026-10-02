@@ -45,8 +45,43 @@ def memory_store_fact(key: str, value: str) -> str:
 
 
 @mcp.tool()
+def memory_search(query: str, top_k: int = 3) -> str:
+    """透過關鍵字搜尋相關的長期記憶（強烈建議優先使用此工具以節省 Token）"""
+    data = load_memory()
+    if not data:
+        return "目前沒有任何長期記憶。"
+
+    # 簡易關鍵字拆分（全小寫）
+    keywords = [kw.strip().lower() for kw in query.split() if kw.strip()]
+    if not keywords:
+        return "請提供有效的搜尋關鍵字。"
+
+    scored_items = []
+    for k, v in data.items():
+        score = 0
+        text_to_search = f"{k} {v}".lower()
+        for kw in keywords:
+            if kw in text_to_search:
+                score += 1
+        if score > 0:
+            scored_items.append((score, k, v))
+
+    if not scored_items:
+        return f"找不到與「{query}」相關的記憶。"
+
+    # 依據符合的關鍵字數量排序，取前 top_k 筆
+    scored_items.sort(key=lambda x: x[0], reverse=True)
+    results = scored_items[:top_k]
+
+    lines = [f"找到 {len(results)} 筆最相關的記憶："]
+    for _, k, v in results:
+        lines.append(f"- {k}: {v}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def memory_retrieve_context() -> str:
-    """檢索目前儲存的所有長期記憶與上下文"""
+    """檢索目前儲存的所有長期記憶 (注意：記憶較多時可能消耗大量 Token，請優先使用 memory_search)"""
     data = load_memory()
     if not data:
         return "目前沒有任何長期記憶。"
