@@ -355,6 +355,11 @@ def key_bindings(
                     buffer.complete_state = None
                     buffer.start_completion(select_first=True)
                     return
+
+            # 若選單有反白選項，按 Enter 僅套用該選項並關閉選單，不送出表單
+            buffer.complete_state = None
+            return
+
         event.current_buffer.validate_and_handle()
 
     @bindings.add("escape", "enter", filter=Condition(lambda: not selecting()))

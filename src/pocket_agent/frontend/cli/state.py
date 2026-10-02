@@ -29,10 +29,11 @@ class CliState:
         normalized = []
         for value in paths:
             path = Path(value).expanduser().resolve(strict=True)
-            if not path.is_file():
-                raise ValueError(f"不是一般檔案：{path}")
-            with path.open("rb"):
-                pass
+            if not path.is_file() and not path.is_dir():
+                raise ValueError(f"路徑不存在或無效：{path}")
+            if path.is_file():
+                with path.open("rb"):
+                    pass
             normalized.append(str(path))
         known = {os.path.normcase(p) for p in self.pending_files}
         added = []

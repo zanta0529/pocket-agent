@@ -23,8 +23,9 @@ def test_invalid_batch_is_atomic(tmp_path):
     with pytest.raises(OSError):
         state.add_files([str(path), str(tmp_path / "missing")])
     assert state.pending_files == []
-    with pytest.raises(ValueError):
-        state.add_files([str(tmp_path)])
+    # 確認現在資料夾可被加入
+    added = state.add_files([str(tmp_path)])
+    assert added == [str(tmp_path.resolve())]
 
 
 def test_deleted_attachment_and_invalid_number_are_retained(tmp_path):

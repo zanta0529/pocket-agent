@@ -71,7 +71,10 @@ class FileUploader:
     async def _convert(self, path: str) -> dict | list[dict]:
         p = Path(path).expanduser().resolve()
         if not p.exists():
-            raise FileNotFoundError(f"找不到檔案：{p}")
+            raise FileNotFoundError(f"找不到檔案或目錄：{p}")
+
+        if p.is_dir():
+            return await asyncio.to_thread(self._read_directory, p)
 
         ext = p.suffix.lower()
 
@@ -195,3 +198,27 @@ class FileUploader:
         text, truncated = self._truncate(text)
         suffix_note = "\n…（內容過長已截斷）" if truncated else ""
         return {"type": "input_text", "text": f"[{p.name}]\n```\n{text}{suffix_note}\n```"}
+
+    def _read_directory(self, p: Path) -> dict:
+        import os
+
+        tree_lines = []
+        count = 0
+        MAX_FILES = 200
+        for root, dirs, files in os.walk(p):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            level = str(root).replace(str(p), "").count(os.sep)
+            indent = " " * 4 * level
+            tree_lines.append(f"{indent}{os.path.basename(root)}/")
+            subindent = " " * 4 * (level + 1)
+            for f in files:
+                if f.startswith("."):
+                    continue
+                tree_lines.append(f"{subindent}{f}")
+                count += 1
+            if count > MAX_FILES:
+                tree_lines.append(f"{subindent}... (檔案過多，已截斷)")
+                break
+
+        tree_str = "\n".join(tree_lines)
+        return {"type": "input_text", "text": f"[{p.name} (目錄結構)]\n```\n{tree_str}\n```"}
