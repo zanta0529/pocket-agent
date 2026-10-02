@@ -33,3 +33,25 @@ servers:
   #   transport: stdio
   #   command: python
   #   args: ["mcp_servers/browser_mcp.py"]
+
+  # GitHub 整合 (提供 PR 與 Issue 查詢)
+  # github:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/github_mcp.py"]
+  #   env:
+  #     GITHUB_TOKEN: "your_github_personal_access_token"
+
+  # 本機資料庫檢索 (唯讀 SELECT 查詢)
+  # database:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/database_mcp.py"]
+  #   env:
+  #     DB_PATH: "dev.db"
+
+  # 長期記憶與上下文管理 (預設存於 ~/.pocket-agent/memory.json)
+  # memory:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/memory_mcp.py"]

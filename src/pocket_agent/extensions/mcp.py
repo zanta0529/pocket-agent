@@ -80,7 +80,7 @@ class MCPManager:
     async def stop(self) -> None:
         for closer in reversed(self._exit_stack_closers):
             try:
-                await closer()
+                await closer(None, None, None)
             except Exception:
                 pass
 
@@ -176,7 +176,8 @@ class MCPManager:
         response = await session.list_tools()
         for tool in response.tools:
             # 從 schema 移除 inject 參數——模型不需要知道這些
-            raw_params = tool.inputSchema or {"type": "object", "properties": {}}
+            schema_attr = getattr(tool, "inputSchema", getattr(tool, "input_schema", None))
+            raw_params = schema_attr or {"type": "object", "properties": {}}
             params = _strip_inject_params(raw_params, inject)
 
             # Artifact 隔離機制：針對檔案寫入工具注入 ArtifactMetadata 定義

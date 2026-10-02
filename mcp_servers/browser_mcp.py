@@ -20,10 +20,10 @@
 
 import os
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from playwright.async_api import async_playwright
 
-mcp = FastMCP("browser")
+mcp = MCPServer("browser")
 
 _pw = None
 _browser = None
