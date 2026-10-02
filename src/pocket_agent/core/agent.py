@@ -605,11 +605,31 @@ class Agent:
     async def _run_loop(self) -> tuple[str, str]:
         tools = self._build_tools()
 
-        # Context Overflow 保護機制 (Sliding Window)
-        history_str_len = sum(len(str(msg)) for msg in self.history)
-        if history_str_len > 120000 and len(self.history) > 14:
+        # Context Overflow 保護機制 (Sliding Window, Token-aware, Atomic Truncation)
+        # 簡單估算：約 4 個字元 1 個 token (中文較耗，但取個約數)
+        estimated_tokens = sum(len(str(msg)) // 4 for msg in self.history)
+        if estimated_tokens > 30000 and len(self.history) > 14:
+            log.warning(f"Context overflow predicted (est. {estimated_tokens} tokens). Truncating history safely.")
+            # 保留前 4 則 (system/initial user) 與最後幾則，確保工具對話不被從中間拆斷
+            safe_history = self.history[:4]
             notice = {"role": "system", "content": "[System] 中間的對話歷史已被系統自動截斷以避免 Context Overflow。"}
-            self.history = self.history[:4] + [notice] + self.history[-10:]
+            safe_history.append(notice)
+
+            # 從後面往前找，找到一個乾淨的邊界 (不能切在 function_call 和 function_call_output 之間)
+            tail_idx = max(4, len(self.history) - 10)
+            while tail_idx < len(self.history):
+                msg = self.history[tail_idx]
+                prev_msg = self.history[tail_idx - 1] if tail_idx > 0 else {}
+                # 如果這則是 tool output，且前一則是 tool call，不能從這裡切斷
+                if msg.get("type") == "function_call_output" and prev_msg.get("type") == "function_call":
+                    tail_idx -= 1  # 往前移，包含它的 call
+                    continue
+                # 如果這則是 tool call，不能只留 call 卻在後面斷掉它的 output
+                # (不過我們是從後面切，所以留 call 一定會留 output)
+                break
+
+            safe_history.extend(self.history[tail_idx:])
+            self.history = safe_history
 
         input_items: list = list(self.history)
 
@@ -793,11 +813,19 @@ class Agent:
                     try:
                         args = json.loads(raw) if raw else {}
                     except json.JSONDecodeError as e:
-                        log.error("JSONDecodeError on args: %r", raw)
-                        result = (
-                            f"[ERROR] JSON 解碼失敗: {e}。"
-                            "請檢查跳脫字元，特別是 Windows 路徑中的反斜線，建議改用正斜線 (/)。"
-                        )
+                        # Attempt to auto-fix common LLM JSON errors (e.g. trailing commas, unescaped quotes)
+                        import re
+
+                        fixed_raw = re.sub(r",\s*([\]}])", r"\1", raw)  # Remove trailing commas
+                        try:
+                            args = json.loads(fixed_raw) if fixed_raw else {}
+                            log.info("Auto-fixed JSON decode error.")
+                        except json.JSONDecodeError:
+                            log.error("JSONDecodeError on args even after fallback: %r", raw)
+                            result = (
+                                f"[ERROR] JSON 解碼失敗: {e}。"
+                                "請檢查跳脫字元，特別是 Windows 路徑中的反斜線，建議改用正斜線 (/)。"
+                            )
                         self._emit(
                             "tool_done",
                             {

@@ -31,7 +31,7 @@ class OpenAIProvider(BaseProvider):
             base_url=base_url,
             default_headers=extra_headers,
             http_client=None,
-            timeout=httpx.Timeout(timeout=1800.0, connect=60.0),
+            timeout=httpx.Timeout(timeout=1800.0, connect=10.0),
         )
 
     def fetch_models(self) -> List[str]:

@@ -2,6 +2,7 @@ import logging
 from typing import Any
 
 from pocket_agent.engines.base import BaseEngine
+from pocket_agent.engines.chat_engine import StandardChatCompletionsEngine
 from pocket_agent.engines.ollama_engine import OllamaChatEngine
 from pocket_agent.engines.openai_engine import OpenAIResponsesEngine
 from pocket_agent.engines.openrouter_engine import OpenRouterEngine
@@ -24,11 +25,11 @@ ENGINE_MAP = {
     PROVIDER_OLLAMACLOUD: OllamaChatEngine,
     PROVIDER_OPENROUTER: OpenRouterEngine,
     PROVIDER_OPENAI: OpenAIResponsesEngine,
-    PROVIDER_GEMINI: OpenAIResponsesEngine,
-    PROVIDER_GEMINI_OAUTH: OpenAIResponsesEngine,
-    PROVIDER_GROQ: OpenAIResponsesEngine,
-    PROVIDER_MISTRAL: OpenAIResponsesEngine,
-    PROVIDER_SAMBANOVA: OpenAIResponsesEngine,
+    PROVIDER_GEMINI: StandardChatCompletionsEngine,
+    PROVIDER_GEMINI_OAUTH: StandardChatCompletionsEngine,
+    PROVIDER_GROQ: StandardChatCompletionsEngine,
+    PROVIDER_MISTRAL: StandardChatCompletionsEngine,
+    PROVIDER_SAMBANOVA: StandardChatCompletionsEngine,
 }
 
 

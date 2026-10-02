@@ -22,7 +22,7 @@ class GroqProvider(BaseProvider):
             api_key=api_key,
             base_url=GROQ_BASE_URL,
             http_client=None,
-            timeout=httpx.Timeout(timeout=180.0, connect=60.0),
+            timeout=httpx.Timeout(timeout=180.0, connect=10.0),
         )
 
     def fetch_models(self) -> List[str]:
