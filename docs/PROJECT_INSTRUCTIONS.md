@@ -1,160 +1,84 @@
 # PocketAgent 專案特定開發指南
 
-本文件依目前版本庫的 README、原始碼、依賴、測試及 CI 設定整理。
-搭配 [AI_INSTRUCTIONS.md](AI_INSTRUCTIONS.md) 使用；變更技術棧前重新確認現況。
+本文件依目前版本庫的 README、原始碼、依賴、測試及 CI 設定整理。搭配 [AI_INSTRUCTIONS.md](AI_INSTRUCTIONS.md) 使用；變更技術棧前重新確認現況。
 以下架構描述為已觀察現況，開發要求則為後續修改應遵循的準則，並非完整安全稽核結論。
 
 ## 1. 專案定位與技術棧
 
-- PocketAgent 是本機 Python AI 代理應用，提供 CLI 模式，README 宣告支援 Windows、macOS、Linux。
-- README 最低版本為 Python 3.14；一般 CI 與 Windows 發布流程也使用 Python 3.14。
+- PocketAgent 是本機 Python AI 代理應用，提供 CLI 模式，支援 Windows、macOS、Linux。
+- 最低版本為 Python 3.14；一般 CI 與 Windows 發布流程也使用 Python 3.14。
 - 入口為 `main.py`，使用 Click；CLI 使用 Rich／prompt_toolkit。
-- 引擎包含 OpenAI Responses API 與 Ollama Chat Completions；非同步流程使用 asyncio。
-- 認證包含 OAuth PKCE；相關依賴包含 OpenAI SDK、httpx、FastAPI、uvicorn、keyring。
-- MCP 提供外部工具整合；`browser_mcp.py` 為瀏覽器整合入口，依賴中包含 Playwright。
-- 文件輸出相關依賴包含 python-docx、python-pptx、ReportLab；PDF 讀取使用 pypdf。
-- 已檢閱的 session 持久化使用 JSON，設定使用環境變數／YAML 等；不要自行引入 SQLite 或 ORM。
+- 引擎包含 OpenAI API 與標準 Chat Completions (如 Gemini, Groq 等)；非同步流程使用 asyncio。
+- 認證包含 OAuth PKCE；依賴包含 OpenAI SDK、httpx、FastAPI、uvicorn、keyring。
+- MCP 提供外部工具整合；`browser_mcp.py` 為瀏覽器整合入口 (依賴 Playwright)。
+- 輸出支援 python-docx、python-pptx、ReportLab；PDF 讀取使用 pypdf。
+- session 持久化使用 JSON，設定使用環境變數／YAML；禁止自行引入 SQLite 或 ORM。
 
 ## 2. 目錄與責任邊界
 
 | 路徑                           | 用途與修改原則                                                                                          |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------- |
 | `src/pocket_agent/main.py`     | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                            |
-| `src/pocket_agent/core/`       | 核心業務邏輯：Agent 協調、對話紀錄 (sessions)、上下文與錯誤處理 (exceptions)。                          |
-| `src/pocket_agent/engines/`    | LLM 引擎實作：BaseEngine、OpenAI、OpenRouter、Ollama 與 Factory。                                       |
-| `src/pocket_agent/frontend/`   | 使用者介面策略：目前實作 `cli/` (包含 input、render、state、commands 等模組)。                          |
-| `src/pocket_agent/system/`     | 系統基礎設施：認證 (auth)、路徑解析 (paths)、設定管理 (config) 與初始設定精靈 (wizard)。                |
+| `src/pocket_agent/core/`       | 核心業務邏輯：Agent 協調、對話紀錄 (sessions)、上下文與錯誤處理。                                       |
+| `src/pocket_agent/engines/`    | LLM 引擎實作：BaseEngine、OpenAI、OpenRouter、Ollama、StandardChatCompletions 與 Factory。              |
+| `src/pocket_agent/frontend/`   | 使用者介面策略：實作 `cli/` (包含 input、render、state、commands 等模組)。                              |
+| `src/pocket_agent/system/`     | 系統基礎設施：認證 (auth)、路徑解析 (paths)、設定 (config) 與精靈 (wizard)。                            |
 | `src/pocket_agent/extensions/` | 擴充功能：MCP (Model Context Protocol) 伺服器生命週期與掛載管理。                                       |
-| `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行、原生檔案操作 (files)、網路請求 (web)、圖片生成 (image)、文件產出 (document)。 |
+| `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行、原生檔案操作 (fs)、網路請求 (web)、圖片生成 (image)、文件產出 (document)。    |
 
-| `skills/`、`subagents/`、`commands/` | 產品隨附的技能、子代理與命令，不等同開發代理規範。 |
-| `.agents/skills/` | 開發代理技能；維持通用性，專案差異放在本指南。 |
-| `tests/` | pytest 回歸測試。 |
-| `build_portable.py`、`PocketAgent.spec` | portable 與 PyInstaller 包裝設定。 |
-| `docs/` | 工程規範與文件；代理入口見根目錄 `AGENTS.md`、`.agents/AGENTS.md` 與 `.github/copilot-instructions.md`。 |
+*其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，`docs/` 為工程規範。*
 
 ### 2.1 架構設計原則：Adapter／Strategy／Factory
 
-本專案支援 Ollama／Cloud AI，設計目標是讓模型供應商可替換，而不是為每一種組合各自維護一套 Agent 流程。
+設計目標是讓模型供應商可替換，避免為每一種組合維護獨立流程。**後續開發必須遵循「依賴抽象、封裝差異、共用流程集中維護」的設計風格。**
 
-**後續開發必須遵循「依賴抽象、封裝差異、共用流程集中維護」的設計風格。**
-
-#### 設計模式與責任邊界
-
-| 模式／邊界        | 現有對應                                                  | 修改原則                                                                            |
-| ----------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Adapter（轉接器） | `BaseEngine`、`OpenAIResponsesEngine`、`OllamaChatEngine` | 將供應商的請求格式、SDK 呼叫與串流回應轉換為統一的 `stream_chat` 與 `Event*` 契約。 |
-| Strategy（策略）  | `FrontendStrategy`、`CliFrontend`                         | 封裝前端的啟動與互動方式；共同業務流程交由核心處理。                                |
-| Factory（工廠）   | `EngineFactory.create(provider, client, model)`           | 集中選擇及建立引擎，避免各呼叫端自行判斷供應商並建構具體實作。                      |
-| 共用流程協調      | `src/pocket_agent/core/agent.py` 與既有共用模組           | 集中維護對話協調、串流事件消費、工具回合及其他共用規則，避免依供應商複製流程。      |
-
-以上描述為現有抽象的設計角色與後續修改準則，不代表所有歷史程式碼均已完全解耦。修改前仍須確認實際呼叫路徑與契約，不得只依類別名稱推定行為。
-
-#### 核心解耦與狀態同步 (Decoupling & State Synchronization)
-
-- **依賴單向性 (Dependency Rule)**：前端依賴核心，核心依賴 `BaseEngine` 契約呼叫模型。核心與引擎均不得直接操作 UI (Rich)；核心應透過事件、回傳結果或抽象介面通知前端。
-- **邏輯集中不重複 (DRY)**：業務規則（如指令 `/add-dir`、檔案路徑檢查）**必須**統一實作於共用層（如核心或合適的共用服務模組），前端僅負責接收狀態並渲染。
-- **動態狀態注入 (Dynamic Context)**：當指令變更了 Agent 的存取權限或全域狀態時，應同步注入模型完成任務所需、可安全揭露的狀態摘要（如透過 `Agent._instructions()`），以維持認知一致；實際授權仍由工具與沙箱強制執行，不以 System Prompt 取代權限檢查。
-- **契約完整性 (Contract Integrity)**：替換模型實作時，不可遺失工具參數分片、完成事件、`Event*` 串流事件、取消機制、錯誤傳遞與資源清理。不支援的功能應明確回報，不得偽造成功。
-- **邊界判斷集中化**：避免在系統各處散落 `if provider...` 等硬編碼判斷，應集中於 Factory 封裝差異。優先沿用既有擴充點，不為單一需求建立通用框架。
-
-#### AI 代理的擴充查核點 (Extension Checklist)
-
-1. **辨識修改邊界**：修改前先確認該功能屬於「共用流程」還是「供應商 Adapter 差異」。
-2. **實作與整合**：新增供應商請實作 Adapter 並接入 Factory；跨模組功能請先在核心寫好規則，再到前端接上 UI。
-3. **契約相容測試**：利用 Mock 或假資料測試不同 Provider 的組合，確認取消、錯誤與資源清理行為一致。
-4. **交付設計說明**：回報時須說明重用的抽象介面、封裝位置，以及對契約相容性的影響。
-
-測試執行仍須遵守本指南第 5、7 節，不因架構調整而自動執行測試、Lint 或建置。
+- **Adapter（轉接器）**：`OpenAIResponsesEngine`、`OllamaChatEngine`、`StandardChatCompletionsEngine` 等，將各家 SDK 與串流格式轉換為統一的 `stream_chat` 契約。
+- **Strategy（策略）**：`CliFrontend` 封裝前端的啟動與互動；共同業務流程交由核心處理。
+- **Factory（工廠）**：`EngineFactory` 集中選擇及建立引擎。
+- **狀態同步**：當指令變更了 Agent 存取權限或全域狀態時，應透過 `Agent._instructions()` 動態注入狀態摘要；業務規則必須統一實作於共用層，前端僅負責接收狀態並渲染。
 
 ## 3. 編碼與相容性要求
 
 - Python 使用 4 空白縮排、UTF-8、LF 與檔尾換行；行長嚴格限制為 120 字元以內。
-- **Ruff E501 警告防範**：若字串或程式碼超過 120 字元，必定會觸發 Ruff `E501 (Line too long)` 警告。撰寫長字串（如系統提示詞、日誌訊息或系統備註）時，務必利用 Python 隱式字串拼接（Implicit string concatenation）將其拆分為多行。
-- Python 格式以 `pyproject.toml` 的 Ruff 設定為準：雙引號、E／F／I 規則；
-  `.editorconfig` 的 single quote 提示不覆寫 Python formatter。
-- 新增程式以 Python 3.14 相容為基準，不使用僅在更高版本提供的語法或標準庫 API。
-- 新增／修改介面補型別與必要的錯誤處理，不為型別改善擴大重構既有程式。
-- 保留 `BaseEngine.stream_chat` 的 Event 型別契約；修改串流事件時同步檢查兩個 provider 與所有消費端。
-- 避免在 GUI 執行緒阻塞網路與長時間操作；更新元件沿用既有排程模式。
-- 保留取消、失敗提示、附件狀態、連線關閉與 MCP 清理行為，不在失敗後偷偷自動重送可能有副作用的操作。
-- 使用 pathlib 與集中式路徑 helper，不硬編碼本機磁碟或假定目前目錄就是專案根目錄。
-- 文件與使用者訊息的語言遵循通用協定第 6 節；程式識別字沿用現有英文慣例。
+- **Ruff E501 警告防範**：若字串或程式碼超過 120 字元，務必利用 Python 隱式字串拼接（Implicit string concatenation）拆分為多行。
+- 格式以 `pyproject.toml` 的 Ruff 設定為準：雙引號、E／F／I 規則。
+- 新增程式以 Python 3.14 相容為基準。新增／修改介面補型別與必要的錯誤處理。
+- 保留取消、失敗提示、附件狀態、連線關閉與 MCP 清理行為，禁止在失敗後偷偷自動重送操作。
+- **上下文與草稿區 (Context & Scratchpad)**：遇到大型 codebase 任務或搜尋結果過長導致 Context Overflow 截斷時，**必須主動將關鍵發現、變數與 TODO 寫入 `.agents/scratch/notes.md`** 以建立外部長期記憶。
 
-## 4. 資料、擴充與安全
+## 4. 資料、擴充與安全邊界
 
-- 隨附資源透過 `bundle_dir()` 取得；PyInstaller 使用其 bundle 資源位置。
-- `user_dir()` 為 `~/.pocket-agent`；發布版 `.env` 與 MCP 設定走使用者資料目錄，
-  開發模式則由 `env_path()`、`mcp_config_path()` 指向版本庫位置。不得將可寫資料塞入唯讀 bundle。
-- 對話保存在 `~/.pocket-agent/sessions/*.json`；修改格式須考慮既有資料讀取與遷移。
-- 產品技能從 bundle 的 `skills/` 與使用者 `~/.pocket-agent/skills/` 載入，同名時使用者優先；
-  SKILL.md 使用 name／description frontmatter。不要將 `.subagents/skills/` 當成產品載入目錄。
-- 技能／外掛 ZIP、附件、MCP 回應與模型工具參數皆是不可信輸入；維持並補強路徑穿越、覆寫與解壓防護。
-- 不讀取、列印或提交真實 `.env`、token、私人 session、瀏覽器狀態或 `agent.log`；需要設定時先讀範例檔。
-- 不自動啟動 OAuth、真實模型呼叫、MCP／瀏覽器服務、更新器或外部腳本。
-- 修改 shell、hooks、plugins、MCP 或更新流程時，不移除確認機制、逾時或沙箱檢查。
-- 應用程式的 shell／sandbox 能力不等於開發代理已獲准執行命令，也不能保證任意命令均被安全隔離。
-- 不手動修改或提交 venv、build、dist、快取、產生的圖片／文件與私人設定。
+- **資源存取**：隨附資源透過 `bundle_dir()` 取得。使用者資料位於 `~/.pocket-agent` (發布版) 或版本庫內 (開發版)。不得將可寫資料塞入唯讀 bundle。
+- **既有資料防護**：對話保存在 `sessions/*.json`，修改格式須考慮向下相容。禁止讀取、列印或提交真實 `.env`、token、私人 session 或 `agent.log`。
+- **原生工具優先**：進行檔案讀寫或搜尋時，必須優先使用內建工具（如 `search_files`、`read_file`）。**嚴禁**使用 shell 指令包裝 `echo`、`sed`、`grep` 或 `python -c` 處理單純的 I/O 操作。
+- **環境限制與隔離**：
+  - 本專案開發環境預設為 Windows，僅能執行 `cmd.exe`，`PowerShell` 受群組原則封鎖，禁止試圖繞過。
+  - 對中文文件明確使用 UTF-8，覆寫檔案前需透過原生工具確認。
+- **操作審查**：Agent 不得自動執行測試、Lint、建置、自動安裝依賴、啟動服務或 Git 提交。所有修改狀態指令必須明確提供給使用者，由使用者手動執行。
 
-## 5. 專案工具政策與已知環境
+## 5. 終端機渲染限制 (Terminal UI & Rendering)
 
-### 5.1 專案政策
-
-- **原生工具優先**：Pocket Agent 已內建 `src/pocket_agent/tools/fs.py` 與 `src/pocket_agent/tools/web.py`。進行檔案讀寫、全域搜尋 (grep/find)、或網頁搜尋時，**必須優先使用系統提供的原生工具**。嚴禁使用 `run_command` 包裝 `echo`、`sed`、`grep` 或 `python -c` 腳本來處理單純的 I/O 操作，以避免觸發 EDR 警報與跳脫字元錯誤。
-- 對中文文件明確使用 UTF-8，不以有損解碼結果覆蓋原檔。
-- 既有檔案覆寫前需透過原生工具進行確認；缺少工具時，僅可依第 5.2 節所列條件申請替代方式；未取得授權或受權限限制時，停止並交付手動方案，不得繞過限制。
-- 開發代理不得自動執行測試、Lint、格式化、建置或 pre-commit；只提供手動命令。
-- 不自動安裝依賴、啟動服務、commit、push、打 tag、發布或刪除資料。
-- 上述開發代理政策不因 OS 不同而自動放寬；遠端既有 CI 仍依 workflow 執行，不為配合開發代理政策停用 CI。
-
-### 5.2 已知 Windows 工作站限制
-
-- 已知工作站的 Windows 平台工具以 cmd.exe 執行，PowerShell 受群組原則封鎖；不得繞過。此為特定環境紀錄，不表示所有開發環境皆為 Windows。
-- 每次切換環境，依當前平台資訊確認 OS、Shell 與工具權限；不把 PowerShell 限制推論為所有 Shell 均不可用，亦不宣稱原生檔案工具永遠不受權限或沙箱限制。
-- 在此 Windows 環境缺少原生工具時，經使用者／工具審查授權後，可用 cmd.exe 搭配 Python 做限定範圍的檔案讀寫與 Git 唯讀查詢。其他環境須另確認可用且獲准的替代方式。
-- Python 終端機讀寫可使用 `python -X utf8`；此替代機制不是測試、安裝、建置或繞過 OS 政策的許可。
-
-### 5.3 CLI 與終端機渲染限制 (Terminal UI & Rendering)
-
-- **統一的工具渲染色彩語意**：在 `src/pocket_agent/frontend/cli/render.py` 中渲染工具呼叫時，必須遵守以下顏色慣例，以提供一致的 UX 警示體驗：
-  - **動作分類 (Action)**：`Read`、`Write`、`Action` 等行為字眼一律維持黃色 (`bold yellow`)。
-  - **工具名稱 (Tool Name)**：內建工具 (Native Tools) 為綠色 (`bold green`)；非內建工具 (Non-native / MCP Tools) 為藍青色 (`bold cyan`)。
-  - **狀態小圓點 (Bullet)**：安全的本機唯讀操作 (Read + 內建) 為綠色 (`bold green`)；潛在風險操作 (Write 或非內建工具) 則為紅色 (`bold red`)。
-  - **安全警告字樣**：涉及權限跨越等嚴重提示時，「【安全警告】」前綴應單獨使用紅色 (`bold red`)，而非整段變色。
-- **非同步 Spinner 衝突**：在使用 `rich.status` (如「思考中...」動畫) 等會在背景執行緒持續刷新畫面的 UI 元件時，**嚴禁**在未停止動畫的狀態下直接呼叫 `input()` 或其他同步阻塞的標準輸入。
-- **處理原則**：在向使用者索取授權或等待輸入前，必須先呼叫 `status.stop()` 暫停背景重繪，取得輸入後，若原作業仍在進行且需繼續渲染，再呼叫 `status.start()` 恢復（遇到取消或退出時不宜無條件恢復），以避免多執行緒渲染衝突導致畫面假死。
+- **統一色彩語意 (`render.py`)**：
+  - **動作分類**：`Read`、`Write`、`Action` 等行為字眼一律維持黃色 (`bold yellow`)。
+  - **工具名稱**：內建工具為綠色 (`bold green`)；非內建工具 (MCP) 為藍青色 (`bold cyan`)。
+  - **狀態小圓點**：本機唯讀操作為綠色 (`bold green`)；寫入或潛在風險操作為紅色 (`bold red`)。
+  - **安全警告**：「【安全警告】」前綴應單獨使用紅色 (`bold red`)。
+- **非同步 Spinner 衝突**：在使用 `rich.status` (如「思考中...」動畫) 時，**嚴禁**在未停止動畫 (`status.stop()`) 的狀態下直接呼叫 `input()` 或同步阻塞的標準輸入，以免造成多執行緒渲染衝突導致畫面假死。
 
 ## 6. 依賴與發布維護
 
-- `requirements.in` 為直接依賴來源，`requirements.txt` 是 pip-compile 產出的鎖定結果；不要手改鎖定版本。
-- 依賴異動先說明必要性、相容性與影響，再由使用者於授權環境重新產生並檢閱鎖定檔。
-- 不直接重播鎖定檔註記的 `--no-index` 指令；該選項是否可用取決於本機套件來源。
-- 發布 workflow 在 Windows／Python 3.14 執行 `build_portable.py`，v\* tag 會觸發 release。
-- 修改打包或資源路徑時須考慮原始碼、portable 與 PyInstaller 模式；不直接修改 dist 成品。
+- `requirements.in` 為直接依賴來源，`requirements.txt` 為 pip-compile 產出；禁止手改鎖定版本。
+- 發布 workflow 在 Windows／Python 3.14 執行 `build_portable.py`，v* tag 會觸發 release。修改打包路徑時須考慮原始碼、portable 與 PyInstaller 模式。
 
 ## 7. 驗證方式與手動命令
 
-一般 CI 在 Windows／Python 3.14 執行 Ruff 格式檢查、Lint 與 pytest。
-既有測試涵蓋 auth／Ollama、CLI commands／flow／input／render／state、MCP manager 與 shell sandbox；
-這不代表打包或所有 provider 均已有完整覆蓋。
+一般 CI 執行 Ruff 格式檢查與 pytest。新增測試沿用 pytest 既有模式，確保隔離網路、OAuth 與使用者資料。
 
-新增測試沿用 pytest、unittest.mock／AsyncMock、tmp_path 等既有模式；隔離網路、OAuth、
-使用者 home、session、MCP 與子行程，不使用真實憑證或改動真實使用者資料。
-
-以下命令僅供使用者在版本庫根目錄的已授權 Windows cmd.exe 手動執行。
-前提為 venv 已建立，且其中已安裝專案依賴及 Ruff／pytest；不存在時不要宣稱可以直接執行。
+以下命令僅供使用者手動執行 (前提為 venv 已建立)：
 
 ```cmd
 venv\Scripts\python.exe -m ruff format --check .
 venv\Scripts\python.exe -m ruff check .
 venv\Scripts\python.exe -m pytest tests/
-```
-
-針對 CLI 交易／清理行為可先執行：
-
-```cmd
 venv\Scripts\python.exe -m pytest tests/test_cli_flow.py
 ```
-
-回報時分開列出：文件／差異檢閱、實際執行的命令與結果、未執行項目及原因。
-本機僅提供命令不等於測試通過；打包相關變更仍需使用者額外人工驗證。
