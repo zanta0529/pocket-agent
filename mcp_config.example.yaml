@@ -33,6 +33,8 @@ servers:
   #   transport: stdio
   #   command: python
   #   args: ["mcp_servers/browser_mcp.py"]
+  #        env:
+  #        BROWSER_HEADLESS: "0"   # <--- 1：強制無頭模式
 
   # GitHub 整合 (提供 PR 與 Issue 查詢)
   # github:
