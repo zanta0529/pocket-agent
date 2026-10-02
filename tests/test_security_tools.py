@@ -77,6 +77,6 @@ def test_fs_grep_search_dos_protection(tmp_path):
 
         args = {"query": "secret_keyword", "path": str(workspace)}
         # 由於檔案過大，搜尋應自動跳過，所以找不到內容
-        result = call_fs_tool("grep_search", args, on_confirm=None, workspace_dirs=[str(workspace)])
+        result = call_fs_tool("search_files", args, on_confirm=None, workspace_dirs=[str(workspace)])
 
         assert "找不到包含" in result

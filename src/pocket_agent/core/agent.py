@@ -606,8 +606,14 @@ class Agent:
         tools = self._build_tools()
 
         # Context Overflow 保護機制 (Sliding Window, Token-aware, Atomic Truncation)
-        # 簡單估算：約 4 個字元 1 個 token (中文較耗，但取個約數)
-        estimated_tokens = sum(len(str(msg)) // 4 for msg in self.history)
+        try:
+            import tiktoken
+
+            encoding = tiktoken.get_encoding("cl100k_base")
+            estimated_tokens = sum(len(encoding.encode(str(msg))) for msg in self.history)
+        except ImportError:
+            # 簡單估算：中文等佔比高時約 2~3 字元 1 token，保守取 3
+            estimated_tokens = sum(len(str(msg)) // 3 for msg in self.history)
         if estimated_tokens > 30000 and len(self.history) > 14:
             log.warning(f"Context overflow predicted (est. {estimated_tokens} tokens). Truncating history safely.")
             # 保留前 4 則 (system/initial user) 與最後幾則，確保工具對話不被從中間拆斷
@@ -720,56 +726,68 @@ class Agent:
                 else:
                     break
 
-            stream = engine.stream_chat(
-                input_items=input_items,
-                instructions=self._instructions(user_query),
-                tools=tools,
-                reasoning_param=reasoning_param,
-                cancel_check=lambda: self.cancel_requested,
-                build_tools_callback=self._build_tools,
-            )
+            try:
+                stream = engine.stream_chat(
+                    input_items=input_items,
+                    instructions=self._instructions(user_query),
+                    tools=tools,
+                    reasoning_param=reasoning_param,
+                    cancel_check=lambda: self.cancel_requested,
+                    build_tools_callback=self._build_tools,
+                )
 
-            async with aclosing(stream):
-                async for event in stream:
-                    if self.cancel_requested:
-                        break
+                async with aclosing(stream):
+                    async for event in stream:
+                        if self.cancel_requested:
+                            break
 
-                    if isinstance(event, EventThinking):
-                        thinking_chunks.append(event.delta)
-                        self._emit("thinking", event.delta)
+                        if isinstance(event, EventThinking):
+                            thinking_chunks.append(event.delta)
+                            self._emit("thinking", event.delta)
 
-                    elif isinstance(event, EventText):
-                        text_chunks.append(event.delta)
-                        self._emit("text", event.delta)
+                        elif isinstance(event, EventText):
+                            text_chunks.append(event.delta)
+                            self._emit("text", event.delta)
 
-                    elif isinstance(event, EventToolCallStart):
-                        func_calls[event.call_id] = {
-                            "call_id": event.call_id,
-                            "name": event.name,
-                            "arguments": "",
-                        }
-                        log.debug("TOOL item.added call_id=%s name=%s", event.call_id, event.name)
-                        self._emit("tool_stream_start", event.name)
+                        elif isinstance(event, EventToolCallStart):
+                            func_calls[event.call_id] = {
+                                "call_id": event.call_id,
+                                "name": event.name,
+                                "arguments": "",
+                            }
+                            log.debug("TOOL item.added call_id=%s name=%s", event.call_id, event.name)
+                            self._emit("tool_stream_start", event.name)
 
-                    elif isinstance(event, EventToolCallDelta):
-                        if event.call_id in func_calls:
-                            func_calls[event.call_id]["arguments"] += event.delta
-                        log.debug("TOOL args.delta call_id=%s delta=%r", event.call_id, event.delta)
+                        elif isinstance(event, EventToolCallDelta):
+                            if event.call_id in func_calls:
+                                func_calls[event.call_id]["arguments"] += event.delta
+                            log.debug("TOOL args.delta call_id=%s delta=%r", event.call_id, event.delta)
 
-                    elif isinstance(event, EventToolCallDone):
-                        if event.call_id in func_calls:
-                            func_calls[event.call_id]["arguments"] = event.full_args
-                        log.debug("TOOL item.done call_id=%s full_args=%r", event.call_id, event.full_args)
+                        elif isinstance(event, EventToolCallDone):
+                            if event.call_id in func_calls:
+                                func_calls[event.call_id]["arguments"] = event.full_args
+                            log.debug("TOOL item.done call_id=%s full_args=%r", event.call_id, event.full_args)
 
-                    elif isinstance(event, EventImageGenerationDone):
-                        path = save_image_b64(event.b64)
-                        self.last_images.append(path)
-                        log.debug("IMAGE saved %s", path)
-                        self._emit("image_saved", str(path))
+                        elif isinstance(event, EventImageGenerationDone):
+                            path = save_image_b64(event.b64)
+                            self.last_images.append(path)
+                            log.debug("IMAGE saved %s", path)
+                            self._emit("image_saved", str(path))
 
-                    # ── 串流結束，提取用量 ────────────────
-                    elif isinstance(event, EventUsage):
-                        self.total_tokens += event.total_tokens
+                        # ── 串流結束，提取用量 ────────────────
+                        elif isinstance(event, EventUsage):
+                            self.total_tokens += event.total_tokens
+            except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors >= 3:
+                    log.error("連續錯誤過多，中斷代理執行", exc_info=True)
+                    return "", self._stopped_reply("連續發生太多次執行錯誤，為保護系統穩定已自動中斷。")
+                self.history.append(
+                    {"role": "system", "content": f"[System Error] 串流執行時發生例外：{e}。請換個方式重試。"}
+                )
+                continue
+            else:
+                consecutive_errors = 0
 
             thinking = "".join(thinking_chunks)
             text = "".join(text_chunks)

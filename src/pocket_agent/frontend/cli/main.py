@@ -344,7 +344,8 @@ class CliFrontend(FrontendStrategy):
                                 continue
 
                             if md_target.exists() and md_target.is_file():
-                                md_content = md_target.read_text(encoding="utf-8").strip()
+                                md_content = await asyncio.to_thread(md_target.read_text, encoding="utf-8")
+                                md_content = md_content.strip()
                                 if md_content:
                                     _g_ctx += (
                                         f"\n\n---\n## [系統提示] 已為您自動載入 {md_target.name}，"
@@ -391,7 +392,8 @@ class CliFrontend(FrontendStrategy):
                                 continue
 
                             if md_target.exists() and md_target.is_file():
-                                md_content = md_target.read_text(encoding="utf-8").strip()
+                                md_content = await asyncio.to_thread(md_target.read_text, encoding="utf-8")
+                                md_content = md_content.strip()
                                 if md_content:
                                     system_prompt += f"\n\n---\n## 自動展開文件：{md_target.name}\n" + md_content
                         except Exception as inner_e:
@@ -415,7 +417,7 @@ class CliFrontend(FrontendStrategy):
 
             from pocket_agent.system.config import AuthException, MissingKeyException, config
 
-            max_retries = 3
+            max_retries = int(config.get("cli.max_retries", 3))
             retry_count = 0
             while retry_count < max_retries:
                 try:
@@ -437,16 +439,17 @@ class CliFrontend(FrontendStrategy):
                     renderer.message("請先離開，並在終端機執行 `pocket-agent setup` 完成 API Key 設定。")
                     return
                 except AuthException as e:
+                    retry_count += 1
                     renderer.message(f"【安全鎖】{e}", "yellow")
                     password = Prompt.ask("[bold cyan]請輸入主密碼解鎖[/bold cyan]", password=True)
                     if config.unlock(password):
                         renderer.message("解鎖成功，重新連線中...", "green")
                     else:
-                        retry_count += 1
                         renderer.message(f"密碼錯誤或解鎖失敗。剩餘重試次數：{max_retries - retry_count}", "red")
-                        if retry_count >= max_retries:
-                            renderer.message("重試次數過多，啟動中止。", "red")
-                            return
+
+                    if retry_count >= max_retries:
+                        renderer.message("重試次數過多，啟動中止。", "red")
+                        return
 
             mcp = MCPManager()
             startup = await mcp.start(on_start=lambda count: renderer.message("正在初始化 MCP 服務…"))

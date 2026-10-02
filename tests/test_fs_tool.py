@@ -86,7 +86,7 @@ def test_read_file_truncation_and_range(tmp_path: Path):
 
     assert "This is line 500" in result_full
     assert "This is line 501" not in result_full
-    assert "內容過長，共 600 行，目前僅顯示前 500 行" in result_full
+    assert "內容過長，共 600 行，已自動截斷前 500 行" in result_full
 
     # 測試情境二：指定範圍讀取 (例如讀取 550 到 555 行)
     args_range = {"path": str(test_file), "start_line": 550, "end_line": 555}
