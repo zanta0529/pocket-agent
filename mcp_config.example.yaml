@@ -33,8 +33,9 @@ servers:
   #   transport: stdio
   #   command: python
   #   args: ["mcp_servers/browser_mcp.py"]
-  #        env:
-  #        BROWSER_HEADLESS: "0"   # <--- 1：強制無頭模式
+  #    env:
+  #      BROWSER_CDP_URL: 'http://localhost:9222'  # 告訴 MCP 直接連接已經在背景跑著的瀏覽器
+  #      BROWSER_HEADLESS: "0"                     # 1：強制無頭模式
 
   # GitHub 整合 (提供 PR 與 Issue 查詢)
   # github:
