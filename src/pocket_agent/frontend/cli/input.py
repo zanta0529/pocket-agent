@@ -341,24 +341,29 @@ def key_bindings(
     @bindings.add("enter")
     def submit(event: KeyPressEvent) -> None:
         buffer = event.current_buffer
-        if completer and buffer.complete_state and buffer.complete_state.current_completion:
+        if completer and buffer.complete_state:
             c = buffer.complete_state.current_completion
-            display_str = c.display_text
-            if "more" in display_str or "before" in display_str:
-                if display_str.lstrip().startswith("↓"):
-                    completer.page += 1
-                    buffer.complete_state = None
-                    buffer.start_completion(select_first=True)
-                    return
-                elif display_str.lstrip().startswith("↑"):
-                    completer.page = max(0, completer.page - 1)
-                    buffer.complete_state = None
-                    buffer.start_completion(select_first=True)
-                    return
+            # 如果選單已開啟但沒有反白項目，自動選取第一個
+            if c is None and buffer.complete_state.completions:
+                c = buffer.complete_state.completions[0]
 
-            # 若選單有反白選項，按 Enter 僅套用該選項並關閉選單，不送出表單
-            buffer.complete_state = None
-            return
+            if c:
+                display_str = c.display_text
+                if "more" in display_str or "before" in display_str:
+                    if display_str.lstrip().startswith("↓"):
+                        completer.page += 1
+                        buffer.complete_state = None
+                        buffer.start_completion(select_first=True)
+                        return
+                    elif display_str.lstrip().startswith("↑"):
+                        completer.page = max(0, completer.page - 1)
+                        buffer.complete_state = None
+                        buffer.start_completion(select_first=True)
+                        return
+
+                # 正確套用補齊項目，然後關閉選單，不送出對話
+                buffer.apply_completion(c)
+                return
 
         event.current_buffer.validate_and_handle()
 
@@ -380,8 +385,34 @@ def key_bindings(
     @bindings.add("tab")
     def complete(event: KeyPressEvent) -> None:
         buffer = event.current_buffer
-        if buffer.complete_state:
-            buffer.complete_next()
+        if completer and buffer.complete_state:
+            c = buffer.complete_state.current_completion
+            if c is None and buffer.complete_state.completions:
+                c = buffer.complete_state.completions[0]
+
+            if c:
+                display_str = c.display_text
+                if "more" in display_str or "before" in display_str:
+                    if display_str.lstrip().startswith("↓"):
+                        completer.page += 1
+                        buffer.complete_state = None
+                        buffer.start_completion(select_first=True)
+                        return
+                    elif display_str.lstrip().startswith("↑"):
+                        completer.page = max(0, completer.page - 1)
+                        buffer.complete_state = None
+                        buffer.start_completion(select_first=True)
+                        return
+
+                buffer.apply_completion(c)
+
+                # 自動補空白的邏輯
+                # 若補齊的是目錄（以斜線結尾）或字串已有空白，則不補空白，方便繼續往下層輸入；
+                # 若是檔案或斜線指令，則自動補空白。
+                text_before = buffer.document.text_before_cursor
+                if not text_before.endswith(os.sep) and not text_before.endswith("/") and not text_before.endswith(" "):
+                    buffer.insert_text(" ")
+                return
         else:
             buffer.start_completion(select_first=True)
 
