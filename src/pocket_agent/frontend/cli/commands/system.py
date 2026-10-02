@@ -48,7 +48,7 @@ async def do_model_flow(ctx: CommandContext, args: str) -> None:
         else:
             raise ValueError(f"用法：/model [<{'|'.join(SUPPORTED_PROVIDERS)}>] <模型名稱>")
     else:
-        provider = await ctx.reader.choose(f"提供者 {' / '.join(SUPPORTED_PROVIDERS)}", SUPPORTED_PROVIDERS)
+        provider = await ctx.reader.choose("提供者", SUPPORTED_PROVIDERS)
         if not provider:
             return
         if provider not in SUPPORTED_PROVIDERS:

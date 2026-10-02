@@ -361,9 +361,12 @@ def key_bindings(
                         buffer.start_completion(select_first=True)
                         return
 
-                # 正確套用補齊項目，然後關閉選單，不送出對話
+                # 正確套用補齊項目
                 buffer.apply_completion(c)
-                return
+
+                # 如果不是在選擇模式，則關閉選單且不送出對話
+                if not selecting():
+                    return
 
         event.current_buffer.validate_and_handle()
 
@@ -409,9 +412,15 @@ def key_bindings(
                 # 自動補空白的邏輯
                 # 若補齊的是目錄（以斜線結尾）或字串已有空白，則不補空白，方便繼續往下層輸入；
                 # 若是檔案或斜線指令，則自動補空白。
+                # 注意：若目前是在選擇模式 (selecting())，則不自動補空白，以免影響選項比對。
                 text_before = buffer.document.text_before_cursor
-                if not text_before.endswith(os.sep) and not text_before.endswith("/") and not text_before.endswith(" "):
-                    buffer.insert_text(" ")
+                if not selecting():
+                    if (
+                        not text_before.endswith(os.sep)
+                        and not text_before.endswith("/")
+                        and not text_before.endswith(" ")
+                    ):
+                        buffer.insert_text(" ")
                 return
         else:
             buffer.start_completion(select_first=True)
