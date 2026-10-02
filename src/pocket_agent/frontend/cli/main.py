@@ -408,10 +408,10 @@ class CliFrontend(FrontendStrategy):
             renderer.banner()
 
             if loaded_global_ctx:
-                renderer.message(f"已載入全域規範：{global_ctx_file.name}")
+                renderer.message(f"已載入全域規範：{global_ctx_file.resolve()}")
             # 若有工作區規範，在 banner 後提示（保持 banner 整潔）
             if _ctx_file and "工作區規範" in system_prompt:
-                renderer.message(f"已載入工作區規範：{_ctx_file.name}")
+                renderer.message(f"已載入工作區規範：{_ctx_file.resolve()}")
 
             from rich.prompt import Prompt
 
