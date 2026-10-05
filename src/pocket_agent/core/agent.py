@@ -8,68 +8,65 @@ from pathlib import Path
 
 from openai import NOT_GIVEN, AsyncOpenAI
 
-from pocket_agent.system.config import config
-from pocket_agent.system.paths import is_packaged, user_dir
-
-# ── Log 檔設定 ────────────────────────────────────
-# 開發時寫在執行目錄；發佈版寫 ~/.pocket-agent/，因為程式所在目錄
-# 未必可寫（共用磁碟、Program Files），而且 cwd 會隨捷徑而變。
-_log_path = user_dir() / "agent.log" if is_packaged() else Path("agent.log")
-
-_handlers: list[logging.Handler] = [
-    logging.FileHandler(_log_path, encoding="utf-8"),
-]
-
-# 可攜版用 pythonw.exe 啟動且無 console，此時 sys.stderr 是 None。
-# 無條件掛 StreamHandler 會讓第一筆 log 就 AttributeError 而整個程式
-# 靜默死掉（沒有 console 可以顯示錯誤，症狀是雙擊後完全沒反應）。
-if sys.stderr is not None:
-    _handlers.append(logging.StreamHandler())
-
-# 預設 INFO。要深入追查時可設定 POCKET_AGENT_LOG_LEVEL=DEBUG，
-# 這樣 HTTP payload、工具呼叫細節都會印出來。
-_LOG_LEVEL = config.get("system.log_level", "WARNING").upper()
-
-logging.basicConfig(
-    level=getattr(logging, _LOG_LEVEL, logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=_handlers,
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
-# 這些套件在 DEBUG 會把完整的 HTTP 標頭與回應主體寫進 log，
-# 其中包含 OAuth token 與 session cookie——等於在每台機器上留下
-# 一份使用者憑證的明文副本。無論主層級設多低都壓到 WARNING。
-# PIL 則是每讀一張圖就吐十幾行 PNG chunk，純粹是雜訊。
-for _noisy in (
-    "httpx",
-    "httpcore",
-    "openai",
-    "PIL",
-    "urllib3",
-    "asyncio",
-    "keyring",
-):
-    logging.getLogger(_noisy).setLevel(logging.WARNING)
-
-log = logging.getLogger("pocket-agent")
-
-from pocket_agent.core.files import FileUploader  # noqa: E402
-from pocket_agent.core.subagents import get_subagent, is_subagent_tool, subagent_tools  # noqa: E402
-from pocket_agent.extensions.hooks import run_hooks  # noqa: E402
-from pocket_agent.extensions.mcp import MCPManager  # noqa: E402
-from pocket_agent.extensions.skills import (  # noqa: E402
+from pocket_agent.core.files import FileUploader
+from pocket_agent.core.subagents import get_subagent, is_subagent_tool, subagent_tools
+from pocket_agent.extensions.hooks import run_hooks
+from pocket_agent.extensions.mcp import MCPManager
+from pocket_agent.extensions.skills import (
     call_skill_tool,
     is_skill_tool,
     skill_tools,
     skills_index_prompt,
 )
-from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool, is_doc_tool  # noqa: E402
-from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool, is_document_tool  # noqa: E402
-from pocket_agent.tools.fs import FS_TOOLS, call_fs_tool, is_fs_tool  # noqa: E402
-from pocket_agent.tools.image import image_tool, save_image_b64  # noqa: E402
-from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: E402
-from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_web_tool  # noqa: E402
+from pocket_agent.system.config import config
+from pocket_agent.system.paths import is_packaged, user_dir
+from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool, is_doc_tool
+from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool, is_document_tool
+from pocket_agent.tools.fs import FS_TOOLS, call_fs_tool, is_fs_tool
+from pocket_agent.tools.image import image_tool, save_image_b64
+from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool
+from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_web_tool
+
+_logging_setup_done = False
+
+
+def setup_logging():
+    global _logging_setup_done
+    if _logging_setup_done:
+        return
+    _logging_setup_done = True
+
+    _log_path = user_dir() / "agent.log" if is_packaged() else Path("agent.log")
+
+    _handlers: list[logging.Handler] = [
+        logging.FileHandler(_log_path, encoding="utf-8"),
+    ]
+
+    if sys.stderr is not None:
+        _handlers.append(logging.StreamHandler())
+
+    _LOG_LEVEL = config.get("system.log_level", "WARNING").upper()
+
+    logging.basicConfig(
+        level=getattr(logging, _LOG_LEVEL, logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=_handlers,
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    for _noisy in (
+        "httpx",
+        "httpcore",
+        "openai",
+        "PIL",
+        "urllib3",
+        "asyncio",
+        "keyring",
+    ):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+
+log = logging.getLogger("pocket-agent")
 
 DEFAULT_MAX_TOOL_ROUNDS = 20
 
@@ -86,6 +83,7 @@ class Agent:
         is_subagent: bool = False,  # 子代理不觸發 hooks、不能再開子代理
         allowed_tools: list[str] | None = None,  # 限定可使用的工具清單（None 代表全開）
     ):
+        setup_logging()
         from pocket_agent.system.config import config
 
         self.client = client
@@ -99,7 +97,7 @@ class Agent:
         rounds_val = max_tool_rounds or config.get("system.max_tool_rounds")
         self.max_tool_rounds = int(rounds_val) if rounds_val is not None else DEFAULT_MAX_TOOL_ROUNDS
 
-        self.files = FileUploader(client)
+        self.files = FileUploader(client, cancel_check=lambda: self.cancel_requested)
         self.history: list[dict] = []
         self.cancel_requested = False  # 使用者按「停止」時設為 True（跨執行緒安全）
         self.last_images: list[Path] = []  # 本輪 chat 產生的圖片路徑（GUI 顯示用）
@@ -639,6 +637,16 @@ class Agent:
 
         input_items: list = list(self.history)
 
+        def sanitize_surrogates(obj):
+            if isinstance(obj, str):
+                return obj.encode("utf-8", "replace").decode("utf-8")
+            elif isinstance(obj, list):
+                return [sanitize_surrogates(i) for i in obj]
+            elif isinstance(obj, dict):
+                return {k: sanitize_surrogates(v) for k, v in obj.items()}
+            return obj
+
+        input_items = sanitize_surrogates(input_items)
         # reasoning 參數：effort 為 "none" 時不送推理
         reasoning_param = NOT_GIVEN
         if self.reasoning_effort and self.reasoning_effort != "none":
@@ -729,7 +737,7 @@ class Agent:
             try:
                 stream = engine.stream_chat(
                     input_items=input_items,
-                    instructions=self._instructions(user_query),
+                    instructions=sanitize_surrogates(self._instructions(user_query)),
                     tools=tools,
                     reasoning_param=reasoning_param,
                     cancel_check=lambda: self.cancel_requested,

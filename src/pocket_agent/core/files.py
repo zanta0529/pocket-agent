@@ -11,6 +11,7 @@ import asyncio
 import logging
 import mimetypes
 from pathlib import Path
+from typing import Callable, Optional
 
 from openai import AsyncOpenAI
 
@@ -49,8 +50,9 @@ MIN_IMAGE_DIMENSION = 32  # 小於這個尺寸多半是裝飾用小圖示，略�
 
 
 class FileUploader:
-    def __init__(self, client: AsyncOpenAI):
+    def __init__(self, client: AsyncOpenAI, cancel_check: Optional[Callable[[], bool]] = None):
         self.client = client
+        self.cancel_check = cancel_check or (lambda: False)
 
     async def upload(self, path: str) -> dict | list[dict]:
         """
@@ -116,6 +118,10 @@ class FileUploader:
         images_skipped = 0
 
         for page in reader.pages:
+            if self.cancel_check():
+                pages_text.append("\n\n... (讀取已由使用者中斷) ...\n\n")
+                break
+
             pages_text.append(page.extract_text() or "")
 
             try:
@@ -206,6 +212,9 @@ class FileUploader:
         count = 0
         MAX_FILES = 200
         for root, dirs, files in os.walk(p):
+            if self.cancel_check():
+                tree_lines.append("... (目錄讀取已由使用者中斷) ...")
+                break
             dirs[:] = [d for d in dirs if not d.startswith(".")]
             level = str(root).replace(str(p), "").count(os.sep)
             indent = " " * 4 * level

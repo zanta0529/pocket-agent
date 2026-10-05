@@ -14,13 +14,22 @@ def _get_hmac_key() -> bytes:
     import getpass
     import platform
 
+    salt_file = Path.home() / ".pocket-agent" / "session_salt"
+    if salt_file.exists():
+        salt = salt_file.read_bytes()
+    else:
+        salt = secrets.token_bytes(32)
+        salt_file.parent.mkdir(parents=True, exist_ok=True)
+        salt_file.write_bytes(salt)
+
     try:
         login = getpass.getuser()
     except Exception:
         login = "unknown_user"
     material = f"{platform.node()}-{login}-pocket-agent-session".encode("utf-8")
-    digest = hashlib.sha256(material).digest()
-    return digest
+
+    # 使用 PBKDF2 進行 Key Stretching (100,000 次)
+    return hashlib.pbkdf2_hmac("sha256", material, salt, 100000)
 
 
 def _sign_data(data_str: str) -> str:

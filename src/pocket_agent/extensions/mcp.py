@@ -81,8 +81,10 @@ class MCPManager:
         for closer in reversed(self._exit_stack_closers):
             try:
                 await closer(None, None, None)
-            except Exception:
-                pass
+            except Exception as e:
+                import logging
+
+                logging.getLogger("pocket-agent").warning("MCP closer failed: %s", e, exc_info=True)
 
     # ── Tool access ───────────────────────────────
 
