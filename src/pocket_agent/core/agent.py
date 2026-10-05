@@ -29,6 +29,20 @@ from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_web_tool
 
 _logging_setup_done = False
 
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+
+
+class _ConsoleFormatter(logging.Formatter):
+    """終端機專用格式：隱藏 traceback，避免干擾友善錯誤畫面（完整堆疊仍寫入 agent.log）。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        exc_info, exc_text, stack_info = record.exc_info, record.exc_text, record.stack_info
+        record.exc_info = record.exc_text = record.stack_info = None
+        try:
+            return super().format(record)
+        finally:
+            record.exc_info, record.exc_text, record.stack_info = exc_info, exc_text, stack_info
+
 
 def setup_logging():
     global _logging_setup_done
@@ -38,18 +52,20 @@ def setup_logging():
 
     _log_path = user_dir() / "agent.log" if is_packaged() else Path("agent.log")
 
-    _handlers: list[logging.Handler] = [
-        logging.FileHandler(_log_path, encoding="utf-8"),
-    ]
+    _file_handler = logging.FileHandler(_log_path, encoding="utf-8")
+    _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    _handlers: list[logging.Handler] = [_file_handler]
 
     if sys.stderr is not None:
-        _handlers.append(logging.StreamHandler())
+        _console_handler = logging.StreamHandler()
+        _console_handler.setFormatter(_ConsoleFormatter(_LOG_FORMAT))
+        _handlers.append(_console_handler)
 
     _LOG_LEVEL = config.get("system.log_level", "WARNING").upper()
 
     logging.basicConfig(
         level=getattr(logging, _LOG_LEVEL, logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(message)s",
+        format=_LOG_FORMAT,
         handlers=_handlers,
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -786,10 +802,18 @@ class Agent:
                         elif isinstance(event, EventUsage):
                             self.total_tokens += event.total_tokens
             except Exception as e:
+                # 額度／用量類錯誤重試無意義：交由引擎策略判斷，再由 chat() 轉為友善訊息
+                if engine.is_non_retryable_error(e):
+                    raise
                 consecutive_errors += 1
                 if consecutive_errors >= 3:
-                    log.error("連續錯誤過多，中斷代理執行", exc_info=True)
-                    return "", self._stopped_reply("連續發生太多次執行錯誤，為保護系統穩定已自動中斷。")
+                    log.error("連續錯誤過多，中斷代理執行：%s", e, exc_info=True)
+                    reason = " ".join(str(e).split())
+                    if len(reason) > 200:
+                        reason = reason[:200] + "…"
+                    return "", self._stopped_reply(
+                        f"連續發生太多次執行錯誤，為保護系統穩定已自動中斷。\n\n最後一次錯誤：{type(e).__name__}：{reason}"
+                    )
                 self.history.append(
                     {"role": "system", "content": f"[System Error] 串流執行時發生例外：{e}。請換個方式重試。"}
                 )

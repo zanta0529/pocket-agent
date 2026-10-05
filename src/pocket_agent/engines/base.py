@@ -115,6 +115,14 @@ class BaseEngine:
         """
         return None
 
+    def is_non_retryable_error(self, exc: Exception) -> bool:
+        """
+        判斷例外是否為不可重試的額度／計費類錯誤（預設為 HTTP 402／429）。
+        若為 True，Agent 主流程會立即中止並透過 format_api_error 呈現友善訊息。
+        子類別可覆寫以支援各供應商特有的錯誤。
+        """
+        return getattr(exc, "status_code", None) in (402, 429)
+
     def format_api_error(self, exc: Exception) -> str:
         """
         Strategy method to format the API error into a human-readable message.
@@ -141,33 +149,6 @@ class BaseEngine:
 
             if isinstance(error_dict, dict):
                 err_msg = error_dict.get("message", err_msg)
-
-                # 處理 usage_limit_reached 的重置時間
-                if error_dict.get("type") == "usage_limit_reached":
-                    plan_type = error_dict.get("plan_type", "未知")
-                    err_msg += (
-                        f"\n\n💳 API 用量已達上限（方案：{plan_type}）\n"
-                        "本次請求未被計費，輸入已保留，重置後可直接重試。"
-                    )
-                    resets_at = error_dict.get("resets_at")
-                    if isinstance(resets_at, (int, float)) and resets_at > 0:
-                        from datetime import datetime, timezone
-
-                        reset_dt = datetime.fromtimestamp(resets_at, tz=timezone.utc).astimezone()
-                        err_msg += f"\n重置時間：{reset_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}"
-
-                    resets_in_seconds = error_dict.get("resets_in_seconds")
-                    if isinstance(resets_in_seconds, (int, float)) and resets_in_seconds > 0:
-                        secs = int(resets_in_seconds)
-                        hours, remainder = divmod(secs, 3600)
-                        minutes, seconds = divmod(remainder, 60)
-                        if hours:
-                            countdown = f"{hours} 小時 {minutes} 分 {seconds} 秒"
-                        elif minutes:
-                            countdown = f"{minutes} 分 {seconds} 秒"
-                        else:
-                            countdown = f"{seconds} 秒"
-                        err_msg += f"\n距離重置還有：{countdown}"
         except Exception:
             pass
 
