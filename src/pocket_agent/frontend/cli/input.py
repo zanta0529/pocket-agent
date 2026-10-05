@@ -35,6 +35,8 @@ BUILTINS = {
     "logout": "登出",
     "model": "切換當次提供者與模型",
     "parallel": "手動平行啟動多個子代理 (用法: /parallel <name>:<task> | <name>:<task>)",
+    "rm-dir": "單次會話內，將外部資料夾從工作範圍移除",
+    "rm-file": "從待送區移除附件檔案",
     "session": "查看／載入歷史對話",
     "skills": "列出目前所有可用的全域與專案技能",
     "subagent": "強制委派任務給指定的子代理",

@@ -229,6 +229,25 @@ class SysRegistryCommand(CliCommand):
         elif result.status == "interactive_menu":
             if self.name == "model":
                 await do_model_flow(ctx, args)
+        elif result.status == "interactive_rm_dir":
+            dirs = result.payload.get("dirs", [])
+            if not dirs:
+                ctx.renderer.message("目前沒有任何額外授權目錄可移除。")
+                return CommandResult()
+
+            choices = list(dirs)
+            choices.append("取消")
+
+            selected = await ctx.reader.choose("選擇要移除的額外授權目錄", choices)
+            if not selected or selected == "取消":
+                ctx.renderer.message("已取消移除。")
+                return CommandResult()
+
+            rm_result = sys_registry.execute(f"/rm-dir {selected}", ctx.agent)
+            if rm_result.status == "success":
+                ctx.renderer.message(rm_result.message, "green")
+            else:
+                ctx.renderer.message(rm_result.message, "red")
         elif result.status == "learn_interactive":
             ctx.renderer.message("正在萃取對話知識，請稍候...", "dim")
             skill_content = await ctx.agent.extract_skill()

@@ -332,6 +332,19 @@ class Agent:
         if str(target_dir) not in self.workspace_dirs:
             self.workspace_dirs.append(str(target_dir))
 
+    def remove_workspace_dir(self, target_dir: str) -> tuple[bool, str]:
+        from pathlib import Path
+
+        try:
+            target = str(Path(target_dir).expanduser().resolve())
+        except Exception:
+            return False, "無效的路徑格式。"
+
+        if target in self.workspace_dirs:
+            self.workspace_dirs.remove(target)
+            return True, f"已從額外授權目錄中移除：{target}"
+        return False, f"找不到該授權目錄：{target}"
+
     async def extract_skill(self) -> str:
         """非同步呼叫 LLM 總結對話為 Skill Markdown。"""
         if len(self.history) < 2:

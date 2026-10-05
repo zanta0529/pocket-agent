@@ -111,6 +111,55 @@ class FileCommand(CliCommand):
         return CommandResult()
 
 
+class RmFileCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if not args.strip():
+            if not ctx.state.pending_files:
+                ctx.renderer.message("待送區沒有任何附件可移除。")
+                return CommandResult()
+
+            choices = []
+            for i, p in enumerate(ctx.state.pending_files, 1):
+                choices.append(f"{i}. {p}")
+            choices.append("取消")
+
+            selected = await ctx.reader.choose("選擇要移除的待送附件", choices)
+            if not selected or selected == "取消":
+                ctx.renderer.message("已取消移除。")
+                return CommandResult()
+
+            idx = choices.index(selected) + 1
+            removed = ctx.state.remove(idx)
+            ctx.renderer.message(f"已移除待送附件：{removed}")
+            return CommandResult()
+
+        arg = args.strip()
+        try:
+            # 嘗試作為編號移除
+            number = int(arg)
+            removed = ctx.state.remove(number)
+            ctx.renderer.message(f"已移除待送附件：{removed}")
+            return CommandResult()
+        except ValueError:
+            pass
+
+        # 作為路徑移除
+        from pathlib import Path
+
+        try:
+            target = str(Path(arg).expanduser().resolve(strict=False))
+        except Exception:
+            raise ValueError(f"無效的路徑格式：{arg}")
+
+        for i, p in enumerate(ctx.state.pending_files, 1):
+            if str(Path(p).expanduser().resolve(strict=False)) == target:
+                removed = ctx.state.remove(i)
+                ctx.renderer.message(f"已移除待送附件：{removed}")
+                return CommandResult()
+
+        raise ValueError(f"在待送區中找不到該檔案：{arg}")
+
+
 class AttachmentsCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         parts = args.split()

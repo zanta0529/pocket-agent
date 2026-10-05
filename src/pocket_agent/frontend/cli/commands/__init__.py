@@ -11,6 +11,7 @@ from pocket_agent.frontend.cli.commands.misc import (
     ImageCommand,
     LogoutCommand,
     QuitCommand,
+    RmFileCommand,
     SkillsCommand,
     ToolsCommand,
     UsageCommand,
@@ -39,6 +40,7 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("logout", LogoutCommand())
     registry.register("clear", ClearCommand())
     registry.register("file", FileCommand())
+    registry.register("rm-file", RmFileCommand())
     registry.register("attachments", AttachmentsCommand())
     registry.register("session", SessionCommand())
     registry.register("compact", CompactCommand())
@@ -54,7 +56,7 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("codesearch", cs_cmd)
     registry.register("cs", cs_cmd)
 
-    for sys_cmd in ("add-dir", "workspace", "model", "learn", "config", "undo"):
+    for sys_cmd in ("add-dir", "rm-dir", "workspace", "model", "learn", "config", "undo"):
         registry.register(sys_cmd, SysRegistryCommand(sys_cmd))
 
     registry.register("image", ImageCommand())

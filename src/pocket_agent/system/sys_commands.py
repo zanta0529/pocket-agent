@@ -42,6 +42,22 @@ class AddDirCommand(SysCommand):
             return CommandResult("needs_auth", msg, {"target_dir": target_dir})
 
 
+class RmDirCommand(SysCommand):
+    @property
+    def name(self) -> str:
+        return "rm-dir"
+
+    def execute(self, args_str: str, agent: Any) -> CommandResult:
+        if not args_str.strip():
+            return CommandResult("interactive_rm_dir", "", payload={"dirs": agent.workspace_dirs})
+
+        success, msg = agent.remove_workspace_dir(args_str.strip())
+        if success:
+            return CommandResult("success", f"✓ {msg}")
+        else:
+            return CommandResult("error", f"⚠ {msg}")
+
+
 class WorkspaceCommand(SysCommand):
     @property
     def name(self) -> str:
@@ -201,6 +217,7 @@ class SysCommandRegistry:
 # 全域單例
 sys_registry = SysCommandRegistry()
 sys_registry.register(AddDirCommand())
+sys_registry.register(RmDirCommand())
 sys_registry.register(WorkspaceCommand())
 sys_registry.register(ModelCommand())
 sys_registry.register(LearnCommand())

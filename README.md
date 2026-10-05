@@ -152,6 +152,8 @@ python -m pocket_agent
 - `/undo`：啟動互動式還原選單，可檢視檔案備份差異並執行還原。
 - `/codesearch <關鍵字>` (或 `/cs`)：快速搜尋工作區的程式碼片段，並隱式加入對話上下文供 AI 參考。
 - `/add-dir <路徑>` / `/workspace`：授權並新增額外的工作目錄。
+- `/rm-dir [路徑]`：移除額外授權的工作目錄。若不帶參數將顯示互動式選單供選擇。
+- `/rm-file [路徑或編號]`：移除單一待送附件。若不帶參數將顯示互動式選單供選擇。
 - `/compact`：讓 AI 自動摘要並壓縮中間的對話歷史，快速回收 Context 上限空間。
 - `/clear`：清除當前記憶體的對話歷史。
 - `/logout`：清除本機端的 OAuth Token 憑證。
@@ -186,10 +188,12 @@ python -m pocket_agent --resume
 | /config                         | 互動式編輯系統設定檔                                  |
 | /undo                           | 互動式檢視檔案備份並執行還原                          |
 | /add-dir                        | 授權並新增工作目錄                                    |
+| /rm-dir                         | 移除額外的授權工作目錄 (支援無參數互動選單)           |
 | /compact                        | 自動摘要並壓縮對話紀錄                                |
 | /attachments                    | 列出本次待送附件與編號                                |
 | /attachments remove <編號>      | 移除單一待送附件，不刪除檔案                          |
 | /attachments clear              | 清空待送佇列，不刪除檔案                              |
+| /rm-file                        | 移除單一待送附件 (支援無參數互動選單)，不刪除檔案     |
 
 > 💡 關於 CLI 介面的附件處理、路徑解析、影像生成細節，以及系統錯誤與中斷時的邊界行為，請詳閱：[CLI 操作與限制說明](docs/cli-usage-limitations.md)。
 
