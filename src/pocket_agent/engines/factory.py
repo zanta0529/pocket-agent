@@ -35,6 +35,16 @@ ENGINE_MAP = {
 
 class EngineFactory:
     @staticmethod
+    def resolve_provider(client: Any) -> str:
+        """未明確指定 provider 時的唯一後備：依 client 的 base_url 推論（向下相容用）。"""
+        url_str = str(getattr(client, "base_url", ""))
+        if "openai.com" in url_str or "chatgpt.com" in url_str:
+            return PROVIDER_OPENAI
+        if "openrouter.ai" in url_str:
+            return PROVIDER_OPENROUTER
+        return PROVIDER_OLLAMA
+
+    @staticmethod
     def create(provider: str, client: Any, model: str) -> BaseEngine:
         p = provider.lower()
         engine_cls = ENGINE_MAP.get(p)

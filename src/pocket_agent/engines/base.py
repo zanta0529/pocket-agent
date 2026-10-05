@@ -85,9 +85,35 @@ class QuotaInfo:
 
 
 class BaseEngine:
+    # 能力旗標：是否支援內建的圖片生成工具（由各 Adapter 覆寫）
+    supports_image_generation: bool = False
+
     def __init__(self, client: Any, model: str):
         self.client = client
         self.model = model
+
+    def is_context_overflow(self, exc: Exception) -> bool:
+        """
+        判斷例外是否為「上下文長度超載」。預設以 HTTP 400 搭配常見關鍵字判斷，
+        子類別可覆寫以支援各供應商特有的錯誤格式。
+        """
+        if getattr(exc, "status_code", None) != 400:
+            return False
+        err_msg = str(exc).lower()
+        return any(
+            key in err_msg for key in ("context_length_exceeded", "context length", "too large", "maximum context")
+        )
+
+    def connection_error_hint(self, exc: Exception) -> str | None:
+        """
+        若例外為連線中斷／逾時類錯誤，回傳友善的補充說明；否則回傳 None。
+        """
+        if "Connection error" not in str(exc):
+            return None
+        return (
+            "\n\n💡 **系統提示**：此錯誤通常發生在網路不穩定、或是模型產生的內容與"
+            "工具呼叫（例如產生整份 PDF）過於龐大，導致 API 伺服器中斷連線或逾時。"
+        )
 
     async def get_quota(self) -> QuotaInfo:
         """

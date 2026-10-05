@@ -17,6 +17,8 @@ log = logging.getLogger("pocket-agent")
 
 
 class OpenAIResponsesEngine(BaseEngine):
+    supports_image_generation = True
+
     async def stream_chat(
         self,
         input_items: list,

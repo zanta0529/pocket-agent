@@ -10,6 +10,7 @@ from openai import NOT_GIVEN, AsyncOpenAI
 
 from pocket_agent.core.files import FileUploader
 from pocket_agent.core.subagents import get_subagent, is_subagent_tool, subagent_tools
+from pocket_agent.engines.base import BaseEngine
 from pocket_agent.extensions.hooks import run_hooks
 from pocket_agent.extensions.mcp import MCPManager
 from pocket_agent.extensions.skills import (
@@ -98,11 +99,14 @@ class Agent:
         max_tool_rounds: int | None = None,  # 未指定時讀 MAX_TOOL_ROUNDS 環境變數
         is_subagent: bool = False,  # 子代理不觸發 hooks、不能再開子代理
         allowed_tools: list[str] | None = None,  # 限定可使用的工具清單（None 代表全開）
+        provider: str | None = None,  # 模型供應商 ID；未指定時由 EngineFactory 依 client 推論（向下相容）
     ):
         setup_logging()
         from pocket_agent.system.config import config
 
         self.client = client
+        self.provider = provider
+        self._engine_cache: tuple[tuple[str, int, str], BaseEngine] | None = None
         self.mcp = mcp
         self._is_subagent = is_subagent
         self.allowed_tools = allowed_tools
@@ -137,6 +141,17 @@ class Agent:
         # None 時不確認直接執行；GUI 會掛上跳確認視窗的實作。
         self.on_confirm = None
 
+    @property
+    def engine(self) -> BaseEngine:
+        """目前 provider／client／model 對應的 Engine（Adapter）；相關設定變動時自動重建。"""
+        from pocket_agent.engines import EngineFactory
+
+        provider = self.provider or EngineFactory.resolve_provider(self.client)
+        key = (provider, id(self.client), self.model)
+        if self._engine_cache is None or self._engine_cache[0] != key:
+            self._engine_cache = (key, EngineFactory.create(provider, self.client, self.model))
+        return self._engine_cache[1]
+
     def _emit(self, kind: str, data="") -> None:
         callback = self.on_stream
         if callback is None:
@@ -161,8 +176,6 @@ class Agent:
         """
         import time
 
-        from openai import APIStatusError, BadRequestError
-
         self.cancel_requested = False
         self.total_tokens = 0
         start_time = time.time()
@@ -178,14 +191,9 @@ class Agent:
 
         try:
             thinking, reply = await self._run_loop()
-        except BadRequestError as e:
-            err_msg = str(e).lower()
-            if (
-                "context_length_exceeded" in err_msg
-                or "context length" in err_msg
-                or "too large" in err_msg
-                or "maximum context" in err_msg
-            ):
+        except Exception as e:
+            engine = self.engine
+            if engine.is_context_overflow(e):
                 log.info("Context exceeded intercepted.")
                 self.history.pop()  # Remove the failed user input from history
                 notice = {
@@ -204,31 +212,16 @@ class Agent:
                     "建議作法：請明確指示我「**委派子代理**」或「**改用精準搜尋**」來拆解這個大型任務。",
                     "",
                 )
-            else:
-                raise
-        except APIStatusError as e:
-            if getattr(e, "status_code", None) not in (402, 429):
-                raise
 
-            log.info(f"API Error {e.status_code} intercepted.")
+            if engine.is_non_retryable_error(e):
+                log.info(f"API Error {getattr(e, 'status_code', None)} intercepted.")
+                self.history.pop()
+                raise RuntimeError(engine.format_api_error(e)) from e
 
-            # Use Engine Strategy to parse detailed error hint
-            url_str = str(self.client.base_url)
-            if "openai.com" in url_str or "chatgpt.com" in url_str:
-                provider = "openai"
-            elif "openrouter.ai" in url_str:
-                provider = "openrouter"
-            else:
-                provider = "ollama"
-
-            from pocket_agent.engines import EngineFactory
-
-            engine = EngineFactory.create(provider, self.client, self.model)
-
-            self.history.pop()
-
-            msg = engine.format_api_error(e)
-            raise RuntimeError(msg)
+            hint = engine.connection_error_hint(e)
+            if hint:
+                raise RuntimeError(f"{e}{hint}") from e
+            raise
 
         if self.last_images:
             paths = "\n".join(f"🖼️ {p}" for p in self.last_images)
@@ -301,20 +294,7 @@ class Agent:
         return True
 
     async def get_quota(self):
-        url_str = str(self.client.base_url)
-        if "openai.com" in url_str or "chatgpt.com" in url_str:
-            provider = "openai"
-        elif "openrouter.ai" in url_str:
-            provider = "openrouter"
-        else:
-            provider = "ollama"
-
-        from pocket_agent.engines import EngineFactory
-
-        engine = EngineFactory.create(provider, self.client, self.model)
-        if hasattr(engine, "get_quota"):
-            return await engine.get_quota()
-        return None
+        return await self.engine.get_quota()
 
     @staticmethod
     def _stopped_reply(text: str) -> str:
@@ -402,9 +382,7 @@ class Agent:
             + skill_tools(self.workspace_dirs)
         )
 
-        url_str = str(self.client.base_url)
-        is_openai = "openai.com" in url_str or "chatgpt.com" in url_str
-        if is_openai:
+        if self.engine.supports_image_generation:
             tools.insert(0, image_tool())
 
         ask_question = {
@@ -673,18 +651,9 @@ class Agent:
 
         consecutive_errors = 0  # 連續全錯輪次計數
 
-        url_str = str(self.client.base_url)
-        if "openai.com" in url_str or "chatgpt.com" in url_str:
-            provider = "openai"
-        elif "openrouter.ai" in url_str:
-            provider = "openrouter"
-        else:
-            provider = "ollama"
-
         from contextlib import aclosing
 
         from pocket_agent.engines import (
-            EngineFactory,
             EventImageGenerationDone,
             EventText,
             EventThinking,
@@ -694,7 +663,7 @@ class Agent:
             EventUsage,
         )
 
-        engine = EngineFactory.create(provider, self.client, self.model)
+        engine = self.engine
 
         max_rounds = self.max_tool_rounds
         round_idx = 0

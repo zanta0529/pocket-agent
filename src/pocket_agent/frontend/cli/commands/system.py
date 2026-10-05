@@ -23,7 +23,7 @@ async def switch_model(
     new_client = get_provider_client(provider=provider, model=model)
     old_client = agent.client
     # No await between construction and commit: all consumers see one state.
-    agent.client, agent.model = new_client, model
+    agent.client, agent.model, agent.provider = new_client, model, provider
     state.provider, state.model = provider, model
     renderer.message(f"當次對話已切換：{provider} / {model}", "green")
     try:

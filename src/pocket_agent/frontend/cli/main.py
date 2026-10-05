@@ -408,7 +408,9 @@ class CliFrontend(FrontendStrategy):
             )
             system_prompt += immunity_clause
 
-            agent = Agent(client=client, mcp=mcp, model=state.model, system_prompt=system_prompt)
+            agent = Agent(
+                client=client, mcp=mcp, model=state.model, system_prompt=system_prompt, provider=state.provider
+            )
 
             # F3：讓 renderer 能取得 model 名稱顯示在標頭
             renderer._state = state
