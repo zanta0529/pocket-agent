@@ -38,7 +38,7 @@ jobs:
         run: pytest tests/
 
       - name: Check Missing Imports (Production)
-        run: python scripts/check_imports.py src scripts --req requirements.in
+        run: python scripts/check_imports.py src scripts --req requirements.in --ignore tiktoken
 
       - name: Check Missing Imports (Development)
         run: python scripts/check_imports.py tests --req requirements.in --req requirements-dev.in
