@@ -6,6 +6,7 @@ from pocket_agent.system.constants import (
     PROVIDER_OLLAMA,
     PROVIDER_OLLAMACLOUD,
     PROVIDER_OPENAI,
+    PROVIDER_OPENAI_API,
     PROVIDER_OPENROUTER,
     PROVIDER_SAMBANOVA,
 )
@@ -15,12 +16,13 @@ from pocket_agent.system.providers.groq_provider import GroqProvider
 from pocket_agent.system.providers.mistral_provider import MistralProvider
 from pocket_agent.system.providers.ollama import OllamaLocalProvider
 from pocket_agent.system.providers.ollama_cloud import OllamaCloudProvider
-from pocket_agent.system.providers.openai_provider import OpenAIProvider
+from pocket_agent.system.providers.openai_provider import OpenAIApiProvider, OpenAIProvider
 from pocket_agent.system.providers.openrouter import OpenRouterProvider
 from pocket_agent.system.providers.sambanova_provider import SambaNovaProvider
 
 PROVIDER_STRATEGIES = {
     PROVIDER_OPENAI: OpenAIProvider,
+    PROVIDER_OPENAI_API: OpenAIApiProvider,
     PROVIDER_OLLAMA: OllamaLocalProvider,
     PROVIDER_OLLAMACLOUD: OllamaCloudProvider,
     PROVIDER_OPENROUTER: OpenRouterProvider,

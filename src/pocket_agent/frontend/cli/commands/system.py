@@ -34,7 +34,7 @@ async def switch_model(
 
 async def do_model_flow(ctx: CommandContext, args: str) -> None:
     from pocket_agent.system.auth import fetch_available_models
-    from pocket_agent.system.providers import SUPPORTED_PROVIDERS
+    from pocket_agent.system.providers import PROVIDER_STRATEGIES, SUPPORTED_PROVIDERS
 
     if args:
         parts = args.split()
@@ -48,11 +48,17 @@ async def do_model_flow(ctx: CommandContext, args: str) -> None:
         else:
             raise ValueError(f"用法：/model [<{'|'.join(SUPPORTED_PROVIDERS)}>] <模型名稱>")
     else:
-        provider = await ctx.reader.choose("提供者", SUPPORTED_PROVIDERS)
-        if not provider:
+        # 轉換為 display_name 顯示
+        display_choices = [PROVIDER_STRATEGIES[p].display_name for p in SUPPORTED_PROVIDERS]
+        chosen_display = await ctx.reader.choose("提供者", display_choices)
+        if not chosen_display:
             return
-        if provider not in SUPPORTED_PROVIDERS:
+
+        # 轉回 internal ID
+        provider = next((p for p in SUPPORTED_PROVIDERS if PROVIDER_STRATEGIES[p].display_name == chosen_display), None)
+        if not provider or provider not in SUPPORTED_PROVIDERS:
             raise ValueError(f"僅支援 {', '.join(SUPPORTED_PROVIDERS)}")
+
         try:
             models = fetch_available_models(provider)
         except Exception:

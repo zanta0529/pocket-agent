@@ -203,7 +203,7 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
     if provider == "gemini-oauth":
         auth_url_base = "https://accounts.google.com/o/oauth2/v2/auth"
         token_url = "https://oauth2.googleapis.com/token"
-        scope = "https://www.googleapis.com/auth/generative-language"
+        scope = config.get("providers.gemini.scope", "https://www.googleapis.com/auth/generative-language")
     else:
         auth_url_base = OPENAI_AUTH_URL
         token_url = OPENAI_TOKEN_URL
@@ -230,12 +230,18 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
     bucket: dict = {}
     app = FastAPI()
 
+    from urllib.parse import urlparse
+
+    parsed_uri = urlparse(REDIRECT_URI)
+    listen_port = parsed_uri.port or 1455
+    listen_path = parsed_uri.path or "/auth/callback"
+
     def _page(color: str, message: str) -> HTMLResponse:
         return HTMLResponse(
             f"<h1 style='font-family:sans-serif;text-align:center;padding-top:20vh;color:{color}'>{message}</h1>"
         )
 
-    @app.get("/auth/callback")
+    @app.get(listen_path)
     async def callback(code: str = "", state: str = "", error: str = "", error_description: str = ""):
         if error:
             log.error("OAuth 被拒絕：%s %s", error, error_description)
@@ -251,7 +257,7 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
         bucket["code"] = code
         return _page("#10a37f", "✓ 認證成功！請關閉此視窗回到 Pocket Agent。")
 
-    server = uvicorn.Server(uvicorn.Config(app, host="localhost", port=1455, log_level="error", log_config=None))
+    server = uvicorn.Server(uvicorn.Config(app, host="localhost", port=listen_port, log_level="error", log_config=None))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
 
@@ -259,7 +265,7 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
         if server.started:
             break
         if not thread.is_alive():
-            raise RuntimeError("無法在 port 1455 啟動登入用的本機服務。請確認 port 未被占用。")
+            raise RuntimeError(f"無法在 port {listen_port} 啟動登入用的本機服務。請確認 port 未被占用。")
         time.sleep(0.1)
     else:
         raise RuntimeError("登入服務啟動逾時。")
@@ -298,6 +304,11 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
 
             parsed = parse_qs(urlparse(redirect_url).query)
             if "code" in parsed:
+                got_state = parsed.get("state", [""])[0]
+                if got_state != expected_state:
+                    bucket["error"] = "驗證碼不符 (State mismatch)。"
+                    server.should_exit = True
+                    break
                 bucket["code"] = parsed["code"][0]
                 server.should_exit = True
                 break

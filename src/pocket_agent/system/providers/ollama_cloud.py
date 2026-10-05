@@ -11,6 +11,20 @@ log = logging.getLogger("pocket-agent")
 
 
 class OllamaCloudProvider(BaseProvider):
+    display_name = "Ollama Cloud"
+
+    @classmethod
+    def setup_wizard(cls, config) -> None:
+        from rich.console import Console
+        from rich.prompt import Prompt
+
+        console = Console()
+        current_url = config.get("providers.ollama_cloud.base_url", "https://ollama.com/v1")
+        console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
+        new_url = Prompt.ask("請輸入 Base URL", default=current_url)
+        config.set("providers.ollama_cloud.base_url", new_url)
+        cls.prompt_api_key("providers.ollama_cloud.api_key", "Ollama Cloud", config)
+
     def get_client(self) -> Any:
         base_url = config.get("providers.ollama_cloud.base_url") or "https://ollama.com/v1"
         base_url = base_url.rstrip("/")

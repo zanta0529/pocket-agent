@@ -13,6 +13,12 @@ SAMBANOVA_BASE_URL = "https://api.sambanova.ai/v1"
 
 
 class SambaNovaProvider(BaseProvider):
+    display_name = "SambaNova Cloud"
+
+    @classmethod
+    def setup_wizard(cls, config) -> None:
+        cls.prompt_api_key("providers.sambanova.api_key", "SambaNova", config)
+
     def get_client(self) -> Any:
         api_key = config.get("providers.sambanova.api_key")
         if not api_key:

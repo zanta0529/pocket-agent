@@ -11,6 +11,20 @@ log = logging.getLogger("pocket-agent")
 
 
 class OpenRouterProvider(BaseProvider):
+    display_name = "OpenRouter"
+
+    @classmethod
+    def setup_wizard(cls, config) -> None:
+        from rich.console import Console
+        from rich.prompt import Prompt
+
+        console = Console()
+        current_url = config.get("providers.openrouter.base_url", "https://openrouter.ai/api/v1")
+        console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
+        new_url = Prompt.ask("請輸入 Base URL", default=current_url)
+        config.set("providers.openrouter.base_url", new_url)
+        cls.prompt_api_key("providers.openrouter.api_key", "OpenRouter", config)
+
     def get_client(self) -> Any:
         base_url = config.get("providers.openrouter.base_url")
         if not base_url:

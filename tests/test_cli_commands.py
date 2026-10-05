@@ -60,7 +60,10 @@ def test_clear_and_add_dir_do_not_consume_attachments():
 
 def test_model_selection_unavailable_allows_manual_entry():
     state = CliState("openai", "old")
-    reader = SimpleNamespace(choose=AsyncMock(side_effect=["ollama", "manual"]))
+    from pocket_agent.system.providers import PROVIDER_STRATEGIES
+
+    ollama_display = PROVIDER_STRATEGIES["ollama"].display_name
+    reader = SimpleNamespace(choose=AsyncMock(side_effect=[ollama_display, "manual"]))
     handler = CommandHandler(Mock(), state, reader, Mock(), [])
     with (
         patch("pocket_agent.system.auth.fetch_available_models", return_value=[]),

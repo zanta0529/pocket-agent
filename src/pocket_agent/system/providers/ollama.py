@@ -11,6 +11,20 @@ log = logging.getLogger("pocket-agent")
 
 
 class OllamaLocalProvider(BaseProvider):
+    display_name = "Ollama (Local)"
+
+    @classmethod
+    def setup_wizard(cls, config) -> None:
+        from rich.console import Console
+        from rich.prompt import Prompt
+
+        console = Console()
+        current_url = config.get("providers.ollama.base_url", "http://localhost:11434")
+        console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
+        new_url = Prompt.ask("請輸入 Ollama 連線位址", default=current_url)
+        config.set("providers.ollama.base_url", new_url)
+        console.print("[green]✓ Ollama 設定已更新[/green]\n")
+
     def get_client(self) -> Any:
         base_url = config.get("providers.ollama.base_url")
         if base_url:

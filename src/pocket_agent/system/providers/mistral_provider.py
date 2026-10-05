@@ -13,6 +13,12 @@ MISTRAL_BASE_URL = "https://api.mistral.ai/v1"
 
 
 class MistralProvider(BaseProvider):
+    display_name = "Mistral API"
+
+    @classmethod
+    def setup_wizard(cls, config) -> None:
+        cls.prompt_api_key("providers.mistral.api_key", "Mistral", config)
+
     def get_client(self) -> Any:
         api_key = config.get("providers.mistral.api_key")
         if not api_key:

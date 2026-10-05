@@ -13,6 +13,12 @@ GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
 class GroqProvider(BaseProvider):
+    display_name = "Groq Cloud"
+
+    @classmethod
+    def setup_wizard(cls, config) -> None:
+        cls.prompt_api_key("providers.groq.api_key", "Groq", config)
+
     def get_client(self) -> Any:
         api_key = config.get("providers.groq.api_key")
         if not api_key:

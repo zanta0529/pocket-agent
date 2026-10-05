@@ -7,7 +7,6 @@ from rich.prompt import Confirm, Prompt
 from rich.rule import Rule
 from rich.text import Text
 
-from pocket_agent.system.auth import get_access_token, logout
 from pocket_agent.system.paths import mcp_config_path
 
 console = Console()
@@ -41,7 +40,7 @@ def run_setup() -> None:
 
 def _step_provider() -> str:
     from pocket_agent.system.config import config
-    from pocket_agent.system.providers import SUPPORTED_PROVIDERS
+    from pocket_agent.system.providers import PROVIDER_STRATEGIES, SUPPORTED_PROVIDERS
 
     console.print(Rule("① 選擇服務供應商 (Provider)"))
     console.print()
@@ -51,7 +50,8 @@ def _step_provider() -> str:
     providers = SUPPORTED_PROVIDERS
     for i, p in enumerate(providers, 1):
         tag = " [green]← 目前[/green]" if p == current_provider else ""
-        console.print(f"  [cyan]{i}[/cyan]. [bold]{p.upper()}[/bold]{tag}")
+        display = PROVIDER_STRATEGIES[p].display_name
+        console.print(f"  [cyan]{i}[/cyan]. [bold]{display}[/bold]{tag}")
 
     choice = Prompt.ask(
         "選擇",
@@ -61,191 +61,20 @@ def _step_provider() -> str:
     selected = providers[int(choice) - 1]
 
     config.set("active_provider", selected)
-    console.print(f"[green]✓ 已設定為 {selected.upper()}[/green]\n")
+    console.print(f"[green]✓ 已設定為 {PROVIDER_STRATEGIES[selected].display_name}[/green]\n")
     return selected
-
-
-def _prompt_api_key(config_key: str, display_name: str, config) -> None:
-    """共用輔助函式：提示並更新 API Key"""
-    from pocket_agent.system.config import AuthException, MissingKeyException, RequireMasterPasswordException
-
-    current_key = ""
-    while True:
-        try:
-            current_key = config.get(config_key, "")
-            break
-        except MissingKeyException:
-            current_key = ""
-            break
-        except AuthException:
-            console.print("\n[yellow]加密庫目前處於鎖定狀態，需先解鎖才能讀取或修改金鑰。[/yellow]")
-            pwd = Prompt.ask("請輸入主密碼", password=True)
-            if config.unlock(pwd):
-                console.print("[green]✓ 解鎖成功！[/green]\n")
-                continue
-            else:
-                console.print("[red]密碼錯誤或加密庫損毀，請重試。[/red]")
-
-    key_hint = "*" * 10 + current_key[-4:] if current_key and len(current_key) > 4 else "未設定"
-    console.print(f"[dim]目前 API Key: {key_hint}[/dim]")
-    new_key = Prompt.ask(f"請輸入 {display_name} API Key (直接 Enter 保持原狀)", default="")
-
-    if new_key.strip():
-        try:
-            config.set(config_key, new_key.strip())
-        except RequireMasterPasswordException:
-            console.print("\n[yellow]系統不支援原生憑證，即將為您建立高強度的 JWE 加密庫來保護金鑰。[/yellow]")
-            while True:
-                pwd1 = Prompt.ask("請設定您的[bold cyan]主密碼[/bold cyan]", password=True)
-                pwd2 = Prompt.ask("請再次輸入以確認", password=True)
-                if pwd1 == pwd2 and pwd1:
-                    config.encrypted_provider.save_vault(pwd1)
-                    console.print("[green]✓ 加密庫建立成功！[/green]")
-                    break
-                else:
-                    console.print("[red]密碼不一致或為空，請重新輸入。[/red]")
-
-    console.print(f"[green]✓ {display_name} API Key 設定已更新[/green]\n")
-
-
-def _setup_openai(config):
-    console.print(Rule("② 登入 OPENAI"))
-    console.print()
-    from pocket_agent.system.auth import _is_expired, _load_token
-
-    token = _load_token("openai")
-    if token and not _is_expired(token):
-        console.print("[green]✓ 已登入 OPENAI（token 有效）[/green]")
-        if not Confirm.ask("要重新登入嗎？", default=False):
-            console.print()
-            return
-        logout("openai")
-    console.print("即將開啟瀏覽器，請用你的 [bold]OPENAI 帳號[/bold] 登入並授權…\n")
-    input("按 Enter 繼續…")
-    get_access_token(provider="openai")
-    console.print()
-
-
-def _setup_openrouter(config):
-    console.print(Rule("② 設定 OpenRouter"))
-    console.print()
-    current_url = config.get("providers.openrouter.base_url", "https://openrouter.ai/api/v1")
-    console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
-    new_url = Prompt.ask("請輸入 Base URL", default=current_url)
-    config.set("providers.openrouter.base_url", new_url)
-    _prompt_api_key("providers.openrouter.api_key", "OpenRouter", config)
-
-
-def _setup_ollama(config):
-    console.print(Rule("② 設定 Ollama (Local)"))
-    console.print()
-    current_url = config.get("providers.ollama.base_url", "http://localhost:11434")
-    console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
-    new_url = Prompt.ask("請輸入 Ollama 連線位址", default=current_url)
-    config.set("providers.ollama.base_url", new_url)
-    console.print("[green]✓ Ollama 設定已更新[/green]\n")
-
-
-def _setup_ollamacloud(config):
-    console.print(Rule("② 設定 Ollama Cloud"))
-    console.print()
-    current_url = config.get("providers.ollama_cloud.base_url", "https://ollama.com/v1")
-    console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
-    new_url = Prompt.ask("請輸入 Base URL", default=current_url)
-    config.set("providers.ollama_cloud.base_url", new_url)
-    _prompt_api_key("providers.ollama_cloud.api_key", "Ollama Cloud", config)
-
-
-def _setup_gemini(config):
-    console.print(Rule("② 設定 Gemini (Google AI Studio)"))
-    console.print()
-    _prompt_api_key("providers.gemini.api_key", "Gemini", config)
-
-
-def _setup_gemini_oauth(config):
-    console.print(Rule("② 登入 GEMINI (OAuth)"))
-    console.print()
-
-    current_client_id = config.get("providers.gemini.client_id", "")
-    console.print(f"[dim]目前 Google OAuth Client ID: {current_client_id or '未設定'}[/dim]")
-    new_client_id = Prompt.ask("請輸入 Client ID (直接 Enter 保持原狀)", default="")
-    if new_client_id.strip():
-        config.set("providers.gemini.client_id", new_client_id.strip())
-
-    current_client_secret = config.get("providers.gemini.client_secret", "")
-    console.print(f"[dim]目前 Google OAuth Client Secret (選填): {'***' if current_client_secret else '未設定'}[/dim]")
-    new_client_secret = Prompt.ask("請輸入 Client Secret (直接 Enter 保持原狀)", default="")
-    if new_client_secret.strip():
-        config.set("providers.gemini.client_secret", new_client_secret.strip())
-
-    from pocket_agent.system.auth import _is_expired, _load_token
-
-    token = _load_token("gemini-oauth")
-    if token and not _is_expired(token):
-        console.print("[green]✓ 已登入 GEMINI-OAUTH（token 有效）[/green]")
-        if not Confirm.ask("要重新登入嗎？", default=False):
-            console.print()
-            return
-        logout("gemini-oauth")
-
-    client_id_check = config.get("providers.gemini.client_id")
-    if not client_id_check:
-        console.print("[red]✗ 必須提供 Client ID 才能進行 OAuth 授權，請重試。[/red]")
-        return
-
-    console.print("即將開啟瀏覽器，請用你的 [bold]Google 帳號[/bold] 登入並授權…\n")
-    input("按 Enter 繼續…")
-    get_access_token(provider="gemini-oauth")
-    console.print()
-
-
-def _setup_groq(config):
-    console.print(Rule("② 設定 Groq Cloud"))
-    console.print()
-    _prompt_api_key("providers.groq.api_key", "Groq", config)
-
-
-def _setup_sambanova(config):
-    console.print(Rule("② 設定 SambaNova Cloud"))
-    console.print()
-    _prompt_api_key("providers.sambanova.api_key", "SambaNova", config)
-
-
-def _setup_mistral(config):
-    console.print(Rule("② 設定 Mistral API"))
-    console.print()
-    _prompt_api_key("providers.mistral.api_key", "Mistral", config)
 
 
 def _step_login(provider: str) -> None:
     from pocket_agent.system.config import config
-    from pocket_agent.system.constants import (
-        PROVIDER_GEMINI,
-        PROVIDER_GEMINI_OAUTH,
-        PROVIDER_GROQ,
-        PROVIDER_MISTRAL,
-        PROVIDER_OLLAMA,
-        PROVIDER_OLLAMACLOUD,
-        PROVIDER_OPENAI,
-        PROVIDER_OPENROUTER,
-        PROVIDER_SAMBANOVA,
-    )
+    from pocket_agent.system.providers import PROVIDER_STRATEGIES
 
-    handlers = {
-        PROVIDER_OPENAI: _setup_openai,
-        PROVIDER_OPENROUTER: _setup_openrouter,
-        PROVIDER_OLLAMA: _setup_ollama,
-        PROVIDER_OLLAMACLOUD: _setup_ollamacloud,
-        PROVIDER_GEMINI: _setup_gemini,
-        PROVIDER_GEMINI_OAUTH: _setup_gemini_oauth,
-        PROVIDER_GROQ: _setup_groq,
-        PROVIDER_SAMBANOVA: _setup_sambanova,
-        PROVIDER_MISTRAL: _setup_mistral,
-    }
+    console.print(Rule("② 供應商設定"))
+    console.print()
 
-    handler = handlers.get(provider)
-    if handler:
-        handler(config)
+    strategy_cls = PROVIDER_STRATEGIES.get(provider)
+    if strategy_cls and hasattr(strategy_cls, "setup_wizard"):
+        strategy_cls.setup_wizard(config)
 
 
 def _step_model(provider: str) -> None:
