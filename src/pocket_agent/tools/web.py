@@ -109,9 +109,7 @@ def call_web_tool(name: str, args: dict) -> str:
             try:
                 from curl_cffi import requests as c_requests
 
-                resp = c_requests.post(
-                    url, data={"q": query}, headers=headers, impersonate="chrome", timeout=15.0, verify=False
-                )
+                resp = c_requests.post(url, data={"q": query}, headers=headers, impersonate="chrome", timeout=15.0)
                 resp.raise_for_status()
             except Exception as curl_e:
                 # 若 curl_cffi 失敗 (缺套件、SSL 憑證、403等)，降級使用 httpx
@@ -153,41 +151,62 @@ def call_web_tool(name: str, args: dict) -> str:
             if not url:
                 return "[ERROR] 缺少必填參數 'url'"
 
-            parsed = urlparse(url)
-            if parsed.scheme not in ("http", "https"):
-                return "[ERROR] 僅支援 http / https 網址"
-
-            # SSRF 防護：檢查 IP 是否為內部或保留網段
-            try:
-                import ipaddress
-                import socket
-
-                hostname = parsed.hostname or ""
-                ip_str = socket.gethostbyname(hostname)
-                ip_obj = ipaddress.ip_address(ip_str)
-                if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
-                    return f"[ERROR] 安全限制：禁止存取內部或保留網段 ({hostname} -> {ip_str})"
-            except Exception as e:
-                return f"[ERROR] DNS 解析失敗或位址無效: {e}"
-
             warning_msg = ""
-            try:
-                from curl_cffi import requests as c_requests
+            current_url = url
+            resp = None
 
-                resp = c_requests.get(url, headers=headers, impersonate="chrome", timeout=15.0, verify=False)
-                resp.raise_for_status()
-            except Exception as curl_e:
-                if isinstance(curl_e, ImportError):
-                    warning_msg = (
-                        "\n\n(提示：強烈建議使用 run_command 執行 pip install curl_cffi，"
-                        "以模擬真實瀏覽器指紋，避免遭遇 403 Forbidden)"
+            import ipaddress
+            import socket
+
+            for _ in range(5):  # Max 5 redirects
+                parsed = urlparse(current_url)
+                if parsed.scheme not in ("http", "https"):
+                    return "[ERROR] 僅支援 http / https 網址"
+
+                # SSRF 防護：檢查 IP 是否為內部或保留網段
+                try:
+                    hostname = parsed.hostname or ""
+                    ip_str = socket.gethostbyname(hostname)
+                    ip_obj = ipaddress.ip_address(ip_str)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
+                        return f"[ERROR] 安全限制：禁止存取內部或保留網段 ({hostname} -> {ip_str})"
+                except Exception as e:
+                    return f"[ERROR] DNS 解析失敗或位址無效: {e}"
+
+                try:
+                    from curl_cffi import requests as c_requests
+
+                    resp = c_requests.get(
+                        current_url, headers=headers, impersonate="chrome", timeout=15.0, allow_redirects=False
                     )
-                # 降級使用 httpx
-                resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=15.0)
+                except Exception as curl_e:
+                    if isinstance(curl_e, ImportError) and not warning_msg:
+                        warning_msg = (
+                            "\n\n(提示：強烈建議使用 run_command 執行 pip install curl_cffi，"
+                            "以模擬真實瀏覽器指紋，避免遭遇 403 Forbidden)"
+                        )
+                    # 降級使用 httpx
+                    try:
+                        resp = httpx.get(current_url, headers=headers, follow_redirects=False, timeout=15.0)
+                    except Exception as httpx_e:
+                        return f"[ERROR] 網路操作失敗 (curl_cffi: {curl_e} | httpx: {httpx_e}){warning_msg}"
+
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("location")
+                    if not location:
+                        break
+                    from urllib.parse import urljoin
+
+                    current_url = urljoin(current_url, location)
+                    continue
+
                 try:
                     resp.raise_for_status()
-                except Exception as httpx_e:
-                    return f"[ERROR] 網路操作失敗 (curl_cffi: {curl_e} | httpx: {httpx_e}){warning_msg}"
+                except Exception as e:
+                    return f"[ERROR] 網路操作失敗: {e}{warning_msg}"
+                break
+            else:
+                return f"[ERROR] 重新導向次數過多{warning_msg}"
 
             content_type = resp.headers.get("content-type", "")
             if "text/html" in content_type:

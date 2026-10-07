@@ -73,7 +73,20 @@ def save_session(session_id: str, history: list[dict], title: str | None = None)
     signature = _sign_data(payload_str)
 
     data = {"signature": signature, "payload": payload_str}
-    _path(session_id).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    final_path = _path(session_id)
+    tmp_path = final_path.with_suffix(".tmp")
+
+    try:
+        tmp_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp_path.replace(final_path)
+    except Exception as e:
+        import logging
+
+        logging.getLogger("pocket-agent").error(f"Failed to atomic save session {session_id}: {e}")
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def load_session(session_id: str) -> dict | None:
@@ -93,8 +106,12 @@ def load_session(session_id: str) -> dict | None:
                 return None
             return json.loads(data["payload"])
         else:
-            # Backwards compatibility for old un-signed sessions
-            return data
+            import logging
+
+            logging.getLogger("pocket-agent").warning(
+                f"Session {session_id} is missing signature and is rejected for security."
+            )
+            return None
     except Exception:
         return None
 
@@ -110,7 +127,7 @@ def list_sessions() -> list[dict]:
             if "signature" in raw_data and "payload" in raw_data:
                 d = json.loads(raw_data["payload"])
             else:
-                d = raw_data
+                continue
 
             metas.append(
                 {

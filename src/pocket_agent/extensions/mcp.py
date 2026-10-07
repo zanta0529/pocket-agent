@@ -99,7 +99,7 @@ class MCPManager:
             raise KeyError(f"找不到工具 {tool_name!r}，可用：{list(self._tools)}")
 
         # 注入參數（模型看不到，但 server 需要）
-        full_args = {**entry.inject, **arguments}
+        full_args = {**arguments, **entry.inject}
         from pocket_agent.core.agent import log
 
         # Artifact 隔離攔截
@@ -201,6 +201,15 @@ class MCPManager:
                 "description": tool.description or "",
                 "parameters": params,
             }
+            if tool.name in self._tools:
+                from pocket_agent.core.agent import log
+
+                log.warning(
+                    f"MCP Tool conflict: '{tool.name}' from server '{server_name}' "
+                    "will be ignored because it is already registered."
+                )
+                continue
+
             self._tools[tool.name] = ToolEntry(
                 name=tool.name,
                 server_name=server_name,

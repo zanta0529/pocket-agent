@@ -1,5 +1,6 @@
 import json
 import logging
+import shlex
 from typing import List
 
 from pocket_agent.system.paths import user_dir
@@ -41,37 +42,91 @@ def _load_allowlist() -> List[str]:
     return []
 
 
-def is_command_allowed(command: str) -> bool:
-    """檢查指令是否符合白名單前綴（包含內建與自訂）"""
-    cmd_lower = command.strip().lower()
+def _is_builtin_allowed(command: str) -> bool:
+    import shlex
 
+    try:
+        parts = shlex.split(command)
+    except Exception:
+        return False
+    if not parts:
+        return False
+
+    cmd_lower = parts[0].lower()
+
+    if cmd_lower in ("ls", "dir", "pwd", "echo"):
+        return True
+
+    if cmd_lower in ("cat", "type", "grep", "find"):
+        # block writing flags if any
+        for p in parts:
+            if p.startswith("--out") or p.startswith("-o") or ">" in p:
+                return False
+        return True
+
+    if cmd_lower == "git":
+        if len(parts) < 2:
+            return True
+        subcmd = parts[1].lower()
+        if subcmd in ("rev-parse", "status", "diff", "log", "show"):
+            # Check for output flags in diff/log
+            for p in parts:
+                if p.startswith("--output") or p.startswith("-o"):
+                    return False
+            return True
+
+    return False
+
+
+def is_command_allowed(command: str) -> bool:
+    """檢查指令是否符合白名單（包含嚴格內建與自訂完整比對）"""
     dangerous_chars = ["&", "|", ">", "<", ";", "$", "`"]
     if any(char in command for char in dangerous_chars):
         return False
 
-    # 檢查內建
-    for prefix in BUILTIN_ALLOWLIST:
-        if cmd_lower.startswith(prefix):
-            return True
+    if _is_builtin_allowed(command):
+        return True
 
     # 檢查使用者自訂
     user_list = _load_allowlist()
-    for prefix in user_list:
-        if cmd_lower.startswith(prefix.lower()):
+
+    try:
+        parts = shlex.split(command)
+    except Exception:
+        parts = command.strip().split()
+
+    if not parts:
+        return False
+
+    cmd_lower = " ".join(parts).lower()
+
+    for allowed_cmd in user_list:
+        allowed_lower = allowed_cmd.lower()
+        # Allow exact match or if it is a prefix of words (e.g. "npm run" matches "npm run dev")
+        if cmd_lower == allowed_lower or cmd_lower.startswith(allowed_lower + " "):
             return True
 
     return False
 
 
 def add_command_to_allowlist(command: str) -> str:
-    """將指令提取為前綴並加入自訂白名單，回傳被加入的前綴字串"""
-    parts = command.strip().split()
+    """將指令加入自訂白名單，回傳被加入的字串"""
+    import shlex
+
+    try:
+        parts = shlex.split(command)
+    except Exception:
+        parts = command.strip().split()
+
     if not parts:
         return ""
 
-    # 擷取前兩個單字作為 prefix (例如 npm run xxx -> npm run)
-    if len(parts) >= 2:
-        prefix = " ".join(parts[:2])
+    # 如果是常見的 sub-command，取前兩個，否則取第一個
+    if parts[0].lower() in ("npm", "yarn", "pnpm", "pip", "docker", "docker-compose", "git", "python", "go", "cargo"):
+        if len(parts) >= 2 and not parts[1].startswith("-"):
+            prefix = f"{parts[0]} {parts[1]}"
+        else:
+            prefix = parts[0]
     else:
         prefix = parts[0]
 
@@ -81,7 +136,6 @@ def add_command_to_allowlist(command: str) -> str:
         current_list.append(prefix)
         try:
             ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-            # 使用字典格式，方便未來擴充其他設定
             output = {"allowed_prefixes": current_list}
             ALLOWLIST_PATH.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
         except Exception as e:

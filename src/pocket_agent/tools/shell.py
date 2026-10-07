@@ -132,8 +132,11 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         except Exception:
             log.exception("CLI confirm callback 失敗")
             allowed = False
-        if not allowed:
-            return "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]"
+    else:
+        allowed = False
+
+    if not allowed:
+        return "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]"
 
     try:
         timeout = min(int(args.get("timeout_sec") or 60), 600)
@@ -166,27 +169,33 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         log.debug("Using Docker Sandbox")
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd_args,
             shell=is_shell,
             cwd=args.get("cwd") or None,
-            timeout=timeout,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             creationflags=creationflags,
-        )  # 不用 text=True：那會以系統預設編碼解碼（正體中文 Windows
-        # 是 cp950），讀 UTF-8 檔案就整片變亂碼。改拿 bytes 自己判。
-    except subprocess.TimeoutExpired:
-        return f"[ERROR] 指令逾時（{timeout} 秒），已強制終止。"
+        )
+
+        output_chunks = []
+        total_len = 0
+        try:
+            for line in proc.stdout:
+                chunk = _decode(line)
+                output_chunks.append(chunk)
+                total_len += len(chunk)
+                if total_len > MAX_OUTPUT:
+                    output_chunks.append("\n…（輸出過長，已提早截斷）")
+                    proc.terminate()
+                    break
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            return f"[ERROR] 指令逾時（{timeout} 秒），已強制終止。"
     except Exception as e:
         return f"[ERROR] {e}"
 
-    output = _decode(proc.stdout)
-    stderr = _decode(proc.stderr)
-    if stderr:
-        output += "\n[stderr]\n" + stderr
-    output = output.strip() or "(沒有輸出)"
-
-    if len(output) > MAX_OUTPUT:
-        output = output[:MAX_OUTPUT] + "\n…（輸出過長，已截斷）"
+    output = "".join(output_chunks).strip() or "(沒有輸出)"
 
     return f"exit code: {proc.returncode}\n{output}"

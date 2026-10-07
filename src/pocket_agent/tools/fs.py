@@ -180,11 +180,11 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
             except Exception:
                 continue
 
-    # 無論 workspace_dirs 是否存在，cwd 都作為備援允許根
-    try:
-        allowed_roots.append(Path.cwd().resolve())
-    except Exception:
-        pass
+    if not allowed_roots:
+        try:
+            allowed_roots.append(Path.cwd().resolve())
+        except Exception:
+            pass
 
     is_safe = False
     for root in allowed_roots:

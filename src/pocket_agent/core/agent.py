@@ -869,25 +869,27 @@ class Agent:
                                 f"[ERROR] JSON 解碼失敗: {e}。"
                                 "請檢查跳脫字元，特別是 Windows 路徑中的反斜線，建議改用正斜線 (/)。"
                             )
-                        self._emit(
-                            "tool_done",
-                            {
-                                "call_id": fc["call_id"],
-                                "name": fc["name"],
-                                "result": result,
-                                "ok": False,
-                            },
-                        )
-                        input_items.append(
-                            {
-                                "type": "function_call",
-                                "call_id": fc["call_id"],
-                                "name": fc["name"],
-                                "arguments": fc["arguments"],
-                            }
-                        )
-                        input_items.append({"type": "function_call_output", "call_id": fc["call_id"], "output": result})
-                        continue
+                            self._emit(
+                                "tool_done",
+                                {
+                                    "call_id": fc["call_id"],
+                                    "name": fc["name"],
+                                    "result": result,
+                                    "ok": False,
+                                },
+                            )
+                            input_items.append(
+                                {
+                                    "type": "function_call",
+                                    "call_id": fc["call_id"],
+                                    "name": fc["name"],
+                                    "arguments": fc["arguments"],
+                                }
+                            )
+                            input_items.append(
+                                {"type": "function_call_output", "call_id": fc["call_id"], "output": result}
+                            )
+                            continue
 
                     log.debug("TOOL calling %s args=%r", fc["name"], args)
 
@@ -931,11 +933,15 @@ class Agent:
                             "after_tool",
                             {"tool_name": fc["name"], "tool_result": result},
                         )
-                    if not result.startswith("Error:") and not result.startswith("[ERROR]"):
+                    if isinstance(result, str) and (result.startswith("Error:") or result.startswith("[ERROR]")):
+                        ok_status = False
+                    else:
+                        ok_status = True
                         all_errors = False
                 except Exception as e:
                     log.error("TOOL error %s: %s", type(e).__name__, e)
                     result = f"[ERROR] {e}"
+                    ok_status = False
 
                 self._emit(
                     "tool_done",
@@ -943,7 +949,7 @@ class Agent:
                         "call_id": fc["call_id"],
                         "name": fc["name"],
                         "result": result,
-                        "ok": not (result.startswith("Error:") or result.startswith("[ERROR]")),
+                        "ok": ok_status,
                     },
                 )
 

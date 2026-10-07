@@ -57,9 +57,8 @@ def test_add_single_word_command(mock_allowlist_path):
 
     assert is_command_allowed("docker ps") is True
 
-    # 注意：字串 startswith("docker") 的確會包含 docker-compose。
-    # 這在我們目前前綴比對的實作中是被允許的。
-    assert is_command_allowed("docker-compose") is True
+    # 新版白名單以整詞比對，所以 docker 不會再錯誤匹配到 docker-compose
+    assert is_command_allowed("docker-compose") is False
 
 
 def test_add_duplicate_prevention(mock_allowlist_path):
@@ -70,5 +69,5 @@ def test_add_duplicate_prevention(mock_allowlist_path):
     data = json.loads(mock_allowlist_path.read_text(encoding="utf-8"))
     prefixes = data["allowed_prefixes"]
 
-    # 由於 "poetry run" 已經加入，第二次呼叫擷取到相同的 "poetry run"，應該不重複
-    assert prefixes.count("poetry run") == 1
+    # 由於 "poetry" 未被列入預設兩詞保留清單，這兩個皆會擷取 "poetry" 作為前綴，不應重複
+    assert prefixes.count("poetry") == 1
