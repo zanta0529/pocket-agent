@@ -933,7 +933,9 @@ class Agent:
                             "after_tool",
                             {"tool_name": fc["name"], "tool_result": result},
                         )
-                    if isinstance(result, str) and (result.startswith("Error:") or result.startswith("[ERROR]")):
+                    if isinstance(result, str) and (
+                        result.startswith("Error:") or result.startswith("[ERROR]") or result.startswith("[使用者拒絕")
+                    ):
                         ok_status = False
                     else:
                         ok_status = True
