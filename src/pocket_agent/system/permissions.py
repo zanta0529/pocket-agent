@@ -80,12 +80,16 @@ def is_command_allowed(command: str) -> bool:
     if not parts:
         return False
 
-    cmd_lower = " ".join(parts).lower()
+    cmd_normalized = " ".join(parts)
 
     for allowed_cmd in user_list:
-        allowed_lower = allowed_cmd.lower()
-        # Allow exact match
-        if cmd_lower == allowed_lower:
+        try:
+            allowed_parts = shlex.split(allowed_cmd)
+        except Exception:
+            allowed_parts = allowed_cmd.strip().split()
+
+        # Allow exact match preserving case
+        if cmd_normalized == " ".join(allowed_parts):
             return True
 
     return False
@@ -107,7 +111,16 @@ def add_command_to_allowlist(command: str) -> str:
 
     current_list = _load_allowlist()
     # 避免重複加入
-    if not any(p.lower() == prefix.lower() for p in current_list):
+    prefix_normalized = " ".join(parts)
+
+    def normalize(cmd):
+        try:
+            p = shlex.split(cmd)
+        except Exception:
+            p = cmd.strip().split()
+        return " ".join(p)
+
+    if not any(normalize(p) == prefix_normalized for p in current_list):
         current_list.append(prefix)
         try:
             ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)

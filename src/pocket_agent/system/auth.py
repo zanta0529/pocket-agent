@@ -88,39 +88,6 @@ def _extract_account_id(access_token: str) -> str | None:
     return auth.get("chatgpt_account_id")
 
 
-def _get_encryption_key() -> bytes:
-    import base64
-    import getpass
-    import hashlib
-    import platform
-
-    # 建立本機綁定的金鑰
-    try:
-        login = getpass.getuser()
-    except Exception:
-        login = "unknown_user"
-    material = f"{platform.node()}-{login}-pocket-agent".encode("utf-8")
-    digest = hashlib.sha256(material).digest()
-    return base64.urlsafe_b64encode(digest)
-
-
-def _encrypt_dict(data: dict) -> str:
-    from cryptography.fernet import Fernet
-
-    f = Fernet(_get_encryption_key())
-    return f.encrypt(json.dumps(data).encode("utf-8")).decode("utf-8")
-
-
-def _decrypt_dict(token_str: str) -> dict | None:
-    from cryptography.fernet import Fernet
-
-    try:
-        f = Fernet(_get_encryption_key())
-        return json.loads(f.decrypt(token_str.encode("utf-8")).decode("utf-8"))
-    except Exception:
-        return None
-
-
 def _save_token(provider: str, token: dict) -> None:
     if "expires_in" in token and "expires_at" not in token:
         token["expires_at"] = time.time() + token["expires_in"]
@@ -128,18 +95,10 @@ def _save_token(provider: str, token: dict) -> None:
     key = f"{provider}-token"
     try:
         keyring.set_password(KEYCHAIN_SERVICE, key, data)
-    except Exception:
-        TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tokens = {}
-        if TOKEN_FILE.exists():
-            try:
-                tokens = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-
-        # 安全寫入：採用本機綁定的 Fernet 加密
-        tokens[key] = _encrypt_dict(token)
-        TOKEN_FILE.write_text(json.dumps(tokens), encoding="utf-8")
+    except Exception as e:
+        raise RuntimeError(
+            f"系統憑證庫 (Keyring) 寫入失敗，基於安全考量，拒絕將 Token 以不安全方式降級儲存。詳細錯誤：{e}"
+        )
 
 
 def _load_token(provider: str) -> dict | None:
@@ -150,16 +109,6 @@ def _load_token(provider: str) -> dict | None:
             return json.loads(raw)
     except Exception:
         pass
-    if TOKEN_FILE.exists():
-        try:
-            tokens = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
-            stored = tokens.get(key)
-            if isinstance(stored, str):
-                return _decrypt_dict(stored)
-            elif isinstance(stored, dict):
-                return stored  # 舊版未加密的直接回傳
-        except Exception:
-            pass
     return None
 
 

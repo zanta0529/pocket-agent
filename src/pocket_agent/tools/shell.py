@@ -169,28 +169,51 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         log.debug("Using Docker Sandbox")
 
     try:
-        proc = subprocess.Popen(
-            cmd_args,
-            shell=is_shell,
-            cwd=args.get("cwd") or None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            creationflags=creationflags,
-        )
+        kwargs = {
+            "shell": is_shell,
+            "cwd": args.get("cwd") or None,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = creationflags
+        else:
+            kwargs["start_new_session"] = True
+
+        proc = subprocess.Popen(cmd_args, **kwargs)
 
         output_chunks = []
         total_len = [0]
 
         import threading
 
+        def kill_proc_tree():
+            if sys.platform == "win32":
+                subprocess.call(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                import os
+                import signal
+
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except Exception:
+                    proc.terminate()
+
         def reader_thread():
-            for line in proc.stdout:
-                chunk = _decode(line)
+            while True:
+                buf = proc.stdout.read(1024)
+                if not buf:
+                    break
+                chunk = _decode(buf)
                 output_chunks.append(chunk)
                 total_len[0] += len(chunk)
                 if total_len[0] > MAX_OUTPUT:
                     output_chunks.append("\n…（輸出過長，已提早截斷）")
-                    proc.terminate()
+                    kill_proc_tree()
                     break
 
         t = threading.Thread(target=reader_thread, daemon=True)
@@ -200,14 +223,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
             proc.wait(timeout=timeout)
             t.join(timeout=1.0)
         except subprocess.TimeoutExpired:
-            if sys.platform == "win32":
-                subprocess.call(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            else:
-                proc.terminate()
+            kill_proc_tree()
             return f"[ERROR] 指令逾時（{timeout} 秒），已強制終止。"
     except Exception as e:
         return f"[ERROR] {e}"

@@ -15,9 +15,11 @@ def test_shell_tool_no_sandbox():
 
     with patch("pocket_agent.tools.shell.subprocess.Popen") as mock_popen:
         with patch.dict(os.environ, {"USE_SANDBOX": "none"}):
-            # mock 回傳值，Popen 回傳 proc, proc.stdout 是 iterable
+            # mock 回傳值，Popen 回傳 proc, proc.stdout is a file-like object
+            import io
+
             mock_proc = MagicMock()
-            mock_proc.stdout = [b"hello\n"]
+            mock_proc.stdout = io.BytesIO(b"hello\n")
             mock_proc.returncode = 0
             mock_popen.return_value = mock_proc
 
@@ -38,8 +40,10 @@ def test_shell_tool_wsl_sandbox():
 
     with patch("pocket_agent.tools.shell.subprocess.Popen") as mock_popen:
         with patch.dict(os.environ, {"USE_SANDBOX": "wsl"}):
+            import io
+
             mock_proc = MagicMock()
-            mock_proc.stdout = [b"list of files\n"]
+            mock_proc.stdout = io.BytesIO(b"list of files\n")
             mock_proc.returncode = 0
             mock_popen.return_value = mock_proc
 
@@ -59,8 +63,10 @@ def test_shell_tool_docker_sandbox():
 
     with patch("pocket_agent.tools.shell.subprocess.Popen") as mock_popen:
         with patch.dict(os.environ, {"USE_SANDBOX": "docker", "SANDBOX_CONTAINER": "my_sandbox"}):
+            import io
+
             mock_proc = MagicMock()
-            mock_proc.stdout = [b"tests passed\n"]
+            mock_proc.stdout = io.BytesIO(b"tests passed\n")
             mock_proc.returncode = 0
             mock_popen.return_value = mock_proc
 

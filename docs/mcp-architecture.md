@@ -20,7 +20,12 @@ flowchart TD
 
     Register --> LLMCall[LLM 決定呼叫工具]
 
-    LLMCall --> InjectArg{底層還原 Inject 參數}
+    LLMCall --> CheckAuth{工具前綴授權檢查}
+    CheckAuth -- 具有 _safe_read 前綴 (白名單) --> InjectArg{底層還原 Inject 參數}
+    CheckAuth -- 未知工具 (Default-Deny) --> RequireConfirm[要求使用者互動確認]
+    RequireConfirm -- 同意 --> InjectArg
+    RequireConfirm -- 拒絕 --> Block[攔截並回傳錯誤]
+
     InjectArg --> InterceptPath{攔截檔案路徑}
     InterceptPath -- 若標記 UserFacing --> RedirectPath[強制將儲存路徑重導向至 ~/.pocket-agent/artifacts/]
     InterceptPath -- 其他情況 --> Exec[實際傳遞給 MCP Server 執行]
@@ -46,3 +51,10 @@ Pocket Agent 的解決方案：
 
 - **動態 Schema 擴充**：系統會在註冊階段強制要求這些工具必須帶有 `ArtifactMetadata` 參數，強制 LLM 交代寫入檔案的目的與是否面向使用者 (`UserFacing`)。
 - **路徑重導向 (Redirect)**：在執行階段，若判斷為產出物，系統會無視 LLM 給予的路徑，強制將目標路徑替換到 `~/.pocket-agent/artifacts/<filename>`，確保沙盒外的專案原始碼安全無虞。
+
+### 3. 工具前綴授權與 Default-Deny 策略
+
+為了防止惡意或未預期的 MCP 工具執行破壞性操作，Pocket Agent 實作了基於前綴 (Prefix) 的預設拒絕 (Default-Deny) 授權模型：
+
+- **白名單放行**：只有工具名稱帶有特定前綴（如 `_safe_read`）且被系統判定為唯讀且安全的工具，才會在被 LLM 呼叫時自動放行執行。
+- **未知工具攔截**：對於所有未在白名單內或不具備安全前綴的工具，系統預設視為高風險操作。當 LLM 試圖呼叫這些工具時，執行緒會被暫停，並在 CLI 介面強制要求使用者互動確認 (Prompt for confirmation)。若使用者拒絕，該次工具呼叫會被直接攔截並回傳錯誤給 LLM，保障系統安全。

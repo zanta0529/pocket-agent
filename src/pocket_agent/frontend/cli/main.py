@@ -416,11 +416,20 @@ class CliFrontend(FrontendStrategy):
             renderer._state = state
 
             # F1：CLI 工具確認機制（三重授權）
-            def _cli_confirm(command: str) -> bool:
+            def _cli_confirm(*args_tuple) -> bool:
                 from rich.panel import Panel
                 from rich.text import Text
 
                 from pocket_agent.system.permissions import add_command_to_allowlist, is_command_allowed
+
+                if len(args_tuple) == 1 and isinstance(args_tuple[0], str):
+                    command = args_tuple[0]
+                else:
+                    import json
+
+                    command = " ".join(
+                        json.dumps(a, ensure_ascii=False) if isinstance(a, (dict, list)) else str(a) for a in args_tuple
+                    )
 
                 # 1. 檢查白名單 (前綴比對包含內建唯讀清單與使用者自訂清單)
                 if is_command_allowed(command):

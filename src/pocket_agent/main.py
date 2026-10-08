@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pocket Agent — GUI（預設）或 CLI（--cli）模式"""
+"""Pocket Agent — 命令列 (CLI) 模式"""
 
 import sys
 

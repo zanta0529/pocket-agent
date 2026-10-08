@@ -35,7 +35,8 @@
 ### 4. 企業級安全治理 (Enterprise Governance)
 
 - **CLI 指令執行確認**：在終端機模式下，當 AI 嘗試呼叫 Shell 工具執行系統指令時，會強制暫停並提示使用者輸入 `[y/N]` 進行確認，防止不可逆的危險操作。
-- **指令沙盒 (Shell Sandbox)**：透過啟用 `.env` 中的 `USE_SANDBOX=wsl` 或 `docker`，徹底隔離 AI 的終端機執行權限。
+- **MCP Default-Deny 授權**：針對外部掛載的 MCP 工具實作嚴格的白名單與前綴授權檢查，未知工具將被預設攔截並要求互動式確認。
+- **指令沙盒 (Shell Sandbox)**：透過啟用 `.env` 中的 `USE_SANDBOX=wsl` 或 `docker`，徹底隔離 AI 的終端機執行權限。並支援 Shell 輸出的動態分塊 (Chunking)，確保大型輸出不中斷核心執行緒。
 - **Artifacts 全域隔離**：強制將 AI 自動生成的專案計畫與文檔寫入 `~/.pocket-agent/artifacts/`，避免污染既有專案程式碼。
 - **Context Overflow 滑動視窗與防護網**：當上下文超過 12 萬字元時，自動觸發首尾保留截斷機制。若模型 API 仍拋出超載錯誤，系統會自動攔截崩潰、退回該次輸入，並注入 `[System]` 提示指導 AI 改用平行子代理或精準搜尋，確保對話永不中斷。
 - **程式碼檢索增強 (RAG Codebase Search)**：內建 `indexed_search` 工具，利用本地 SQLite FTS5 建立輕量級程式碼庫索引，取代低效的 `grep_search`，實現極速且精準的片段擷取。

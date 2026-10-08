@@ -41,7 +41,16 @@ def new_session_id() -> str:
 
 
 def _path(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.json"
+    import re
+
+    if not re.match(r"^[a-zA-Z0-9\-_]+$", session_id):
+        raise ValueError(f"無效的 Session ID 格式: {session_id}")
+    path = (SESSIONS_DIR / f"{session_id}.json").resolve()
+    try:
+        path.relative_to(SESSIONS_DIR.resolve())
+    except ValueError:
+        raise ValueError(f"Session ID 超出安全路徑範圍: {session_id}")
+    return path
 
 
 def make_title(history: list[dict]) -> str:

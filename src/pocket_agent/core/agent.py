@@ -924,11 +924,8 @@ class Agent:
 
                         result = await asyncio.to_thread(call_indexed_search, args, self.workspace_dirs)
                     else:
-                        # MCP 工具寫入/修改/建立類型需取得授權
-                        if any(
-                            fc["name"].startswith(prefix)
-                            for prefix in ("write_", "create_", "delete_", "update_", "github_create")
-                        ):
+                        # 未知 MCP 工具預設需要確認，除非明確標示為 safe_read
+                        if fc["name"] not in getattr(self, "_safe_read_tools", set()):
                             ok = await asyncio.to_thread(self.on_confirm, fc["name"], args)
                             if not ok:
                                 raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
