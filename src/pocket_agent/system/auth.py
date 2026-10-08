@@ -93,8 +93,36 @@ def _save_token(provider: str, token: dict) -> None:
         token["expires_at"] = time.time() + token["expires_in"]
     data = json.dumps(token)
     key = f"{provider}-token"
+
+    chunk_size = 1024  # Windows Keyring (CredWrite) 限制，避免 WinError 1783
+
     try:
-        keyring.set_password(KEYCHAIN_SERVICE, key, data)
+        # 清除舊的 meta 與切塊
+        try:
+            old_meta_raw = keyring.get_password(KEYCHAIN_SERVICE, f"{key}-meta")
+            if old_meta_raw:
+                old_meta = json.loads(old_meta_raw)
+                for i in range(old_meta.get("chunks", 0)):
+                    try:
+                        keyring.delete_password(KEYCHAIN_SERVICE, f"{key}-{i}")
+                    except Exception:
+                        pass
+            keyring.delete_password(KEYCHAIN_SERVICE, f"{key}-meta")
+        except Exception:
+            pass
+
+        try:
+            keyring.delete_password(KEYCHAIN_SERVICE, key)
+        except Exception:
+            pass
+
+        if len(data) > chunk_size:
+            chunks = [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
+            for i, chunk in enumerate(chunks):
+                keyring.set_password(KEYCHAIN_SERVICE, f"{key}-{i}", chunk)
+            keyring.set_password(KEYCHAIN_SERVICE, f"{key}-meta", json.dumps({"chunks": len(chunks)}))
+        else:
+            keyring.set_password(KEYCHAIN_SERVICE, key, data)
     except Exception as e:
         raise RuntimeError(
             f"系統憑證庫 (Keyring) 寫入失敗，基於安全考量，拒絕將 Token 以不安全方式降級儲存。詳細錯誤：{e}"
@@ -104,6 +132,17 @@ def _save_token(provider: str, token: dict) -> None:
 def _load_token(provider: str) -> dict | None:
     key = f"{provider}-token"
     try:
+        meta_raw = keyring.get_password(KEYCHAIN_SERVICE, f"{key}-meta")
+        if meta_raw:
+            meta = json.loads(meta_raw)
+            chunks = []
+            for i in range(meta.get("chunks", 0)):
+                chunk = keyring.get_password(KEYCHAIN_SERVICE, f"{key}-{i}")
+                if chunk is None:
+                    return None
+                chunks.append(chunk)
+            return json.loads("".join(chunks))
+
         raw = keyring.get_password(KEYCHAIN_SERVICE, key)
         if raw:
             return json.loads(raw)
@@ -350,6 +389,21 @@ def logout(provider: str = "openai") -> None:
         cleared = True
     except Exception:
         pass
+
+    try:
+        meta_raw = keyring.get_password(KEYCHAIN_SERVICE, f"{key}-meta")
+        if meta_raw:
+            meta = json.loads(meta_raw)
+            for i in range(meta.get("chunks", 0)):
+                try:
+                    keyring.delete_password(KEYCHAIN_SERVICE, f"{key}-{i}")
+                except Exception:
+                    pass
+            keyring.delete_password(KEYCHAIN_SERVICE, f"{key}-meta")
+            cleared = True
+    except Exception:
+        pass
+
     if TOKEN_FILE.exists():
         try:
             tokens = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
