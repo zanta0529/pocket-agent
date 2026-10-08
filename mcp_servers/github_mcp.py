@@ -17,9 +17,20 @@ def get_headers():
     }
 
 
+def check_repo_allowed(owner: str, repo: str):
+    allowed = os.getenv("GITHUB_ALLOWED_REPOS")
+    if not allowed:
+        return
+    allowed_list = [r.strip().lower() for r in allowed.split(",")]
+    target = f"{owner}/{repo}".lower()
+    if target not in allowed_list:
+        raise ValueError(f"拒絕存取：{target} 不在允許的 GITHUB_ALLOWED_REPOS 內")
+
+
 @mcp.tool()
 async def github_list_prs(owner: str, repo: str, state: str = "open") -> str:
     """列出指定儲存庫的 Pull Requests"""
+    check_repo_allowed(owner, repo)
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(
@@ -37,6 +48,7 @@ async def github_list_prs(owner: str, repo: str, state: str = "open") -> str:
 @mcp.tool()
 async def github_read_issue(owner: str, repo: str, issue_number: int) -> str:
     """讀取指定的 Issue 或 Pull Request 內容"""
+    check_repo_allowed(owner, repo)
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(
@@ -52,6 +64,7 @@ async def github_read_issue(owner: str, repo: str, issue_number: int) -> str:
 @mcp.tool()
 async def github_create_comment(owner: str, repo: str, issue_number: int, body: str) -> str:
     """在指定的 Issue 或 Pull Request 新增留言"""
+    check_repo_allowed(owner, repo)
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(

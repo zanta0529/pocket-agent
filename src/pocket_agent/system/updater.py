@@ -126,6 +126,15 @@ def apply_update(progress=None) -> dict:
             except Exception:
                 pass
 
+    import click
+
+    info = check_for_update()
+    if info.get("update_available"):
+        print(f"\n[系統提示] 發現新版本！最新提交：{info.get('latest_message')}")
+    print("⚠ 警告：即將從 GitHub 下載並套用更新。這可能會改變系統行為或包含未知的第三方變更。")
+    if not click.confirm("確定要繼續更新嗎？"):
+        raise RuntimeError("使用者取消更新")
+
     if _is_dev_repo():
         return _update_via_git(report)
     return _update_via_zip(report)

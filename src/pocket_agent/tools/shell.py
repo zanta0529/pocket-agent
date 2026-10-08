@@ -179,19 +179,35 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         )
 
         output_chunks = []
-        total_len = 0
-        try:
+        total_len = [0]
+
+        import threading
+
+        def reader_thread():
             for line in proc.stdout:
                 chunk = _decode(line)
                 output_chunks.append(chunk)
-                total_len += len(chunk)
-                if total_len > MAX_OUTPUT:
+                total_len[0] += len(chunk)
+                if total_len[0] > MAX_OUTPUT:
                     output_chunks.append("\n…（輸出過長，已提早截斷）")
                     proc.terminate()
                     break
+
+        t = threading.Thread(target=reader_thread, daemon=True)
+        t.start()
+
+        try:
             proc.wait(timeout=timeout)
+            t.join(timeout=1.0)
         except subprocess.TimeoutExpired:
-            proc.terminate()
+            if sys.platform == "win32":
+                subprocess.call(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                proc.terminate()
             return f"[ERROR] 指令逾時（{timeout} 秒），已強制終止。"
     except Exception as e:
         return f"[ERROR] {e}"

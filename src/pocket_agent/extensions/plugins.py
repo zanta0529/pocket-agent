@@ -178,6 +178,18 @@ def install_plugin_zip(zip_path: str | Path, overwrite: bool = False) -> dict:
             if conflicts and not overwrite:
                 raise FileExistsError("、".join(conflicts))
 
+            import click
+
+            print(f"\n[系統提示] 準備安裝外掛：{name} (v{version})")
+            print(f"描述：{description}")
+            print(
+                f"內容：{len(skill_dirs)} skills, {len(command_files)} commands, "
+                f"{len(agent_files)} subagents, {len(new_servers)} MCP servers"
+            )
+            print("⚠ 警告：第三方外掛可能包含惡意指令或不受信任的 MCP 工具。")
+            if not click.confirm("確定要繼續安裝嗎？"):
+                raise RuntimeError("使用者取消安裝")
+
             # 覆蓋模式：先移除同名舊 plugin，衝突項目直接蓋過
             if name in registry:
                 uninstall_plugin(name)

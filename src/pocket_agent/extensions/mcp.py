@@ -128,7 +128,8 @@ class MCPManager:
                 parts.append(block.text)
             else:
                 parts.append(str(block))
-        return "\n".join(parts)
+        joined = "\n".join(parts)
+        return f"<external_content>\n{joined}\n</external_content>"
 
     def list_tools(self) -> list[str]:
         return list(self._tools.keys())

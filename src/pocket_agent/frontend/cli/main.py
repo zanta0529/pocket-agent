@@ -427,7 +427,7 @@ class CliFrontend(FrontendStrategy):
                     return True
 
                 # 2. 檢查「本次 Session 信任」
-                if state.session_approved_commands:
+                if command.strip() in state.session_approved_commands:
                     return True
 
                 renderer._ensure_newline()
@@ -457,13 +457,13 @@ class CliFrontend(FrontendStrategy):
                     if ans == "y" or ans == "Y":
                         return True
                     elif ans == "a":
-                        state.session_approved_commands = True
-                        renderer.message("✓ 已同意本次對話中自動執行指令", "green")
+                        state.session_approved_commands.add(command.strip())
+                        renderer.message(f"✓ 已同意本次對話中自動執行指令: {command}", "green")
                         return True
                     elif ans == "A":
                         prefix = add_command_to_allowlist(command)
                         renderer._ensure_newline()
-                        renderer.message(f"✓ 已將「{prefix}」加入指令白名單，未來具備此字首的指令將自動執行。", "green")
+                        renderer.message(f"✓ 已將「{prefix}」加入指令白名單，未來將自動執行此指令。", "green")
                         return True
                     return False
                 except EOFError:

@@ -397,7 +397,9 @@ def call_fs_tool(
 
             # 人工確認
             action_desc = f"修改檔案：{target.name}" if target.exists() else f"建立新檔：{target.name}"
-            if on_confirm and not on_confirm(action_desc):
+            if on_confirm is None:
+                return "[ERROR] 缺乏使用者確認機制，拒絕執行寫入操作"
+            if not on_confirm(action_desc):
                 return "[使用者拒絕執行此檔案寫入操作]"
 
             _backup_file(target)
@@ -411,7 +413,9 @@ def call_fs_tool(
             if not target.exists():
                 return "[ERROR] 檔案不存在，無法附加。請使用 write_to_file 建立新檔。"
 
-            if on_confirm and not on_confirm(f"附加內容至檔案：{target.name}"):
+            if on_confirm is None:
+                return "[ERROR] 缺乏使用者確認機制，拒絕執行寫入操作"
+            if not on_confirm(f"附加內容至檔案：{target.name}"):
                 return "[使用者拒絕執行此檔案寫入操作]"
 
             _backup_file(target)
@@ -468,7 +472,9 @@ def call_fs_tool(
                 new_content = content.replace(target_str, replacement)
 
             # 人工確認
-            if on_confirm and not on_confirm(f"局部修改檔案：{target.name}"):
+            if on_confirm is None:
+                return "[ERROR] 缺乏使用者確認機制，拒絕執行替換操作"
+            if not on_confirm(f"局部修改檔案：{target.name}"):
                 return "[使用者拒絕執行此檔案替換操作]"
 
             _backup_file(target)

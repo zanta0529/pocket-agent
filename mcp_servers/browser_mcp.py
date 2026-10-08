@@ -97,12 +97,25 @@ async def _page_state(page) -> str:
     return f"目前頁面：{await page.title()}\nURL：{page.url}"
 
 
+def check_url_allowed(url: str):
+    allowed = os.getenv("BROWSER_ALLOWED_DOMAINS")
+    if not allowed:
+        return
+    import urllib.parse
+
+    domain = urllib.parse.urlparse(url).netloc.split(":")[0].lower()
+    allowed_list = [d.strip().lower() for d in allowed.split(",")]
+    if domain not in allowed_list:
+        raise ValueError(f"拒絕存取：網域 {domain} 不在 BROWSER_ALLOWED_DOMAINS 內")
+
+
 @mcp.tool()
 async def browser_navigate(url: str) -> str:
     """開啟指定網址。之後用 browser_snapshot 查看頁面內容。"""
-    page = await _ensure_page()
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+    check_url_allowed(url)
+    page = await _ensure_page()
     await page.goto(url, wait_until="domcontentloaded")
     return await _page_state(page)
 

@@ -16,14 +16,6 @@ BUILTIN_ALLOWLIST = [
     "git diff",
     "git log",
     "git show",
-    "ls ",
-    "dir ",
-    "cat ",
-    "type ",
-    "pwd",
-    "echo ",
-    "grep ",
-    "find ",
 ]
 
 
@@ -54,16 +46,6 @@ def _is_builtin_allowed(command: str) -> bool:
 
     cmd_lower = parts[0].lower()
 
-    if cmd_lower in ("ls", "dir", "pwd", "echo"):
-        return True
-
-    if cmd_lower in ("cat", "type", "grep", "find"):
-        # block writing flags if any
-        for p in parts:
-            if p.startswith("--out") or p.startswith("-o") or ">" in p:
-                return False
-        return True
-
     if cmd_lower == "git":
         if len(parts) < 2:
             return True
@@ -71,7 +53,7 @@ def _is_builtin_allowed(command: str) -> bool:
         if subcmd in ("rev-parse", "status", "diff", "log", "show"):
             # Check for output flags in diff/log
             for p in parts:
-                if p.startswith("--output") or p.startswith("-o"):
+                if p.startswith("--output") or p.startswith("-o") or ">" in p:
                     return False
             return True
 
@@ -80,7 +62,7 @@ def _is_builtin_allowed(command: str) -> bool:
 
 def is_command_allowed(command: str) -> bool:
     """檢查指令是否符合白名單（包含嚴格內建與自訂完整比對）"""
-    dangerous_chars = ["&", "|", ">", "<", ";", "$", "`"]
+    dangerous_chars = ["&", "|", ">", "<", ";", "$", "`", "\n", "\r", "%", "^"]
     if any(char in command for char in dangerous_chars):
         return False
 
@@ -102,8 +84,8 @@ def is_command_allowed(command: str) -> bool:
 
     for allowed_cmd in user_list:
         allowed_lower = allowed_cmd.lower()
-        # Allow exact match or if it is a prefix of words (e.g. "npm run" matches "npm run dev")
-        if cmd_lower == allowed_lower or cmd_lower.startswith(allowed_lower + " "):
+        # Allow exact match
+        if cmd_lower == allowed_lower:
             return True
 
     return False
@@ -121,14 +103,7 @@ def add_command_to_allowlist(command: str) -> str:
     if not parts:
         return ""
 
-    # 如果是常見的 sub-command，取前兩個，否則取第一個
-    if parts[0].lower() in ("npm", "yarn", "pnpm", "pip", "docker", "docker-compose", "git", "python", "go", "cargo"):
-        if len(parts) >= 2 and not parts[1].startswith("-"):
-            prefix = f"{parts[0]} {parts[1]}"
-        else:
-            prefix = parts[0]
-    else:
-        prefix = parts[0]
+    prefix = command.strip()
 
     current_list = _load_allowlist()
     # 避免重複加入

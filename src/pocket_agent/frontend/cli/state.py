@@ -19,7 +19,7 @@ class CliState:
     last_failed_input: str = ""
     session_id: str = field(default_factory=_new_session_id)
     session_tokens: int = 0  # 本 session 累計 token 用量（供 toolbar 顯示）
-    session_approved_commands: bool = False  # 是否同意本次對話中自動執行指令
+    session_approved_commands: set = field(default_factory=set)  # 本次對話中允許的指令清單
     quota_supported: bool = False
     quota_limit: float | None = None
     quota_remaining: float | None = None

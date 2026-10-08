@@ -18,9 +18,11 @@ def test_builtin_allowlist(mock_allowlist_path):
     """測試內建的純唯讀指令，不需要 allowlist.json 也能通過"""
     assert is_command_allowed("git rev-parse --show-toplevel") is True
     assert is_command_allowed("GIT STATUS") is True  # 測試大小寫不敏感
-    assert is_command_allowed("ls -la") is True
-    assert is_command_allowed("pwd") is True
-    assert is_command_allowed("echo 'hello world'") is True
+
+    # ls, pwd, echo 已經從內建白名單中移除
+    assert is_command_allowed("ls -la") is False
+    assert is_command_allowed("pwd") is False
+    assert is_command_allowed("echo 'hello world'") is False
 
     # 危險或不在清單的指令應被拒絕
     assert is_command_allowed("rm -rf /") is False
@@ -35,16 +37,16 @@ def test_add_to_allowlist_and_check(mock_allowlist_path):
 
     # 加入白名單
     prefix = add_command_to_allowlist("npm run dev")
-    assert prefix == "npm run"  # 預期只截取前兩個詞
+    assert prefix == "npm run dev"  # 新邏輯預期為完整指令
 
     # 確認檔案已正確寫入
     assert mock_allowlist_path.exists()
     data = json.loads(mock_allowlist_path.read_text(encoding="utf-8"))
-    assert "npm run" in data["allowed_prefixes"]
+    assert "npm run dev" in data["allowed_prefixes"]
 
     # 再次檢查：現在應該允許了
     assert is_command_allowed("npm run dev") is True
-    assert is_command_allowed("npm run build") is True  # 同前綴也應允許
+    assert is_command_allowed("npm run build") is False  # 嚴格比對，不同指令應攔截
     assert is_command_allowed("npm install") is False  # 不同前綴應攔截
 
 
@@ -55,7 +57,8 @@ def test_add_single_word_command(mock_allowlist_path):
     prefix = add_command_to_allowlist("docker")
     assert prefix == "docker"
 
-    assert is_command_allowed("docker ps") is True
+    assert is_command_allowed("docker ps") is False  # 嚴格比對，所以為 False
+    assert is_command_allowed("docker") is True
 
     # 新版白名單以整詞比對，所以 docker 不會再錯誤匹配到 docker-compose
     assert is_command_allowed("docker-compose") is False
@@ -69,5 +72,7 @@ def test_add_duplicate_prevention(mock_allowlist_path):
     data = json.loads(mock_allowlist_path.read_text(encoding="utf-8"))
     prefixes = data["allowed_prefixes"]
 
-    # 由於 "poetry" 未被列入預設兩詞保留清單，這兩個皆會擷取 "poetry" 作為前綴，不應重複
-    assert prefixes.count("poetry") == 1
+    # 現已存入完整指令，故兩個指令皆會成功存入，總長度為 2
+    assert "poetry run" in prefixes
+    assert "poetry run test" in prefixes
+    assert len(prefixes) == 2

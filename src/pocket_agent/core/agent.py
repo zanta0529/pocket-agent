@@ -924,6 +924,14 @@ class Agent:
 
                         result = await asyncio.to_thread(call_indexed_search, args, self.workspace_dirs)
                     else:
+                        # MCP 工具寫入/修改/建立類型需取得授權
+                        if any(
+                            fc["name"].startswith(prefix)
+                            for prefix in ("write_", "create_", "delete_", "update_", "github_create")
+                        ):
+                            ok = await asyncio.to_thread(self.on_confirm, fc["name"], args)
+                            if not ok:
+                                raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
                         result = await self.mcp.call(fc["name"], args)
                     log.debug("TOOL result=%r", result)
 
@@ -1020,6 +1028,7 @@ class Agent:
                     combined.append(res)
 
             result = "\n\n".join(combined)
+            result = f"<external_content>\n{result}\n</external_content>"
             if require_save_prompt:
                 result += (
                     "\n\n[系統指示 (System Instruction)]\n"
@@ -1050,6 +1059,7 @@ class Agent:
 
         if is_subagent_tool(name):
             result = await self._run_subagent(args)
+            result = f"<external_content>\n{result}\n</external_content>"
             sa_def = get_subagent(args.get("name", ""))
             if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
                 result += (

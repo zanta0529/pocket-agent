@@ -346,4 +346,4 @@ def call_skill_tool(args: dict, workspace_dirs: list[str] | None = None) -> str:
         f"Always derive paths relative to the workspace roots listed above.\n\n"
     )
 
-    return f"# Skill: {name}\n\n{workspace_context}{body}"
+    return f"# Skill: {name}\n\n{workspace_context}<external_content>\n{body}\n</external_content>"
