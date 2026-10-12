@@ -1,19 +1,24 @@
 """CLI 執行工具：讓模型能在本機執行指令（附使用者確認機制）。
 
 安全設計：
-- 預設每次執行前透過 confirm callback 詢問使用者（GUI 跳確認視窗）
+- 預設每次執行前透過 confirm callback 詢問使用者
 - 逾時強制終止（預設 60 秒）
 - 輸出截斷，避免灌爆 context
 """
 
 import locale
 import logging
+import os
+import re
+import signal
 import subprocess
 import sys
+import threading
 
 log = logging.getLogger("pocket-agent")
 
-MAX_OUTPUT = 8000
+MAX_OUTPUT = 8000  # 回傳給模型的最大字元數
+MAX_OUTPUT_BYTES = MAX_OUTPUT * 4  # 讀取子行程輸出的位元組上限（UTF-8 最多 4 位元組／字元）
 
 
 def _decode_candidates() -> list[str]:
@@ -62,6 +67,18 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def _trim_partial_utf8(raw: bytes) -> bytes:
+    """截斷輸出時，移除結尾被切斷的 UTF-8 多位元組字元，避免整段被誤判為其他編碼。"""
+    for cut in range(4):
+        candidate = raw[: len(raw) - cut]
+        try:
+            candidate.decode("utf-8")
+            return candidate
+        except UnicodeDecodeError:
+            continue
+    return raw
+
+
 SHELL_TOOLS = [
     {
         "type": "function",
@@ -100,6 +117,21 @@ def is_shell_tool(name: str) -> bool:
     return name == "run_command"
 
 
+def _kill_proc_tree(proc: subprocess.Popen) -> None:
+    """終止子行程及其整個行程樹。"""
+    if sys.platform == "win32":
+        subprocess.call(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            proc.terminate()
+
+
 def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     """執行指令並回傳結果字串。confirm(command) 回傳 False 時拒絕執行。
 
@@ -110,13 +142,12 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         return "[ERROR] 沒有提供指令。"
 
     # --- Hard Command Floor (災難指令安全底線) ---
-    import re
-
-    # 阻擋 rm -rf /, del /s /q (根目錄或全磁碟), format, mkfs 等毀滅性關鍵字
+    # 阻擋 rm -rf /, del /s /q (根目錄或全磁碟), rd /s, format, mkfs 等毀滅性關鍵字
     # 注意：此為最後防線，容易被混淆繞過。真實防禦仍需依賴 Sandbox 或確認機制。
     danger_patterns = [
-        r"rm\s+-[A-Za-z]*r[A-Za-z]*[fFv]*\s+(?:/[A-Za-z0-9_]*|\*|\s*$)",  # 更廣泛的 rm -rf 攔截
+        r"rm\s+-[A-Za-z]*r[A-Za-z]*[fFv]*\s+(?:/[A-Za-z0-9_]*|~|\$HOME|\*|\s*$)",  # 更廣泛的 rm -rf 攔截
         r"del\s+(/[sqf]\s*)+\s*(?:[A-Za-z]:\\|\*)",  # 涵蓋 del /s /q *
+        r"\b(?:rd|rmdir)\s+(?:/[sq]\s*)+\s*[A-Za-z]:\\?(?:\s|$)",  # rd /s /q C:\
         r"format\s+[A-Za-z]:",  # format C:
         r"mkfs",  # mkfs.*
     ]
@@ -125,6 +156,10 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
             log.warning(f"SECURITY BLOCK: 嘗試執行毀滅性指令被系統底線攔截 -> {command}")
             return f"[ERROR] 觸發安全底線限制，拒絕執行該高風險指令：{command}"
     # ----------------------------------------------
+
+    cwd = args.get("cwd") or None
+    if cwd and not os.path.isdir(cwd):
+        return f"[ERROR] 工作目錄不存在或不是目錄：{cwd}"
 
     if confirm is not None:
         try:
@@ -171,7 +206,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     try:
         kwargs = {
             "shell": is_shell,
-            "cwd": args.get("cwd") or None,
+            "cwd": cwd,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
         }
@@ -182,52 +217,60 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
 
         proc = subprocess.Popen(cmd_args, **kwargs)
 
-        output_chunks = []
-        total_len = [0]
-
-        import threading
-
-        def kill_proc_tree():
-            if sys.platform == "win32":
-                subprocess.call(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            else:
-                import os
-                import signal
-
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except Exception:
-                    proc.terminate()
+        # 累積原始位元組，結束後一次解碼，避免多位元組字元被分段切斷而誤判編碼
+        output_buf = bytearray()
+        truncated = [False]
 
         def reader_thread():
             while True:
-                buf = proc.stdout.read(1024)
+                try:
+                    buf = proc.stdout.read(1024)
+                except ValueError, OSError:
+                    break  # stdout 已被關閉
                 if not buf:
                     break
-                chunk = _decode(buf)
-                output_chunks.append(chunk)
-                total_len[0] += len(chunk)
-                if total_len[0] > MAX_OUTPUT:
-                    output_chunks.append("\n…（輸出過長，已提早截斷）")
-                    kill_proc_tree()
+                output_buf.extend(buf)
+                if len(output_buf) > MAX_OUTPUT_BYTES:
+                    truncated[0] = True
+                    _kill_proc_tree(proc)
                     break
 
         t = threading.Thread(target=reader_thread, daemon=True)
         t.start()
 
+        def collect_output() -> str:
+            raw = bytes(output_buf[:MAX_OUTPUT_BYTES]) if truncated[0] else bytes(output_buf)
+            if truncated[0]:
+                raw = _trim_partial_utf8(raw)
+            text = _decode(raw)
+            if len(text) > MAX_OUTPUT:
+                text = text[:MAX_OUTPUT]
+                truncated[0] = True
+            if truncated[0]:
+                text += "\n…（輸出過長，已提早截斷）"
+            return text.strip()
+
         try:
             proc.wait(timeout=timeout)
             t.join(timeout=1.0)
         except subprocess.TimeoutExpired:
-            kill_proc_tree()
-            return f"[ERROR] 指令逾時（{timeout} 秒），已強制終止。"
+            _kill_proc_tree(proc)
+            t.join(timeout=1.0)
+            partial = collect_output()
+            message = f"[ERROR] 指令逾時（{timeout} 秒），已強制終止。"
+            if partial:
+                message += f"\n已收集的輸出：\n{partial}"
+            return message
+        finally:
+            # 讀取執行緒仍在阻塞讀取時關閉管道可能卡住，故僅在其結束後才關閉，避免檔案描述元外洩
+            if not t.is_alive():
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
     except Exception as e:
         return f"[ERROR] {e}"
 
-    output = "".join(output_chunks).strip() or "(沒有輸出)"
+    output = collect_output() or "(沒有輸出)"
 
     return f"exit code: {proc.returncode}\n{output}"
