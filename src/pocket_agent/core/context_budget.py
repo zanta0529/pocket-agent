@@ -199,11 +199,18 @@ class ContextBudget:
     def compact(self, items: list, instructions: str = "", tools: list | None = None) -> int:
         """超過門檻時，由舊到新把工具輸出換成佔位文字（保留 call／output 成對）。回傳清除筆數。
 
-        最近 KEEP_RECENT_OUTPUTS 筆輸出不清除。items 會被原地修改。
+        最近 KEEP_RECENT_OUTPUTS 筆輸出不清除。關鍵指引與技能輸出受白名單保護不清除。items 會被原地修改。
         """
         total = self.estimate_items(items, instructions, tools)
         if total <= self.compact_threshold:
             return 0
+
+        # 建立 call_id -> function_call 映射，識別產生輸出的工具名稱與參數
+        call_map: dict[str, dict] = {
+            m.get("call_id"): m
+            for m in items
+            if isinstance(m, dict) and m.get("type") == "function_call" and m.get("call_id")
+        }
 
         output_idx = [
             i for i, item in enumerate(items) if isinstance(item, dict) and item.get("type") == "function_call_output"
@@ -216,6 +223,15 @@ class ContextBudget:
             old = items[i].get("output")
             if not isinstance(old, str) or old == _PLACEHOLDER:
                 continue
+
+            # 保護白名單：避免 use_skill 或核心規範 (AGENTS.md/PROJECT_INSTRUCTIONS.md) 被清除導致失憶死循環
+            call_id = items[i].get("call_id")
+            fc = call_map.get(call_id, {})
+            tool_name = fc.get("name", "")
+            tool_args = str(fc.get("arguments", ""))
+            if tool_name == "use_skill" or any(p in tool_args for p in ("AGENTS.md", "PROJECT_INSTRUCTIONS.md")):
+                continue
+
             total -= max(0, estimate_tokens(old) - estimate_tokens(_PLACEHOLDER))
             items[i]["output"] = _PLACEHOLDER
             cleared += 1

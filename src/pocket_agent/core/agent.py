@@ -744,6 +744,20 @@ class Agent:
 
             instructions = sanitize_surrogates(self._instructions(user_query))
 
+            # 最後一輪強制清空工具，要求模型產出總結，避免子代理達到上限時結果被拋棄
+            if round_idx == max_rounds:
+                tools = []
+                if self._is_subagent:
+                    input_items.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[系統通知] 本次研究探勘已達工具呼叫上限。請勿再呼叫工具，"
+                                "請直接依據先前所有探索到的檔案與資訊，產出完整、結構化的研究分析報告。"
+                            ),
+                        }
+                    )
+
             # ── 統一送出前上下文管理流程 ─────────────────────────────────
             # 1. 優先嘗試清除較舊的工具輸出 (Tool Compact)
             budget.compact(input_items, instructions, tools)
@@ -752,43 +766,31 @@ class Agent:
             estimated_tokens = budget.estimate_items(input_items, instructions, tools)
 
             # 3. 若清除工具輸出後仍超限，嘗試以專用 Compactor 進行 LLM 歷史摘要
-            if estimated_tokens > budget.compact_threshold and len(self.history) > 8:
+            if estimated_tokens > budget.compact_threshold and len(input_items) > 8:
                 from pocket_agent.core.compaction import HistoryCompactor
 
                 compactor = HistoryCompactor(engine)
-                new_history, compacted = await compactor.compact_history(
-                    self.history, cancel_check=lambda: self.cancel_requested
+                new_items, compacted = await compactor.compact_history(
+                    input_items, cancel_check=lambda: self.cancel_requested
                 )
                 if compacted:
-                    self.history = new_history
-                    tail_tools = [
-                        it
-                        for it in input_items
-                        if isinstance(it, dict) and it.get("type") in ("function_call", "function_call_output")
-                    ]
-                    input_items = list(self.history) + tail_tools
+                    input_items = new_items
                     estimated_tokens = budget.estimate_items(input_items, instructions, tools)
 
             # 4. 若摘要後仍超限且歷史輪次過長，才安全滑動視窗裁減中間對話
             if estimated_tokens > budget.compact_threshold and len(input_items) > 14:
                 log.warning(f"Context overflow predicted (est. {estimated_tokens} tokens). Truncating history safely.")
-                safe_prefix = input_items[:4]
+                from pocket_agent.core.compaction import ensure_paired_tool_calls
+
+                # 保留初始使用者目標，避免遺失任務核心條件
+                head_msgs = [m for m in input_items[:2] if m.get("role") == "user"]
                 notice = {
                     "role": "system",
                     "content": "[System] 中間的對話歷史已被系統自動截斷以避免 Context Overflow。",
                 }
-                safe_prefix.append(notice)
-
-                tail_idx = max(4, len(input_items) - 10)
-                while tail_idx < len(input_items):
-                    msg = input_items[tail_idx]
-                    prev_msg = input_items[tail_idx - 1] if tail_idx > 0 else {}
-                    if msg.get("type") == "function_call_output" and prev_msg.get("type") == "function_call":
-                        tail_idx -= 1
-                        continue
-                    break
-
-                input_items = safe_prefix + input_items[tail_idx:]
+                tail_msgs = input_items[-10:]
+                # 確保保留之尾端工具呼叫嚴格閉合成對，避免拋出 400 No tool output found 錯誤
+                input_items = head_msgs + [notice] + ensure_paired_tool_calls(tail_msgs)
                 estimated_tokens = budget.estimate_items(input_items, instructions, tools)
 
             # 5. 若經過上述所有縮減策略後，Payload 總量依然超過可用輸入預算，明確終止送出
@@ -1045,6 +1047,8 @@ class Agent:
             else:
                 consecutive_errors = 0
 
+        if self._is_subagent:
+            return "", "（子代理已達工具呼叫上限，且未產出額外分析內容）"
         return "", "（已達工具呼叫上限）"
 
     async def _execute_core_tool(self, name: str, args: dict, call_id: str) -> str:

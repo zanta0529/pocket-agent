@@ -150,3 +150,35 @@ class HistoryCompactor:
         }
         new_history = [summary_msg] + to_keep
         return new_history, True
+
+
+def ensure_paired_tool_calls(items: list[dict]) -> list[dict]:
+    """過濾掉未成對的 function_call 或 function_call_output，確保 API 契約完整性。
+
+    若某個 call_id 只有 call 沒有 output，或只有 output 沒有 call，將一併剔除。
+    非工具呼叫之一般對話訊息原樣保留。
+    """
+    call_ids = {
+        m.get("call_id") for m in items if isinstance(m, dict) and m.get("type") == "function_call" and m.get("call_id")
+    }
+    output_ids = {
+        m.get("call_id")
+        for m in items
+        if isinstance(m, dict) and m.get("type") == "function_call_output" and m.get("call_id")
+    }
+    valid_ids = call_ids & output_ids
+
+    cleaned: list[dict] = []
+    for m in items:
+        if not isinstance(m, dict):
+            cleaned.append(m)
+            continue
+        m_type = m.get("type")
+        if m_type in ("function_call", "function_call_output"):
+            if m.get("call_id") in valid_ids:
+                cleaned.append(m)
+            else:
+                log.warning("移除孤立未閉合之 %s (call_id=%s)", m_type, m.get("call_id"))
+        else:
+            cleaned.append(m)
+    return cleaned

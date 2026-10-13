@@ -30,6 +30,9 @@ class OpenAIResponsesEngine(BaseEngine):
         build_tools_callback: Optional[Callable[[], list]] = None,
     ) -> AsyncGenerator[Any, None]:
 
+        # 供應商輸入防禦：確保傳入 Responses API 的 function_call 與 output 嚴格成對
+        input_items = self.sanitize_input_items(input_items)
+
         try:
             stream = await self.client.responses.create(
                 model=self.model,

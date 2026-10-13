@@ -136,6 +136,19 @@ class BaseEngine:
             key in err_msg for key in ("context_length_exceeded", "context length", "too large", "maximum context")
         )
 
+    def is_invalid_tool_call_error(self, exc: Exception) -> bool:
+        """判斷例外是否為供應商回報的工具呼叫不成對或格式錯誤 (如 HTTP 400)。"""
+        if getattr(exc, "status_code", None) != 400:
+            return False
+        err_msg = str(exc).lower()
+        return "no tool output found" in err_msg or "tool_call_id" in err_msg or "function_call" in err_msg
+
+    def sanitize_input_items(self, input_items: list) -> list:
+        """供應商輸入檢查與清理。預設保證 function_call 與 function_call_output 成對閉合。"""
+        from pocket_agent.core.compaction import ensure_paired_tool_calls
+
+        return ensure_paired_tool_calls(input_items)
+
     def connection_error_hint(self, exc: Exception) -> str | None:
         """
         若例外為連線中斷／逾時類錯誤，回傳友善的補充說明；否則回傳 None。

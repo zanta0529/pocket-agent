@@ -220,3 +220,32 @@ def test_read_file_char_offset_continuation(tmp_path):
     assert "[+5000]" in result
     assert "B" * 100 in result
     assert "A" not in result
+
+
+def test_compact_preserves_whitelisted_skills_and_guidelines():
+    budget = ContextBudget(1000)  # 門檻 700 tokens
+    big = "資料" * 800
+    items = [
+        {"type": "function_call", "call_id": "c_skill", "name": "use_skill", "arguments": '{"name": "review"}'},
+        {"type": "function_call_output", "call_id": "c_skill", "output": big},
+        {
+            "type": "function_call",
+            "call_id": "c_doc",
+            "name": "read_file",
+            "arguments": '{"path": "docs/PROJECT_INSTRUCTIONS.md"}',
+        },
+        {"type": "function_call_output", "call_id": "c_doc", "output": big},
+        {"type": "function_call", "call_id": "c_normal", "name": "read_file", "arguments": '{"path": "src/app.py"}'},
+        {"type": "function_call_output", "call_id": "c_normal", "output": big},
+        {"type": "function_call", "call_id": "c_recent1", "name": "read_file", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c_recent1", "output": big},
+        {"type": "function_call", "call_id": "c_recent2", "name": "read_file", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c_recent2", "output": big},
+    ]
+
+    cleared = budget.compact(items)
+    assert cleared == 1  # 只有 c_normal 被清除
+    outputs = {m["call_id"]: m["output"] for m in items if m["type"] == "function_call_output"}
+    assert outputs["c_skill"] == big  # 白名單保護未被清除
+    assert outputs["c_doc"] == big  # 專案指引保護未被清除
+    assert outputs["c_normal"] == _PLACEHOLDER  # 一般檔案被清除為佔位符

@@ -170,3 +170,26 @@ def test_compact_history_session_persistence(tmp_path, monkeypatch):
     assert loaded_history[0]["compacted_range"] == [0, 4]
     assert loaded_history[0]["original_tokens"] == 1200
     assert loaded_history[0]["compacted_tokens"] == 150
+
+
+def test_ensure_paired_tool_calls():
+    from pocket_agent.core.compaction import ensure_paired_tool_calls
+
+    items = [
+        {"role": "user", "content": "hello"},
+        # 成對的 call 1
+        {"type": "function_call", "call_id": "c1", "name": "read_file", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+        # 孤立的 call 2 (無 output)
+        {"type": "function_call", "call_id": "c2", "name": "read_file", "arguments": "{}"},
+        # 孤立的 output 3 (無 call)
+        {"type": "function_call_output", "call_id": "c3", "output": "orphan output"},
+        {"role": "assistant", "content": "done"},
+    ]
+
+    cleaned = ensure_paired_tool_calls(items)
+    assert len(cleaned) == 4
+    assert cleaned[0]["role"] == "user"
+    assert cleaned[1]["call_id"] == "c1"
+    assert cleaned[2]["call_id"] == "c1"
+    assert cleaned[3]["role"] == "assistant"
