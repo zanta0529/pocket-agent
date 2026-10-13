@@ -97,3 +97,76 @@ def test_compact_history_fails_gracefully():
         assert new_hist == history  # 保證原子性，原樣保留
 
     asyncio.run(_test())
+
+
+def test_compact_history_no_benefit_fallback():
+    async def _test():
+        # 摘要長度與原內容相近，壓縮效益未達 20%
+        engine = MockSummaryEngine(summary_output="長篇摘要 " * 200)
+        compactor = HistoryCompactor(engine, keep_recent_messages=2)
+
+        history = [
+            {"role": "user", "content": "長篇大論 " * 200},
+            {"role": "assistant", "content": "詳細解答 " * 200},
+            {"role": "user", "content": "保留問題 1"},
+            {"role": "assistant", "content": "保留回答 1"},
+        ]
+
+        new_hist, success = await compactor.compact_history(history)
+        assert success is False
+        assert new_hist == history
+
+    asyncio.run(_test())
+
+
+def test_compact_history_empty_or_cancelled():
+    async def _test():
+        # 1. 摘要內容為空
+        engine_empty = MockSummaryEngine(summary_output="")
+        compactor_empty = HistoryCompactor(engine_empty, keep_recent_messages=2)
+        history = [
+            {"role": "user", "content": "長篇大論 " * 200},
+            {"role": "assistant", "content": "詳細解答 " * 200},
+            {"role": "user", "content": "保留問題 1"},
+            {"role": "assistant", "content": "保留回答 1"},
+        ]
+        new_hist, success = await compactor_empty.compact_history(history)
+        assert success is False
+        assert new_hist == history
+
+        # 2. cancel_check 觸發取消
+        engine_cancel = MockSummaryEngine(summary_output="正常摘要")
+        compactor_cancel = HistoryCompactor(engine_cancel, keep_recent_messages=2)
+        new_hist2, success2 = await compactor_cancel.compact_history(history, cancel_check=lambda: True)
+        assert success2 is False
+        assert new_hist2 == history
+
+    asyncio.run(_test())
+
+
+def test_compact_history_session_persistence(tmp_path, monkeypatch):
+    from pocket_agent.core import sessions
+
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path)
+    session_id = "test-compaction-session"
+    history = [
+        {
+            "role": "user",
+            "content": "[系統紀錄：較早歷史對話之高密度摘要]\n摘要",
+            "is_compaction": True,
+            "compacted_range": [0, 4],
+            "original_tokens": 1200,
+            "compacted_tokens": 150,
+        },
+        {"role": "user", "content": "保留問題 1"},
+        {"role": "assistant", "content": "保留回答 1"},
+    ]
+    sessions.save_session(session_id, history)
+    loaded = sessions.load_session(session_id)
+    assert loaded is not None
+    loaded_history = loaded["history"]
+    assert len(loaded_history) == 3
+    assert loaded_history[0]["is_compaction"] is True
+    assert loaded_history[0]["compacted_range"] == [0, 4]
+    assert loaded_history[0]["original_tokens"] == 1200
+    assert loaded_history[0]["compacted_tokens"] == 150
