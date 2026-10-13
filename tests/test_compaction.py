@@ -69,6 +69,9 @@ def test_compact_history_success():
         assert success is True
         assert len(new_hist) == 3  # 1 則摘要 + 2 則保留
         assert "高密度摘要" in new_hist[0]["content"]
+        assert new_hist[0].get("is_compaction") is True
+        assert "compacted_range" in new_hist[0]
+        assert "original_tokens" in new_hist[0]
         assert new_hist[1]["content"] == "保留問題 1"
         assert new_hist[2]["content"] == "保留回答 1"
 

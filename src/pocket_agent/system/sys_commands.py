@@ -176,13 +176,21 @@ class ConfigCommand(SysCommand):
             key = parts[1]
             val_str = " ".join(parts[2:])
 
-            # 簡單型別轉換
-            if val_str.lower() in ("true", "yes", "1"):
+            # 簡單型別轉換 (布林值、數字、None 或字串)
+            if val_str.lower() in ("true", "yes"):
                 val = True
-            elif val_str.lower() in ("false", "no", "0"):
+            elif val_str.lower() in ("false", "no"):
                 val = False
+            elif val_str.lower() in ("none", "null"):
+                val = None
             else:
-                val = val_str
+                try:
+                    if "." in val_str:
+                        val = float(val_str)
+                    else:
+                        val = int(val_str)
+                except ValueError:
+                    val = val_str
 
             config.set(key, val)
             is_secret = any(x in key.lower() for x in ("key", "token", "password", "secret"))

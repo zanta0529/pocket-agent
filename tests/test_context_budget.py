@@ -202,3 +202,21 @@ def test_console_formatter_warning_indent_and_color():
     assert "│  " in output
     assert "\033[38;5;208m" in output
     assert "Context compaction: cleared 3 old tool outputs." in output
+
+
+def test_read_file_char_offset_continuation(tmp_path):
+    from pocket_agent.tools.fs import call_fs_tool
+
+    long_file = tmp_path / "stream_code.js"
+    content = ("A" * 5000) + ("B" * 5000)
+    long_file.write_text(content, encoding="utf-8")
+
+    result = call_fs_tool(
+        "read_file",
+        {"path": str(long_file), "start_line": 1, "char_offset": 5000},
+        on_confirm=None,
+        workspace_dirs=[str(tmp_path)],
+    )
+    assert "[+5000]" in result
+    assert "B" * 100 in result
+    assert "A" not in result

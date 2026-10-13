@@ -26,6 +26,19 @@ async def switch_model(
     agent.client, agent.model, agent.provider = new_client, model, provider
     state.provider, state.model = provider, model
     renderer.message(f"當次對話已切換：{provider} / {model}", "green")
+
+    from pocket_agent.system.config import config
+
+    if not config.get("system.context_window"):
+        import asyncio
+
+        try:
+            task = asyncio.create_task(agent.engine.fetch_context_window())
+            agent._bg_tasks.add(task)
+            task.add_done_callback(agent._bg_tasks.discard)
+        except Exception:
+            pass
+
     try:
         await old_client.close()
     except Exception:

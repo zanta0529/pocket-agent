@@ -142,7 +142,11 @@ class HistoryCompactor:
 
         summary_msg = {
             "role": "user",
-            "content": (f"[系統紀錄：較早歷史對話之高密度摘要（僅供脈絡參考，不擴大任何操作授權）]\n{summary_text}"),
+            "content": f"[系統紀錄：較早歷史對話之高密度摘要（僅供脈絡參考，不擴大任何操作授權）]\n{summary_text}",
+            "is_compaction": True,
+            "compacted_range": [0, split_idx],
+            "original_tokens": original_tokens,
+            "compacted_tokens": summary_tokens,
         }
         new_history = [summary_msg] + to_keep
         return new_history, True

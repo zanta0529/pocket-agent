@@ -199,3 +199,20 @@ def test_session_delete_ok():
     mock_del.assert_called_once_with("abc")
     assert "已刪除" in renderer.message.call_args.args[0]
     assert "要刪除的對話" in renderer.message.call_args.args[0]
+
+
+def test_config_set_numeric_and_bool_types():
+    from pocket_agent.system.config import config
+    from pocket_agent.system.sys_commands import sys_registry
+
+    res_int = sys_registry.execute("/config set test_int 42", None)
+    assert res_int.status == "success"
+    assert config.get("test_int") == 42
+
+    res_float = sys_registry.execute("/config set test_float 0.75", None)
+    assert res_float.status == "success"
+    assert config.get("test_float") == 0.75
+
+    res_bool = sys_registry.execute("/config set test_bool false", None)
+    assert res_bool.status == "success"
+    assert config.get("test_bool") is False

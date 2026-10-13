@@ -23,6 +23,10 @@ FS_TOOLS = [
                 "path": {"type": "string", "description": "Absolute or relative path to the file."},
                 "start_line": {"type": "integer", "description": "Start line number (inclusive)."},
                 "end_line": {"type": "integer", "description": "End line number (inclusive)."},
+                "char_offset": {
+                    "type": "integer",
+                    "description": "Optional character offset within start_line to continue reading long lines.",
+                },
             },
             "required": ["path"],
         },
@@ -361,6 +365,8 @@ def call_fs_tool(
 
             start = args.get("start_line")
             end = args.get("end_line")
+            char_offset = args.get("char_offset")
+            char_offset = max(0, int(char_offset)) if char_offset is not None else 0
             total_lines = len(lines)
 
             MAX_READ_LINES = 500
@@ -380,12 +386,18 @@ def call_fs_tool(
             chars_count = 0
             char_truncated = False
             is_single_line_cut = False
+            cut_end_char = 0
             last_rendered_line = start_idx
 
             for i, line in enumerate(sliced):
                 current_line_no = start_idx + i + 1
                 stripped = line.rstrip()
-                line_prefix = f"{current_line_no:4}| "
+                if i == 0 and char_offset > 0:
+                    stripped = stripped[char_offset:]
+                    line_prefix = f"{current_line_no:4}| [+{char_offset}] "
+                else:
+                    line_prefix = f"{current_line_no:4}| "
+
                 avail_chars = MAX_READ_CHARS - chars_count - len(line_prefix) - 1
 
                 if avail_chars <= 0:
@@ -399,6 +411,7 @@ def call_fs_tool(
                     last_rendered_line = current_line_no
                     char_truncated = True
                     is_single_line_cut = True
+                    cut_end_char = (char_offset if i == 0 else 0) + avail_chars
                     break
 
                 line_str = line_prefix + stripped
@@ -418,6 +431,8 @@ def call_fs_tool(
                 if is_single_line_cut:
                     notice_parts.append(
                         f"[系統提示] 第 {last_rendered_line} 行為超長單行，已被字元截斷。"
+                        f"若要閱讀該行剩餘內容，請設定 `start_line={last_rendered_line}`, "
+                        f"`char_offset={cut_end_char}`；"
                         f"若要閱讀後續行，可設定 `start_line={last_rendered_line + 1}`；"
                         "若要尋找特定字串，請優先改用 `search_files` 進行精準檢索。"
                     )

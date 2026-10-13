@@ -45,8 +45,10 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 - 新增程式以 Python 3.14 相容為基準。新增／修改介面補型別與必要的錯誤處理。
 - 保留取消、失敗提示、附件狀態、連線關閉與 MCP 清理行為，禁止在失敗後偷偷自動重送操作。
 - **上下文與草稿區 (Context & Scratchpad)**：
-  - 專案採用 `ContextBudget` 動態預算管理，包含單筆工具輸出截斷、舊輸出清除與安全歷史滑動視窗。使用者可透過 `system.context_window` 與 `system.context_reserve_output` 微調設定。
-  - `read_file` 具備 500 行與 12,000 字元雙重限制，讀取大型檔案應優先使用 `search_files` 或搭配 `start_line`／`end_line` 精準閱讀。
+  - 專案採用 `ContextBudget` 動態預算管理，計算有效輸入預算（`有效視窗 − 預留輸出 − 安全餘裕`）。
+  - 送出前採用統一流程：優先清除舊工具輸出（至目標水位 60%）→ 嘗試 `HistoryCompactor` 歷史摘要壓縮 → 安全滑動視窗降級 → 不可縮減超限強制停止。
+  - 使用者可透過 `system.context_window`、`system.context_reserve_output`、`system.context_safety_margin` 與 `system.context_compact_target_ratio` 微調設定。
+  - `read_file` 具備 500 行與 12,000 字元雙重限制，並支援 `char_offset` 單行行內字元游標續讀；讀取大型檔案應優先使用 `search_files` 或搭配精準範圍閱讀。
   - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入 `.agents/scratch/notes.md`** 以建立外部長期記憶。詳見 [context-management-architecture.md](context-management-architecture.md)。
 
 ## 4. 資料、擴充與安全邊界

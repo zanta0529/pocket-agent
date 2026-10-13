@@ -161,6 +161,17 @@ class Agent:
         # None 時不確認直接執行；GUI 會掛上跳確認視窗的實作。
         self.on_confirm = None
 
+        # 背景非同步預載模型視窗快取（若使用者未手動指定設定值）
+        if not config.get("system.context_window"):
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    task = loop.create_task(self.engine.fetch_context_window())
+                    self._bg_tasks.add(task)
+                    task.add_done_callback(self._bg_tasks.discard)
+            except RuntimeError:
+                pass
+
     @property
     def engine(self) -> BaseEngine:
         """目前 provider／client／model 對應的 Engine（Adapter）；相關設定變動時自動重建。"""
