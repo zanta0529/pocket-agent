@@ -41,13 +41,24 @@ _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
 
 class _ConsoleFormatter(logging.Formatter):
-    """終端機專用格式：隱藏 traceback，避免干擾友善錯誤畫面（完整堆疊仍寫入 agent.log）。"""
+    """終端機專用格式：隱藏 traceback，縮排並上色以與一般輸出區隔（完整堆疊仍寫入 agent.log）。"""
 
     def format(self, record: logging.LogRecord) -> str:
         exc_info, exc_text, stack_info = record.exc_info, record.exc_text, record.stack_info
         record.exc_info = record.exc_text = record.stack_info = None
         try:
-            return super().format(record)
+            formatted = super().format(record)
+            # 依層級決定 ANSI 色彩：WARNING 為暗橘色 (ANSI 256 色 208)，ERROR 為紅色，其餘為灰色
+            if record.levelno == logging.WARNING:
+                color_code = "\033[38;5;208m"
+            elif record.levelno >= logging.ERROR:
+                color_code = "\033[38;5;196m"
+            else:
+                color_code = "\033[38;5;245m"
+            reset_code = "\033[0m"
+
+            lines = formatted.splitlines()
+            return "\n".join(f"{color_code}│  {line}{reset_code}" for line in lines)
         finally:
             record.exc_info, record.exc_text, record.stack_info = exc_info, exc_text, stack_info
 

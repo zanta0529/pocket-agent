@@ -181,3 +181,24 @@ def test_read_file_single_long_line_notice(tmp_path):
     result = call_fs_tool("read_file", {"path": str(long_file)}, on_confirm=None, workspace_dirs=[str(tmp_path)])
     assert "超長單行，已被字元截斷" in result
     assert "search_files" in result
+
+
+def test_console_formatter_warning_indent_and_color():
+    import logging
+
+    from pocket_agent.core.agent import _LOG_FORMAT, _ConsoleFormatter
+
+    formatter = _ConsoleFormatter(_LOG_FORMAT)
+    record = logging.LogRecord(
+        name="pocket-agent",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=10,
+        msg="Context compaction: cleared 3 old tool outputs.",
+        args=(),
+        exc_info=None,
+    )
+    output = formatter.format(record)
+    assert "│  " in output
+    assert "\033[38;5;208m" in output
+    assert "Context compaction: cleared 3 old tool outputs." in output
