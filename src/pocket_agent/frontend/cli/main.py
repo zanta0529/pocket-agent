@@ -506,6 +506,11 @@ class CliFrontend(FrontendStrategy):
                 else:
                     renderer.message("沒有找到歷史 session，以全新對話啟動。", "dim")
 
+            # 啟動時背景執行自動 Housekeeping (具備 24 小時冷卻期，無感執行)
+            from pocket_agent.system.housekeeping import default_housekeeper
+
+            asyncio.create_task(asyncio.to_thread(default_housekeeper.run_cleanup, force=False))
+
             # F6：Ctrl+L 清屏後重印 banner
             await conversation(
                 agent, state, CliInput(state, agent=agent, on_clear_screen=renderer.banner), renderer, tools

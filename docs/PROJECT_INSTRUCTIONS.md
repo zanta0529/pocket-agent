@@ -49,7 +49,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
   - 送出前採用統一流程：優先清除舊工具輸出（至目標水位 60%）→ 嘗試 `HistoryCompactor` 歷史摘要壓縮 → 安全滑動視窗降級 → 不可縮減超限強制停止。
   - 使用者可透過 `system.context_window`、`system.context_reserve_output`、`system.context_safety_margin` 與 `system.context_compact_target_ratio` 微調設定。
   - `read_file` 具備 500 行與 12,000 字元雙重限制，並支援 `char_offset` 單行行內字元游標續讀；讀取大型檔案應優先使用 `search_files` 或搭配精準範圍閱讀。
-  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入 `.agents/scratch/notes.md`** 以建立外部長期記憶。詳見 [context-management-architecture.md](context-management-architecture.md)。
+  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入 `.agents/scratch/notes.md`** 以建立外部長期記憶。詳見 [context-management-architecture.md](context-management-architecture.md) 與 [configuration-specification.md](configuration-specification.md)。
 
 ## 4. 資料、擴充與安全邊界
 

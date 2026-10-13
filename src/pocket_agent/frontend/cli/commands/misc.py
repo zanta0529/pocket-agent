@@ -69,6 +69,27 @@ class ClearCommand(CliCommand):
         return CommandResult()
 
 
+class CleanCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if args:
+            raise ValueError("/clean 不接受參數")
+        import asyncio
+
+        from pocket_agent.system.housekeeping import default_housekeeper
+
+        res = await asyncio.to_thread(default_housekeeper.run_cleanup, force=True)
+        files = res.get("cleaned_files", 0)
+        mb = res.get("freed_mb", 0.0)
+        if files > 0:
+            ctx.renderer.message(
+                f"✓ Housekeeping 完成：已清理 {files} 個過期檔案，釋放 {mb:.2f} MB 磁碟空間。",
+                "green",
+            )
+        else:
+            ctx.renderer.message("✓ 日誌與暫存目錄狀態良好，無過期檔案需清理。", "green")
+        return CommandResult()
+
+
 class FileCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         from pathlib import Path

@@ -35,6 +35,7 @@ def build_manual():
     readme = read_md(readme_path)
 
     files = {
+        "config_spec": read_md(os.path.join(docs_dir, "configuration-specification.md")),
         "agent_config": read_md(os.path.join(docs_dir, "agent-configuration-standards.md")),
         "hooks": read_md(os.path.join(docs_dir, "hooks-lifecycle.md")),
         "llm_adapter": read_md(os.path.join(docs_dir, "llm-adapter-architecture.md")),
@@ -98,9 +99,12 @@ def build_manual():
     manual.append("- [三、設定與擴充 (Configuration & Extensions)](#三設定與擴充-configuration--extensions)")
     manual.append("  - [3.1 進階設定與 MCP](#31-進階設定與-mcp)")
     manual.append(
-        "  - [3.2 代理配置標準 (Agent Configuration Standards)](#32-代理配置標準-agent-configuration-standards)"
+        "  - [3.2 設定檔規格說明書 (Configuration Specification)](#32-設定檔規格說明書-configuration-specification)"
     )
-    manual.append("  - [3.3 Hooks 生命週期機制](#33-hooks-生命週期機制)")
+    manual.append(
+        "  - [3.3 代理配置標準 (Agent Configuration Standards)](#33-代理配置標準-agent-configuration-standards)"
+    )
+    manual.append("  - [3.4 Hooks 生命週期機制](#34-hooks-生命週期機制)")
     manual.append("- [四、架構與安全 (Architecture & Security)](#四架構與安全-architecture--security)")
     manual.append("  - [4.1 雙軌大模型轉接架構](#41-雙軌大模型轉接架構)")
     manual.append("  - [4.2 OAuth 2.0 認證機制](#42-oauth-20-認證機制)")
@@ -134,10 +138,13 @@ def build_manual():
     manual.append("### 3.1 進階設定與 MCP\n")
     manual.append(demote_headers(readme_config, 1) + "\n")
 
-    manual.append("### 3.2 代理配置標準 (Agent Configuration Standards)\n")
+    manual.append("### 3.2 設定檔規格說明書 (Configuration Specification)\n")
+    manual.append(demote_headers(strip_title(files["config_spec"]), 2) + "\n")
+
+    manual.append("### 3.3 代理配置標準 (Agent Configuration Standards)\n")
     manual.append(demote_headers(strip_title(files["agent_config"]), 2) + "\n")
 
-    manual.append("### 3.3 Hooks 生命週期機制\n")
+    manual.append("### 3.4 Hooks 生命週期機制\n")
     manual.append(demote_headers(strip_title(files["hooks"]), 2) + "\n")
 
     manual.append("## 四、架構與安全 (Architecture & Security)\n")

@@ -27,7 +27,6 @@ from pocket_agent.extensions.skills import (
     skills_index_prompt,
 )
 from pocket_agent.system.config import config
-from pocket_agent.system.paths import is_packaged, user_dir
 from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool, is_doc_tool
 from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool, is_document_tool
 from pocket_agent.tools.fs import FS_TOOLS, call_fs_tool, is_fs_tool
@@ -82,9 +81,18 @@ def setup_logging():
         return
     _logging_setup_done = True
 
-    _log_path = user_dir() / "agent.log" if is_packaged() else Path("agent.log")
+    from logging.handlers import RotatingFileHandler
 
-    _file_handler = logging.FileHandler(_log_path, encoding="utf-8")
+    from pocket_agent.system.paths import log_dir
+
+    _log_path = log_dir() / "agent.log"
+
+    _file_handler = RotatingFileHandler(
+        _log_path,
+        maxBytes=10 * 1024 * 1024,  # 10 MB 自動輪轉
+        backupCount=3,
+        encoding="utf-8",
+    )
     _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
     _handlers: list[logging.Handler] = [_file_handler]
 

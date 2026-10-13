@@ -26,8 +26,9 @@ class SpilloverManager:
         if output_dir is not None:
             self.output_dir = output_dir
         else:
-            # 優先使用工作區內的 .agents/scratch/outputs，若不存在則退回使用者目錄
-            self.output_dir = Path.cwd() / ".agents" / "scratch" / "outputs"
+            from pocket_agent.system.paths import scratch_dir
+
+            self.output_dir = scratch_dir() / "outputs"
 
     def _ensure_dir(self) -> Path:
         try:
@@ -62,11 +63,14 @@ class SpilloverManager:
         if total_len <= threshold:
             return text
 
-        # 動態雙端預覽長度：預設各 1,500，或由設定覆寫，不超過門檻的一半
+        # 動態雙端預覽長度：預設各 1,500，或由設定覆寫，不超過門檻的 1/3
         cfg_head = config.get("system.spillover_head_chars")
         cfg_tail = config.get("system.spillover_tail_chars")
-        head_limit = int(cfg_head) if cfg_head is not None else min(DEFAULT_HEAD_CHARS, threshold // 3)
-        tail_limit = int(cfg_tail) if cfg_tail is not None else min(DEFAULT_TAIL_CHARS, threshold // 3)
+        max_preview = max(1, threshold // 3)
+        raw_head = int(cfg_head) if cfg_head is not None else DEFAULT_HEAD_CHARS
+        raw_tail = int(cfg_tail) if cfg_tail is not None else DEFAULT_TAIL_CHARS
+        head_limit = min(raw_head, max_preview)
+        tail_limit = min(raw_tail, max_preview)
 
         # 產生安全檔名並寫入全量檔案
         safe_tool = re.sub(r"[^\w\-]", "_", tool_name) or "tool"

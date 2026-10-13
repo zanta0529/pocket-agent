@@ -42,6 +42,14 @@ DEFAULT_CONFIG = {
         "context_reserve_output": 4096,
         "context_safety_margin": 1024,
         "context_compact_target_ratio": 0.6,
+        "spillover_threshold_chars": None,
+        "spillover_head_chars": 1500,
+        "spillover_tail_chars": 1500,
+        "repo_map_budget": 1024,
+        "housekeeping_enabled": True,
+        "housekeeping_ttl_days": 7,
+        "housekeeping_max_files": 100,
+        "housekeeping_max_size_mb": 50,
     },
     "providers": {
         "openai": {
@@ -108,6 +116,14 @@ class EnvConfigProvider(ConfigProvider):
         "system.use_sandbox": "USE_SANDBOX",
         "system.sandbox_container": "SANDBOX_CONTAINER",
         "system.auto_learn": "POCKET_AGENT_AUTO_LEARN",
+        "system.spillover_threshold_chars": "POCKET_AGENT_SPILLOVER_THRESHOLD",
+        "system.spillover_head_chars": "POCKET_AGENT_SPILLOVER_HEAD",
+        "system.spillover_tail_chars": "POCKET_AGENT_SPILLOVER_TAIL",
+        "system.repo_map_budget": "POCKET_AGENT_REPO_MAP_BUDGET",
+        "system.housekeeping_enabled": "POCKET_AGENT_HOUSEKEEPING_ENABLED",
+        "system.housekeeping_ttl_days": "POCKET_AGENT_HOUSEKEEPING_TTL_DAYS",
+        "system.housekeeping_max_files": "POCKET_AGENT_HOUSEKEEPING_MAX_FILES",
+        "system.housekeeping_max_size_mb": "POCKET_AGENT_HOUSEKEEPING_MAX_SIZE_MB",
     }
 
     def get(self, key: str) -> Optional[Any]:

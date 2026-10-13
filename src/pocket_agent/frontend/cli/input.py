@@ -23,6 +23,7 @@ BUILTINS = {
     "add-dir": "單次會話內，將外部資料夾加入工作範圍",
     "agents": "列出目前所有可用的子代理清單與能力",
     "attachments": "查看／移除待送附件",
+    "clean": "手動清理過期日誌與暫存檔 (Housekeeping)",
     "clear": "清除對話，保留附件",
     "codesearch": "搜尋程式碼片段並加入對話上下文",
     "compact": "摘要並壓縮中間對話歷史，回收 context 空間",

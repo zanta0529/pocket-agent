@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from pocket_agent.frontend.cli.commands.core import CliCommandRegistry, CommandContext, CommandResult
 from pocket_agent.frontend.cli.commands.misc import (
     AttachmentsCommand,
+    CleanCommand,
     ClearCommand,
     CodeSearchCommand,
     FileCommand,
@@ -39,6 +40,9 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("quota", usage_cmd)
     registry.register("logout", LogoutCommand())
     registry.register("clear", ClearCommand())
+    clean_cmd = CleanCommand()
+    registry.register("clean", clean_cmd)
+    registry.register("gc", clean_cmd)
     registry.register("file", FileCommand())
     registry.register("rm-file", RmFileCommand())
     registry.register("attachments", AttachmentsCommand())

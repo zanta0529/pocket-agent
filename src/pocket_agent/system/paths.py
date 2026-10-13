@@ -73,3 +73,31 @@ def env_path() -> Path:
     if is_packaged():
         return user_dir() / ".env"
     return bundle_dir() / ".env"
+
+
+def log_dir() -> Path:
+    """系統日誌目錄。開發模式為 .agents/logs，發佈版為 ~/.pocket-agent/logs。"""
+    if is_packaged():
+        d = user_dir() / "logs"
+    else:
+        d = Path.cwd() / ".agents" / "logs"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        d = user_dir() / "logs"
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def scratch_dir() -> Path:
+    """臨時暫存目錄。開發模式為 .agents/scratch，發佈版為 ~/.pocket-agent/scratch。"""
+    if is_packaged():
+        d = user_dir() / "scratch"
+    else:
+        d = Path.cwd() / ".agents" / "scratch"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        d = user_dir() / "scratch"
+        d.mkdir(parents=True, exist_ok=True)
+    return d
