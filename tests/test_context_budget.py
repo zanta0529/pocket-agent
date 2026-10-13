@@ -36,8 +36,8 @@ def test_truncate_tool_output_only_when_over_limit():
     limit = budget.max_tool_output_chars
     assert budget.truncate_tool_output("x" * limit) == "x" * limit
     truncated = budget.truncate_tool_output("x" * (limit + 1000))
-    assert truncated.startswith("x" * limit)
-    assert "已截斷" in truncated
+    assert "[系統日誌虛擬化]" in truncated
+    assert "完整日誌路徑" in truncated
     assert budget.truncate_tool_output(None) is None
 
 

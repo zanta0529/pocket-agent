@@ -151,19 +151,17 @@ class ContextBudget:
     def max_tool_output_chars(self) -> int:
         return max(500, int(self.effective_input_budget * TOOL_OUTPUT_RATIO * CHARS_PER_TOKEN))
 
-    def truncate_tool_output(self, text: Any) -> Any:
-        """工具輸出寫入 history 前只截斷一次；非字串或未超限時原樣回傳。"""
+    def truncate_tool_output(self, text: Any, tool_name: str = "", call_id: str = "") -> Any:
+        """工具輸出寫入 history 前進行動態檢查；超限時啟動落盤虛擬化與雙端切片。"""
         if not isinstance(text, str):
             return text
         limit = self.max_tool_output_chars
         if len(text) <= limit:
             return text
         log.warning("Tool output truncated on append (from %d to %d chars).", len(text), limit)
-        return (
-            text[:limit] + f"\n\n... (輸出過長，已截斷，省略 {len(text) - limit} 字元) ...\n"
-            "[系統建議] 若遺失關鍵資訊，請限縮搜尋範圍重試（例如指定 start_line/end_line）；"
-            "若任務龐大，建議將進度寫入 `.agents/scratch/notes.md` 草稿區。"
-        )
+        from pocket_agent.core.spillover import default_spillover
+
+        return default_spillover.spill_or_pass(text, tool_name=tool_name, call_id=call_id, max_chars=limit)
 
     def estimate_items(self, items: list, instructions: str = "", tools: list | None = None) -> int:
         """估算送出內容（含 instructions 與 tools schema）的 token 數。"""

@@ -564,6 +564,15 @@ class Agent:
             "這樣能確保重要資訊不受 Context Overflow 截斷影響，建立起長期記憶。"
         )
 
+        # 加入動態預算之專案結構鳥瞰圖 (Repo Map)
+        from pocket_agent.tools.repo_map import default_repo_map
+
+        search_roots = self.workspace_dirs if self.workspace_dirs else [Path.cwd()]
+        max_repo_budget = min(1200, int(self._budget.effective_input_budget * 0.05))
+        repo_map_str = default_repo_map.build_repo_map(search_roots, budget_tokens=max_repo_budget)
+        if repo_map_str:
+            base += f"\n\n{repo_map_str}"
+
         # 加入技能清單
         instructions = base + skills_index_prompt(self.workspace_dirs, query)
 
@@ -682,7 +691,11 @@ class Agent:
             {
                 "type": "function_call_output",
                 "call_id": fc["call_id"],
-                "output": self._budget.truncate_tool_output(result),
+                "output": self._budget.truncate_tool_output(
+                    result,
+                    tool_name=fc.get("name", ""),
+                    call_id=fc.get("call_id", ""),
+                ),
             }
         )
 
