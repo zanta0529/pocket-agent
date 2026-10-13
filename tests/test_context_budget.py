@@ -199,9 +199,22 @@ def test_console_formatter_warning_indent_and_color():
         exc_info=None,
     )
     output = formatter.format(record)
-    assert "│  " in output
-    assert "\033[38;5;208m" in output
+    assert "│ 🧹 " in output
+    assert "\033[38;5;245m" in output
     assert "Context compaction: cleared 3 old tool outputs." in output
+
+    record_trunc = logging.LogRecord(
+        name="pocket-agent",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=10,
+        msg="Tool output truncated on append (from 100 to 50 chars).",
+        args=(),
+        exc_info=None,
+    )
+    output_trunc = formatter.format(record_trunc)
+    assert "│ ✂️ " in output_trunc
+    assert "\033[38;5;245m" in output_trunc
 
 
 def test_read_file_char_offset_continuation(tmp_path):

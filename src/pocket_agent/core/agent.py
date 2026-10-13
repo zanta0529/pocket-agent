@@ -41,24 +41,35 @@ _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
 
 class _ConsoleFormatter(logging.Formatter):
-    """終端機專用格式：隱藏 traceback，縮排並上色以與一般輸出區隔（完整堆疊仍寫入 agent.log）。"""
+    """終端機專用格式：隱藏 traceback，縮排、圖示化並套用柔和色彩（完整堆疊仍寫入 agent.log）。"""
 
     def format(self, record: logging.LogRecord) -> str:
         exc_info, exc_text, stack_info = record.exc_info, record.exc_text, record.stack_info
         record.exc_info = record.exc_text = record.stack_info = None
         try:
             formatted = super().format(record)
-            # 依層級決定 ANSI 色彩：WARNING 為暗橘色 (ANSI 256 色 208)，ERROR 為紅色，其餘為灰色
-            if record.levelno == logging.WARNING:
-                color_code = "\033[38;5;208m"
-            elif record.levelno >= logging.ERROR:
-                color_code = "\033[38;5;196m"
+            msg_lower = record.getMessage().lower()
+
+            # 依層級與事件類型決定圖示與色彩
+            if record.levelno >= logging.ERROR:
+                icon = "⚠️"
+                color_code = "\033[38;5;196m"  # 紅色
+            elif record.levelno == logging.WARNING:
+                if "truncated" in msg_lower or "截斷" in msg_lower:
+                    icon = "✂️"
+                elif "compaction" in msg_lower or "cleared" in msg_lower:
+                    icon = "🧹"
+                else:
+                    icon = "ℹ️"
+                # 改為與中途思考一致的 dim 灰色 (ANSI 256 色 245)，消除視覺焦慮
+                color_code = "\033[38;5;245m"
             else:
+                icon = "💬"
                 color_code = "\033[38;5;245m"
             reset_code = "\033[0m"
 
             lines = formatted.splitlines()
-            return "\n".join(f"{color_code}│  {line}{reset_code}" for line in lines)
+            return "\n".join(f"{color_code}│ {icon} {line}{reset_code}" for line in lines)
         finally:
             record.exc_info, record.exc_text, record.stack_info = exc_info, exc_text, stack_info
 

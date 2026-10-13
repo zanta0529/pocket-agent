@@ -72,19 +72,11 @@ def test_openai_responses_engine_sanitizes_before_stream():
     asyncio.run(_test())
 
 
-def test_subagent_graceful_degradation_at_max_rounds():
+def test_subagent_graceful_degradation_at_max_rounds(monkeypatch):
     async def _test():
         mock_client = MagicMock()
         mock_mcp = MagicMock()
         mock_mcp.openai_tools.return_value = []
-
-        subagent = Agent(
-            client=mock_client,
-            mcp=mock_mcp,
-            model="test-model",
-            is_subagent=True,
-            max_tool_rounds=2,
-        )
 
         rounds_called = 0
         received_tools_history = []
@@ -113,20 +105,25 @@ def test_subagent_graceful_degradation_at_max_rounds():
                     # 第二輪（最後一輪）：此時 tools 應已被清空，輸出總結文字
                     yield EventText("【階段性研究報告】已確認專案架構與關鍵檔案。")
 
-        subagent._engine_cache = (("mock", id(mock_client), "test-model"), MockSubEngine(mock_client, "test-model"))
+        mock_engine = MockSubEngine(mock_client, "test-model")
+        from pocket_agent.engines.factory import EngineFactory
 
-        # 模擬檔案工具回傳
-        from pocket_agent.tools import fs
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: mock_engine)
+        monkeypatch.setattr("pocket_agent.core.agent.call_fs_tool", MagicMock(return_value="檔案內容"))
 
-        orig_call = fs.call_fs_tool
-        fs.call_fs_tool = MagicMock(return_value="檔案內容")
-        try:
-            _thinking, reply, _usage = await subagent.chat("請探勘專案")
-            assert "階段性研究報告" in reply
-            # 驗證最後一輪 tools 被強制清空
-            assert len(received_tools_history[0]) > 0  # 第 1 輪有 tools
-            assert len(received_tools_history[1]) == 0  # 第 2 輪 (最後一輪) tools 被清空
-        finally:
-            fs.call_fs_tool = orig_call
+        subagent = Agent(
+            client=mock_client,
+            mcp=mock_mcp,
+            model="test-model",
+            is_subagent=True,
+            max_tool_rounds=2,
+            provider="openai",
+        )
+
+        _thinking, reply, _usage = await subagent.chat("請探勘專案")
+        assert "階段性研究報告" in reply
+        # 驗證最後一輪 tools 被強制清空
+        assert len(received_tools_history[0]) > 0  # 第 1 輪有 tools
+        assert len(received_tools_history[1]) == 0  # 第 2 輪 (最後一輪) tools 被清空
 
     asyncio.run(_test())
