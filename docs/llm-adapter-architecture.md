@@ -11,18 +11,23 @@ classDiagram
     class BaseEngine {
         <<interface>>
         +stream_chat(input, tools, ...) AsyncGenerator
+        +context_window() int?
     }
 
     class OpenAIResponsesEngine {
         +stream_chat()
+        +context_window() int?
         -原生支援 OpenAI Responses (Beta) 協定
         -直接解析原生的 reasoning_content
+        -回傳實際 input_tokens 用量
     }
 
     class OllamaChatEngine {
         +stream_chat()
+        +context_window() int?
         -相容標準 Chat Completions API
         -內建 State Machine 解析文字中的標籤
+        -回傳 prompt_tokens 用量
     }
 
     class EngineFactory {

@@ -16,17 +16,17 @@
 
 ## 2. 目錄與責任邊界
 
-| 路徑                           | 用途與修改原則                                                                                          |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `src/pocket_agent/main.py`     | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                            |
-| `src/pocket_agent/core/`       | 核心業務邏輯：Agent 協調、對話紀錄 (sessions)、上下文與錯誤處理。                                       |
-| `src/pocket_agent/engines/`    | LLM 引擎實作：BaseEngine、OpenAI、OpenRouter、Ollama、StandardChatCompletions 與 Factory。              |
-| `src/pocket_agent/frontend/`   | 使用者介面策略：實作 `cli/` (包含 input、render、state、commands 等模組)。                              |
-| `src/pocket_agent/system/`     | 系統基礎設施：認證 (auth)、路徑解析 (paths)、設定 (config) 與精靈 (wizard)。                            |
-| `src/pocket_agent/extensions/` | 擴充功能：MCP (Model Context Protocol) 伺服器生命週期與掛載管理。                                       |
-| `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行、原生檔案操作 (fs)、網路請求 (web)、圖片生成 (image)、文件產出 (document)。    |
+| 路徑                           | 用途與修改原則                                                                                       |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `src/pocket_agent/main.py`     | 啟動、模式選擇與 Click 命令；保留 Windows asyncio 相容處理。                                         |
+| `src/pocket_agent/core/`       | 核心業務邏輯：Agent 協調、對話紀錄 (sessions)、上下文與錯誤處理。                                    |
+| `src/pocket_agent/engines/`    | LLM 引擎實作：BaseEngine、OpenAI、OpenRouter、Ollama、StandardChatCompletions 與 Factory。           |
+| `src/pocket_agent/frontend/`   | 使用者介面策略：實作 `cli/` (包含 input、render、state、commands 等模組)。                           |
+| `src/pocket_agent/system/`     | 系統基礎設施：認證 (auth)、路徑解析 (paths)、設定 (config) 與精靈 (wizard)。                         |
+| `src/pocket_agent/extensions/` | 擴充功能：MCP (Model Context Protocol) 伺服器生命週期與掛載管理。                                    |
+| `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行、原生檔案操作 (fs)、網路請求 (web)、圖片生成 (image)、文件產出 (document)。 |
 
-*其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，`docs/` 為工程規範。*
+_其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，`docs/` 為工程規範。_
 
 ### 2.1 架構設計原則：Adapter／Strategy／Factory
 
@@ -44,7 +44,10 @@
 - 格式以 `pyproject.toml` 的 Ruff 設定為準：雙引號、E／F／I 規則。
 - 新增程式以 Python 3.14 相容為基準。新增／修改介面補型別與必要的錯誤處理。
 - 保留取消、失敗提示、附件狀態、連線關閉與 MCP 清理行為，禁止在失敗後偷偷自動重送操作。
-- **上下文與草稿區 (Context & Scratchpad)**：遇到大型 codebase 任務或搜尋結果過長導致 Context Overflow 截斷時，**必須主動將關鍵發現、變數與 TODO 寫入 `.agents/scratch/notes.md`** 以建立外部長期記憶。
+- **上下文與草稿區 (Context & Scratchpad)**：
+  - 專案採用 `ContextBudget` 動態預算管理，包含單筆工具輸出截斷、舊輸出清除與安全歷史滑動視窗。使用者可透過 `system.context_window` 與 `system.context_reserve_output` 微調設定。
+  - `read_file` 具備 500 行與 12,000 字元雙重限制，讀取大型檔案應優先使用 `search_files` 或搭配 `start_line`／`end_line` 精準閱讀。
+  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入 `.agents/scratch/notes.md`** 以建立外部長期記憶。詳見 [context-management-architecture.md](context-management-architecture.md)。
 
 ## 4. 資料、擴充與安全邊界
 
@@ -68,7 +71,7 @@
 ## 6. 依賴與發布維護
 
 - `requirements.in` 為直接依賴來源，`requirements.txt` 為 pip-compile 產出；禁止手改鎖定版本。
-- 發布 workflow 在 Windows／Python 3.14 執行 `build_portable.py`，v* tag 會觸發 release。修改打包路徑時須考慮原始碼、portable 與 PyInstaller 模式。
+- 發布 workflow 在 Windows／Python 3.14 執行 `build_portable.py`，v\* tag 會觸發 release。修改打包路徑時須考慮原始碼、portable 與 PyInstaller 模式。
 
 ## 7. 驗證方式與手動命令
 
