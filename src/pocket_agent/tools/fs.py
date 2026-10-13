@@ -363,28 +363,58 @@ def call_fs_tool(
             end = args.get("end_line")
             total_lines = len(lines)
 
-            # 預設行為與截斷保護
-            if start is None and end is None:
-                max_lines = 500
-                if total_lines > max_lines:
-                    sliced = lines[:max_lines]
-                    inner = "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(sliced))
-                    inner += (
-                        f"\n\n...（內容過長，共 {total_lines} 行，已自動截斷前 {max_lines} 行。）\n"
-                        "[系統建議] 若要繼續閱讀後續內容，\n"
-                        "請呼叫 `read_file` 並設定 `start_line` / `end_line`；\n"
-                        "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
-                    )
-                    return f"<external_content>\n{inner}\n</external_content>"
-                else:
-                    inner = "\n".join(f"{i + 1:4}| {line.rstrip()}" for i, line in enumerate(lines))
-                    return f"<external_content>\n{inner}\n</external_content>"
+            MAX_READ_LINES = 500
+            MAX_READ_CHARS = 12000
 
             start_idx = max(0, int(start) - 1) if start else 0
             end_idx = min(total_lines, int(end)) if end else total_lines
 
+            # 若未指定範圍，預設限制在 MAX_READ_LINES
+            if start is None and end is None:
+                end_idx = min(total_lines, MAX_READ_LINES)
+
             sliced = lines[start_idx:end_idx]
-            inner = "\n".join(f"{start_idx + i + 1:4}| {line.rstrip()}" for i, line in enumerate(sliced))
+
+            # 逐行組合並檢查字元數上限
+            formatted_lines = []
+            chars_count = 0
+            char_truncated = False
+            last_rendered_line = start_idx
+
+            for i, line in enumerate(sliced):
+                line_str = f"{start_idx + i + 1:4}| {line.rstrip()}"
+                if chars_count + len(line_str) + 1 > MAX_READ_CHARS and formatted_lines:
+                    char_truncated = True
+                    break
+                formatted_lines.append(line_str)
+                chars_count += len(line_str) + 1
+                last_rendered_line = start_idx + i + 1
+
+            inner = "\n".join(formatted_lines)
+
+            # 截斷提示
+            notice_parts = []
+            if char_truncated:
+                notice_parts.append(
+                    f"...（內容過長，已達單次讀取上限 {MAX_READ_CHARS} 字元，"
+                    f"僅呈現至第 {last_rendered_line} 行 / 共 {total_lines} 行。）"
+                )
+                notice_parts.append(
+                    f"[系統建議] 若要繼續閱讀後續內容，請呼叫 `read_file` 並設定 "
+                    f"`start_line={last_rendered_line + 1}`；"
+                    "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
+                )
+            elif start is None and end is None and total_lines > MAX_READ_LINES:
+                notice_parts.append(f"...（內容過長，共 {total_lines} 行，已自動截斷前 {MAX_READ_LINES} 行。）")
+                notice_parts.append(
+                    "[系統建議] 若要繼續閱讀後續內容，請呼叫 `read_file` 並設定 "
+                    f"`start_line={MAX_READ_LINES + 1}`；"
+                    "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
+                )
+
+            if notice_parts:
+                inner += "\n\n" + "\n".join(notice_parts)
+
             return f"<external_content>\n{inner}\n</external_content>"
 
         elif name == "write_to_file":

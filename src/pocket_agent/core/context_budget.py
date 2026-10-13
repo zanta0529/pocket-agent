@@ -96,20 +96,40 @@ class ContextUsage:
         ]
 
 
+# 預設預留輸出/推理空間與安全餘裕（tokens）
+DEFAULT_RESERVE_OUTPUT = 4096
+DEFAULT_SAFETY_MARGIN = 1024
+
+
 class ContextBudget:
     """依視窗大小計算預算，並提供截斷與清除工具。"""
 
-    def __init__(self, window: int, source: str = SOURCE_DEFAULT):
+    def __init__(
+        self,
+        window: int,
+        source: str = SOURCE_DEFAULT,
+        reserve_output: int = DEFAULT_RESERVE_OUTPUT,
+        safety_margin: int = DEFAULT_SAFETY_MARGIN,
+    ):
         self.window = max(1, int(window))
         self.source = source
+        self.reserve_output = max(0, int(reserve_output))
+        self.safety_margin = max(0, int(safety_margin))
+
+    @property
+    def effective_input_budget(self) -> int:
+        """可用輸入預算 ＝ 有效視窗 － 預留輸出空間 － 安全餘裕。最低不小於 1000 tokens。"""
+        budget = self.window - self.reserve_output - self.safety_margin
+        return max(1000, budget)
 
     @property
     def compact_threshold(self) -> int:
-        return int(self.window * COMPACT_RATIO)
+        """超過可用輸入預算的 COMPACT_RATIO 時觸發清除工具輸出。"""
+        return int(self.effective_input_budget * COMPACT_RATIO)
 
     @property
     def max_tool_output_chars(self) -> int:
-        return max(500, int(self.window * TOOL_OUTPUT_RATIO * CHARS_PER_TOKEN))
+        return max(500, int(self.effective_input_budget * TOOL_OUTPUT_RATIO * CHARS_PER_TOKEN))
 
     def truncate_tool_output(self, text: Any) -> Any:
         """工具輸出寫入 history 前只截斷一次；非字串或未超限時原樣回傳。"""

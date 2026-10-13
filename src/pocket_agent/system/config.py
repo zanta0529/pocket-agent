@@ -38,6 +38,8 @@ DEFAULT_CONFIG = {
         "use_sandbox": "none",
         "sandbox_container": "pocket_sandbox",
         "auto_learn": False,
+        "context_window": None,
+        "context_reserve_output": 4096,
     },
     "providers": {
         "openai": {

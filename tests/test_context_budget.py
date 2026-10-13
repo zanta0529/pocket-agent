@@ -88,3 +88,28 @@ def test_engine_defaults_and_usage_field():
     assert EventUsage(10).input_tokens == 0
     assert usage_field({"prompt_tokens": 7}, "input_tokens", "prompt_tokens") == 7
     assert usage_field(object(), "input_tokens") == 0
+
+
+def test_effective_input_budget_and_reserves():
+    budget = ContextBudget(window=32000, reserve_output=4000, safety_margin=1000)
+    assert budget.effective_input_budget == 27000
+    assert budget.compact_threshold == int(27000 * 0.7)
+
+
+def test_effective_input_budget_minimum_floor():
+    # 當視窗極小且預留空間大於視窗時，應保有最低 1000 tokens 地板
+    budget = ContextBudget(window=4000, reserve_output=4000, safety_margin=1000)
+    assert budget.effective_input_budget == 1000
+
+
+def test_read_file_char_limit(tmp_path):
+    from pocket_agent.tools.fs import call_fs_tool
+
+    # 建立一個包含超長單行（超過 12000 字元）的檔案
+    long_file = tmp_path / "minified.js"
+    long_content = "const data = '" + ("A" * 15000) + "';\nconsole.log(data);\n"
+    long_file.write_text(long_content, encoding="utf-8")
+
+    result = call_fs_tool("read_file", {"path": str(long_file)}, on_confirm=None, workspace_dirs=[str(tmp_path)])
+    assert "單次讀取上限 12000 字元" in result
+    assert "start_line=" in result
