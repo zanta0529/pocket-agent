@@ -18,11 +18,28 @@ def test_base_engine_sanitize_and_error_detection():
         {"role": "assistant", "content": "回覆"},
     ]
 
+    items.append(
+        {
+            "role": "user",
+            "content": "摘要內容",
+            "is_compaction": True,
+            "compacted_range": [0, 5],
+            "original_tokens": 1200,
+            "compacted_tokens": 400,
+        }
+    )
+
     sanitized = engine.sanitize_input_items(items)
-    # 孤立的 call_123 應被過濾剔除
-    assert len(sanitized) == 2
+    # 孤立的 call_123 應被過濾剔除，且自訂中繼欄位（如 is_compaction）應被完全淨化
+    assert len(sanitized) == 3
     assert sanitized[0]["role"] == "user"
     assert sanitized[1]["role"] == "assistant"
+    assert sanitized[2]["role"] == "user"
+    assert sanitized[2]["content"] == "摘要內容"
+    assert "is_compaction" not in sanitized[2]
+    assert "compacted_range" not in sanitized[2]
+    assert "original_tokens" not in sanitized[2]
+    assert "compacted_tokens" not in sanitized[2]
 
     class Fake400Error(Exception):
         status_code = 400
@@ -127,3 +144,37 @@ def test_subagent_graceful_degradation_at_max_rounds(monkeypatch):
         assert len(received_tools_history[1]) == 0  # 第 2 輪 (最後一輪) tools 被清空
 
     asyncio.run(_test())
+
+
+def test_console_formatter_prepends_newline_and_icons():
+    import logging
+
+    from pocket_agent.core.agent import _ConsoleFormatter
+
+    formatter = _ConsoleFormatter("%(message)s")
+
+    record_compaction = logging.LogRecord(
+        name="pocket-agent",
+        level=logging.WARNING,
+        pathname="",
+        lineno=0,
+        msg="Context compaction: cleared 3 old tool outputs",
+        args=(),
+        exc_info=None,
+    )
+    formatted = formatter.format(record_compaction)
+    assert formatted.startswith("\n")
+    assert "🧹" in formatted
+
+    record_truncate = logging.LogRecord(
+        name="pocket-agent",
+        level=logging.WARNING,
+        pathname="",
+        lineno=0,
+        msg="Tool output truncated on append",
+        args=(),
+        exc_info=None,
+    )
+    formatted_trunc = formatter.format(record_truncate)
+    assert formatted_trunc.startswith("\n")
+    assert "✂️" in formatted_trunc

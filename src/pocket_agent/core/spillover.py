@@ -106,7 +106,8 @@ class SpilloverManager:
             f"=== 尾部結論 (後 {tail_limit:,} 字元) ===\n"
             f"{tail_part}\n\n"
             f"💡 [檢索提示] 若需精確檢索中途省略資訊，請對上述日誌路徑使用 `search_files`，"
-            f"或搭配 `start_line` 的 `read_file` 進行局部閱讀。"
+            f"或搭配 `start_line` 與 `end_line` 的 `read_file` 進行分頁局部閱讀。\n"
+            f"⚠️ [重要限制] 切勿對此日誌路徑執行全量未分頁的 `read_file`，以免再次觸發落盤。"
         )
 
         return summary_msg

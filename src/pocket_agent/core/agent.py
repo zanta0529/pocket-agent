@@ -69,7 +69,9 @@ class _ConsoleFormatter(logging.Formatter):
             reset_code = "\033[0m"
 
             lines = formatted.splitlines()
-            return "\n".join(f"{color_code}│ {icon} {line}{reset_code}" for line in lines)
+            body = "\n".join(f"{color_code}│ {icon} {line}{reset_code}" for line in lines)
+            # 在前置補上換行，確保日誌不與即時 Spinner (如「⠸ 思考中…」) 擠在同一行
+            return f"\n{body}"
         finally:
             record.exc_info, record.exc_text, record.stack_info = exc_info, exc_text, stack_info
 

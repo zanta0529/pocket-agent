@@ -144,10 +144,47 @@ class BaseEngine:
         return "no tool output found" in err_msg or "tool_call_id" in err_msg or "function_call" in err_msg
 
     def sanitize_input_items(self, input_items: list) -> list:
-        """供應商輸入檢查與清理。預設保證 function_call 與 function_call_output 成對閉合。"""
+        """供應商輸入檢查與清理。
+
+        1. 保證 function_call 與 function_call_output 成對閉合。
+        2. 清理各元素的多餘內部中繼欄位（例如 is_compaction, compacted_range 等），
+           確保嚴格相容各大供應商 API 契約，避免 Unknown parameter 400 錯誤。
+        """
         from pocket_agent.core.compaction import ensure_paired_tool_calls
 
-        return ensure_paired_tool_calls(input_items)
+        paired = ensure_paired_tool_calls(input_items)
+        sanitized = []
+        for item in paired:
+            if not isinstance(item, dict):
+                sanitized.append(item)
+                continue
+            item_type = item.get("type")
+            if item_type == "function_call":
+                sanitized.append(
+                    {
+                        "type": "function_call",
+                        "call_id": item.get("call_id", ""),
+                        "name": item.get("name", ""),
+                        "arguments": item.get("arguments", "{}"),
+                    }
+                )
+            elif item_type == "function_call_output":
+                sanitized.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": item.get("call_id", ""),
+                        "output": item.get("output", ""),
+                    }
+                )
+            else:
+                msg: dict[str, Any] = {
+                    "role": item.get("role", "user"),
+                    "content": item.get("content", ""),
+                }
+                if "type" in item:
+                    msg["type"] = item["type"]
+                sanitized.append(msg)
+        return sanitized
 
     def connection_error_hint(self, exc: Exception) -> str | None:
         """
@@ -306,10 +343,11 @@ class BaseEngine:
             elif item_type == "function_call_output":
                 messages.append({"role": "tool", "tool_call_id": msg.get("call_id"), "content": msg.get("output", "")})
             else:
-                if "type" in msg:
-                    del msg["type"]  # Remove Responses API specific type field if it exists
-                if "role" not in msg:
-                    msg["role"] = "user"  # Fallback if missing
-                messages.append(msg)
+                messages.append(
+                    {
+                        "role": msg.get("role", "user"),
+                        "content": msg.get("content", ""),
+                    }
+                )
 
         return messages
