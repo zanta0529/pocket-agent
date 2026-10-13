@@ -39,6 +39,16 @@ class EventImageGenerationDone:
 @dataclass
 class EventUsage:
     total_tokens: int
+    input_tokens: int = 0  # 本輪送出的 input tokens；供應商未回報時為 0
+
+
+def usage_field(usage: Any, *names: str) -> int:
+    """從 dict 或物件型態的 usage 取第一個存在且為正整數的欄位，否則回傳 0。"""
+    for name in names:
+        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+        if isinstance(value, int) and value > 0:
+            return value
+    return 0
 
 
 @dataclass
@@ -91,6 +101,10 @@ class BaseEngine:
     def __init__(self, client: Any, model: str):
         self.client = client
         self.model = model
+
+    def context_window(self) -> int | None:
+        """回傳目前模型的 context 視窗 tokens；供應商未提供時回傳 None（由預算模組使用保底值）。"""
+        return None
 
     def is_context_overflow(self, exc: Exception) -> bool:
         """

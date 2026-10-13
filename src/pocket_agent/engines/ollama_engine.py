@@ -9,6 +9,7 @@ from pocket_agent.engines.base import (
     EventToolCallDone,
     EventToolCallStart,
     EventUsage,
+    usage_field,
 )
 
 log = logging.getLogger("pocket-agent")
@@ -123,7 +124,7 @@ class OllamaChatEngine(BaseEngine):
                         usage.get("total_tokens", 0) if isinstance(usage, dict) else getattr(usage, "total_tokens", 0)
                     )
                     if total_tokens > 0:
-                        yield EventUsage(total_tokens)
+                        yield EventUsage(total_tokens, usage_field(usage, "prompt_tokens"))
 
         finally:
             if stream:

@@ -20,6 +20,14 @@ class UsageCommand(CliCommand):
             raise ValueError("/usage 不接受參數")
         ctx.renderer.message(f"目前對話累計 Token 用量: {ctx.state.session_tokens}", "cyan")
 
+        usage = getattr(ctx.agent, "context_usage", None)
+        if usage is None:
+            ctx.renderer.message("上下文：尚無資料（送出第一則訊息後即可顯示）。", "yellow")
+        else:
+            level_style = {"ok": "green", "warn": "yellow", "critical": "red"}[usage.level]
+            for line in usage.display_lines():
+                ctx.renderer.message(line, level_style)
+
         if hasattr(ctx.agent, "get_quota"):
             try:
                 quota = await ctx.agent.get_quota()

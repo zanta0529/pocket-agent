@@ -8,6 +8,13 @@ from pathlib import Path
 
 from openai import NOT_GIVEN, AsyncOpenAI
 
+from pocket_agent.core.context_budget import (
+    DEFAULT_CONTEXT_WINDOW,
+    SOURCE_DEFAULT,
+    ContextBudget,
+    ContextUsage,
+    resolve_context_window,
+)
 from pocket_agent.core.files import FileUploader
 from pocket_agent.core.subagents import get_subagent, is_subagent_tool, subagent_tools
 from pocket_agent.engines.base import BaseEngine
@@ -119,6 +126,8 @@ class Agent:
 
         self.files = FileUploader(client, cancel_check=lambda: self.cancel_requested)
         self.history: list[dict] = []
+        self.context_usage: ContextUsage | None = None  # 最近一輪的上下文使用快照（/usage 顯示用）
+        self._budget = ContextBudget(DEFAULT_CONTEXT_WINDOW)
         self.cancel_requested = False  # 使用者按「停止」時設為 True（跨執行緒安全）
         self.last_images: list[Path] = []  # 本輪 chat 產生的圖片路徑（GUI 顯示用）
         self.last_files: list[Path] = []  # 本輪 chat 產生的文件路徑（GUI 顯示用）
@@ -607,19 +616,40 @@ class Agent:
 
         return f"【子代理 {name} 的結果】\n{reply}"
 
+    def _resolve_budget(self) -> ContextBudget:
+        """依「設定值 → 引擎查詢 → 保底值」解析視窗，建立上下文預算。"""
+        window, source = resolve_context_window(config.get("system.context_window"), self.engine.context_window())
+        if source == SOURCE_DEFAULT:
+            log.debug("Context window unknown for %s; using fallback %d.", self.model, window)
+        self._budget = ContextBudget(window, source)
+        return self._budget
+
+    def _append_tool_pair(self, input_items: list, fc: dict, result) -> None:
+        """附加 function_call 與其 output；輸出在此只截斷一次，避免事後反覆原地修改。"""
+        input_items.append(
+            {
+                "type": "function_call",
+                "call_id": fc["call_id"],
+                "name": fc["name"],
+                "arguments": fc["arguments"],
+            }
+        )
+        input_items.append(
+            {
+                "type": "function_call_output",
+                "call_id": fc["call_id"],
+                "output": self._budget.truncate_tool_output(result),
+            }
+        )
+
     async def _run_loop(self) -> tuple[str, str]:
         tools = self._build_tools()
 
-        # Context Overflow 保護機制 (Sliding Window, Token-aware, Atomic Truncation)
-        try:
-            import tiktoken
+        budget = self._resolve_budget()
 
-            encoding = tiktoken.get_encoding("cl100k_base")
-            estimated_tokens = sum(len(encoding.encode(str(msg))) for msg in self.history)
-        except ImportError:
-            # 簡單估算：中文等佔比高時約 2~3 字元 1 token，保守取 3
-            estimated_tokens = sum(len(str(msg)) // 3 for msg in self.history)
-        if estimated_tokens > 30000 and len(self.history) > 14:
+        # Context Overflow 保護機制 (Sliding Window, Token-aware, Atomic Truncation)
+        estimated_tokens = budget.estimate_items(self.history)
+        if estimated_tokens > budget.compact_threshold and len(self.history) > 14:
             log.warning(f"Context overflow predicted (est. {estimated_tokens} tokens). Truncating history safely.")
             # 保留前 4 則 (system/initial user) 與最後幾則，確保工具對話不被從中間拆斷
             safe_history = self.history[:4]
@@ -704,38 +734,15 @@ class Agent:
                                 user_query = part.get("text", "")
                                 break
                     break
-            # 迴圈內動態截斷保護機制：防止工具讀取大量內容導致單次 Payload 過大
-            while sum(len(str(msg)) for msg in input_items) > 100000:
-                longest_idx = -1
-                longest_len = 0
-                for i, msg in enumerate(input_items):
-                    if msg.get("type") == "function_call_output" and isinstance(msg.get("output"), str):
-                        out_len = len(msg["output"])
-                        if out_len > longest_len and out_len > 100:
-                            longest_len = out_len
-                            longest_idx = i
-
-                if longest_idx != -1:
-                    orig_output = input_items[longest_idx]["output"]
-                    new_len = max(500, len(orig_output) // 2)
-                    sliced_output = (
-                        orig_output[:new_len]
-                        + f"\n\n... (輸出過長，已截斷，省略 {len(orig_output) - new_len} 字元) ...\n"
-                        "[系統建議] 若遺失關鍵資訊，請限縮搜尋範圍重試；"
-                        "若任務龐大，建議將進度寫入 `.agents/scratch/notes.md` 草稿區。"
-                    )
-                    input_items[longest_idx]["output"] = sliced_output
-                    log.warning(
-                        "Context overflow protected: partially truncated "
-                        f"a function_call_output (from {len(orig_output)} to {new_len})."
-                    )
-                else:
-                    break
+            # 上下文預算：超過視窗門檻時由舊到新清除工具輸出（工具輸出在附加時已先截斷一次）
+            instructions = sanitize_surrogates(self._instructions(user_query))
+            budget.compact(input_items, instructions, tools)
+            self.context_usage = budget.snapshot(input_items, instructions, tools)
 
             try:
                 stream = engine.stream_chat(
                     input_items=input_items,
-                    instructions=sanitize_surrogates(self._instructions(user_query)),
+                    instructions=instructions,
                     tools=tools,
                     reasoning_param=reasoning_param,
                     cancel_check=lambda: self.cancel_requested,
@@ -783,6 +790,10 @@ class Agent:
                         # ── 串流結束，提取用量 ────────────────
                         elif isinstance(event, EventUsage):
                             self.total_tokens += event.total_tokens
+                            if event.input_tokens > 0:
+                                self.context_usage = budget.snapshot(
+                                    input_items, instructions, tools, actual_input_tokens=event.input_tokens
+                                )
             except Exception as e:
                 # 額度／用量類錯誤重試無意義：交由引擎策略判斷，再由 chat() 轉為友善訊息
                 if engine.is_non_retryable_error(e):
@@ -830,15 +841,7 @@ class Agent:
                             "ok": False,
                         },
                     )
-                    input_items.append(
-                        {
-                            "type": "function_call",
-                            "call_id": fc["call_id"],
-                            "name": fc["name"],
-                            "arguments": fc["arguments"],
-                        }
-                    )
-                    input_items.append({"type": "function_call_output", "call_id": fc["call_id"], "output": result})
+                    self._append_tool_pair(input_items, fc, result)
                     continue
 
                 self._emit(
@@ -878,17 +881,7 @@ class Agent:
                                     "ok": False,
                                 },
                             )
-                            input_items.append(
-                                {
-                                    "type": "function_call",
-                                    "call_id": fc["call_id"],
-                                    "name": fc["name"],
-                                    "arguments": fc["arguments"],
-                                }
-                            )
-                            input_items.append(
-                                {"type": "function_call_output", "call_id": fc["call_id"], "output": result}
-                            )
+                            self._append_tool_pair(input_items, fc, result)
                             continue
 
                     log.debug("TOOL calling %s args=%r", fc["name"], args)
@@ -960,21 +953,7 @@ class Agent:
                     },
                 )
 
-                input_items.append(
-                    {
-                        "type": "function_call",
-                        "call_id": fc["call_id"],
-                        "name": fc["name"],
-                        "arguments": fc["arguments"],
-                    }
-                )
-                input_items.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": fc["call_id"],
-                        "output": result,
-                    }
-                )
+                self._append_tool_pair(input_items, fc, result)
 
             # 連續兩輪全部都是錯誤 → 強制讓模型直接回報給使用者
             if all_errors:

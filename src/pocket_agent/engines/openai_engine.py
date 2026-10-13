@@ -10,6 +10,7 @@ from pocket_agent.engines.base import (
     EventToolCallDone,
     EventToolCallStart,
     EventUsage,
+    usage_field,
 )
 from pocket_agent.tools.image import disable_model_param
 
@@ -107,7 +108,7 @@ class OpenAIResponsesEngine(BaseEngine):
                             if isinstance(usage, dict)
                             else getattr(usage, "total_tokens", 0)
                         )
-                        yield EventUsage(total_tokens)
+                        yield EventUsage(total_tokens, usage_field(usage, "input_tokens"))
         finally:
             if stream:
                 try:
