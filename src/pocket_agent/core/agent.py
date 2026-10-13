@@ -624,7 +624,15 @@ class Agent:
         if source == SOURCE_DEFAULT:
             log.debug("Context window unknown for %s; using fallback %d.", self.model, window)
         reserve_output = config.get("system.context_reserve_output") or 4096
-        self._budget = ContextBudget(window, source, reserve_output=reserve_output)
+        safety_margin = config.get("system.context_safety_margin") or 1024
+        target_ratio = config.get("system.context_compact_target_ratio") or 0.6
+        self._budget = ContextBudget(
+            window,
+            source,
+            reserve_output=reserve_output,
+            safety_margin=safety_margin,
+            compact_target_ratio=target_ratio,
+        )
         return self._budget
 
     def _append_tool_pair(self, input_items: list, fc: dict, result) -> None:
@@ -721,7 +729,25 @@ class Agent:
             # 2. 估算全量 Payload (含 history、本輪工具輸出、instructions 與 tools schema)
             estimated_tokens = budget.estimate_items(input_items, instructions, tools)
 
-            # 3. 若清除工具輸出後仍超限且歷史輪次過長，才安全滑動視窗裁減中間對話
+            # 3. 若清除工具輸出後仍超限，嘗試以專用 Compactor 進行 LLM 歷史摘要
+            if estimated_tokens > budget.compact_threshold and len(self.history) > 8:
+                from pocket_agent.core.compaction import HistoryCompactor
+
+                compactor = HistoryCompactor(engine)
+                new_history, compacted = await compactor.compact_history(
+                    self.history, cancel_check=lambda: self.cancel_requested
+                )
+                if compacted:
+                    self.history = new_history
+                    tail_tools = [
+                        it
+                        for it in input_items
+                        if isinstance(it, dict) and it.get("type") in ("function_call", "function_call_output")
+                    ]
+                    input_items = list(self.history) + tail_tools
+                    estimated_tokens = budget.estimate_items(input_items, instructions, tools)
+
+            # 4. 若摘要後仍超限且歷史輪次過長，才安全滑動視窗裁減中間對話
             if estimated_tokens > budget.compact_threshold and len(input_items) > 14:
                 log.warning(f"Context overflow predicted (est. {estimated_tokens} tokens). Truncating history safely.")
                 safe_prefix = input_items[:4]
@@ -741,6 +767,21 @@ class Agent:
                     break
 
                 input_items = safe_prefix + input_items[tail_idx:]
+                estimated_tokens = budget.estimate_items(input_items, instructions, tools)
+
+            # 5. 若經過上述所有縮減策略後，Payload 總量依然超過可用輸入預算，明確終止送出
+            if estimated_tokens > budget.effective_input_budget:
+                log.error(
+                    "Payload 估算 tokens (%d) 仍超出可用輸入預算 (%d)，終止當輪送出。",
+                    estimated_tokens,
+                    budget.effective_input_budget,
+                )
+                return "", self._stopped_reply(
+                    f"【上下文預算防護】當前對話與工具定義總量 (約 {estimated_tokens:,} tokens) "
+                    f"已超過可用輸入預算 ({budget.effective_input_budget:,} tokens)。\n\n"
+                    "系統已自動攔截此請求以防止 API 崩潰。建議作法：請縮減 System Prompt、使用 `/clear` 清除對話，"
+                    "或利用 `run_subagents_parallel` 將任務分拆給子代理處理。"
+                )
 
             self.context_usage = budget.snapshot(input_items, instructions, tools)
 
@@ -800,8 +841,8 @@ class Agent:
                                     input_items, instructions, tools, actual_input_tokens=event.input_tokens
                                 )
             except Exception as e:
-                # 額度／用量類錯誤重試無意義：交由引擎策略判斷，再由 chat() 轉為友善訊息
-                if engine.is_non_retryable_error(e):
+                # 額度／用量類錯誤重試無意義；上下文超載亦不可偷偷自動重送，應立即向外拋出交由外層處理
+                if engine.is_non_retryable_error(e) or engine.is_context_overflow(e):
                     raise
                 consecutive_errors += 1
                 if consecutive_errors >= 3:

@@ -113,3 +113,71 @@ def test_read_file_char_limit(tmp_path):
     result = call_fs_tool("read_file", {"path": str(long_file)}, on_confirm=None, workspace_dirs=[str(tmp_path)])
     assert "單次讀取上限 12000 字元" in result
     assert "start_line=" in result
+
+
+def test_compact_clears_down_to_target_tokens():
+    # 預算 1000 tokens，門檻 700 tokens，目標水位 600 tokens
+    budget = ContextBudget(1000, reserve_output=0, safety_margin=0, compact_target_ratio=0.6)
+    assert budget.compact_threshold == 700
+    assert budget.compact_target_tokens == 600
+
+    big = "資料" * 200
+    items: list = []
+    for i in range(5):
+        items += _pair(f"c{i}", big)
+
+    cleared = budget.compact(items)
+    assert cleared > 0
+    est = budget.estimate_items(items)
+    assert est <= budget.compact_threshold
+
+
+def test_usage_display_lines_with_effective_budget():
+    usage = ContextUsage(500, 1000, SOURCE_CONFIG, False, effective_budget=800)
+    lines = usage.display_lines()
+    assert any("有效輸入預算" in line for line in lines)
+    assert "62%" in lines[1]
+
+
+def test_engine_context_window_cache():
+    import time
+
+    engine = BaseEngine(client=None, model="test-model")
+    key = engine._cache_key()
+    BaseEngine._context_window_cache[key] = (16000, time.time() + 100)
+    assert engine.context_window() == 16000
+
+    # 模擬過期
+    BaseEngine._context_window_cache[key] = (16000, time.time() - 1)
+    assert engine.context_window() is None
+
+
+def test_is_context_overflow_detection():
+    engine = BaseEngine(client=None, model="test-model")
+
+    class FakeOverflowError(Exception):
+        status_code = 400
+
+        def __str__(self):
+            return "context_length_exceeded: maximum context length is 8192"
+
+    assert engine.is_context_overflow(FakeOverflowError()) is True
+
+    class FakeOtherError(Exception):
+        status_code = 400
+
+        def __str__(self):
+            return "invalid_parameter"
+
+    assert engine.is_context_overflow(FakeOtherError()) is False
+
+
+def test_read_file_single_long_line_notice(tmp_path):
+    from pocket_agent.tools.fs import call_fs_tool
+
+    long_file = tmp_path / "single_long.txt"
+    long_file.write_text("A" * 15000, encoding="utf-8")
+
+    result = call_fs_tool("read_file", {"path": str(long_file)}, on_confirm=None, workspace_dirs=[str(tmp_path)])
+    assert "超長單行，已被字元截斷" in result
+    assert "search_files" in result

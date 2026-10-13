@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Callable, Optional
 
@@ -98,12 +99,29 @@ class BaseEngine:
     # 能力旗標：是否支援內建的圖片生成工具（由各 Adapter 覆寫）
     supports_image_generation: bool = False
 
+    # (provider, base_url, model) -> (window_tokens, expire_ts)
+    _context_window_cache: dict[tuple[str, str, str], tuple[int, float]] = {}
+
     def __init__(self, client: Any, model: str):
         self.client = client
         self.model = model
 
+    def _cache_key(self) -> tuple[str, str, str]:
+        provider = getattr(self, "provider_name", type(self).__name__)
+        base_url = str(getattr(self.client, "base_url", ""))
+        return (provider, base_url, self.model)
+
     def context_window(self) -> int | None:
-        """回傳目前模型的 context 視窗 tokens；供應商未提供時回傳 None（由預算模組使用保底值）。"""
+        """同步讀取快取之 context 視窗 tokens；過期或無快取時回傳 None（由預算模組使用保底值）。"""
+        key = self._cache_key()
+        if key in self._context_window_cache:
+            tokens, expire_ts = self._context_window_cache[key]
+            if time.time() < expire_ts:
+                return tokens
+        return None
+
+    async def fetch_context_window(self) -> int | None:
+        """非同步查詢供應商端點取得視窗大小並寫入快取。預設不支援。"""
         return None
 
     def is_context_overflow(self, exc: Exception) -> bool:

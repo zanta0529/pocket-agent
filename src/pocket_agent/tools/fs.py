@@ -379,16 +379,32 @@ def call_fs_tool(
             formatted_lines = []
             chars_count = 0
             char_truncated = False
+            is_single_line_cut = False
             last_rendered_line = start_idx
 
             for i, line in enumerate(sliced):
-                line_str = f"{start_idx + i + 1:4}| {line.rstrip()}"
-                if chars_count + len(line_str) + 1 > MAX_READ_CHARS and formatted_lines:
+                current_line_no = start_idx + i + 1
+                stripped = line.rstrip()
+                line_prefix = f"{current_line_no:4}| "
+                avail_chars = MAX_READ_CHARS - chars_count - len(line_prefix) - 1
+
+                if avail_chars <= 0:
                     char_truncated = True
                     break
+
+                if len(stripped) > avail_chars:
+                    line_str = line_prefix + stripped[:avail_chars]
+                    formatted_lines.append(line_str)
+                    chars_count += len(line_str) + 1
+                    last_rendered_line = current_line_no
+                    char_truncated = True
+                    is_single_line_cut = True
+                    break
+
+                line_str = line_prefix + stripped
                 formatted_lines.append(line_str)
                 chars_count += len(line_str) + 1
-                last_rendered_line = start_idx + i + 1
+                last_rendered_line = current_line_no
 
             inner = "\n".join(formatted_lines)
 
@@ -399,11 +415,18 @@ def call_fs_tool(
                     f"...（內容過長，已達單次讀取上限 {MAX_READ_CHARS} 字元，"
                     f"僅呈現至第 {last_rendered_line} 行 / 共 {total_lines} 行。）"
                 )
-                notice_parts.append(
-                    f"[系統建議] 若要繼續閱讀後續內容，請呼叫 `read_file` 並設定 "
-                    f"`start_line={last_rendered_line + 1}`；"
-                    "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
-                )
+                if is_single_line_cut:
+                    notice_parts.append(
+                        f"[系統提示] 第 {last_rendered_line} 行為超長單行，已被字元截斷。"
+                        f"若要閱讀後續行，可設定 `start_line={last_rendered_line + 1}`；"
+                        "若要尋找特定字串，請優先改用 `search_files` 進行精準檢索。"
+                    )
+                else:
+                    notice_parts.append(
+                        f"[系統建議] 若要繼續閱讀後續內容，請呼叫 `read_file` 並設定 "
+                        f"`start_line={last_rendered_line + 1}`；"
+                        "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
+                    )
             elif start is None and end is None and total_lines > MAX_READ_LINES:
                 notice_parts.append(f"...（內容過長，共 {total_lines} 行，已自動截斷前 {MAX_READ_LINES} 行。）")
                 notice_parts.append(

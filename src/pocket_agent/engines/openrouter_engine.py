@@ -20,6 +20,32 @@ class OpenRouterEngine(BaseEngine):
     """OpenRouter uses the standard chat.completions API.
     We implement `<think>` tag parsing to support reasoning models (e.g. DeepSeek-R1)."""
 
+    provider_name = "openrouter"
+
+    async def fetch_context_window(self) -> int | None:
+        import time
+
+        import httpx
+
+        try:
+            api_key = getattr(self.client, "api_key", None)
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            async with httpx.AsyncClient(timeout=10.0) as http_client:
+                resp = await http_client.get("https://openrouter.ai/api/v1/models", headers=headers)
+                if resp.status_code != 200:
+                    return None
+                data = resp.json().get("data", [])
+                for m in data:
+                    if m.get("id") == self.model:
+                        ctx = m.get("context_length")
+                        if isinstance(ctx, int) and ctx > 0:
+                            key = self._cache_key()
+                            self._context_window_cache[key] = (ctx, time.time() + 3600)
+                            return ctx
+        except Exception as e:
+            log.debug("查詢 OpenRouter context_length 失敗: %s", e)
+        return None
+
     async def get_quota(self) -> QuotaInfo:
         import httpx
 

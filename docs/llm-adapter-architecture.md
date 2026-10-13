@@ -51,15 +51,15 @@ flowchart TD
 
     IsInThink -- 否 (False) --> CheckThinkStart{文字包含 &lt;think&gt; 嗎?}
     CheckThinkStart -- 是 --> YieldTextBefore[送出 &lt;think&gt; 前的正式文字]
-    YieldTextBefore --> SetThinkTrue[切換至思考狀態 (True)]
+    YieldTextBefore --> SetThinkTrue["切換至思考狀態 (True)"]
     SetThinkTrue --> ProcessThinkData[處理剩下的思考內容]
-    CheckThinkStart -- 否 --> YieldText[送出 EventText (正式文字)]
+    CheckThinkStart -- 否 --> YieldText["送出 EventText (正式文字)"]
 
     IsInThink -- 是 (True) --> CheckThinkEnd{文字包含 &lt;/think&gt; 嗎?}
     CheckThinkEnd -- 是 --> YieldThinkBefore[送出 &lt;/think&gt; 前的思考文字]
-    YieldThinkBefore --> SetThinkFalse[切換回正式狀態 (False)]
+    YieldThinkBefore --> SetThinkFalse["切換回正式狀態 (False)"]
     SetThinkFalse --> ProcessTextData[處理剩下的正式內容]
-    CheckThinkEnd -- 否 --> YieldThink[送出 EventThinking (思考文字)]
+    CheckThinkEnd -- 否 --> YieldThink["送出 EventThinking (思考文字)"]
 ```
 
 ## 關鍵優勢

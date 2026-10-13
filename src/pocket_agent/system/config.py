@@ -40,6 +40,8 @@ DEFAULT_CONFIG = {
         "auto_learn": False,
         "context_window": None,
         "context_reserve_output": 4096,
+        "context_safety_margin": 1024,
+        "context_compact_target_ratio": 0.6,
     },
     "providers": {
         "openai": {
