@@ -185,6 +185,78 @@ class Housekeeper:
 
         return (deleted_count, freed_bytes)
 
+    def clean_scratch_clipboard(
+        self,
+        ttl_days: int | None = None,
+        max_files: int | None = None,
+        max_size_mb: int | None = None,
+    ) -> tuple[int, int]:
+        """清理 .agents/scratch/clipboard/ 下的剪貼簿暫存截圖檔案。
+
+        回傳 (已刪除檔案數, 釋放位元組數)。
+        """
+        clipboard_dir = self.scratch_dir / "clipboard"
+        if not clipboard_dir.exists():
+            return (0, 0)
+
+        effective_ttl = ttl_days if ttl_days is not None else self.ttl_days
+        effective_max_files = max_files if max_files is not None else self.max_files
+        effective_max_bytes = (max_size_mb if max_size_mb is not None else self.max_size_mb) * 1024 * 1024
+
+        now = time.time()
+        ttl_threshold = now - (effective_ttl * 86400)
+
+        deleted_count = 0
+        freed_bytes = 0
+
+        files_info: list[tuple[Path, float, int]] = []
+        for p in clipboard_dir.glob("screenshot_*.png"):
+            if not p.is_file():
+                continue
+            try:
+                st = p.stat()
+                files_info.append((p, st.st_mtime, st.st_size))
+            except OSError:
+                continue
+
+        surviving_files: list[tuple[Path, float, int]] = []
+        for p, mtime, size in files_info:
+            if mtime < ttl_threshold:
+                try:
+                    p.unlink()
+                    deleted_count += 1
+                    freed_bytes += size
+                except OSError as e:
+                    log.warning("刪除過期截圖暫存失敗: %s: %s", p, e)
+            else:
+                surviving_files.append((p, mtime, size))
+
+        surviving_files.sort(key=lambda x: x[1])
+
+        while len(surviving_files) > effective_max_files:
+            oldest, _, size = surviving_files.pop(0)
+            try:
+                oldest.unlink()
+                deleted_count += 1
+                freed_bytes += size
+            except OSError as e:
+                log.warning("超出截圖暫存數量上限刪除失敗: %s: %s", oldest, e)
+
+        total_size = sum(sz for _, _, sz in surviving_files)
+        if total_size > effective_max_bytes:
+            target_size = int(effective_max_bytes * 0.8)
+            while total_size > target_size and surviving_files:
+                oldest, _, size = surviving_files.pop(0)
+                try:
+                    oldest.unlink()
+                    deleted_count += 1
+                    freed_bytes += size
+                    total_size -= size
+                except OSError as e:
+                    log.warning("超出截圖暫存容量配額刪除失敗: %s: %s", oldest, e)
+
+        return (deleted_count, freed_bytes)
+
     def clean_logs(self, ttl_days: int | None = None) -> tuple[int, int]:
         """清理 .agents/logs/ 下的過期備份日誌與舊日誌（保護當前 agent.log）。
 
@@ -230,10 +302,11 @@ class Housekeeper:
 
         cleaned_root = self.clean_legacy_root_logs()
         scratch_count, scratch_bytes = self.clean_scratch_outputs()
+        clipboard_count, clipboard_bytes = self.clean_scratch_clipboard()
         log_count, log_bytes = self.clean_logs()
 
-        total_files = cleaned_root + scratch_count + log_count
-        total_bytes = scratch_bytes + log_bytes
+        total_files = cleaned_root + scratch_count + clipboard_count + log_count
+        total_bytes = scratch_bytes + clipboard_bytes + log_bytes
 
         self.mark_executed()
 

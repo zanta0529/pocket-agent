@@ -201,79 +201,39 @@ def key_bindings(
 
     @bindings.add("escape", "v")
     def paste_attachments(event: KeyPressEvent) -> None:
-        """Alt+V：從剪貼簿讀取路徑或檔案，作為附件加入。支援跨平台。"""
-        import platform
-        import subprocess
-        import urllib.parse
+        """Alt+V：從剪貼簿讀取檔案、記憶體截圖或路徑，作為附件加入。支援跨平台。"""
         from pathlib import Path
 
-        text_data = ""
-        sys_name = platform.system()
+        from pocket_agent.frontend.cli.clipboard import get_clipboard_attachments
 
-        # 1. 根據不同作業系統提取剪貼簿內容
-        if sys_name == "Windows":
-            try:
-                import win32clipboard
+        valid_paths, is_screenshot = get_clipboard_attachments()
+        if not valid_paths:
+            return
 
-                win32clipboard.OpenClipboard()
-                try:
-                    # 優先檢查是否為實體檔案 (從檔案總管複製, CF_HDROP = 15)
-                    if win32clipboard.IsClipboardFormatAvailable(15):
-                        paths = win32clipboard.GetClipboardData(15)
-                        text_data = "\n".join(paths)
-                    # 檢查純文字
-                    elif win32clipboard.IsClipboardFormatAvailable(13):
-                        text_data = win32clipboard.GetClipboardData(13)
-                finally:
-                    win32clipboard.CloseClipboard()
-            except Exception:
-                pass
-        elif sys_name == "Darwin":
-            try:
-                text_data = subprocess.run(["pbpaste"], capture_output=True, text=True, check=True).stdout
-            except Exception:
-                pass
-        elif sys_name == "Linux":
-            # 依序嘗試 Wayland 與 X11 的剪貼簿工具
-            for cmd in [["wl-paste"], ["xclip", "-selection", "clipboard", "-o"], ["xsel", "--clipboard", "--output"]]:
-                try:
-                    text_data = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-                    if text_data:
-                        break
-                except Exception:
-                    continue
+        if is_screenshot:
+            added = state.add_files(valid_paths)
+            if added:
+                from prompt_toolkit.application.run_in_terminal import run_in_terminal
 
-        # 2. 解析並驗證路徑
-        if text_data:
-            valid_paths = []
-            for line in text_data.splitlines():
-                clean_line = line.strip(" \t\r\n\"'")
+                def notify_screenshot():
+                    from rich.console import Console
 
-                # 處理 Mac/Linux 檔案總管常產生的 file:// URI
-                if clean_line.startswith("file://"):
-                    # 移除 file:// 首綴，並解碼 URL 編碼 (如 %20 轉空白)
-                    clean_line = urllib.parse.unquote(clean_line[7:])
+                    console = Console()
+                    for p in added:
+                        console.print(f"✓ 已從剪貼簿擷取截圖並加入待送附件：[cyan]{Path(p).name}[/cyan]")
 
-                if not clean_line:
-                    continue
+                run_in_terminal(notify_screenshot)
+                event.app.invalidate()
+            return
 
-                try:
-                    pth = Path(clean_line).expanduser().resolve()
-                    if pth.is_file():
-                        valid_paths.append(str(pth))
-                except Exception:
-                    pass
-
-            # 3. 匯入狀態並重繪 UI
-            if valid_paths:
-                unauthorized_paths = []
-                authorized_paths = []
-                for p in valid_paths:
-                    status, msg, target_dir = agent.check_new_workspace_dir(str(Path(p).parent))
-                    if status in ("in_default", "already_authorized"):
-                        authorized_paths.append(p)
-                    else:
-                        unauthorized_paths.append((p, target_dir))
+        unauthorized_paths = []
+        authorized_paths = []
+        for p in valid_paths:
+            status, msg, target_dir = agent.check_new_workspace_dir(str(Path(p).parent))
+            if status in ("in_default", "already_authorized"):
+                authorized_paths.append(p)
+            else:
+                unauthorized_paths.append((p, target_dir))
 
                 if unauthorized_paths:
                     from prompt_toolkit.application.run_in_terminal import run_in_terminal
