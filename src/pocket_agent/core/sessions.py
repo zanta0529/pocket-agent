@@ -8,13 +8,19 @@ import time
 from pathlib import Path
 
 SESSIONS_DIR = Path.home() / ".pocket-agent" / "sessions"
+PBKDF2_ITERATIONS = 600_000
+LEGACY_PBKDF2_ITERATIONS = 100_000
+
 _CACHED_HMAC_KEY: bytes | None = None
+_CACHED_LEGACY_HMAC_KEY: bytes | None = None
 
 
-def _get_hmac_key() -> bytes:
-    global _CACHED_HMAC_KEY
-    if _CACHED_HMAC_KEY is not None:
+def _get_hmac_key(iterations: int = PBKDF2_ITERATIONS) -> bytes:
+    global _CACHED_HMAC_KEY, _CACHED_LEGACY_HMAC_KEY
+    if iterations == PBKDF2_ITERATIONS and _CACHED_HMAC_KEY is not None:
         return _CACHED_HMAC_KEY
+    if iterations == LEGACY_PBKDF2_ITERATIONS and _CACHED_LEGACY_HMAC_KEY is not None:
+        return _CACHED_LEGACY_HMAC_KEY
 
     import getpass
     import platform
@@ -59,14 +65,17 @@ def _get_hmac_key() -> bytes:
         login = "unknown_user"
     material = f"{platform.node()}-{login}-pocket-agent-session".encode("utf-8")
 
-    # 使用 PBKDF2 進行 Key Stretching (100,000 次)
-    key = hashlib.pbkdf2_hmac("sha256", material, salt, 100000)
-    _CACHED_HMAC_KEY = key
+    # 使用 PBKDF2 進行 Key Stretching (預設 600,000 次)
+    key = hashlib.pbkdf2_hmac("sha256", material, salt, iterations)
+    if iterations == PBKDF2_ITERATIONS:
+        _CACHED_HMAC_KEY = key
+    elif iterations == LEGACY_PBKDF2_ITERATIONS:
+        _CACHED_LEGACY_HMAC_KEY = key
     return key
 
 
-def _sign_data(data_str: str) -> str:
-    return hmac.new(_get_hmac_key(), data_str.encode("utf-8"), hashlib.sha256).hexdigest()
+def _sign_data(data_str: str, iterations: int = PBKDF2_ITERATIONS) -> str:
+    return hmac.new(_get_hmac_key(iterations), data_str.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def new_session_id() -> str:
@@ -139,7 +148,13 @@ def load_session(session_id: str) -> dict | None:
         data = json.loads(p.read_text(encoding="utf-8"))
         if "signature" in data and "payload" in data:
             expected_sig = _sign_data(data["payload"])
-            if not hmac.compare_digest(expected_sig, data["signature"]):
+            is_valid = hmac.compare_digest(expected_sig, data["signature"])
+            if not is_valid:
+                # 嘗試以舊版迭代次數驗證（向下相容舊 Session）
+                legacy_sig = _sign_data(data["payload"], iterations=LEGACY_PBKDF2_ITERATIONS)
+                is_valid = hmac.compare_digest(legacy_sig, data["signature"])
+
+            if not is_valid:
                 import logging
 
                 logging.getLogger("pocket-agent").warning(

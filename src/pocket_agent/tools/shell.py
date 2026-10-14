@@ -146,10 +146,14 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     # 注意：此為最後防線，容易被混淆繞過。真實防禦仍需依賴 Sandbox 或確認機制。
     danger_patterns = [
         r"rm\s+-[A-Za-z]*r[A-Za-z]*[fFv]*\s+(?:/[A-Za-z0-9_]*|~|\$HOME|\*|\s*$)",  # 更廣泛的 rm -rf 攔截
+        r"rm\s+.*--no-preserve-root",  # 阻擋強制根目錄刪除
         r"del\s+(/[sqf]\s*)+\s*(?:[A-Za-z]:\\|\*)",  # 涵蓋 del /s /q *
         r"\b(?:rd|rmdir)\s+(?:/[sq]\s*)+\s*[A-Za-z]:\\?(?:\s|$)",  # rd /s /q C:\
         r"format\s+[A-Za-z]:",  # format C:
         r"mkfs",  # mkfs.*
+        r"\bdd\s+.*if=/dev/(?:zero|urandom|null)\s+of=/dev/",  # 磁碟抹除
+        r">\s*/dev/sd[a-z]",  # 覆寫 raw 磁區
+        r"\bshred\s+.*-(?:[A-Za-z]*[uzn])+\s+(?:/|[A-Za-z]:\\|\*)",  # shred 磁區/根目錄
     ]
     for pattern in danger_patterns:
         if re.search(pattern, command, re.IGNORECASE):

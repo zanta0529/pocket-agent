@@ -134,7 +134,17 @@ def test_shell_timeout_keeps_partial_output():
 
 @pytest.mark.parametrize(
     "command",
-    ["rm -rf ~", "rm -rf $HOME", "rd /s /q C:\\", "del /f /s /q C:\\*", "format C:"],
+    [
+        "rm -rf ~",
+        "rm -rf $HOME",
+        "rd /s /q C:\\",
+        "del /f /s /q C:\\*",
+        "format C:",
+        "rm -rf --no-preserve-root /",
+        "dd if=/dev/zero of=/dev/sda",
+        "> /dev/sda",
+        "shred -u -z /dev/sda",
+    ],
 )
 def test_shell_hard_floor_blocks(command):
     called = []
@@ -187,3 +197,44 @@ def test_split_command_keeps_backslashes_on_windows(monkeypatch):
     monkeypatch.setattr(permissions.sys, "platform", "win32")
     assert permissions._split_command(r'type "C:\a b\c.txt"') == ["type", r"C:\a b\c.txt"]
     assert permissions._split_command(r"dir C:\foo") == ["dir", r"C:\foo"]
+
+
+# ==========================================
+# 5. compat.py & sessions.py：相容性與簽名升級
+# ==========================================
+def test_compat_asyncio_policy():
+    from pocket_agent.system.compat import setup_asyncio_policy
+
+    # 應能安全呼叫且不拋出例外
+    setup_asyncio_policy()
+
+
+def test_session_signature_legacy_backward_compatibility(tmp_path, monkeypatch):
+    import json
+
+    from pocket_agent.core import sessions
+
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path)
+    session_id = "legacy-compat-test"
+
+    payload = {
+        "id": session_id,
+        "title": "Legacy Test",
+        "updated_at": 123456.0,
+        "history": [{"role": "user", "content": "hi"}],
+    }
+    payload_str = json.dumps(payload, ensure_ascii=False)
+    # 用舊版 100,000 次簽署
+    legacy_sig = sessions._sign_data(payload_str, iterations=sessions.LEGACY_PBKDF2_ITERATIONS)
+
+    legacy_file = tmp_path / f"{session_id}.json"
+    legacy_file.write_text(
+        json.dumps({"signature": legacy_sig, "payload": payload_str}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    # 驗證 load_session 能成功以向下相容機制載入舊版簽名
+    loaded = sessions.load_session(session_id)
+    assert loaded is not None
+    assert loaded["id"] == session_id
+    assert loaded["history"] == [{"role": "user", "content": "hi"}]

@@ -204,16 +204,10 @@ class CliFrontend(FrontendStrategy):
 
     async def _run_cli(self, system_prompt: str, resume: bool = False) -> None:
         import pathlib
-        import sys
 
-        # Windows asyncio SIGINT workaround
-        if sys.platform == "win32":
+        from pocket_agent.system.compat import setup_win_sigint_workaround
 
-            async def _win_sigint_workaround():
-                while True:
-                    await asyncio.sleep(0.5)
-
-            asyncio.create_task(_win_sigint_workaround())
+        setup_win_sigint_workaround()
 
         from rich.console import Console
 

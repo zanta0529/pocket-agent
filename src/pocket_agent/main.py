@@ -1,24 +1,15 @@
 #!/usr/bin/env python3
 """Pocket Agent — 命令列 (CLI) 模式"""
 
-import sys
-
-# Windows asyncio fix（uvicorn OAuth callback server 需要 SelectorEventLoop）
-if sys.platform == "win32":
-    import asyncio
-    import warnings
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
 import asyncio
 
 import click
 from dotenv import load_dotenv
 
+from pocket_agent.system.compat import setup_asyncio_policy
 from pocket_agent.system.paths import env_path
 
+setup_asyncio_policy()
 load_dotenv(env_path())
 
 
