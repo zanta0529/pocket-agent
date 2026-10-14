@@ -57,7 +57,7 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 | 鍵值 (Key)                 | 型別      | 預設值             | 環境變數                  | 說明                                                                       |
 | :------------------------- | :-------- | :----------------- | :------------------------ | :------------------------------------------------------------------------- |
 | `system.max_tool_rounds`   | `integer` | `20`               | `MAX_TOOL_ROUNDS`         | 單輪對話中允許 Agent 連續調用工具的最大輪次上限。                          |
-| `system.log_level`         | `string`  | `"WARNING"`        | `POCKET_AGENT_LOG_LEVEL`  | 終端機與檔案的日誌記錄等級（可設 `DEBUG`, `INFO`, `WARNING`, `ERROR`）。   |
+| `system.log_level`         | `string`  | `"WARNING"`        | `POCKET_AGENT_LOG_LEVEL`  | 終端機與檔案的日誌記錄等級（可設 `DEBUG`, `INFO`, `WARNING`, `ERROR`）。檔案儲存於全域 `~/.pocket-agent/workspaces/<slug>/logs/agent.log`。 |
 | `system.use_sandbox`       | `string`  | `"none"`           | `USE_SANDBOX`             | 命令列執行沙盒模式（`none` 表示直接本機執行；`docker` 表示透過容器隔離）。 |
 | `system.sandbox_container` | `string`  | `"pocket_sandbox"` | `SANDBOX_CONTAINER`       | 沙盒 Docker 容器名稱。                                                     |
 | `system.auto_learn`        | `boolean` | `false`            | `POCKET_AGENT_AUTO_LEARN` | 是否在對話結束後自動分析萃取共用技能。                                     |
@@ -75,7 +75,7 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 
 | 鍵值 (Key)                         | 型別                | 預設值 | 環境變數                           | 說明                                                                                             |
 | :--------------------------------- | :------------------ | :----- | :--------------------------------- | :----------------------------------------------------------------------------------------------- |
-| `system.spillover_threshold_chars` | `integer` \| `null` | `null` | `POCKET_AGENT_SPILLOVER_THRESHOLD` | 啟動工具巨量輸出落盤的字元門檻。設為 `null` 時動態依模型輸入預算之 15% 計算（保底 6,000 字元）。 |
+| `system.spillover_threshold_chars` | `integer` \| `null` | `null` | `POCKET_AGENT_SPILLOVER_THRESHOLD` | 啟動工具巨量輸出落盤的字元門檻。設為 `null` 時動態依模型輸入預算之 15% 計算（保底 6,000 字元）。儲存於工作區沙盒 `scratch/outputs/`。 |
 | `system.spillover_head_chars`      | `integer`           | `1500` | `POCKET_AGENT_SPILLOVER_HEAD`      | 注入 Context 的頂部預覽字元長度（不超過門檻的 1/3）。                                            |
 | `system.spillover_tail_chars`      | `integer`           | `1500` | `POCKET_AGENT_SPILLOVER_TAIL`      | 注入 Context 的尾部結論字元長度（通常包含測試/建置結論）。                                       |
 
@@ -86,6 +86,8 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 | `system.repo_map_budget` | `integer` | `1024` | `POCKET_AGENT_REPO_MAP_BUDGET` | 注入 Prompt 之 Python AST 簽名結構地圖最大 Token 上限。 |
 
 #### 自動維護管家 (Housekeeping)
+
+> 💡 **全域維護機制**：Housekeeper 會定時（或透過 `/clean` 手動觸發）掃描全域 `~/.pocket-agent/workspaces/` 下所有工作區沙盒，自動清理歷史過期暫存與日誌。
 
 | 鍵值 (Key)                        | 型別      | 預設值 | 環境變數                                | 說明                                                          |
 | :-------------------------------- | :-------- | :----- | :-------------------------------------- | :------------------------------------------------------------ |

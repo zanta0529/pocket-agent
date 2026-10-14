@@ -53,7 +53,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 
 ## 4. 資料、擴充與安全邊界
 
-- **資源存取**：隨附資源透過 `bundle_dir()` 取得。使用者資料位於 `~/.pocket-agent` (發布版) 或版本庫內 (開發版)。不得將可寫資料塞入唯讀 bundle。
+- **資源存取**：隨附資源透過 `bundle_dir()` 取得。使用者資料與執行期動態暫存一律集中於 `~/.pocket-agent`（日誌與 scratch 依工作區路徑 Slug 隔離存放於 `~/.pocket-agent/workspaces/<slug>/`）。專案目錄內僅存放受版本控制之靜態規範（如 `AGENTS.md`、`.agents/skills/`），嚴禁在工作目錄隨意建立 `.agents/logs` 或 `.agents/scratch` 污染版本庫。不得將可寫資料塞入唯讀 bundle。
 - **既有資料防護**：對話保存在 `sessions/*.json`，修改格式須考慮向下相容。禁止讀取、列印或提交真實 `.env`、token、私人 session 或 `agent.log`。
 - **原生工具優先**：進行檔案讀寫或搜尋時，必須優先使用內建工具（如 `search_files`、`read_file`）。**嚴禁**使用 shell 指令包裝 `echo`、`sed`、`grep` 或 `python -c` 處理單純的 I/O 操作。
 - **環境限制與隔離**：

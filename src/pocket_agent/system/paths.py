@@ -52,6 +52,55 @@ def user_dir() -> Path:
     return d
 
 
+def get_workspace_slug(cwd: Path | str | None = None) -> str:
+    """依工作目錄絕對路徑產生唯一且安全的路徑 Slug（借鑑 Claude Code 規範）。
+
+    轉換規則：
+    1. 解析為絕對路徑。
+    2. Windows 磁碟代號（如 C:\ 或 D:\）轉為 C-- 或 D--。
+    3. 特殊字元與分隔符號轉為單一連字號 -。
+    4. 若轉換後長度超過 60 字元，取前 48 字元並加上該完整路徑之 sha256 前 8 碼作為後綴，
+       防止超出作業系統路徑長度上限。
+    """
+    import hashlib
+    import re
+
+    p = Path(cwd or Path.cwd()).resolve()
+    path_str = str(p)
+
+    m = re.match(r"^([a-zA-Z]):[\\/](.*)$", path_str)
+    if m:
+        drive = m.group(1).upper()
+        rest = m.group(2)
+        sanitized_rest = re.sub(r"[^a-zA-Z0-9_\-]+", "-", rest).strip("-")
+        slug = f"{drive}--{sanitized_rest}" if sanitized_rest else f"{drive}--"
+    else:
+        slug = re.sub(r"[^a-zA-Z0-9_\-]+", "-", path_str)
+        if not slug.startswith("-") and path_str.startswith(("/", "\\")):
+            slug = f"-{slug}"
+
+    slug = re.sub(r"-+", "-", slug)
+    if slug.endswith("-") and len(slug) > 1 and not slug.endswith("--"):
+        slug = slug.rstrip("-")
+
+    if len(slug) > 60:
+        h = hashlib.sha256(str(p).encode("utf-8")).hexdigest()[:8]
+        slug = f"{slug[:48].rstrip('-')}_{h}"
+
+    return slug or "default"
+
+
+def workspace_dir(cwd: Path | str | None = None) -> Path:
+    """取得當前工作區在全域家目錄中的專屬隔離沙盒目錄。
+
+    結構為：~/.pocket-agent/workspaces/<workspace-slug>/
+    """
+    slug = get_workspace_slug(cwd)
+    d = user_dir() / "workspaces" / slug
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def mcp_config_path() -> Path:
     """可寫的 mcp_config.yaml。
 
@@ -75,29 +124,33 @@ def env_path() -> Path:
     return bundle_dir() / ".env"
 
 
-def log_dir() -> Path:
-    """系統日誌目錄。開發模式為 .agents/logs，發佈版為 ~/.pocket-agent/logs。"""
-    if is_packaged():
-        d = user_dir() / "logs"
-    else:
-        d = Path.cwd() / ".agents" / "logs"
+def log_dir(cwd: Path | str | None = None) -> Path:
+    """系統日誌目錄。
+
+    全域集中於 ~/.pocket-agent/workspaces/<slug>/logs，
+    避免在工作目錄隨意產生 .agents/logs 污染版本庫。
+    """
     try:
+        d = workspace_dir(cwd) / "logs"
         d.mkdir(parents=True, exist_ok=True)
+        return d
     except OSError:
         d = user_dir() / "logs"
         d.mkdir(parents=True, exist_ok=True)
-    return d
+        return d
 
 
-def scratch_dir() -> Path:
-    """臨時暫存目錄。開發模式為 .agents/scratch，發佈版為 ~/.pocket-agent/scratch。"""
-    if is_packaged():
-        d = user_dir() / "scratch"
-    else:
-        d = Path.cwd() / ".agents" / "scratch"
+def scratch_dir(cwd: Path | str | None = None) -> Path:
+    """臨時暫存目錄。
+
+    全域集中於 ~/.pocket-agent/workspaces/<slug>/scratch，
+    避免在工作目錄隨意產生 .agents/scratch 污染版本庫。
+    """
     try:
+        d = workspace_dir(cwd) / "scratch"
         d.mkdir(parents=True, exist_ok=True)
+        return d
     except OSError:
         d = user_dir() / "scratch"
         d.mkdir(parents=True, exist_ok=True)
-    return d
+        return d

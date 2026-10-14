@@ -289,6 +289,47 @@ class Housekeeper:
 
         return (deleted_count, freed_bytes)
 
+    def clean_all_workspaces(
+        self,
+        ttl_days: int | None = None,
+        max_files: int | None = None,
+        max_size_mb: int | None = None,
+    ) -> tuple[int, int]:
+        """清理全域 ~/.pocket-agent/workspaces/ 底下所有其他工作區的過期暫存與日誌。"""
+        workspaces_root = user_dir() / "workspaces"
+        if not workspaces_root.exists():
+            return (0, 0)
+
+        total_cleaned = 0
+        total_freed = 0
+        current_ws = None
+        try:
+            current_ws = self.scratch_dir.parent.resolve()
+        except Exception:
+            pass
+
+        for ws in workspaces_root.iterdir():
+            if not ws.is_dir():
+                continue
+            if current_ws and ws.resolve() == current_ws:
+                continue
+
+            ws_scratch = ws / "scratch"
+            ws_log = ws / "logs"
+
+            sub_hk = Housekeeper(
+                target_log_dir=ws_log,
+                target_scratch_dir=ws_scratch,
+                cwd=self.cwd,
+            )
+            c1, b1 = sub_hk.clean_scratch_outputs(ttl_days, max_files, max_size_mb)
+            c2, b2 = sub_hk.clean_scratch_clipboard(ttl_days, max_files, max_size_mb)
+            c3, b3 = sub_hk.clean_logs(ttl_days)
+            total_cleaned += c1 + c2 + c3
+            total_freed += b1 + b2 + b3
+
+        return (total_cleaned, total_freed)
+
     def run_cleanup(self, force: bool = False) -> dict[str, Any]:
         """執行完整 Housekeeping 維護。
 
@@ -304,9 +345,10 @@ class Housekeeper:
         scratch_count, scratch_bytes = self.clean_scratch_outputs()
         clipboard_count, clipboard_bytes = self.clean_scratch_clipboard()
         log_count, log_bytes = self.clean_logs()
+        other_ws_count, other_ws_bytes = self.clean_all_workspaces()
 
-        total_files = cleaned_root + scratch_count + clipboard_count + log_count
-        total_bytes = scratch_bytes + clipboard_bytes + log_bytes
+        total_files = cleaned_root + scratch_count + clipboard_count + log_count + other_ws_count
+        total_bytes = scratch_bytes + clipboard_bytes + log_bytes + other_ws_bytes
 
         self.mark_executed()
 

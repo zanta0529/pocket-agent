@@ -40,6 +40,7 @@
 - **Artifacts 全域隔離**：強制將 AI 自動生成的專案計畫與文檔寫入 `~/.pocket-agent/artifacts/`，避免污染既有專案程式碼。
 - **Context Overflow 滑動視窗與防護網**：當上下文超過 12 萬字元時，自動觸發首尾保留截斷機制。若模型 API 仍拋出超載錯誤，系統會自動攔截崩潰、退回該次輸入，並注入 `[System]` 提示指導 AI 改用平行子代理或精準搜尋，確保對話永不中斷。
 - **程式碼檢索增強 (RAG Codebase Search)**：內建 `indexed_search` 工具，利用本地 SQLite FTS5 建立輕量級程式碼庫索引，取代低效的 `grep_search`，實現極速且精準的片段擷取。
+- **工作區零污染與全域集中隔離 (Zero Project Pollution & Workspace Slugs)**：借鑑 Claude Code 的儲存架構，所有執行期產生的巨量工具溢出落盤（Spillover）、剪貼簿截圖快取與執行日誌，一律自動收攏於全域 `~/.pocket-agent/workspaces/<workspace-slug>/` 專屬沙盒中。無論在任何專案目錄或系統根目錄（如 `D:\`）啟動，專案目錄內絕不產生未受追蹤的 `.agents/` 暫存資料夾，確保 Git 狀態絕對乾淨。
 
 ### 5. 工作區環境規範 (Workspace Context)
 
@@ -173,12 +174,14 @@ python -m pocket_agent --resume
 | ------------------------------- | ----------------------------------------------------- |
 | Enter                           | 送出整段輸入                                          |
 | Esc 後 Enter（Meta+Enter）      | 插入換行；多行貼上先保留於編輯器                      |
+| Alt+V                           | 從剪貼簿貼上實體檔案、文字路徑或記憶體截圖（免存檔）至待送附件 |
 | Tab／方向鍵                     | 補全與選擇光棒選單；輸入歷史保留                      |
 | Ctrl+L                          | 清除終端機畫面顯示，但不清除對話歷史                  |
 | Ctrl+C（輸入期間）              | 有文字時清空輸入，空白時提示退出方式；不清附件        |
 | Ctrl+D（空輸入）或 /exit、/quit | 離開                                                  |
 | /help、/tools                   | 查看指令、MCP 工具清單                                |
 | /usage、/quota                  | 顯示當前對話累計 Token 用量                           |
+| /clean                          | 執行管家維護（Housekeeping），批次清理過期日誌、截圖與暫存檔案 |
 | /codesearch、/cs                | 快速搜尋工作區的程式碼片段並加入上下文                |
 | /subagent、/<name>              | 委派任務給單一子代理（例如 /researcher）              |
 | /parallel                       | 平行委派給多個子代理，使用 `\|` 分隔 (需注意分隔符號) |
