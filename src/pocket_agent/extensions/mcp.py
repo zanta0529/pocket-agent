@@ -149,26 +149,40 @@ class MCPManager:
 
     async def _connect(self, name: str, spec: dict) -> ClientSession:
         transport = spec.get("transport", "stdio")
+        closers_before = len(self._exit_stack_closers)
 
-        if transport == "stdio":
-            params = StdioServerParameters(
-                command=spec["command"],
-                args=spec.get("args", []),
-                env=spec.get("env"),
-            )
-            read, write, _ = await self._enter(stdio_client(params))
-        elif transport == "sse":
-            if not HAS_SSE:
-                raise ImportError("需要安裝 mcp[sse] 才能使用 SSE transport")
-            read, write, _ = await self._enter(sse_client(spec["url"]))
-        else:
-            raise ValueError(f"未知 transport: {transport!r}")
+        try:
+            if transport == "stdio":
+                params = StdioServerParameters(
+                    command=spec["command"],
+                    args=spec.get("args", []),
+                    env=spec.get("env"),
+                )
+                read, write, _ = await self._enter(stdio_client(params))
+            elif transport == "sse":
+                if not HAS_SSE:
+                    raise ImportError("需要安裝 mcp[sse] 才能使用 SSE transport")
+                read, write, _ = await self._enter(sse_client(spec["url"]))
+            else:
+                raise ValueError(f"未知 transport: {transport!r}")
 
-        session = ClientSession(read, write)
-        await session.__aenter__()
-        await session.initialize()
-        self._exit_stack_closers.append(session.__aexit__)
-        return session
+            session = ClientSession(read, write)
+            await session.__aenter__()
+            try:
+                await session.initialize()
+            except BaseException:
+                await session.__aexit__(None, None, None)
+                raise
+            self._exit_stack_closers.append(session.__aexit__)
+            return session
+        except BaseException:
+            while len(self._exit_stack_closers) > closers_before:
+                closer = self._exit_stack_closers.pop()
+                try:
+                    await closer(None, None, None)
+                except Exception:
+                    pass
+            raise
 
     async def _enter(self, cm):
         result = await cm.__aenter__()

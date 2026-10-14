@@ -733,7 +733,8 @@ class Agent:
                 "summary": "auto",
             }
 
-        consecutive_errors = 0  # 連續全錯輪次計數
+        stream_consecutive_errors = 0  # 串流連線／協定層級例外計數
+        tool_consecutive_all_errors = 0  # 連續工具全錯輪次計數
 
         from contextlib import aclosing
 
@@ -902,8 +903,8 @@ class Agent:
                 # 額度／用量類錯誤重試無意義；上下文超載亦不可偷偷自動重送，應立即向外拋出交由外層處理
                 if engine.is_non_retryable_error(e) or engine.is_context_overflow(e):
                     raise
-                consecutive_errors += 1
-                if consecutive_errors >= 3:
+                stream_consecutive_errors += 1
+                if stream_consecutive_errors >= 3:
                     log.error("連續錯誤過多，中斷代理執行：%s", e, exc_info=True)
                     reason = " ".join(str(e).split())
                     if len(reason) > 200:
@@ -911,12 +912,12 @@ class Agent:
                     return "", self._stopped_reply(
                         f"連續發生太多次執行錯誤，為保護系統穩定已自動中斷。\n\n最後一次錯誤：{type(e).__name__}：{reason}"
                     )
-                self.history.append(
-                    {"role": "system", "content": f"[System Error] 串流執行時發生例外：{e}。請換個方式重試。"}
-                )
+                err_msg = {"role": "system", "content": f"[System Error] 串流執行時發生例外：{e}。請換個方式重試。"}
+                self.history.append(err_msg)
+                input_items.append(err_msg)
                 continue
             else:
-                consecutive_errors = 0
+                stream_consecutive_errors = 0
 
             thinking = "".join(thinking_chunks)
             text = "".join(text_chunks)
@@ -1061,9 +1062,9 @@ class Agent:
 
             # 連續兩輪全部都是錯誤 → 強制讓模型直接回報給使用者
             if all_errors:
-                consecutive_errors += 1
-                if consecutive_errors >= 2:
-                    log.warning("TOOL 連續 %d 輪全部錯誤，強制跳出", consecutive_errors)
+                tool_consecutive_all_errors += 1
+                if tool_consecutive_all_errors >= 2:
+                    log.warning("TOOL 連續 %d 輪全部錯誤，強制跳出", tool_consecutive_all_errors)
                     input_items.append(
                         {
                             "role": "user",
@@ -1079,7 +1080,7 @@ class Agent:
                     max_rounds += 1
                     continue
             else:
-                consecutive_errors = 0
+                tool_consecutive_all_errors = 0
 
         if self._is_subagent:
             return "", "（子代理已達工具呼叫上限，且未產出額外分析內容）"

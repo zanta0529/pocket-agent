@@ -8,19 +8,50 @@ import time
 from pathlib import Path
 
 SESSIONS_DIR = Path.home() / ".pocket-agent" / "sessions"
+_CACHED_HMAC_KEY: bytes | None = None
 
 
 def _get_hmac_key() -> bytes:
+    global _CACHED_HMAC_KEY
+    if _CACHED_HMAC_KEY is not None:
+        return _CACHED_HMAC_KEY
+
     import getpass
     import platform
 
     salt_file = Path.home() / ".pocket-agent" / "session_salt"
+    salt = None
     if salt_file.exists():
-        salt = salt_file.read_bytes()
-    else:
-        salt = secrets.token_bytes(32)
+        try:
+            salt = salt_file.read_bytes()
+        except Exception:
+            salt = None
+
+    if not salt:
         salt_file.parent.mkdir(parents=True, exist_ok=True)
-        salt_file.write_bytes(salt)
+        new_salt = secrets.token_bytes(32)
+        try:
+            with salt_file.open("xb") as f:
+                f.write(new_salt)
+            salt = new_salt
+        except FileExistsError:
+            # 另一個行程搶先建立，讀取已初始化的 salt
+            for _ in range(10):
+                try:
+                    salt = salt_file.read_bytes()
+                    if len(salt) == 32:
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.01)
+            if not salt:
+                salt = salt_file.read_bytes()
+        except Exception:
+            if salt_file.exists():
+                salt = salt_file.read_bytes()
+            else:
+                salt_file.write_bytes(new_salt)
+                salt = new_salt
 
     try:
         login = getpass.getuser()
@@ -29,7 +60,9 @@ def _get_hmac_key() -> bytes:
     material = f"{platform.node()}-{login}-pocket-agent-session".encode("utf-8")
 
     # 使用 PBKDF2 進行 Key Stretching (100,000 次)
-    return hashlib.pbkdf2_hmac("sha256", material, salt, 100000)
+    key = hashlib.pbkdf2_hmac("sha256", material, salt, 100000)
+    _CACHED_HMAC_KEY = key
+    return key
 
 
 def _sign_data(data_str: str) -> str:

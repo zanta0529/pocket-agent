@@ -194,7 +194,12 @@ def _update_via_zip(report) -> dict:
         new_sha = info["latest"]
 
         report("套用檔案更新…")
-        _merge_copy(source_root, bundle_dir(), report)
+        failed = _merge_copy(source_root, bundle_dir(), report)
+        if failed:
+            failed_summary = ", ".join(f"{name} ({err})" for name, err in failed[:5])
+            if len(failed) > 5:
+                failed_summary += f" 等共 {len(failed)} 個檔案"
+            raise RuntimeError(f"檔案更新未完整套用，為避免版本混合損壞已中止更新。失敗檔案：{failed_summary}")
 
         (bundle_dir() / VERSION_FILE).write_text(new_sha, encoding="utf-8")
 
@@ -203,8 +208,15 @@ def _update_via_zip(report) -> dict:
     return {"message": "更新完成"}
 
 
-def _merge_copy(source: Path, dest: Path, report) -> None:
+def _merge_copy(
+    source: Path,
+    dest: Path,
+    report,
+    failed_files: list[tuple[str, str]] | None = None,
+) -> list[tuple[str, str]]:
     """把 source 疊到 dest：只新增/覆蓋，絕不刪除 dest 既有但 source 沒有的東西。"""
+    if failed_files is None:
+        failed_files = []
     for item in source.iterdir():
         if item.name in _PRESERVE_NAMES:
             continue
@@ -212,12 +224,14 @@ def _merge_copy(source: Path, dest: Path, report) -> None:
         target = dest / item.name
         if item.is_dir():
             target.mkdir(parents=True, exist_ok=True)
-            _merge_copy(item, target, report)
+            _merge_copy(item, target, report, failed_files)
         else:
             try:
                 shutil.copy2(item, target)
             except Exception as e:
+                failed_files.append((item.name, str(e)))
                 report(f"略過 {item.name}（{e}）")
+    return failed_files
 
 
 def _maybe_update_deps(report) -> None:
