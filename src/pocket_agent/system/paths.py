@@ -53,7 +53,7 @@ def user_dir() -> Path:
 
 
 def get_workspace_slug(cwd: Path | str | None = None) -> str:
-    """依工作目錄絕對路徑產生唯一且安全的路徑 Slug（借鑑 Claude Code 規範）。
+    r"""依工作目錄絕對路徑產生唯一且安全的路徑 Slug（借鑑 Claude Code 規範）。
 
     轉換規則：
     1. 解析為絕對路徑。
@@ -65,26 +65,29 @@ def get_workspace_slug(cwd: Path | str | None = None) -> str:
     import hashlib
     import re
 
-    p = Path(cwd or Path.cwd()).resolve()
-    path_str = str(p)
+    if cwd is None:
+        path_str = str(Path.cwd().resolve())
+    else:
+        raw_str = str(cwd).replace("\\", "/")
+        if raw_str.startswith("/") and not re.match(r"^[a-zA-Z]:", raw_str):
+            path_str = raw_str
+        else:
+            path_str = str(Path(cwd).resolve())
 
     m = re.match(r"^([a-zA-Z]):[\\/](.*)$", path_str)
     if m:
         drive = m.group(1).upper()
         rest = m.group(2)
         sanitized_rest = re.sub(r"[^a-zA-Z0-9_\-]+", "-", rest).strip("-")
+        sanitized_rest = re.sub(r"-+", "-", sanitized_rest)
         slug = f"{drive}--{sanitized_rest}" if sanitized_rest else f"{drive}--"
     else:
-        slug = re.sub(r"[^a-zA-Z0-9_\-]+", "-", path_str)
-        if not slug.startswith("-") and path_str.startswith(("/", "\\")):
-            slug = f"-{slug}"
-
-    slug = re.sub(r"-+", "-", slug)
-    if slug.endswith("-") and len(slug) > 1 and not slug.endswith("--"):
-        slug = slug.rstrip("-")
+        sanitized = re.sub(r"[^a-zA-Z0-9_\-]+", "-", path_str).strip("-")
+        sanitized = re.sub(r"-+", "-", sanitized)
+        slug = f"-{sanitized}" if sanitized else "-"
 
     if len(slug) > 60:
-        h = hashlib.sha256(str(p).encode("utf-8")).hexdigest()[:8]
+        h = hashlib.sha256(path_str.encode("utf-8")).hexdigest()[:8]
         slug = f"{slug[:48].rstrip('-')}_{h}"
 
     return slug or "default"
