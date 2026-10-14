@@ -49,11 +49,11 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
   - 送出前採用統一流程：優先清除舊工具輸出（至目標水位 60%）→ 嘗試 `HistoryCompactor` 歷史摘要壓縮 → 安全滑動視窗降級 → 不可縮減超限強制停止。
   - 使用者可透過 `system.context_window`、`system.context_reserve_output`、`system.context_safety_margin` 與 `system.context_compact_target_ratio` 微調設定。
   - `read_file` 具備 500 行與 12,000 字元雙重限制，並支援 `char_offset` 單行行內字元游標續讀；讀取大型檔案應優先使用 `search_files` 或搭配精準範圍閱讀。
-  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入 `.agents/scratch/notes.md`** 以建立外部長期記憶。詳見 [context-management-architecture.md](context-management-architecture.md) 與 [configuration-specification.md](configuration-specification.md)。
+  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入集中式暫存區**（如 `<artifact_dir>/workspaces/<slug>/scratch/notes.md` 或開發工具專屬暫存區）以建立外部長期記憶；**嚴禁在工作目錄建立 `.agents/scratch`** 避免污染版本庫。詳見 [context-management-architecture.md](context-management-architecture.md) 與 [configuration-specification.md](configuration-specification.md)。
 
 ## 4. 資料、擴充與安全邊界
 
-- **資源存取**：隨附資源透過 `bundle_dir()` 取得。使用者資料與執行期動態暫存一律集中於 `~/.pocket-agent`（日誌與 scratch 依工作區路徑 Slug 隔離存放於 `~/.pocket-agent/workspaces/<slug>/`）。專案目錄內僅存放受版本控制之靜態規範（如 `AGENTS.md`、`.agents/skills/`），嚴禁在工作目錄隨意建立 `.agents/logs` 或 `.agents/scratch` 污染版本庫。不得將可寫資料塞入唯讀 bundle。
+- **資源存取**：隨附資源透過 `bundle_dir()` 取得。使用者資料與執行期動態暫存一律集中於 `<artifact_dir>`（日誌與 scratch 依工作區路徑 Slug 隔離存放於 `<artifact_dir>/workspaces/<slug>/`）。專案目錄內僅存放受版本控制之靜態規範（如 `AGENTS.md`、`.agents/skills/`），嚴禁在工作目錄隨意建立 `.agents/logs` 或 `.agents/scratch` 污染版本庫。不得將可寫資料塞入唯讀 bundle。
 - **既有資料防護**：對話保存在 `sessions/*.json`，修改格式須考慮向下相容。禁止讀取、列印或提交真實 `.env`、token、私人 session 或 `agent.log`。
 - **原生工具優先**：進行檔案讀寫或搜尋時，必須優先使用內建工具（如 `search_files`、`read_file`）。**嚴禁**使用 shell 指令包裝 `echo`、`sed`、`grep` 或 `python -c` 處理單純的 I/O 操作。
 - **環境限制與隔離**：
