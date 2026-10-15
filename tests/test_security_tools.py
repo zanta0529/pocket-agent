@@ -110,3 +110,73 @@ def test_fs_grep_search_dos_protection(tmp_path):
         result = call_fs_tool("search_files", args, on_confirm=None, workspace_dirs=[str(workspace)])
 
         assert "找不到包含" in result
+
+
+def test_fs_validate_safe_path_global_user_dir_allowed(tmp_path):
+    """測試從專案工作區存取全域目錄 (~/.pocket-agent) 下的沙盒與產物能夠順利通過。"""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    scratch_file = fake_global / "workspaces" / "project-slug" / "scratch" / "outputs" / "out.log"
+    scratch_file.parent.mkdir(parents=True)
+    scratch_file.write_text("dummy output", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        resolved = _validate_safe_path(str(scratch_file))
+        assert resolved == scratch_file.resolve()
+
+
+def test_fs_validate_safe_path_global_user_dir_env_forbidden(tmp_path):
+    """測試即便全域目錄已放行，存取全域目錄下的 .env 依然會被嚴格阻擋。"""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    fake_global.mkdir(parents=True)
+    global_env = fake_global / ".env"
+    global_env.write_text("SECRET=123", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        with pytest.raises(ValueError, match="安全限制：禁止存取敏感目錄或檔案"):
+            _validate_safe_path(str(global_env))
+
+
+def test_fs_validate_safe_path_unauthorized_outside_dir(tmp_path):
+    """測試非工作區、非全域目錄的外部未授權目錄依然會觸發工作區監禁。"""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    fake_global.mkdir(parents=True)
+    outside_file = tmp_path / "outside" / "secret.txt"
+    outside_file.parent.mkdir(parents=True)
+    outside_file.write_text("confidential", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        with pytest.raises(ValueError, match="超出允許的工作區範圍"):
+            _validate_safe_path(str(outside_file))
+
+
+def test_fs_search_files_in_global_user_dir(tmp_path):
+    """測試在全域目錄 (~/.pocket-agent) 下搜尋檔案不會被靜默過濾。"""
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    scratch_dir = fake_global / "workspaces" / "project-slug" / "scratch"
+    scratch_dir.mkdir(parents=True)
+    log_file = scratch_dir / "spillover.log"
+    log_file.write_text("Hello Spillover Content", encoding="utf-8")
+
+    with patch("pocket_agent.system.paths.user_dir", return_value=fake_global):
+        result = call_fs_tool(
+            "search_files",
+            {"query": "Hello Spillover", "path": str(scratch_dir)},
+            on_confirm=None,
+        )
+        assert "[ERROR]" not in result
+        assert "spillover.log" in result
