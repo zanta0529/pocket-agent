@@ -167,19 +167,41 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
     except Exception as e:
         raise ValueError(f"無效的路徑格式: {e}")
 
+    try:
+        from pocket_agent.system.paths import user_dir
+
+        global_user_dir: Path | None = user_dir().resolve()
+    except Exception:
+        global_user_dir = None
+
     # 黑名單：防止存取敏感設定或版本控制資料
-    sensitive_exact = {".git", ".pocket-agent"}
+    is_in_global = global_user_dir is not None and target.is_relative_to(global_user_dir)
+
+    # 全域目錄 (~/.pocket-agent) 中僅允許 workspaces, scratch, backups, skills 等沙盒與產物
+    # 根目錄下的系統設定檔 (如 allowlist.json, mcp_config.yaml, config.json) 均屬敏感保護範圍
+    if is_in_global and global_user_dir is not None:
+        rel = target.relative_to(global_user_dir)
+        allowed_global_subdirs = {"workspaces", "scratch", "backups", "skills"}
+        if len(rel.parts) == 0 or rel.parts[0] not in allowed_global_subdirs:
+            raise ValueError("安全限制：禁止存取敏感目錄或檔案 (.pocket-agent)")
+
     for part in target.parts:
-        if part in sensitive_exact or part.startswith(".env"):
+        if part == ".git" or part.startswith(".env"):
+            raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
+        # 僅當目標不在合法全域使用者目錄內時，才阻擋名為 .pocket-agent 的目錄
+        if part == ".pocket-agent" and not is_in_global:
             raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
 
     # 工作區監禁 (Workspace Jail)
-    # 將啟動目錄 (CWD) 作為基礎工作區無條件加入
+    # 將啟動目錄 (CWD) 與全域使用者目錄 (user_dir) 作為基礎工作區無條件加入
     allowed_roots: list[Path] = []
     try:
         allowed_roots.append(Path.cwd().resolve())
     except Exception:
         pass
+
+    if global_user_dir is not None:
+        allowed_roots.append(global_user_dir)
 
     # workspace_dirs 是使用者明確授權的額外工作目錄，疊加進去
     if workspace_dirs:
@@ -556,9 +578,15 @@ def call_fs_tool(
             file_pattern = args.get("file_pattern", "")
 
             results = []
-            excludes = {".git", "node_modules", "venv", "__pycache__", ".pocket-agent"}
-            sensitive_exact = {".git", ".pocket-agent"}
+            excludes = {".git", "node_modules", "venv", "__pycache__"}
             spec = _get_ignore_spec(target) if target.is_dir() else None
+
+            try:
+                from pocket_agent.system.paths import user_dir
+
+                global_user_dir: Path | None = user_dir().resolve()
+            except Exception:
+                global_user_dir = None
 
             # 決定搜尋範圍
             if target.is_file():
@@ -568,7 +596,15 @@ def call_fs_tool(
                 paths_to_search = target.rglob(glob_pattern)
 
             for p in paths_to_search:
-                if any(part.startswith(".env") or part in sensitive_exact for part in p.parts):
+                p_in_global = global_user_dir is not None and p.is_relative_to(global_user_dir)
+                if any(part.startswith(".env") or part == ".git" for part in p.parts):
+                    continue
+                if p_in_global:
+                    rel_g = p.relative_to(global_user_dir)
+                    allowed_global_subdirs = {"workspaces", "scratch", "backups", "skills"}
+                    if len(rel_g.parts) == 0 or rel_g.parts[0] not in allowed_global_subdirs:
+                        continue
+                elif any(part == ".pocket-agent" for part in p.parts):
                     continue
 
                 if p.is_symlink():

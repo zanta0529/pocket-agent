@@ -98,16 +98,54 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return (not ip.is_global) or ip.is_multicast
 
 
+DEFAULT_ALLOWED_SSRF_DOMAINS = ("github.com", "raw.githubusercontent.com")
+
+
+def _is_allowed_domain(hostname: str) -> bool:
+    """檢查主機名稱是否屬於允許內部/代理解析的受信任白名單網域。"""
+    if not hostname:
+        return False
+    host_lower = hostname.lower().strip(".")
+    allowed_list = list(DEFAULT_ALLOWED_SSRF_DOMAINS)
+    try:
+        from pocket_agent.system.config import config
+
+        custom = config.get("web.ssrf_allowed_domains")
+        if custom:
+            if isinstance(custom, str):
+                allowed_list.extend(d.strip().lower() for d in custom.split(",") if d.strip())
+            elif isinstance(custom, (list, tuple, set)):
+                allowed_list.extend(str(d).strip().lower() for d in custom if str(d).strip())
+    except Exception:
+        pass
+
+    for domain in allowed_list:
+        if host_lower == domain or host_lower.endswith(f".{domain}"):
+            return True
+    return False
+
+
 def _resolve_public_ip(hostname: str, port: int) -> str:
-    """解析主機名稱（IPv4 與 IPv6），所有結果皆須為公開位址，回傳第一個供固定連線使用。"""
+    """解析主機名稱（IPv4 與 IPv6），所有結果皆須為公開位址，回傳第一個供固定連線使用。
+
+    若環境解析為內部/保留位址，但主機名稱符合受信任白名單，且非本機 loopback / link-local，則予以放行。
+    """
     if not hostname:
         raise ValueError("缺少主機名稱")
     infos = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
     addrs: list[str] = []
+    is_allowed = _is_allowed_domain(hostname)
     for info in infos:
         ip_str = str(info[4][0]).split("%")[0]
-        if _is_blocked_ip(ipaddress.ip_address(ip_str)):
-            raise _BlockedAddressError(f"{hostname} -> {ip_str}")
+        ip_obj = ipaddress.ip_address(ip_str)
+        if _is_blocked_ip(ip_obj):
+            # 高風險本機 loopback、link-local (雲端 metadata) 絕不放行
+            if ip_obj.is_loopback or ip_obj.is_link_local:
+                raise _BlockedAddressError(f"{hostname} -> {ip_str}")
+            if is_allowed:
+                log.info("SSRF 豁免白名單網域: %s -> %s (企業代理/內網解析)", hostname, ip_str)
+            else:
+                raise _BlockedAddressError(f"{hostname} -> {ip_str}")
         addrs.append(ip_str)
     if not addrs:
         raise ValueError("DNS 無解析結果")

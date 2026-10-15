@@ -750,6 +750,14 @@ class Agent:
 
         engine = self.engine
 
+        web_tool_call_count = 0
+        web_convergence_warned = False
+        try:
+            web_soft_limit = int(config.get("agent.web_research_soft_limit", 5))
+            web_hard_limit = int(config.get("agent.web_research_hard_limit", 10))
+        except TypeError, ValueError:
+            web_soft_limit, web_hard_limit = 5, 10
+
         max_rounds = self.max_tool_rounds
         round_idx = 0
         while round_idx < max_rounds:
@@ -912,6 +920,7 @@ class Agent:
                     return "", self._stopped_reply(
                         f"連續發生太多次執行錯誤，為保護系統穩定已自動中斷。\n\n最後一次錯誤：{type(e).__name__}：{reason}"
                     )
+                log.warning("串流連線遭遇異常，進行第 %d 次重試（最多 3 次）：%s", stream_consecutive_errors, e)
                 err_msg = {"role": "system", "content": f"[System Error] 串流執行時發生例外：{e}。請換個方式重試。"}
                 self.history.append(err_msg)
                 input_items.append(err_msg)
@@ -948,6 +957,25 @@ class Agent:
                     )
                     self._append_tool_pair(input_items, fc, result)
                     continue
+
+                if is_web_tool(fc["name"]):
+                    web_tool_call_count += 1
+                    if web_tool_call_count > web_hard_limit:
+                        result = (
+                            f"[調研上限攔截] 本輪網路檢索次數已達上限（{web_hard_limit} 次）。"
+                            "系統已暫停執行新的網路調研，請立即根據目前累積之資訊完成回答或寫入檔案。"
+                        )
+                        self._emit(
+                            "tool_done",
+                            {
+                                "call_id": fc["call_id"],
+                                "name": fc["name"],
+                                "result": result,
+                                "ok": False,
+                            },
+                        )
+                        self._append_tool_pair(input_items, fc, result)
+                        continue
 
                 self._emit(
                     "tool_start",
@@ -1043,6 +1071,16 @@ class Agent:
                     else:
                         ok_status = True
                         all_errors = False
+                        if (
+                            is_web_tool(fc["name"])
+                            and web_tool_call_count >= web_soft_limit
+                            and not web_convergence_warned
+                        ):
+                            web_convergence_warned = True
+                            result += (
+                                f"\n\n[系統提醒：調研收斂] 你已執行多次網路檢索（累計 {web_tool_call_count} 次）。"
+                                "請檢視現有資訊是否充足，優先開始產出解答或建立檔案，避免無休止調研。"
+                            )
                 except Exception as e:
                     log.error("TOOL error %s: %s", type(e).__name__, e)
                     result = f"[ERROR] {e}"

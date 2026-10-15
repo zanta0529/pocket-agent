@@ -25,7 +25,23 @@ KEEP_RECENT_OUTPUTS = 2
 WARN_RATIO = 0.7
 CRITICAL_RATIO = 0.85
 
-_PLACEHOLDER = "[舊工具輸出已為節省上下文而清除；如仍需要，請重新以精準範圍讀取。]"
+_PLACEHOLDER = "[舊工具輸出已清除以節省上下文。請依已取得之既有結論繼續完成任務，避免重複檢索相同資料。]"
+
+
+def format_compact_placeholder(tool_name: str = "", tool_args: str = "") -> str:
+    """產生富含語意但不誘導模型重新發起相同查詢的佔位文字。"""
+    if not tool_name:
+        return _PLACEHOLDER
+    args_snippet = " ".join(str(tool_args).split())
+    if len(args_snippet) > 60:
+        args_snippet = args_snippet[:57] + "..."
+    if args_snippet and args_snippet != "{}":
+        return (
+            f"[舊工具輸出已清除以節省上下文（工具：{tool_name}，參數：{args_snippet}）。"
+            "請依既有結論與推論繼續產出，避免重複發起相同檢索。]"
+        )
+    return f"[舊工具輸出已清除以節省上下文（工具：{tool_name}）。請依既有結論與推論繼續產出，避免重複發起相同檢索。]"
+
 
 SOURCE_CONFIG = "設定值"
 SOURCE_ENGINE = "供應商查詢"
@@ -219,7 +235,7 @@ class ContextBudget:
             if total <= self.compact_target_tokens:
                 break
             old = items[i].get("output")
-            if not isinstance(old, str) or old == _PLACEHOLDER:
+            if not isinstance(old, str) or old.startswith("[舊工具輸出已清除"):
                 continue
 
             # 保護白名單：避免 use_skill 或核心規範 (AGENTS.md/PROJECT_INSTRUCTIONS.md) 被清除導致失憶死循環
@@ -230,8 +246,9 @@ class ContextBudget:
             if tool_name == "use_skill" or any(p in tool_args for p in ("AGENTS.md", "PROJECT_INSTRUCTIONS.md")):
                 continue
 
-            total -= max(0, estimate_tokens(old) - estimate_tokens(_PLACEHOLDER))
-            items[i]["output"] = _PLACEHOLDER
+            placeholder_text = format_compact_placeholder(tool_name, tool_args)
+            total -= max(0, estimate_tokens(old) - estimate_tokens(placeholder_text))
+            items[i]["output"] = placeholder_text
             cleared += 1
         if cleared:
             log.warning("Context compaction: cleared %d old tool outputs (est. %d tokens now).", cleared, total)

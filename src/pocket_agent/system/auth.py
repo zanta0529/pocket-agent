@@ -29,9 +29,6 @@ except ImportError:
     if sys.platform == "win32":
         raise RuntimeError("Windows 環境下必須安裝 truststore 以確保企業憑證安全。請在環境中安裝 truststore。")
     _SSL_VERIFY = certifi.where()  # fallback：Mozilla CA bundle
-import uvicorn
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
 
 from pocket_agent.system.config import config
 
@@ -243,6 +240,10 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
             params["id_token_add_organizations"] = "true"
         if USE_SIMPLIFIED_FLOW:
             params["codex_cli_simplified_flow"] = "true"
+
+    import uvicorn
+    from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse
 
     auth_url = auth_url_base + "?" + urlencode(params)
     bucket: dict = {}

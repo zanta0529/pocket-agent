@@ -1,4 +1,4 @@
-"""組裝可攜式發佈包：官方簽章的 python.exe + 原始碼 + 預裝套件。
+r"""組裝可攜式發佈包：官方簽章的 python.exe + 原始碼 + 預裝套件。
 
 為什麼不用 PyInstaller：PyInstaller 產出的 exe 沒有程式碼簽章，
 且每次 build 的 hash 都是新的，會被 Symantec 之類的信譽式防毒判為
@@ -32,7 +32,7 @@ OUT = ROOT / "dist" / "PocketAgent"
 BASE_PYTHON = Path(sys.base_prefix)
 VENV_SITE_PACKAGES = ROOT / "venv" / "Lib" / "site-packages"
 
-# 執行期用不到。
+# 執行期用不到的 CPython 內部模組或大型目錄
 PYTHON_EXCLUDES = {
     "Doc",
     "Tools",
@@ -43,6 +43,51 @@ PYTHON_EXCLUDES = {
     "idlelib",
     "tkinter",
     "tcl",
+    "turtle",
+    "turtledemo",
+    "unittest",
+    "ensurepip",
+    "pydoc_data",
+}
+
+# 開發、測試與打包專用套件（不應流入終端發布包）
+DEV_PACKAGES = {
+    "pytest",
+    "_pytest",
+    "ruff",
+    "coverage",
+    "pip",
+    "setuptools",
+    "wheel",
+    "iniconfig",
+    "pluggy",
+    "pytest_cov",
+    "flit_core",
+    "pyinstaller",
+}
+
+# 應過濾的非執行期資料夾（例如套件內建的測試與範例）
+UNWANTED_DIR_NAMES = {
+    "__pycache__",
+    "tests",
+    "test",
+    "testing",
+    "examples",
+    "demos",
+    "benchmarks",
+    "docs",
+}
+
+# 應過濾的檔案後綴（除錯符號、靜態庫、C 標頭檔）
+UNWANTED_EXTENSIONS = {
+    ".pdb",
+    ".lib",
+    ".a",
+    ".chm",
+    ".h",
+    ".c",
+    ".pyc",
+    ".pyo",
 }
 
 # 要帶進 app/ 的原始碼與資源
@@ -83,8 +128,13 @@ endlocal
 
 
 def _ignore(path, names):
-    """複製時略過不需要的目錄與 __pycache__。"""
-    skip = {n for n in names if n in PYTHON_EXCLUDES or n == "__pycache__"}
+    """複製時略過不需要的目錄、__pycache__、測試目錄與除錯符號。"""
+    skip = set()
+    for n in names:
+        if n in PYTHON_EXCLUDES or n in UNWANTED_DIR_NAMES:
+            skip.add(n)
+        elif Path(n).suffix.lower() in UNWANTED_EXTENSIONS:
+            skip.add(n)
     return skip
 
 
@@ -113,18 +163,28 @@ def main() -> int:
     OUT.mkdir(parents=True)
 
     # 1. Python 本體
-    print("[1/5] 複製 Python 執行環境 ...")
+    print("[1/6] 複製 Python 執行環境 ...")
     shutil.copytree(BASE_PYTHON, OUT / "python", ignore=_ignore)
 
     # 2. 套件（合併進 python/Lib/site-packages，執行期就不必設 PYTHONPATH）
-    print("[2/5] 複製已安裝套件 ...")
+    print("[2/6] 複製已安裝套件 ...")
     target_sp = OUT / "python" / "Lib" / "site-packages"
     target_sp.mkdir(parents=True, exist_ok=True)
     for item in VENV_SITE_PACKAGES.iterdir():
-        if item.name in {"__pycache__", "PyInstaller"}:
+        item_lower = item.name.lower()
+        if item_lower in {"__pycache__", "pyinstaller"} or item_lower.startswith("pyinstaller"):
             continue
-        if item.name.startswith("pyinstaller"):
+        # 排除開發與測試套件
+        if any(
+            item_lower == dev or item_lower.startswith(f"{dev}-") or item_lower.startswith(f"{dev}_")
+            for dev in DEV_PACKAGES
+        ):
             continue
+        if item_lower in UNWANTED_DIR_NAMES:
+            continue
+        if item.is_file() and item.suffix.lower() in UNWANTED_EXTENSIONS:
+            continue
+
         dest = target_sp / item.name
         if item.is_dir():
             shutil.copytree(item, dest, ignore=_ignore, dirs_exist_ok=True)
@@ -132,7 +192,7 @@ def main() -> int:
             shutil.copy2(item, dest)
 
     # 3. 原始碼
-    print("[3/5] 複製程式碼 ...")
+    print("[3/6] 複製程式碼 ...")
     app = OUT / "app"
     app.mkdir()
     for name in APP_ITEMS:
@@ -146,7 +206,7 @@ def main() -> int:
             shutil.copy2(src, app / name)
 
     # 4. 啟動器與標記檔
-    print("[4/5] 產生啟動器 ...")
+    print("[4/6] 產生啟動器 ...")
     (OUT / "start.bat").write_text(START_BAT, encoding="ascii")
     (app / "PORTABLE").write_text(
         "可攜式發佈版標記。pocket_agent/system/paths.py 靠這個檔判斷要把設定與 log\n"
@@ -168,7 +228,7 @@ def main() -> int:
     print("[6/6] 壓縮 ...")
     zip_path = ROOT / "dist" / "PocketAgent-portable.zip"
     zip_path.unlink(missing_ok=True)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for f in OUT.rglob("*"):
             if f.is_file():
                 zf.write(f, Path("PocketAgent") / f.relative_to(OUT))

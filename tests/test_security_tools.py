@@ -26,6 +26,36 @@ def test_read_url_content_ssrf_localhost():
     assert "安全限制：禁止存取內部或保留網段" in result
 
 
+def test_read_url_content_ssrf_allowlist_domain_with_intranet_ip():
+    """測試受信任之白名單網域（如 raw.githubusercontent.com）即使解析為企業內網 IP 也予放行。"""
+    fake_dns = [(2, 1, 6, "", ("10.1.5.219", 443))]
+    fake_response = (200, {"content-type": "text/plain"}, b"Swagger Spec Content", False, False)
+
+    with (
+        patch("socket.getaddrinfo", return_value=fake_dns),
+        patch("pocket_agent.tools.web._fetch_pinned", return_value=fake_response),
+    ):
+        result = call_web_tool(
+            "read_url_content",
+            {"url": "https://raw.githubusercontent.com/swagger-api/swagger-ui/master/README.md"},
+        )
+        assert "[ERROR]" not in result
+        assert "Swagger Spec Content" in result
+
+
+def test_read_url_content_ssrf_disallow_loopback_even_for_allowlist_domain():
+    """測試即使是白名單網域，若解析為 Loopback (127.0.0.1) 依然嚴格阻斷。"""
+    fake_dns = [(2, 1, 6, "", ("127.0.0.1", 443))]
+
+    with patch("socket.getaddrinfo", return_value=fake_dns):
+        result = call_web_tool(
+            "read_url_content",
+            {"url": "https://raw.githubusercontent.com/evil"},
+        )
+        assert "[ERROR]" in result
+        assert "安全限制：禁止存取內部或保留網段" in result
+
+
 # ==========================================
 # 2. 目錄穿越與工作區監禁測試 (document.py)
 # ==========================================
@@ -80,3 +110,90 @@ def test_fs_grep_search_dos_protection(tmp_path):
         result = call_fs_tool("search_files", args, on_confirm=None, workspace_dirs=[str(workspace)])
 
         assert "找不到包含" in result
+
+
+def test_fs_validate_safe_path_global_user_dir_allowed(tmp_path):
+    """測試從專案工作區存取全域目錄 (~/.pocket-agent) 下的沙盒與產物能夠順利通過。"""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    scratch_file = fake_global / "workspaces" / "project-slug" / "scratch" / "outputs" / "out.log"
+    scratch_file.parent.mkdir(parents=True)
+    scratch_file.write_text("dummy output", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        resolved = _validate_safe_path(str(scratch_file))
+        assert resolved == scratch_file.resolve()
+
+
+def test_fs_validate_safe_path_global_user_dir_env_forbidden(tmp_path):
+    """測試即便全域目錄已放行，存取全域目錄下的 .env 依然會被嚴格阻擋。"""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    fake_global.mkdir(parents=True)
+    global_env = fake_global / ".env"
+    global_env.write_text("SECRET=123", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        with pytest.raises(ValueError, match="安全限制：禁止存取敏感目錄或檔案"):
+            _validate_safe_path(str(global_env))
+
+
+def test_fs_validate_safe_path_unauthorized_outside_dir(tmp_path):
+    """測試非工作區、非全域目錄的外部未授權目錄依然會觸發工作區監禁。"""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    fake_global.mkdir(parents=True)
+    outside_file = tmp_path / "outside" / "secret.txt"
+    outside_file.parent.mkdir(parents=True)
+    outside_file.write_text("confidential", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        with pytest.raises(ValueError, match="超出允許的工作區範圍"):
+            _validate_safe_path(str(outside_file))
+
+
+def test_fs_search_files_in_global_user_dir(tmp_path):
+    """測試在全域目錄 (~/.pocket-agent) 下搜尋檔案不會被靜默過濾。"""
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    scratch_dir = fake_global / "workspaces" / "project-slug" / "scratch"
+    scratch_dir.mkdir(parents=True)
+    log_file = scratch_dir / "spillover.log"
+    log_file.write_text("Hello Spillover Content", encoding="utf-8")
+
+    with patch("pocket_agent.system.paths.user_dir", return_value=fake_global):
+        result = call_fs_tool(
+            "search_files",
+            {"query": "Hello Spillover", "path": str(scratch_dir)},
+            on_confirm=None,
+        )
+        assert "[ERROR]" not in result
+        assert "spillover.log" in result
+
+
+def test_fs_validate_safe_path_global_root_files_forbidden(tmp_path):
+    """測試全域根目錄下的系統設定檔 (如 allowlist.json, mcp_config.yaml) 屬於私有保護範圍，禁止存取。"""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    fake_global.mkdir(parents=True)
+    allowlist_file = fake_global / "allowlist.json"
+    allowlist_file.write_text("{}", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        with pytest.raises(ValueError, match="安全限制：禁止存取敏感目錄或檔案"):
+            _validate_safe_path(str(allowlist_file))

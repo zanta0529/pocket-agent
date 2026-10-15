@@ -1,7 +1,6 @@
 """ContextBudget 單元測試：視窗解析、截斷、舊結果清除與使用量快照（不連網）。"""
 
 from pocket_agent.core.context_budget import (
-    _PLACEHOLDER,
     DEFAULT_CONTEXT_WINDOW,
     SOURCE_CONFIG,
     SOURCE_DEFAULT,
@@ -55,7 +54,33 @@ def test_compact_keeps_pairs_and_recent_outputs():
     assert len([m for m in items if m["type"] == "function_call"]) == len(outputs) == 5
     assert outputs[-1]["output"] == big
     assert outputs[-2]["output"] == big
-    assert outputs[0]["output"] == _PLACEHOLDER
+    assert "[舊工具輸出已清除" in outputs[0]["output"]
+    assert "read_file" in outputs[0]["output"]
+
+
+def test_compact_placeholder_includes_tool_context_and_prevents_retrigger():
+    budget = ContextBudget(1000)
+    items = [
+        {
+            "type": "function_call",
+            "call_id": "c1",
+            "name": "search_web",
+            "arguments": '{"query": "RHEL 9.8 podman"}',
+        },
+        {"type": "function_call_output", "call_id": "c1", "output": "大量搜尋結果 " * 200},
+        {"type": "function_call", "call_id": "c_recent1", "name": "read_file", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c_recent1", "output": "最近結果 1 " * 200},
+        {"type": "function_call", "call_id": "c_recent2", "name": "read_file", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c_recent2", "output": "最近結果 2 " * 200},
+        {"role": "user", "content": "next prompt"},
+    ]
+    cleared = budget.compact(items)
+    assert cleared == 1
+    output = items[1]["output"]
+    assert "search_web" in output
+    assert "RHEL 9.8 podman" in output
+    assert "避免重複發起相同檢索" in output
+    assert "如仍需要，請重新以精準範圍讀取" not in output
 
 
 def test_compact_noop_under_threshold():
@@ -260,5 +285,5 @@ def test_compact_preserves_whitelisted_skills_and_guidelines():
     assert cleared == 1  # 只有 c_normal 被清除
     outputs = {m["call_id"]: m["output"] for m in items if m["type"] == "function_call_output"}
     assert outputs["c_skill"] == big  # 白名單保護未被清除
-    assert outputs["c_doc"] == big  # 專案指引保護未被清除
-    assert outputs["c_normal"] == _PLACEHOLDER  # 一般檔案被清除為佔位符
+    assert "[舊工具輸出已清除" in outputs["c_normal"]
+    assert "src/app.py" in outputs["c_normal"]
