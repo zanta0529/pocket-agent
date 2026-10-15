@@ -180,3 +180,20 @@ def test_fs_search_files_in_global_user_dir(tmp_path):
         )
         assert "[ERROR]" not in result
         assert "spillover.log" in result
+
+
+def test_fs_validate_safe_path_global_root_files_forbidden(tmp_path):
+    """測試全域根目錄下的系統設定檔 (如 allowlist.json, mcp_config.yaml) 屬於私有保護範圍，禁止存取。"""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    fake_global.mkdir(parents=True)
+    allowlist_file = fake_global / "allowlist.json"
+    allowlist_file.write_text("{}", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        with pytest.raises(ValueError, match="安全限制：禁止存取敏感目錄或檔案"):
+            _validate_safe_path(str(allowlist_file))

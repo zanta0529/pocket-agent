@@ -176,6 +176,15 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
 
     # 黑名單：防止存取敏感設定或版本控制資料
     is_in_global = global_user_dir is not None and target.is_relative_to(global_user_dir)
+
+    # 全域目錄 (~/.pocket-agent) 中僅允許 workspaces, scratch, backups, skills 等沙盒與產物
+    # 根目錄下的系統設定檔 (如 allowlist.json, mcp_config.yaml, config.json) 均屬敏感保護範圍
+    if is_in_global and global_user_dir is not None:
+        rel = target.relative_to(global_user_dir)
+        allowed_global_subdirs = {"workspaces", "scratch", "backups", "skills"}
+        if len(rel.parts) == 0 or rel.parts[0] not in allowed_global_subdirs:
+            raise ValueError("安全限制：禁止存取敏感目錄或檔案 (.pocket-agent)")
+
     for part in target.parts:
         if part == ".git" or part.startswith(".env"):
             raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
@@ -590,7 +599,12 @@ def call_fs_tool(
                 p_in_global = global_user_dir is not None and p.is_relative_to(global_user_dir)
                 if any(part.startswith(".env") or part == ".git" for part in p.parts):
                     continue
-                if not p_in_global and any(part == ".pocket-agent" for part in p.parts):
+                if p_in_global:
+                    rel_g = p.relative_to(global_user_dir)
+                    allowed_global_subdirs = {"workspaces", "scratch", "backups", "skills"}
+                    if len(rel_g.parts) == 0 or rel_g.parts[0] not in allowed_global_subdirs:
+                        continue
+                elif any(part == ".pocket-agent" for part in p.parts):
                     continue
 
                 if p.is_symlink():
