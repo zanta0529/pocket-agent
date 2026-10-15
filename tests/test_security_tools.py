@@ -26,6 +26,36 @@ def test_read_url_content_ssrf_localhost():
     assert "安全限制：禁止存取內部或保留網段" in result
 
 
+def test_read_url_content_ssrf_allowlist_domain_with_intranet_ip():
+    """測試受信任之白名單網域（如 raw.githubusercontent.com）即使解析為企業內網 IP 也予放行。"""
+    fake_dns = [(2, 1, 6, "", ("10.1.5.219", 443))]
+    fake_response = (200, {"content-type": "text/plain"}, b"Swagger Spec Content", False, False)
+
+    with (
+        patch("socket.getaddrinfo", return_value=fake_dns),
+        patch("pocket_agent.tools.web._fetch_pinned", return_value=fake_response),
+    ):
+        result = call_web_tool(
+            "read_url_content",
+            {"url": "https://raw.githubusercontent.com/swagger-api/swagger-ui/master/README.md"},
+        )
+        assert "[ERROR]" not in result
+        assert "Swagger Spec Content" in result
+
+
+def test_read_url_content_ssrf_disallow_loopback_even_for_allowlist_domain():
+    """測試即使是白名單網域，若解析為 Loopback (127.0.0.1) 依然嚴格阻斷。"""
+    fake_dns = [(2, 1, 6, "", ("127.0.0.1", 443))]
+
+    with patch("socket.getaddrinfo", return_value=fake_dns):
+        result = call_web_tool(
+            "read_url_content",
+            {"url": "https://raw.githubusercontent.com/evil"},
+        )
+        assert "[ERROR]" in result
+        assert "安全限制：禁止存取內部或保留網段" in result
+
+
 # ==========================================
 # 2. 目錄穿越與工作區監禁測試 (document.py)
 # ==========================================

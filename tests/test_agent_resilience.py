@@ -178,3 +178,58 @@ def test_console_formatter_prepends_newline_and_icons():
     formatted_trunc = formatter.format(record_truncate)
     assert formatted_trunc.startswith("\n")
     assert "✂️" in formatted_trunc
+
+
+def test_agent_web_research_convergence_limits(monkeypatch):
+    """測試網路調研工具的軟性收斂警告（5次）與硬性攔截上限（10次）。"""
+
+    async def _test():
+        from pocket_agent.engines.base import EventText, EventToolCallDone, EventToolCallStart
+        from pocket_agent.engines.factory import EngineFactory
+
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+
+        round_counter = [0]
+
+        class MockWebEngine(BaseEngine):
+            async def stream_chat(
+                self, input_items, instructions, tools, reasoning_param=None, cancel_check=None, **kwargs
+            ):
+                round_counter[0] += 1
+                r = round_counter[0]
+                if r <= 11:
+                    yield EventToolCallStart(f"call_{r}", "search_web")
+                    yield EventToolCallDone(f"call_{r}", "search_web", f'{{"query": "q_{r}"}}')
+                else:
+                    yield EventText("完成任務輸出")
+
+        mock_engine = MockWebEngine(mock_client, "test-model")
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: mock_engine)
+        monkeypatch.setattr("pocket_agent.core.agent.call_web_tool", lambda name, args: "搜尋結果摘要")
+
+        agent = Agent(
+            client=mock_client,
+            mcp=mock_mcp,
+            model="test-model",
+            max_tool_rounds=15,
+            provider="openai",
+        )
+
+        emitted_tool_results = []
+
+        def stream_listener(kind, data):
+            if kind == "tool_done" and isinstance(data, dict):
+                emitted_tool_results.append(data.get("result", ""))
+
+        agent.on_stream = stream_listener
+
+        _thinking, reply, _usage = await agent.chat("進行調研任務")
+        assert "完成任務輸出" in reply
+
+        # 第 5 次呼叫應附加軟性收斂提醒
+        assert any("系統提醒：調研收斂" in out for out in emitted_tool_results)
+        # 第 11 次呼叫 (超出硬上限 10 次) 應被硬性攔截
+        assert any("調研上限攔截" in out for out in emitted_tool_results)
+
+    asyncio.run(_test())
