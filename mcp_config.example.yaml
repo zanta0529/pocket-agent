@@ -59,7 +59,7 @@ servers:
   #   command: python
   #   args: ["mcp_servers/memory_mcp.py"]
 
-  # 遠端 RHEL 主機唯讀探查與維運診斷 (透過系統 OpenSSH 連線單一目標主機)
+  # 遠端 RHEL 主機唯讀探查與維運診斷 (僅限帳號密碼驗證；env 內各項皆可預填、留空或省略，未設定項將於執行時在終端機動態詢問)
   # rhel_ops:
   #   transport: stdio
   #   command: python
@@ -73,8 +73,8 @@ servers:
   #     - rhel_security_status
   #     - rhel_read_config
   #   env:
-  #     RHEL_HOST: "192.168.1.100"           # 或 ~/.ssh/config 中定義的 Host Alias
-  #     RHEL_SSH_USER: "mcp-inspector"       # 建議使用最小權限維運帳號
-  #     RHEL_SSH_PORT: "22"
-  #     RHEL_SSH_KEY_PATH: ""                # 選填：指定私鑰路徑（留空則使用預設金鑰或 ssh-agent）
+  #     RHEL_HOST: ""                        # 選填：主機 IP 或位址（留空或省略時將於執行時詢問）
+  #     RHEL_SSH_PORT: ""                    # 選填：SSH 連接埠（留空或省略時將於執行時詢問）
+  #     RHEL_SSH_USER: ""                    # 選填：SSH 登入帳號（留空或省略時將於執行時詢問）
+  #     RHEL_SSH_PASSWORD: ""                # 選填：SSH 登入密碼（建議留空或省略，於執行時安全輸入）
   #     RHEL_CONNECT_TIMEOUT: "10"

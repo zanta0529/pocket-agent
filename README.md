@@ -29,7 +29,7 @@
 
 - **子代理 (Subagents)**：允許在設定檔定義多種人設 (例如：架構師、研究員)，主 Agent 在面對複雜情境時會自動委派任務，實現多代理協同作業。
 - **事件攔截與鉤子 (Hooks)**：支援在 `before_send`, `after_response`, `before_tool`, `after_tool` 綁定並執行本機腳本，達成高度客製化。
-- **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，輕鬆掛載本地檔案系統、資料庫或遠端工具。自帶 `browser_mcp.py` 支援網頁自動化瀏覽與 Session 狀態繼承。
+- **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，輕鬆掛載本地檔案系統、資料庫或遠端工具。內建 `browser_mcp.py`（網頁自動化瀏覽與 Session 狀態繼承）與 `rhel_mcp.py`（遠端 RHEL 主機結構化唯讀巡檢與維運支援）。
 - **CLI 動態捷徑 (Zero-Token Routing)**：除了主 Agent 自行決定外，使用者可直接輸入 `/subagent <name>` 或動態捷徑 `/<name>`。系統會**攔截指令並直接在底層啟動子代理**，完美跳過主代理的 LLM 推理，達成零 Token 消耗的高速派發。
 
 ### 4. 企業級安全治理 (Enterprise Governance)
@@ -216,7 +216,7 @@ PocketAgent 的全域設定自動產生並存放在 `~/.pocket-agent/config.json
 
 ### 外部 MCP 伺服器掛載
 
-如需橋接外部工具或資料庫，請複製根目錄的 `mcp_config.example.yaml` 並重新命名為 `mcp_config.yaml`（該檔已受 `.gitignore` 保護，避免機密外流）：
+如需橋接外部工具、瀏覽器或遠端主機，請複製根目錄的 `mcp_config.example.yaml` 並重新命名為 `mcp_config.yaml`（該檔已受 `.gitignore` 保護，避免機密外流）。即使在 PyInstaller 單一執行檔或 Portable 免安裝環境中，系統也會自動解析內建的 `mcp_servers/*.py` 腳本路徑：
 
 ```yaml
 servers:
@@ -224,9 +224,30 @@ servers:
     transport: stdio
     command: python
     args: ['mcp_servers/browser_mcp.py']
+
+  rhel_ops:
+    transport: stdio
+    command: python
+    args: ['mcp_servers/rhel_mcp.py']
+    safe_read_tools:
+      - rhel_system_overview
+      - rhel_storage_and_fs
+      - rhel_network_status
+      - rhel_service_status
+      - rhel_query_journal
+      - rhel_security_status
+      - rhel_read_config
+    env:
+      RHEL_HOST: ''
+      RHEL_SSH_PORT: '22'
+      RHEL_SSH_USER: ''
+      RHEL_SSH_PASSWORD: ''
+      RHEL_CONNECT_TIMEOUT: '10'
 ```
 
-_(💡 提示：若工具需使用敏感的 API Key，可利用 `inject` 參數配置，PocketAgent 會在底層自動注入，確保模型層不會接觸到金鑰明文。)_
+- **`safe_read_tools`（唯讀工具白名單）**：列於此清單的唯讀工具在呼叫時可免除每次互動式 `[y/N]` 確認，直接安全放行。
+- **彈性連線參數與互動式詢問（`rhel_ops`）**：`RHEL_HOST`（主機 IP／Host）、`RHEL_SSH_PORT`（連接埠）、`RHEL_SSH_USER`（帳號）與 `RHEL_SSH_PASSWORD`（密碼）皆支援在 `env` 中預先填寫、留空字串 `''` 或直接省略。執行期若偵測到未設定的項目，CLI 會在首次呼叫工具時自動於終端機互動詢問（密碼採隱藏輸入），並暫存於當次 Session 記憶體中，全程不經過 LLM 上下文或寫入日誌。
+- **敏感金鑰注入（`inject`）**：若一般外部工具需使用敏感的 API Key，可利用 `inject` 參數配置，PocketAgent 會在底層自動將欄位從 LLM Schema 抹除並於呼叫時注入，確保模型層不會接觸到金鑰明文。詳見 [MCP 伺服器掛載與安全注入機制](docs/mcp-architecture.md)。
 
 ---
 

@@ -491,6 +491,50 @@ class CliFrontend(FrontendStrategy):
 
             agent.on_confirm = _cli_confirm
 
+            def _cli_prompt_mcp_conn(server_name: str, missing_keys: list[str]) -> dict[str, str]:
+                status = renderer._active_status
+                if status:
+                    status.stop()
+
+                renderer._ensure_newline()
+                renderer.console.print()
+                renderer.message(
+                    f"🔐 [{server_name}] 請補充未設定的遠端連線資訊（僅存於本機記憶體，不會傳送給 AI 模型）：",
+                    "bold cyan",
+                )
+                collected: dict[str, str] = {}
+                labels = {
+                    "RHEL_HOST": ("RHEL 主機位址 (IP / Host)", None, False),
+                    "RHEL_SSH_PORT": ("SSH 連接埠 (Port)", "22", False),
+                    "RHEL_SSH_USER": ("SSH 登入帳號 (Username)", None, False),
+                    "RHEL_SSH_PASSWORD": ("SSH 登入密碼 (Password)", None, True),
+                }
+                try:
+                    for key in missing_keys:
+                        label, default_val, is_pw = labels.get(key, (key, None, "PASSWORD" in key))
+                        if default_val is not None:
+                            val = Prompt.ask(
+                                f"[bold yellow]  {label}[/bold yellow]",
+                                default=default_val,
+                                password=is_pw,
+                                console=renderer.console,
+                            )
+                        else:
+                            val = Prompt.ask(
+                                f"[bold yellow]  {label}[/bold yellow]",
+                                password=is_pw,
+                                console=renderer.console,
+                            )
+                        collected[key] = val if is_pw else val.strip()
+                    return collected
+                except EOFError, KeyboardInterrupt:
+                    return collected
+                finally:
+                    if status:
+                        status.start()
+
+            mcp.on_prompt_conn = _cli_prompt_mcp_conn
+
             tools = list(mcp.list_tools())
             renderer.welcome(state, tools)
 

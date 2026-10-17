@@ -1,17 +1,23 @@
 """遠端 RHEL 主機唯讀探查與維運診斷 MCP 伺服器。
 
 安全設計原則：
-1. 採用系統原生 OpenSSH Client (shell=False, BatchMode=yes)，零新增第三方依賴。
-2. 單一目標主機由環境變數 RHEL_HOST 等控制，不暴露 host 參數予 LLM。
+1. 僅允許帳號＋密碼驗證（強制停用 Pubkey、GSSAPI 與 SSH Agent，不殘留金鑰或免密後門）。
+2. 支援彈性設定：RHEL_HOST、RHEL_SSH_PORT、RHEL_SSH_USER、RHEL_SSH_PASSWORD 皆可於設定檔預填、留空或省略；
+   未設定項目於執行期動態詢問使用者並僅快取於本機記憶體，絕不暴露予 LLM 或寫入日誌。
 3. 100% 結構化唯讀探查工具，所有識別字經正規表示式白名單與 shlex.quote 雙重防護。
 4. 遠端設定檔讀取受白名單目錄、敏感關鍵字黑名單與 realpath 解析保護，並自動遮罩機密欄位。
 """
 
+import getpass
 import os
 import posixpath
 import re
 import shlex
+import shutil
 import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -23,6 +29,9 @@ mcp = MCPServer("rhel-ops")
 MAX_OUTPUT_CHARS = 6000
 _IDENT_RE = re.compile(r"^[a-zA-Z0-9_.@-]+$")
 _SINCE_RE = re.compile(r"^[a-zA-Z0-9_.:+\- ]+$")
+
+# 執行期記憶體快取（僅存活於當前行程生命週期，不落盤）
+_RUNTIME_CREDS: dict[str, str] = {}
 
 _VALID_PRIORITIES = {
     "emerg",
@@ -112,66 +121,206 @@ def _redact_and_truncate(text: str) -> str:
     return redacted
 
 
-def _build_ssh_args(remote_cmd: str) -> tuple[list[str], int]:
-    host = (os.getenv("RHEL_HOST") or "").strip()
-    if not host:
-        raise ValueError("缺少 RHEL_HOST 環境變數。請在 mcp_config.yaml 的 env 區段設定目標 RHEL 主機位址或別名。")
-    _validate_identifier(host, "RHEL_HOST")
+def _tty_prompt(prompt_text: str, *, is_password: bool = False) -> str:
+    """當獨立執行且未由上層注入時，直接透過作業系統終端機設備（CONIN$/CONOUT$ 或 /dev/tty）詢問。"""
+    if is_password:
+        return getpass.getpass(prompt_text)
 
-    user = (os.getenv("RHEL_SSH_USER") or "").strip()
-    port = (os.getenv("RHEL_SSH_PORT") or "22").strip()
-    key_path = (os.getenv("RHEL_SSH_KEY_PATH") or "").strip()
-    strict_host = (os.getenv("RHEL_STRICT_HOST_KEY") or "yes").strip()
+    tty_in_name = "CONIN$" if os.name == "nt" else "/dev/tty"
+    tty_out_name = "CONOUT$" if os.name == "nt" else "/dev/tty"
+    try:
+        with (
+            open(tty_out_name, "w", encoding="utf-8") as tty_out,
+            open(tty_in_name, encoding="utf-8") as tty_in,
+        ):
+            tty_out.write(prompt_text)
+            tty_out.flush()
+            return tty_in.readline().strip()
+    except OSError:
+        sys.stderr.write(prompt_text)
+        sys.stderr.flush()
+        return sys.stdin.readline().strip()
+
+
+def _resolve_connection_params(
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> tuple[str, str, str, str]:
+    """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得連線四要素。"""
+    host = (ssh_host or _RUNTIME_CREDS.get("RHEL_HOST") or os.getenv("RHEL_HOST") or "").strip()
+    port = (ssh_port or _RUNTIME_CREDS.get("RHEL_SSH_PORT") or os.getenv("RHEL_SSH_PORT") or "").strip()
+    user = (ssh_user or _RUNTIME_CREDS.get("RHEL_SSH_USER") or os.getenv("RHEL_SSH_USER") or "").strip()
+    password = ssh_password or _RUNTIME_CREDS.get("RHEL_SSH_PASSWORD") or os.getenv("RHEL_SSH_PASSWORD") or ""
+
+    if not host:
+        host = _tty_prompt("請輸入 RHEL 主機 IP 或位址 (RHEL_HOST): ").strip()
+    if not port:
+        port = _tty_prompt("請輸入 SSH 連接埠 (RHEL_SSH_PORT) [預設 22]: ").strip() or "22"
+    if not user:
+        user = _tty_prompt(f"請輸入 {host} 的 SSH 登入帳號 (RHEL_SSH_USER): ").strip()
+    if not password:
+        password = _tty_prompt(f"請輸入 {user}@{host} 的 SSH 登入密碼: ", is_password=True)
+
+    if not host:
+        raise ValueError("未提供 RHEL 主機位址 (RHEL_HOST)。")
+    if not user:
+        raise ValueError("未提供 SSH 登入帳號 (RHEL_SSH_USER)。")
+    if not password:
+        raise ValueError("未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；本工具僅允許帳號密碼驗證。")
+
+    _validate_identifier(host, "RHEL_HOST")
+    _validate_identifier(user, "RHEL_SSH_USER")
+    if not port.isdigit() or not (1 <= int(port) <= 65535):
+        raise ValueError(f"非法的 RHEL_SSH_PORT：{port!r}（必須為 1~65535 之間的整數）")
+
+    _RUNTIME_CREDS["RHEL_HOST"] = host
+    _RUNTIME_CREDS["RHEL_SSH_PORT"] = port
+    _RUNTIME_CREDS["RHEL_SSH_USER"] = user
+    _RUNTIME_CREDS["RHEL_SSH_PASSWORD"] = password
+    return host, port, user, password
+
+
+def _build_ssh_args(
+    remote_cmd: str,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> tuple[list[str], str, int]:
+    host, port, user, password = _resolve_connection_params(ssh_host, ssh_port, ssh_user, ssh_password)
+    strict_host = (os.getenv("RHEL_STRICT_HOST_KEY") or "no").strip()
 
     try:
         timeout = max(3, min(int(os.getenv("RHEL_CONNECT_TIMEOUT") or "10"), 60))
     except ValueError:
         timeout = 10
 
-    if not port.isdigit() or not (1 <= int(port) <= 65535):
-        raise ValueError(f"非法的 RHEL_SSH_PORT：{port!r}")
-
     if strict_host not in ("yes", "accept-new", "no"):
-        strict_host = "yes"
+        strict_host = "no"
 
     args = [
         "ssh",
         "-o",
-        "BatchMode=yes",
-        "-o",
         f"ConnectTimeout={timeout}",
         "-o",
         f"StrictHostKeyChecking={strict_host}",
+        "-o",
+        "BatchMode=no",
+        "-o",
+        "PubkeyAuthentication=no",
+        "-o",
+        "GSSAPIAuthentication=no",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "IdentityAgent=none",
+        "-o",
+        "PreferredAuthentications=keyboard-interactive,password",
+        "-o",
+        "NumberOfPasswordPrompts=1",
         "-p",
         port,
     ]
-    if key_path:
-        args.extend(["-i", key_path])
+    if strict_host == "no":
+        null_dev = "NUL" if os.name == "nt" else "/dev/null"
+        args.extend(["-o", f"UserKnownHostsFile={null_dev}"])
 
-    target = f"{_validate_identifier(user, 'RHEL_SSH_USER')}@{host}" if user else host
+    target = f"{user}@{host}"
     args.extend(["--", target, remote_cmd])
-    return args, timeout
+    return args, password, timeout
 
 
-def _run_remote(remote_cmd: str) -> str:
-    try:
-        ssh_args, timeout = _build_ssh_args(remote_cmd)
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        proc = subprocess.run(
+def _find_plink() -> str | None:
+    custom = (os.getenv("RHEL_PLINK_PATH") or "").strip()
+    if custom and Path(custom).is_file():
+        return custom
+    found = shutil.which("plink") or shutil.which("plink.exe")
+    if found:
+        return found
+    for candidate in (
+        r"C:\Program Files\PuTTY\plink.exe",
+        r"C:\Program Files (x86)\PuTTY\plink.exe",
+    ):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def _run_with_askpass(ssh_args: list[str], password: str, timeout: int, creationflags: int):
+    with tempfile.TemporaryDirectory(prefix="rhel_mcp_") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        pw_file = tmp_path / "pw.txt"
+        pw_file.write_text(password, encoding="utf-8")
+
+        if os.name == "nt":
+            askpass_script = tmp_path / "askpass.bat"
+            askpass_script.write_text(f'@echo off\r\ntype "{pw_file}"\r\n', encoding="utf-8")
+        else:
+            askpass_script = tmp_path / "askpass.sh"
+            askpass_script.write_text(f'#!/bin/sh\ncat "{pw_file}"\n', encoding="utf-8")
+            askpass_script.chmod(0o700)
+
+        env = dict(os.environ)
+        env["SSH_ASKPASS"] = str(askpass_script)
+        env["SSH_ASKPASS_REQUIRE"] = "force"
+        env.setdefault("DISPLAY", "1")
+        env.pop("SSH_AUTH_SOCK", None)
+
+        return subprocess.run(
             ssh_args,
             shell=False,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=timeout + 15,
             creationflags=creationflags,
+            env=env,
         )
+
+
+def _run_remote(
+    remote_cmd: str,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
+    try:
+        ssh_args, password, timeout = _build_ssh_args(remote_cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        proc = _run_with_askpass(ssh_args, password, timeout, creationflags)
+
+        if proc.returncode == 255:
+            plink_bin = _find_plink()
+            if plink_bin:
+                host = _RUNTIME_CREDS["RHEL_HOST"]
+                port = _RUNTIME_CREDS["RHEL_SSH_PORT"]
+                user = _RUNTIME_CREDS["RHEL_SSH_USER"]
+                plink_args = [plink_bin, "-batch", "-ssh", "-noagent", "-P", port, "-l", user, "-pw", password]
+                plink_args.extend([host, remote_cmd])
+                proc = subprocess.run(
+                    plink_args,
+                    shell=False,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout + 15,
+                    creationflags=creationflags,
+                )
+
         combined = (proc.stdout or "").strip()
         err_out = (proc.stderr or "").strip()
         if proc.returncode != 0 and not combined:
+            if proc.returncode == 255 or "permission denied" in err_out.lower() or "access denied" in err_out.lower():
+                _RUNTIME_CREDS.clear()
             return f"[ERROR] 遠端執行失敗 (exit {proc.returncode}): {_redact_and_truncate(err_out)}"
-        if err_out and combined:
+        if err_out and combined and proc.returncode != 0:
             combined = f"{combined}\n[STDERR]\n{err_out}"
         return _redact_and_truncate(combined)
     except subprocess.TimeoutExpired:
@@ -181,7 +330,12 @@ def _run_remote(remote_cmd: str) -> str:
 
 
 @mcp.tool()
-def rhel_system_overview() -> str:
+def rhel_system_overview(
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
     """探查 RHEL 主機系統概況：OS 版本、Kernel、Uptime、CPU/記憶體使用量與前 10 大高負載行程"""
     cmd = (
         "echo '=== OS Release ===' && cat /etc/redhat-release /etc/os-release 2>/dev/null | head -n 15; "
@@ -190,22 +344,32 @@ def rhel_system_overview() -> str:
         "echo '=== Top Processes (by CPU) ===' && "
         "ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu | head -n 11"
     )
-    return _run_remote(cmd)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 
 
 @mcp.tool()
-def rhel_storage_and_fs() -> str:
+def rhel_storage_and_fs(
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
     """探查 RHEL 儲存與檔案系統狀態：掛載點空間使用率 (df -hT)、Inode 使用率 (df -i) 與區塊裝置 (lsblk)"""
     cmd = (
         "echo '=== Filesystem Usage ===' && df -hT -x tmpfs -x devtmpfs; "
         "echo '=== Inode Usage ===' && df -i -x tmpfs -x devtmpfs; "
         "echo '=== Block Devices ===' && lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,UUID"
     )
-    return _run_remote(cmd)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 
 
 @mcp.tool()
-def rhel_network_status() -> str:
+def rhel_network_status(
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
     """探查 RHEL 網路狀態：網路介面與 IP、路由表、DNS 設定與目前監聽的 TCP/UDP 連接埠"""
     cmd = (
         "echo '=== Network Interfaces ===' && ip -br addr; "
@@ -213,16 +377,23 @@ def rhel_network_status() -> str:
         "echo '=== DNS Resolver ===' && cat /etc/resolv.conf 2>/dev/null; "
         "echo '=== Listening Ports ===' && ss -tuln"
     )
-    return _run_remote(cmd)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 
 
 @mcp.tool()
-def rhel_service_status(service_name: str = "", failed_only: bool = False) -> str:
+def rhel_service_status(
+    service_name: str = "",
+    failed_only: bool = False,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
     """查詢 RHEL systemd 服務狀態。不指定 service_name 時列出失敗或活動中的服務；指定時顯示該服務詳細狀態"""
     if failed_only or not service_name.strip():
         state_flag = "--state=failed" if failed_only else "--type=service --state=running,failed"
         cmd = f"systemctl list-units {state_flag} --no-pager --no-legend | head -n 80"
-        return _run_remote(cmd)
+        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 
     try:
         safe_unit = _validate_identifier(service_name, "service_name")
@@ -231,7 +402,7 @@ def rhel_service_status(service_name: str = "", failed_only: bool = False) -> st
 
     quoted = shlex.quote(safe_unit)
     cmd = f"systemctl status {quoted} --no-pager -n 25"
-    return _run_remote(cmd)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 
 
 @mcp.tool()
@@ -240,6 +411,10 @@ def rhel_query_journal(
     priority: str = "err",
     since: str = "1 hour ago",
     lines: int = 50,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
 ) -> str:
     """結構化檢索 RHEL systemd journald 日誌（強制無分頁並限制行數上限 200 行）"""
     parts = ["journalctl", "--no-pager"]
@@ -266,11 +441,16 @@ def rhel_query_journal(
     safe_lines = max(1, min(int(lines or 50), 200))
     parts.extend(["-n", str(safe_lines)])
 
-    return _run_remote(" ".join(parts))
+    return _run_remote(" ".join(parts), ssh_host, ssh_port, ssh_user, ssh_password)
 
 
 @mcp.tool()
-def rhel_security_status() -> str:
+def rhel_security_status(
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
     """探查 RHEL 安全性子系統狀態：SELinux 模式與狀態、firewalld 防火牆規則摘要，以及待安裝的安全性更新"""
     cmd = (
         "echo '=== SELinux Status ===' && (sestatus || getenforce) 2>/dev/null; "
@@ -282,11 +462,18 @@ def rhel_security_status() -> str:
         "echo '=== Security Updates (dnf) ===' && "
         "dnf updateinfo summary --security 2>/dev/null | tail -n 25"
     )
-    return _run_remote(cmd)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 
 
 @mcp.tool()
-def rhel_read_config(file_path: str, max_lines: int = 120) -> str:
+def rhel_read_config(
+    file_path: str,
+    max_lines: int = 120,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
     """安全讀取 RHEL 白名單目錄內的公開系統設定檔（自動阻擋敏感機密路徑並遮罩密碼與金鑰）"""
     try:
         safe_path = _validate_config_path(file_path)
@@ -295,7 +482,6 @@ def rhel_read_config(file_path: str, max_lines: int = 120) -> str:
 
     safe_lines = max(1, min(int(max_lines or 120), 300))
     quoted_path = shlex.quote(safe_path)
-    # 於遠端先解析符號連結真實路徑，防止透過 symlink 指向 /etc/shadow 或私鑰
     cmd = (
         f"real=$(realpath -e {quoted_path} 2>/dev/null) || {{ echo '[ERROR] 檔案不存在或無法存取'; exit 1; }}; "
         "case $real in "
@@ -306,7 +492,7 @@ def rhel_read_config(file_path: str, max_lines: int = 120) -> str:
         "*) echo '[ERROR] 拒絕存取：解析後之真實路徑不在允許的目錄白名單內'; exit 1 ;; "
         "esac"
     )
-    return _run_remote(cmd)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 
 
 if __name__ == "__main__":

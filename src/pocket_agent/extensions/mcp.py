@@ -28,6 +28,14 @@ except ImportError:
     HAS_SSE = False
 
 
+_CONN_PARAM_MAP = {
+    "ssh_host": "RHEL_HOST",
+    "ssh_port": "RHEL_SSH_PORT",
+    "ssh_user": "RHEL_SSH_USER",
+    "ssh_password": "RHEL_SSH_PASSWORD",
+}
+
+
 @dataclass
 class ToolEntry:
     name: str
@@ -35,6 +43,7 @@ class ToolEntry:
     session: ClientSession
     schema: dict  # 送給模型的 schema（已移除 inject 參數）
     inject: dict = field(default_factory=dict)  # 自動注入的參數值
+    needs_ssh_conn: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +64,9 @@ class MCPManager:
         self._tools: dict[str, ToolEntry] = {}
         self._sessions: list[ClientSession] = []
         self._exit_stack_closers: list[Any] = []
+        self._server_envs: dict[str, dict[str, str]] = {}
+        self._runtime_conn_cache: dict[str, dict[str, str]] = {}
+        self.on_prompt_conn: Callable[[str, list[str]], dict[str, str]] | None = None
 
     # ── Lifecycle ─────────────────────────────────
 
@@ -69,6 +81,8 @@ class MCPManager:
         failed_servers = 0
         for name, spec in servers.items():
             try:
+                raw_env = spec.get("env") or {}
+                self._server_envs[name] = {str(k): str(v) for k, v in raw_env.items() if v is not None}
                 session = await self._connect(name, spec)
                 self._sessions.append(session)
                 inject = spec.get("inject") or {}
@@ -95,6 +109,36 @@ class MCPManager:
         """回傳送給模型的 tools 陣列（已隱藏 inject 參數）。"""
         return [entry.schema for entry in self._tools.values()]
 
+    async def _resolve_entry_ssh_conn(self, entry: ToolEntry) -> dict[str, str]:
+        server_env = self._server_envs.get(entry.server_name, {})
+        cached = self._runtime_conn_cache.setdefault(entry.server_name, {})
+        resolved: dict[str, str] = {}
+        missing: list[str] = []
+
+        for env_key in _CONN_PARAM_MAP.values():
+            val = cached.get(env_key)
+            if val is None or val == "":
+                val = server_env.get(env_key)
+            if val is None or val == "":
+                val = os.getenv(env_key) or ""
+            clean = str(val) if env_key == "RHEL_SSH_PASSWORD" else str(val).strip()
+            if clean:
+                resolved[env_key] = clean
+            else:
+                missing.append(env_key)
+
+        if missing and self.on_prompt_conn is not None:
+            import asyncio
+
+            prompted = await asyncio.to_thread(self.on_prompt_conn, entry.server_name, missing)
+            for k, v in (prompted or {}).items():
+                clean_v = str(v) if k == "RHEL_SSH_PASSWORD" else str(v).strip()
+                if clean_v:
+                    cached[k] = clean_v
+                    resolved[k] = clean_v
+
+        return {arg_name: resolved.get(env_key, "") for arg_name, env_key in _CONN_PARAM_MAP.items()}
+
     async def call(self, tool_name: str, arguments: dict) -> str:
         """執行指定工具，自動補入 inject 參數後呼叫。"""
         entry = self._tools.get(tool_name)
@@ -103,6 +147,10 @@ class MCPManager:
 
         # 注入參數（模型看不到，但 server 需要）
         full_args = {**arguments, **entry.inject}
+        if entry.needs_ssh_conn:
+            conn_args = await self._resolve_entry_ssh_conn(entry)
+            full_args.update(conn_args)
+
         from pocket_agent.core.agent import log
 
         # Artifact 隔離攔截
@@ -120,7 +168,11 @@ class MCPManager:
                     full_args[target_key] = str(new_path)
                     log.info(f"Artifact redirected from {original_path} to {new_path}")
 
-        log.debug("MCP call_tool name=%r full_args=%r", tool_name, full_args)
+        safe_log_args = {
+            k: ("[REDACTED]" if any(s in k.lower() for s in ("password", "secret", "token", "key")) else v)
+            for k, v in full_args.items()
+        }
+        log.debug("MCP call_tool name=%r full_args=%r", tool_name, safe_log_args)
 
         result = await entry.session.call_tool(tool_name, full_args)
         log.debug("MCP raw result content=%r", result.content)
@@ -134,6 +186,8 @@ class MCPManager:
         from pocket_agent.tools.fs import wrap_external_content
 
         joined = "\n".join(parts)
+        if entry.needs_ssh_conn and joined.strip().startswith("[ERROR]"):
+            self._runtime_conn_cache.pop(entry.server_name, None)
         return wrap_external_content(joined)
 
     def list_tools(self) -> list[str]:
@@ -245,7 +299,10 @@ class MCPManager:
             # 從 schema 移除 inject 參數——模型不需要知道這些
             schema_attr = getattr(tool, "inputSchema", getattr(tool, "input_schema", None))
             raw_params = schema_attr or {"type": "object", "properties": {}}
-            params = _strip_inject_params(raw_params, inject)
+            raw_props = raw_params.get("properties") or {}
+            needs_ssh_conn = any(k in raw_props for k in _CONN_PARAM_MAP)
+            strip_keys = {**inject, **(_CONN_PARAM_MAP if needs_ssh_conn else {})}
+            params = _strip_inject_params(raw_params, strip_keys)
 
             # Artifact 隔離機制：針對檔案寫入工具注入 ArtifactMetadata 定義
             if tool.name in ("write_to_file", "write_file", "create_file"):
@@ -285,6 +342,7 @@ class MCPManager:
                 session=session,
                 schema=schema,
                 inject=inject,
+                needs_ssh_conn=needs_ssh_conn,
             )
 
 
