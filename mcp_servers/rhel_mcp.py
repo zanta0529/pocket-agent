@@ -54,10 +54,12 @@ _VALID_PRIORITIES = {
 
 _ALLOWED_CONFIG_PREFIXES = (
     "/etc/",
-    "/usr/lib/systemd/",
     "/proc/",
-    "/src/",
+    "/srv/",
     "/sys/",
+    "/usr/lib/systemd/",
+    "/usr/local/etc/",
+    "/usr/share/",
 )
 
 _DENIED_PATH_KEYWORDS = (
@@ -320,10 +322,16 @@ def _run_remote(
         if proc.returncode != 0 and not combined:
             if proc.returncode == 255 or "permission denied" in err_out.lower() or "access denied" in err_out.lower():
                 _RUNTIME_CREDS.clear()
+                return (
+                    f"[ERROR] [CONN_AUTH] 遠端連線或認證失敗 (exit {proc.returncode}): {_redact_and_truncate(err_out)}"
+                )
             return f"[ERROR] 遠端執行失敗 (exit {proc.returncode}): {_redact_and_truncate(err_out)}"
         if err_out and combined and proc.returncode != 0:
             combined = f"{combined}\n[STDERR]\n{err_out}"
         return _redact_and_truncate(combined)
+    except ValueError as e:
+        _RUNTIME_CREDS.clear()
+        return f"[ERROR] [CONN_AUTH] {e}"
     except subprocess.TimeoutExpired:
         return "[ERROR] SSH 遠端指令執行逾時，已中止連線。"
     except Exception as e:
@@ -427,8 +435,9 @@ def rhel_query_journal(
             return f"[ERROR] {e}"
         parts.extend(["-u", shlex.quote(safe_unit)])
 
-    prio = priority.strip().lower()
-    if prio:
+    prio_aliases = {"error": "err", "warn": "warning", "critical": "crit"}
+    prio = prio_aliases.get(priority.strip().lower(), priority.strip().lower())
+    if prio and prio not in ("all", "none"):
         if prio not in _VALID_PRIORITIES:
             return f"[ERROR] 非法的 priority 參數：{priority!r}（允許值：{sorted(_VALID_PRIORITIES)}）"
         parts.extend(["-p", shlex.quote(prio)])
@@ -483,12 +492,13 @@ def rhel_read_config(
 
     safe_lines = max(1, min(int(max_lines or 120), 300))
     quoted_path = shlex.quote(safe_path)
+    allowed_case = "|".join(f"{p.rstrip('/')}/*" for p in _ALLOWED_CONFIG_PREFIXES)
     cmd = (
         f"real=$(realpath -e {quoted_path} 2>/dev/null) || {{ echo '[ERROR] 檔案不存在或無法存取'; exit 1; }}; "
         "case $real in "
         "*shadow*|*gshadow*|*sudoers*|*private*|*secret*|*key*|*token*|*.ssh*|*.env*) "
         "echo '[ERROR] 拒絕存取：解析後之真實路徑屬於敏感機密檔案'; exit 1 ;; "
-        "/etc/*|/usr/lib/systemd/*|/proc/*|/sys/*) "
+        f"{allowed_case}) "
         f"head -n {safe_lines} -- $real ;; "
         "*) echo '[ERROR] 拒絕存取：解析後之真實路徑不在允許的目錄白名單內'; exit 1 ;; "
         "esac"

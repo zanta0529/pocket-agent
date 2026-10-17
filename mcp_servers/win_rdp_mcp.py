@@ -662,9 +662,11 @@ def _run_rdp_clip_command(
         return _redact_and_truncate(result_text.strip())
     except ValueError as e:
         _RUNTIME_CREDS.clear()
-        return f"[ERROR] 參數驗證失敗: {e}"
+        return f"[ERROR] [CONN_AUTH] 參數驗證失敗: {e}"
     except Exception as e:
-        return f"[ERROR] RDP 遠端巡檢執行異常: {e}"
+        msg = str(e)
+        tag = "[CONN_AUTH] " if "等待 mstsc.exe 遠端桌面視窗連線" in msg else ""
+        return f"[ERROR] {tag}RDP 遠端巡檢執行異常: {e}"
 
 
 # ── Layer A: RDP GUI Vision & Input Tools ────────────────────────────────
@@ -702,9 +704,11 @@ def win_rdp_screenshot(
         )
     except ValueError as e:
         _RUNTIME_CREDS.clear()
-        return f"[ERROR] 參數驗證失敗: {e}"
+        return f"[ERROR] [CONN_AUTH] 參數驗證失敗: {e}"
     except Exception as e:
-        return f"[ERROR] 擷取遠端桌面畫面失敗: {e}"
+        msg = str(e)
+        tag = "[CONN_AUTH] " if "等待 mstsc.exe 遠端桌面視窗連線" in msg else ""
+        return f"[ERROR] {tag}擷取遠端桌面畫面失敗: {e}"
 
 
 def _validate_mouse_bounds(x: int, y: int, width: int, height: int) -> None:

@@ -190,7 +190,7 @@ class MCPManager:
         from pocket_agent.tools.fs import wrap_external_content
 
         joined = "\n".join(parts)
-        if entry.conn_params and joined.strip().startswith("[ERROR]"):
+        if entry.conn_params and _is_conn_auth_error(joined):
             self._runtime_conn_cache.pop(entry.server_name, None)
         return wrap_external_content(joined)
 
@@ -360,3 +360,22 @@ def _strip_inject_params(schema: dict, inject: dict) -> dict:
     if "required" in schema:
         schema["required"] = [r for r in schema["required"] if r not in inject]
     return schema
+
+
+def _is_conn_auth_error(text: str) -> bool:
+    """判斷工具回傳字串是否屬於「遠端連線失敗或帳號密碼認證失敗」。
+
+    僅在此類錯誤發生時清除記憶體連線快取，避免因一般遠端指令錯誤（如檔案不存在、參數格式不符）
+    而誤刪已驗證成功的帳密快取。
+    """
+    s = text.strip()
+    if not s.startswith("[ERROR]"):
+        return False
+    lower = s.lower()
+    return (
+        "[conn_auth]" in lower
+        or "exit 255" in lower
+        or "permission denied" in lower
+        or "access denied" in lower
+        or "authentication failed" in lower
+    )

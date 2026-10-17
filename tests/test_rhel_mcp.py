@@ -113,6 +113,7 @@ def test_query_journal_validation_and_clamping(monkeypatch):
         "/etc/myapp/.env",
         "/etc/kubernetes/admin.conf",
         "/home/admin/config.yaml",
+        "/usr/bin/bash",
     ],
 )
 def test_read_config_blocks_sensitive_and_unallowed_paths(monkeypatch, blocked_path):
@@ -133,7 +134,7 @@ def test_read_config_allows_safe_etc_path_and_redacts_secrets(monkeypatch):
     )
     fake_proc = SimpleNamespace(returncode=0, stdout=raw_config, stderr="")
     with patch("subprocess.run", return_value=fake_proc) as mock_run:
-        out = rhel_mcp.rhel_read_config("/etc/nginx/nginx.conf", max_lines=50)
+        out = rhel_mcp.rhel_read_config("/usr/share/nginx/nginx.conf", max_lines=50)
         assert "server_name localhost;" in out
         assert "super_secret_db_pass" not in out
         assert "abcdef123456" not in out
@@ -141,6 +142,9 @@ def test_read_config_allows_safe_etc_path_and_redacts_secrets(monkeypatch):
         assert "[REDACTED]" in out
         assert "[REDACTED PRIVATE KEY]" in out
         mock_run.assert_called_once()
+        remote_cmd = mock_run.call_args.args[0][-1]
+        assert "/srv/*" in remote_cmd
+        assert "/usr/share/*" in remote_cmd
 
 
 def test_remote_timeout_and_truncation(monkeypatch):
@@ -220,6 +224,21 @@ def test_mcp_manager_strips_ssh_params_and_prompts_only_missing():
     # 第二次呼叫直接沿用記憶體快取，不再呼叫 on_prompt_conn
     asyncio.run(manager.call("rhel_system_overview", {}))
     assert len(prompt_calls) == 1
+
+    # 一般工具錯誤（如檔案不存在或查詢條件錯誤）不應清除記憶體帳密快取
+    fake_session.call_tool = AsyncMock(return_value=MagicMock(content=[MagicMock(text="[ERROR] 檔案不存在或無法存取")]))
+    asyncio.run(manager.call("rhel_system_overview", {}))
+    fake_session.call_tool = AsyncMock(return_value=MagicMock(content=[MagicMock(text="OS OK")]))
+    asyncio.run(manager.call("rhel_system_overview", {}))
+    assert len(prompt_calls) == 1
+
+    # 唯有發生連線或認證失敗 ([CONN_AUTH] / exit 255) 時，才會清除快取並於下次重新詢問
+    auth_err_msg = "[ERROR] [CONN_AUTH] 遠端連線或認證失敗 (exit 255): Permission denied"
+    fake_session.call_tool = AsyncMock(return_value=MagicMock(content=[MagicMock(text=auth_err_msg)]))
+    asyncio.run(manager.call("rhel_system_overview", {}))
+    fake_session.call_tool = AsyncMock(return_value=MagicMock(content=[MagicMock(text="OS OK")]))
+    asyncio.run(manager.call("rhel_system_overview", {}))
+    assert len(prompt_calls) == 2
 
 
 def test_resolve_stdio_params_from_external_cwd(tmp_path, monkeypatch):

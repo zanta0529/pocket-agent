@@ -89,13 +89,13 @@ Pocket Agent 的解決方案：
 | `rhel_service_status`  | 查詢指定 systemd 服務的狀態 (`systemctl status`) 與單元設定               | `service_name`（必填，嚴格限制為合法單元名稱 `[a-zA-Z0-9_.@-]+`）                         |
 | `rhel_query_journal`   | 查詢 `journalctl` 系統或特定服務日誌                                     | `unit`（選填）、`priority`（預設 `err`）、`since`（預設 `1 hour ago`）、`lines`（1~200） |
 | `rhel_security_status` | 檢查 SELinux 狀態 (`getenforce`/`sestatus`)、Firewalld 與近期失敗登入紀錄 | 無                                                                                       |
-| `rhel_read_config`     | 唯讀檢視白名單目錄下的設定檔內容（最多 200 行，自動遮罩機密欄位）         | `file_path`（必填，僅限 `/etc/`、`/usr/lib/systemd/`、`/proc/`、`/sys/` 下的檔案）        |
+| `rhel_read_config`     | 唯讀檢視白名單目錄下的設定檔內容（最多 200 行，自動遮罩機密欄位）         | `file_path`（必填，僅限 `/etc/`、`/proc/`、`/srv/`、`/sys/`、`/usr/lib/systemd/`、`/usr/local/etc/`、`/usr/share/` 下的檔案） |
 
 ### 2. 安全防禦邊界
 
 - **強制純帳號密碼驗證（無金鑰／Agent 後門）**：底層透過系統 `ssh`（搭配 `SSH_ASKPASS_REQUIRE=force` 暫存腳本）或 Windows PuTTY `plink -pw -noagent` 連線，並強制附加 `-o PubkeyAuthentication=no`、`-o GSSAPIAuthentication=no`、`-o IdentitiesOnly=yes`、`-o IdentityAgent=none` 與 `-o PreferredAuthentications=keyboard-interactive,password`，徹底停用公私鑰、SSH Agent 與 Kerberos 驗證管道。
 - **零任意 Shell 執行與參數防注入**：不提供通用 `run_command` 工具；所有遠端指令皆為固定模板，且外部參數皆經過嚴格正規表示式驗證與 `shlex.quote` 轉義。
-- **設定檔路徑白名單與黑名單**：`rhel_read_config` 透過 `realpath -e` 解析真實路徑，僅允許讀取 `/etc/`、`/usr/lib/systemd/`、`/proc/`、`/sys/`，並強制攔截 `/etc/shadow`、`/etc/gshadow`、`/etc/sudoers`、`*.key`、`*.pem`、`id_rsa` 等敏感檔案。
+- **設定檔路徑白名單與黑名單**：`rhel_read_config` 透過 `realpath -e` 解析真實路徑，僅允許讀取 `/etc/`、`/proc/`、`/srv/`、`/sys/`、`/usr/lib/systemd/`、`/usr/local/etc/`、`/usr/share/`，並強制攔截 `/etc/shadow`、`/etc/gshadow`、`/etc/sudoers`、`*.key`、`*.pem`、`id_rsa` 等敏感檔案。
 - **敏感資訊遮罩與輸出截斷**：回傳結果自動將 `password`、`secret`、`token`、`api_key` 等賦值或設定行替換為 `[REDACTED]`，並限制單次輸出上限為 `6,000` 字元。
 
 ### 3. 環境變數與配置參數表 (`servers.rhel_ops.env`)
