@@ -56,6 +56,7 @@ _ALLOWED_CONFIG_PREFIXES = (
     "/etc/",
     "/usr/lib/systemd/",
     "/proc/",
+    "/src/",
     "/sys/",
 )
 
