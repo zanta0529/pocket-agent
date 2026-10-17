@@ -33,6 +33,10 @@ _CONN_PARAM_MAP = {
     "ssh_port": "RHEL_SSH_PORT",
     "ssh_user": "RHEL_SSH_USER",
     "ssh_password": "RHEL_SSH_PASSWORD",
+    "rdp_host": "WIN_HOST",
+    "rdp_port": "WIN_RDP_PORT",
+    "rdp_user": "WIN_RDP_USER",
+    "rdp_password": "WIN_RDP_PASSWORD",
 }
 
 
@@ -43,7 +47,7 @@ class ToolEntry:
     session: ClientSession
     schema: dict  # 送給模型的 schema（已移除 inject 參數）
     inject: dict = field(default_factory=dict)  # 自動注入的參數值
-    needs_ssh_conn: bool = False
+    conn_params: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -115,13 +119,13 @@ class MCPManager:
         resolved: dict[str, str] = {}
         missing: list[str] = []
 
-        for env_key in _CONN_PARAM_MAP.values():
+        for env_key in entry.conn_params.values():
             val = cached.get(env_key)
             if val is None or val == "":
                 val = server_env.get(env_key)
             if val is None or val == "":
                 val = os.getenv(env_key) or ""
-            clean = str(val) if env_key == "RHEL_SSH_PASSWORD" else str(val).strip()
+            clean = str(val) if "PASSWORD" in env_key else str(val).strip()
             if clean:
                 resolved[env_key] = clean
             else:
@@ -132,12 +136,12 @@ class MCPManager:
 
             prompted = await asyncio.to_thread(self.on_prompt_conn, entry.server_name, missing)
             for k, v in (prompted or {}).items():
-                clean_v = str(v) if k == "RHEL_SSH_PASSWORD" else str(v).strip()
+                clean_v = str(v) if "PASSWORD" in k else str(v).strip()
                 if clean_v:
                     cached[k] = clean_v
                     resolved[k] = clean_v
 
-        return {arg_name: resolved.get(env_key, "") for arg_name, env_key in _CONN_PARAM_MAP.items()}
+        return {arg_name: resolved.get(env_key, "") for arg_name, env_key in entry.conn_params.items()}
 
     async def call(self, tool_name: str, arguments: dict) -> str:
         """執行指定工具，自動補入 inject 參數後呼叫。"""
@@ -147,7 +151,7 @@ class MCPManager:
 
         # 注入參數（模型看不到，但 server 需要）
         full_args = {**arguments, **entry.inject}
-        if entry.needs_ssh_conn:
+        if entry.conn_params:
             conn_args = await self._resolve_entry_ssh_conn(entry)
             full_args.update(conn_args)
 
@@ -186,7 +190,7 @@ class MCPManager:
         from pocket_agent.tools.fs import wrap_external_content
 
         joined = "\n".join(parts)
-        if entry.needs_ssh_conn and joined.strip().startswith("[ERROR]"):
+        if entry.conn_params and joined.strip().startswith("[ERROR]"):
             self._runtime_conn_cache.pop(entry.server_name, None)
         return wrap_external_content(joined)
 
@@ -300,8 +304,8 @@ class MCPManager:
             schema_attr = getattr(tool, "inputSchema", getattr(tool, "input_schema", None))
             raw_params = schema_attr or {"type": "object", "properties": {}}
             raw_props = raw_params.get("properties") or {}
-            needs_ssh_conn = any(k in raw_props for k in _CONN_PARAM_MAP)
-            strip_keys = {**inject, **(_CONN_PARAM_MAP if needs_ssh_conn else {})}
+            conn_params = {k: v for k, v in _CONN_PARAM_MAP.items() if k in raw_props}
+            strip_keys = {**inject, **conn_params}
             params = _strip_inject_params(raw_params, strip_keys)
 
             # Artifact 隔離機制：針對檔案寫入工具注入 ArtifactMetadata 定義
@@ -342,7 +346,7 @@ class MCPManager:
                 session=session,
                 schema=schema,
                 inject=inject,
-                needs_ssh_conn=needs_ssh_conn,
+                conn_params=conn_params,
             )
 
 

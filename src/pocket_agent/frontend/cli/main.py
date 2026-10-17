@@ -508,6 +508,10 @@ class CliFrontend(FrontendStrategy):
                     "RHEL_SSH_PORT": ("SSH 連接埠 (Port)", "22", False),
                     "RHEL_SSH_USER": ("SSH 登入帳號 (Username)", None, False),
                     "RHEL_SSH_PASSWORD": ("SSH 登入密碼 (Password)", None, True),
+                    "WIN_HOST": ("Windows 主機位址 (IP / Host)", None, False),
+                    "WIN_RDP_PORT": ("RDP 遠端桌面連接埠 (Port)", "3389", False),
+                    "WIN_RDP_USER": ("Windows 登入帳號 (Username / Domain\\User)", None, False),
+                    "WIN_RDP_PASSWORD": ("Windows 登入密碼 (Password)", None, True),
                 }
                 try:
                     for key in missing_keys:

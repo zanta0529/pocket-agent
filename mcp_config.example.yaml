@@ -78,3 +78,27 @@ servers:
   #     RHEL_SSH_USER: ""                    # 選填：SSH 登入帳號（留空或省略時將於執行時詢問）
   #     RHEL_SSH_PASSWORD: ""                # 選填：SSH 登入密碼（建議留空或省略，於執行時安全輸入）
   #     RHEL_CONNECT_TIMEOUT: "10"
+
+  # 遠端 Windows 主機 RDP (Port 3389) 視覺控制與結構化唯讀巡檢
+  # (僅限帳號密碼驗證；win_rdp_mouse_action 與 win_rdp_keyboard_action 不列入 safe_read_tools 以強制互動確認)
+  # win_rdp:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/win_rdp_mcp.py"]
+  #   safe_read_tools:
+  #     - win_rdp_screenshot
+  #     - win_rdp_disconnect
+  #     - win_system_overview
+  #     - win_storage_and_fs
+  #     - win_network_status
+  #     - win_service_status
+  #     - win_query_eventlog
+  #     - win_security_status
+  #     - win_read_config
+  #   env:
+  #     WIN_HOST: ""                         # 選填：Windows 主機 IP 或位址（留空或省略時將於執行時詢問）
+  #     WIN_RDP_PORT: ""                     # 選填：RDP 連接埠，預設 3389（留空或省略時將於執行時詢問）
+  #     WIN_RDP_USER: ""                     # 選填：Windows 登入帳號（支援 User、Domain\User 或 User@Domain）
+  #     WIN_RDP_PASSWORD: ""                 # 選填：Windows 登入密碼（建議留空或省略，於執行時安全輸入）
+  #     WIN_RDP_TIMEOUT: "15"
+  #     WIN_RDP_RESOLUTION: "1280x800"

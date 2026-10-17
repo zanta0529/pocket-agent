@@ -29,7 +29,7 @@
 
 - **子代理 (Subagents)**：允許在設定檔定義多種人設 (例如：架構師、研究員)，主 Agent 在面對複雜情境時會自動委派任務，實現多代理協同作業。
 - **事件攔截與鉤子 (Hooks)**：支援在 `before_send`, `after_response`, `before_tool`, `after_tool` 綁定並執行本機腳本，達成高度客製化。
-- **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，輕鬆掛載本地檔案系統、資料庫或遠端工具。內建 `browser_mcp.py`（網頁自動化瀏覽與 Session 狀態繼承）與 `rhel_mcp.py`（遠端 RHEL 主機結構化唯讀巡檢與維運支援）。
+- **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，輕鬆掛載本地檔案系統、資料庫或遠端工具。內建 `browser_mcp.py`（網頁自動化瀏覽與 Session 狀態繼承）、`rhel_mcp.py`（遠端 RHEL 主機結構化唯讀巡檢）與 `win_rdp_mcp.py`（遠端 Windows 主機 RDP 視覺控制與結構化唯讀巡檢）。
 - **CLI 動態捷徑 (Zero-Token Routing)**：除了主 Agent 自行決定外，使用者可直接輸入 `/subagent <name>` 或動態捷徑 `/<name>`。系統會**攔截指令並直接在底層啟動子代理**，完美跳過主代理的 LLM 推理，達成零 Token 消耗的高速派發。
 
 ### 4. 企業級安全治理 (Enterprise Governance)
@@ -170,34 +170,34 @@ python -m pocket_agent --resume
 
 命令列介面採可捲動對話版面；首屏只列目前專案、模型與 MCP 工具數，詳細清單按需查看。底端狀態列（Toolbar）會即時顯示當次對話累計的 Token 用量。
 
-| 操作                            | 說明                                                  |
-| ------------------------------- | ----------------------------------------------------- |
-| Enter                           | 送出整段輸入                                          |
-| Esc 後 Enter（Meta+Enter）      | 插入換行；多行貼上先保留於編輯器                      |
+| 操作                            | 說明                                                           |
+| ------------------------------- | -------------------------------------------------------------- |
+| Enter                           | 送出整段輸入                                                   |
+| Esc 後 Enter（Meta+Enter）      | 插入換行；多行貼上先保留於編輯器                               |
 | Alt+V                           | 從剪貼簿貼上實體檔案、文字路徑或記憶體截圖（免存檔）至待送附件 |
-| Tab／方向鍵                     | 補全與選擇光棒選單；輸入歷史保留                      |
-| Ctrl+L                          | 清除終端機畫面顯示，但不清除對話歷史                  |
-| Ctrl+C（輸入期間）              | 有文字時清空輸入，空白時提示退出方式；不清附件        |
-| Ctrl+D（空輸入）或 /exit、/quit | 離開                                                  |
-| /help、/tools                   | 查看指令、MCP 工具清單                                |
-| /usage、/quota                  | 顯示當前對話累計 Token 用量                           |
+| Tab／方向鍵                     | 補全與選擇光棒選單；輸入歷史保留                               |
+| Ctrl+L                          | 清除終端機畫面顯示，但不清除對話歷史                           |
+| Ctrl+C（輸入期間）              | 有文字時清空輸入，空白時提示退出方式；不清附件                 |
+| Ctrl+D（空輸入）或 /exit、/quit | 離開                                                           |
+| /help、/tools                   | 查看指令、MCP 工具清單                                         |
+| /usage、/quota                  | 顯示當前對話累計 Token 用量                                    |
 | /clean                          | 執行管家維護（Housekeeping），批次清理過期日誌、截圖與暫存檔案 |
-| /codesearch、/cs                | 快速搜尋工作區的程式碼片段並加入上下文                |
-| /subagent、/<name>              | 委派任務給單一子代理（例如 /researcher）              |
-| /parallel                       | 平行委派給多個子代理，使用 `\|` 分隔 (需注意分隔符號) |
-| /model                          | 互動式光棒選單切換提供者與模型，Esc 返回              |
-| /session                        | 互動式光棒選單分頁瀏覽並管理歷史對話                  |
-| /skills                         | 列出或檢視可用的技能 (Skills)                         |
-| /learn                          | 將當前對話萃取為新技能                                |
-| /config                         | 互動式編輯系統設定檔                                  |
-| /undo                           | 互動式檢視檔案備份並執行還原                          |
-| /add-dir                        | 授權並新增工作目錄                                    |
-| /rm-dir                         | 移除額外的授權工作目錄 (支援無參數互動選單)           |
-| /compact                        | 自動摘要並壓縮對話紀錄                                |
-| /attachments                    | 列出本次待送附件與編號                                |
-| /attachments remove <編號>      | 移除單一待送附件，不刪除檔案                          |
-| /attachments clear              | 清空待送佇列，不刪除檔案                              |
-| /rm-file                        | 移除單一待送附件 (支援無參數互動選單)，不刪除檔案     |
+| /codesearch、/cs                | 快速搜尋工作區的程式碼片段並加入上下文                         |
+| /subagent、/<name>              | 委派任務給單一子代理（例如 /researcher）                       |
+| /parallel                       | 平行委派給多個子代理，使用 `\|` 分隔 (需注意分隔符號)          |
+| /model                          | 互動式光棒選單切換提供者與模型，Esc 返回                       |
+| /session                        | 互動式光棒選單分頁瀏覽並管理歷史對話                           |
+| /skills                         | 列出或檢視可用的技能 (Skills)                                  |
+| /learn                          | 將當前對話萃取為新技能                                         |
+| /config                         | 互動式編輯系統設定檔                                           |
+| /undo                           | 互動式檢視檔案備份並執行還原                                   |
+| /add-dir                        | 授權並新增工作目錄                                             |
+| /rm-dir                         | 移除額外的授權工作目錄 (支援無參數互動選單)                    |
+| /compact                        | 自動摘要並壓縮對話紀錄                                         |
+| /attachments                    | 列出本次待送附件與編號                                         |
+| /attachments remove <編號>      | 移除單一待送附件，不刪除檔案                                   |
+| /attachments clear              | 清空待送佇列，不刪除檔案                                       |
+| /rm-file                        | 移除單一待送附件 (支援無參數互動選單)，不刪除檔案              |
 
 > 💡 關於 CLI 介面的附件處理、路徑解析、影像生成細節，以及系統錯誤與中斷時的邊界行為，請詳閱：[CLI 操作與限制說明](docs/cli-usage-limitations.md)。
 
@@ -243,10 +243,32 @@ servers:
       RHEL_SSH_USER: ''
       RHEL_SSH_PASSWORD: ''
       RHEL_CONNECT_TIMEOUT: '10'
+
+  win_rdp:
+    transport: stdio
+    command: python
+    args: ['mcp_servers/win_rdp_mcp.py']
+    safe_read_tools:
+      - win_rdp_screenshot
+      - win_rdp_disconnect
+      - win_system_overview
+      - win_storage_and_fs
+      - win_network_status
+      - win_service_status
+      - win_query_eventlog
+      - win_security_status
+      - win_read_config
+    env:
+      WIN_HOST: ''
+      WIN_RDP_PORT: '3389'
+      WIN_RDP_USER: ''
+      WIN_RDP_PASSWORD: ''
+      WIN_RDP_TIMEOUT: '15'
+      WIN_RDP_RESOLUTION: '1280x800'
 ```
 
-- **`safe_read_tools`（唯讀工具白名單）**：列於此清單的唯讀工具在呼叫時可免除每次互動式 `[y/N]` 確認，直接安全放行。
-- **彈性連線參數與互動式詢問（`rhel_ops`）**：`RHEL_HOST`（主機 IP／Host）、`RHEL_SSH_PORT`（連接埠）、`RHEL_SSH_USER`（帳號）與 `RHEL_SSH_PASSWORD`（密碼）皆支援在 `env` 中預先填寫、留空字串 `''` 或直接省略。執行期若偵測到未設定的項目，CLI 會在首次呼叫工具時自動於終端機互動詢問（密碼採隱藏輸入），並暫存於當次 Session 記憶體中，全程不經過 LLM 上下文或寫入日誌。
+- **`safe_read_tools`（唯讀工具白名單）**：列於此清單的唯讀工具在呼叫時可免除每次互動式 `[y/N]` 確認，直接安全放行。具狀態修改風險的 GUI 鍵鼠操作（`win_rdp_mouse_action`、`win_rdp_keyboard_action`）預設不列入，確保每次點擊或輸入皆經使用者確認。
+- **彈性連線參數與互動式詢問（`rhel_ops` ／ `win_rdp`）**：`RHEL_HOST`、`RHEL_SSH_PORT`、`RHEL_SSH_USER`、`RHEL_SSH_PASSWORD` 以及 `WIN_HOST`、`WIN_RDP_PORT`、`WIN_RDP_USER`、`WIN_RDP_PASSWORD` 皆支援在 `env` 中預先填寫、留空字串 `''` 或直接省略。執行期若偵測到未設定的項目，CLI 會在首次呼叫工具時自動於終端機互動詢問（密碼採隱藏輸入），並暫存於當次 Session 記憶體中，全程不經過 LLM 上下文或寫入日誌。
 - **敏感金鑰注入（`inject`）**：若一般外部工具需使用敏感的 API Key，可利用 `inject` 參數配置，PocketAgent 會在底層自動將欄位從 LLM Schema 抹除並於呼叫時注入，確保模型層不會接觸到金鑰明文。詳見 [MCP 伺服器掛載與安全注入機制](docs/mcp-architecture.md)。
 
 ---
