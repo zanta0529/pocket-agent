@@ -56,9 +56,11 @@ def save_image_b64(b64_png: str, output_path: str | Path = "generated_images/ima
     return out
 
 
-def _image_part(path: str | Path) -> dict:
+def _image_part(path: str | Path, workspace_dirs: list[str] | None = None) -> dict:
     """本地圖片 → Responses API 的 input_image part（base64 data URL）。"""
-    p = Path(path).expanduser().resolve()
+    from pocket_agent.tools.fs import _validate_safe_path
+
+    p = _validate_safe_path(str(path), workspace_dirs)
     if not p.exists():
         raise FileNotFoundError(f"找不到圖片：{p}")
     mime = mimetypes.guess_type(str(p))[0] or "image/png"

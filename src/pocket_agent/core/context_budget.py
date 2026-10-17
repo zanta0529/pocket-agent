@@ -49,12 +49,17 @@ SOURCE_DEFAULT = "保底值（未設定，供應商未提供）"
 
 _encoding: Any = None
 _encoding_loaded = False
+_str_token_cache: dict[str, int] = {}
+_MAX_TOKEN_CACHE_SIZE = 512
 
 
 def estimate_tokens(obj: Any) -> int:
     """估算 token 數：有 tiktoken 時使用，否則以字元數保守推估。"""
     global _encoding, _encoding_loaded
     text = obj if isinstance(obj, str) else str(obj)
+    cached = _str_token_cache.get(text)
+    if cached is not None:
+        return cached
     if not _encoding_loaded:
         _encoding_loaded = True
         try:
@@ -63,12 +68,19 @@ def estimate_tokens(obj: Any) -> int:
             _encoding = tiktoken.get_encoding("cl100k_base")
         except Exception:
             _encoding = None
+    result: int | None = None
     if _encoding is not None:
         try:
-            return len(_encoding.encode(text, disallowed_special=()))
+            result = len(_encoding.encode(text, disallowed_special=()))
         except Exception:
-            pass
-    return len(text) // CHARS_PER_TOKEN + 1
+            result = None
+    if result is None:
+        result = len(text) // CHARS_PER_TOKEN + 1
+    if len(text) <= 200_000:
+        if len(_str_token_cache) >= _MAX_TOKEN_CACHE_SIZE:
+            _str_token_cache.clear()
+        _str_token_cache[text] = result
+    return result
 
 
 def resolve_context_window(configured: Any, engine_value: int | None) -> tuple[int, str]:

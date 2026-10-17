@@ -128,8 +128,10 @@ class MCPManager:
                 parts.append(block.text)
             else:
                 parts.append(str(block))
+        from pocket_agent.tools.fs import wrap_external_content
+
         joined = "\n".join(parts)
-        return f"<external_content>\n{joined}\n</external_content>"
+        return wrap_external_content(joined)
 
     def list_tools(self) -> list[str]:
         return list(self._tools.keys())

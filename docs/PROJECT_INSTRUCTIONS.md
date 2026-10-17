@@ -1,7 +1,6 @@
 # PocketAgent 專案特定開發指南
 
-本文件依目前版本庫的 README、原始碼、依賴、測試及 CI 設定整理。搭配 [AI_INSTRUCTIONS.md](AI_INSTRUCTIONS.md) 使用；變更技術棧前重新確認現況。
-以下架構描述為已觀察現況，開發要求則為後續修改應遵循的準則，並非完整安全稽核結論。
+本文件依目前版本庫的 README、原始碼、依賴、測試及 CI 設定整理。變更技術棧前重新確認現況。以下架構描述為已觀察現況，開發要求則為後續修改應遵循的準則，並非完整安全稽核結論。
 
 ## 1. 專案定位與技術棧
 
@@ -12,7 +11,7 @@
 - 認證包含 OAuth PKCE；依賴包含 OpenAI SDK、httpx、FastAPI、uvicorn、keyring。
 - MCP 提供外部工具整合；`browser_mcp.py` 為瀏覽器整合入口 (依賴 Playwright)。
 - 輸出支援 python-docx、python-pptx、ReportLab；PDF 讀取使用 pypdf。
-- session 持久化使用 JSON，設定使用環境變數／YAML；禁止自行引入 SQLite 或 ORM。
+- session 持久化使用 JSON，設定使用環境變數／YAML；本地索引與快取（RAG FTS5、Skill 檢索、Repo Map AST 快取）使用標準庫 `sqlite3`，禁止自行引入第三方資料庫或 ORM。
 
 ## 2. 目錄與責任邊界
 

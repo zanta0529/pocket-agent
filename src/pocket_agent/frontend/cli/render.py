@@ -93,7 +93,7 @@ def toolbar(state: CliState, width: int) -> FormattedText:
         count = f"待送 {len(state.pending_files)}"
 
     if state.session_tokens > 0:
-        max_tokens = 128000
+        max_tokens = max(1, getattr(state, "context_window", 128000) or 128000)
         ratio = min(1.0, state.session_tokens / max_tokens)
         filled = int(ratio * 10)
         bar = "█" * filled + "░" * (10 - filled)

@@ -63,6 +63,7 @@ def sync_codebase_index(workspace_dirs: list[str] | None = None):
         except Exception:
             workspace_dirs = []
 
+    state_items = []
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(path, content)")
         conn.execute("DELETE FROM code_fts")
@@ -76,6 +77,7 @@ def sync_codebase_index(workspace_dirs: list[str] | None = None):
                     if any(ex in p.parts for ex in excludes):
                         continue
                     try:
+                        state_items.append((str(p), p.stat().st_mtime))
                         content = p.read_text(encoding="utf-8", errors="ignore")
                         # 避免單一檔案過大撐爆 index，限制前 2000 行
                         lines = content.splitlines()[:2000]
@@ -87,7 +89,7 @@ def sync_codebase_index(workspace_dirs: list[str] | None = None):
                         pass
         conn.commit()
 
-    _last_sync_state = _get_codebase_state(workspace_dirs)
+    _last_sync_state = hash(tuple(sorted(state_items)))
     log.info("RAG Codebase 索引同步完成")
 
 
@@ -132,8 +134,10 @@ def call_indexed_search(args: dict[str, Any], workspace_dirs: list[str] | None =
             if not results:
                 return f"找不到包含 '{query}' 的相關程式碼。"
 
+            from pocket_agent.tools.fs import wrap_external_content
+
             inner = "【RAG 檢索結果】\n" + "-" * 40 + "\n" + "\n".join(results)
-            return f"<external_content>\n{inner}\n</external_content>"
+            return wrap_external_content(inner)
         except sqlite3.OperationalError as e:
             log.warning("FTS5 查詢失敗: %s", e)
             return f"[ERROR] 檢索失敗: {e}"

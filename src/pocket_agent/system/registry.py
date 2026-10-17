@@ -35,6 +35,7 @@ class MarkdownRegistry(ABC):
     def __init__(self, repo_dir: Path, user_dir: Path):
         self.repo_dir = repo_dir
         self.user_dir = user_dir
+        self._item_cache: dict[Path, tuple[float, dict, str, dict | None]] = {}
 
     @abstractmethod
     def get_glob_pattern(self) -> str:
@@ -45,6 +46,24 @@ class MarkdownRegistry(ABC):
     def parse_item(self, path: Path, meta: dict, body: str) -> dict:
         """將解析出的資料轉換為標準字典，必須包含 'name' 鍵值"""
         pass
+
+    def _load_cached(self, md: Path) -> tuple[dict, str, dict | None] | None:
+        try:
+            mtime = md.stat().st_mtime
+        except OSError:
+            return None
+        cached = self._item_cache.get(md)
+        if cached is not None and cached[0] == mtime:
+            return cached[1], cached[2], cached[3]
+        try:
+            text = md.read_text(encoding="utf-8")
+            meta, body = parse_frontmatter(text)
+        except Exception as e:
+            log.warning("資源解析失敗 %s: %s", md, e)
+            return None
+        item = self.parse_item(md, meta, body)
+        self._item_cache[md] = (mtime, meta, body, item)
+        return meta, body, item
 
     def list_all(self, extra_dirs: list[Path] | None = None) -> list[dict]:
         """掃描所有層級的目錄，回傳已註冊的資源清單（優先順序：repo_dir < user_dir < extra_dirs）"""
@@ -57,14 +76,10 @@ class MarkdownRegistry(ABC):
             if not base.is_dir():
                 continue
             for md in sorted(base.glob(self.get_glob_pattern())):
-                try:
-                    text = md.read_text(encoding="utf-8")
-                    meta, body = parse_frontmatter(text)
-                except Exception as e:
-                    log.warning("資源解析失敗 %s: %s", md, e)
+                loaded = self._load_cached(md)
+                if loaded is None:
                     continue
-
-                item = self.parse_item(md, meta, body)
+                _meta, _body, item = loaded
                 if item and "name" in item:
                     found[item["name"]] = item
         return list(found.values())
@@ -82,6 +97,9 @@ class MarkdownRegistry(ABC):
         if item and "path" in item:
             try:
                 path: Path = item["path"]
+                loaded = self._load_cached(path)
+                if loaded is not None:
+                    return loaded[1].strip()
                 _, body = parse_frontmatter(path.read_text(encoding="utf-8"))
                 return body.strip()
             except Exception as e:

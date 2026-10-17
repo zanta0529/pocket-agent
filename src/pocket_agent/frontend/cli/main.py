@@ -138,19 +138,30 @@ async def send_turn(
     else:
         turn_tokens = getattr(agent, "total_tokens", 0)
         state.session_tokens += turn_tokens
-
-        # 背景更新額度資訊
-        if hasattr(agent, "get_quota"):
-            try:
-                quota = await agent.get_quota()
-                if quota:
-                    state.quota_supported = quota.is_supported
-                    state.quota_limit = quota.limit
-                    state.quota_remaining = quota.remaining
-            except Exception:
-                pass
+        budget_obj = getattr(agent, "_budget", None)
+        if budget_obj is not None and getattr(budget_obj, "window", 0) > 0:
+            state.context_window = budget_obj.window
 
         renderer.reply(reply, monotonic() - started, turn_tokens, streamed=True)
+
+        # 背景非同步更新額度資訊，避免網路請求阻塞本輪結算與耗時計算
+        if hasattr(agent, "get_quota"):
+
+            async def _refresh_quota() -> None:
+                try:
+                    quota = await agent.get_quota()
+                    if quota:
+                        state.quota_supported = quota.is_supported
+                        state.quota_limit = quota.limit
+                        state.quota_remaining = quota.remaining
+                except Exception:
+                    pass
+
+            bg_task = asyncio.create_task(_refresh_quota())
+            bg_tasks = getattr(agent, "_bg_tasks", None)
+            if isinstance(bg_tasks, set):
+                bg_tasks.add(bg_task)
+                bg_task.add_done_callback(bg_tasks.discard)
 
 
 async def conversation(

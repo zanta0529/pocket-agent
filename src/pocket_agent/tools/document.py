@@ -33,7 +33,7 @@ def call_document_tool(name: str, args: dict, workspace_dirs: list[str] | None =
 
     # 驗證路徑與套用工作區監禁 (Workspace Jail)
     try:
-        from pocket_agent.tools.fs import _validate_safe_path
+        from pocket_agent.tools.fs import _validate_safe_path, wrap_external_content
 
         target = _validate_safe_path(path_str, workspace_dirs)
     except Exception as e:
@@ -45,16 +45,19 @@ def call_document_tool(name: str, args: dict, workspace_dirs: list[str] | None =
     ext = target.suffix.lower()
     try:
         if ext == ".pdf":
-            return _read_pdf(target)
+            res = _read_pdf(target)
         elif ext == ".docx":
-            return _read_docx(target)
+            res = _read_docx(target)
         elif ext == ".pptx":
-            return _read_pptx(target)
+            res = _read_pptx(target)
         else:
             return (
                 f"[ERROR] 檔案格式不支援。read_document 僅支援 .pdf, .docx, .pptx，"
                 f"目前副檔名為 {ext}。如果是純文字檔，請改用 read_file。"
             )
+        if res.startswith("[ERROR]"):
+            return res
+        return wrap_external_content(res)
     except Exception as e:
         log.exception(f"讀取文件 {target} 失敗")
         return f"[ERROR] 讀取文件失敗: {e}"

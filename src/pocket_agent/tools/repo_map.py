@@ -95,6 +95,7 @@ class RepoMapGenerator:
             db_dir = user_dir() / "db"
             db_dir.mkdir(parents=True, exist_ok=True)
             self.db_path = db_dir / "repo_map_cache.db"
+        self._map_cache: dict[tuple[int, int], str] = {}
         self._init_db()
 
     def _init_db(self) -> None:
@@ -113,23 +114,37 @@ class RepoMapGenerator:
         except sqlite3.OperationalError as e:
             log.warning("Repo Map 快取資料庫初始化異常: %s", e)
 
-    def _get_cached_or_parse(self, file_path: Path, conn: sqlite3.Connection) -> str:
+    def _get_cached_or_parse(
+        self,
+        file_path: Path,
+        conn: sqlite3.Connection,
+        db_cache: dict[str, tuple[float, str]] | None = None,
+        current_mtime: float | None = None,
+    ) -> str:
         str_path = str(file_path.resolve())
-        try:
-            current_mtime = file_path.stat().st_mtime
-        except OSError:
-            return ""
+        if current_mtime is None:
+            try:
+                current_mtime = file_path.stat().st_mtime
+            except OSError:
+                return ""
 
-        cursor = conn.execute("SELECT mtime, skeleton FROM file_ast_cache WHERE path = ?", (str_path,))
-        row = cursor.fetchone()
-        if row and abs(row[0] - current_mtime) < 0.001:
-            return row[1]
+        if db_cache is not None and str_path in db_cache:
+            cached_mtime, cached_skeleton = db_cache[str_path]
+            if abs(cached_mtime - current_mtime) < 0.001:
+                return cached_skeleton
+        else:
+            cursor = conn.execute("SELECT mtime, skeleton FROM file_ast_cache WHERE path = ?", (str_path,))
+            row = cursor.fetchone()
+            if row and abs(row[0] - current_mtime) < 0.001:
+                return row[1]
 
         skeleton = extract_file_skeleton(file_path)
         conn.execute(
             "INSERT OR REPLACE INTO file_ast_cache (path, mtime, skeleton) VALUES (?, ?, ?)",
             (str_path, current_mtime, skeleton),
         )
+        if db_cache is not None:
+            db_cache[str_path] = (current_mtime, skeleton)
         return skeleton
 
     def build_repo_map(self, root_dirs: list[Path | str], budget_tokens: int | None = None) -> str:
@@ -166,13 +181,27 @@ class RepoMapGenerator:
 
         py_files.sort(key=file_rank)
 
+        file_mtimes: list[tuple[Path, float]] = []
+        for f in py_files:
+            try:
+                file_mtimes.append((f, f.stat().st_mtime))
+            except OSError:
+                continue
+
+        state_fingerprint = hash(tuple((str(f), mt) for f, mt in file_mtimes))
+        cache_key = (state_fingerprint, budget_tokens)
+        if cache_key in self._map_cache:
+            return self._map_cache[cache_key]
+
         entries: list[tuple[str, str]] = []  # (rel_path_str, skeleton)
         cwd = Path.cwd().resolve()
 
         try:
             with sqlite3.connect(self.db_path) as conn:
-                for f in py_files:
-                    skeleton = self._get_cached_or_parse(f, conn)
+                rows = conn.execute("SELECT path, mtime, skeleton FROM file_ast_cache").fetchall()
+                db_cache: dict[str, tuple[float, str]] = {r[0]: (r[1], r[2]) for r in rows}
+                for f, mt in file_mtimes:
+                    skeleton = self._get_cached_or_parse(f, conn, db_cache=db_cache, current_mtime=mt)
                     if skeleton.strip():
                         try:
                             rel = str(f.relative_to(cwd))
@@ -182,7 +211,7 @@ class RepoMapGenerator:
                 conn.commit()
         except sqlite3.OperationalError as e:
             log.warning("Repo Map 快取存取失敗，使用即時解析: %s", e)
-            for f in py_files:
+            for f, _mt in file_mtimes:
                 skeleton = extract_file_skeleton(f)
                 if skeleton.strip():
                     entries.append((f.name, skeleton))
@@ -212,7 +241,9 @@ class RepoMapGenerator:
         if not selected_blocks:
             return ""
 
-        return header + "\n".join(selected_blocks)
+        result_map = header + "\n".join(selected_blocks)
+        self._map_cache[cache_key] = result_map
+        return result_map
 
 
 # 全域單例

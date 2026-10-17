@@ -74,6 +74,18 @@ def load_skill(name: str, workspace_dirs: list[str] | None = None) -> str | None
 # ── ZIP 匯入（相容 ChatGPT / Claude 的 Agent Skills zip）──
 
 
+def _validate_safe_skill_dir(base_dir: Path, name: str) -> Path:
+    """驗證技能名稱不含路徑穿越字元，且解析後位於 base_dir 內。"""
+    clean_name = str(name).strip()
+    if not clean_name or clean_name in (".", "..") or "/" in clean_name or "\\" in clean_name:
+        raise ValueError(f"無效或不安全的技能名稱：{name!r}")
+    base_resolved = base_dir.resolve()
+    target_resolved = (base_dir / clean_name).resolve()
+    if not target_resolved.is_relative_to(base_resolved) or target_resolved == base_resolved:
+        raise ValueError(f"技能路徑超出允許範圍：{name!r}")
+    return base_dir / clean_name
+
+
 def import_skill_zip(zip_path: str | Path, overwrite: bool = False) -> list[str]:
     """匯入 Agent Skills 格式的 zip，回傳匯入的 skill 名稱列表。
 
@@ -120,12 +132,13 @@ def import_skill_zip(zip_path: str | Path, overwrite: bool = False) -> list[str]
             for d in skill_dirs:
                 if d == tmp:
                     meta, _ = parse_frontmatter((d / "SKILL.md").read_text(encoding="utf-8"))
-                    name = meta.get("name") or zip_path.stem
+                    name = str(meta.get("name") or zip_path.stem)
                 else:
                     name = d.name
                 # 匯入一律進使用者目錄：內建目錄打包後唯讀，
                 # 且會被下次程式更新覆蓋掉。
-                plans.append((d, USER_SKILLS_DIR / name))
+                target_dir = _validate_safe_skill_dir(USER_SKILLS_DIR, name)
+                plans.append((d, target_dir))
 
             conflicts = [t.name for _s, t in plans if t.exists()]
             if conflicts and not overwrite:
@@ -155,7 +168,7 @@ def save_skill(name: str, description: str, body: str, scope: str = "global") ->
     else:
         base_dir = USER_SKILLS_DIR
 
-    skill_dir = base_dir / name
+    skill_dir = _validate_safe_skill_dir(base_dir, name)
     skill_dir.mkdir(parents=True, exist_ok=True)
 
     skill_path = skill_dir / "SKILL.md"
@@ -346,4 +359,6 @@ def call_skill_tool(args: dict, workspace_dirs: list[str] | None = None) -> str:
         f"Always derive paths relative to the workspace roots listed above.\n\n"
     )
 
-    return f"# Skill: {name}\n\n{workspace_context}<external_content>\n{body}\n</external_content>"
+    from pocket_agent.tools.fs import wrap_external_content
+
+    return f"# Skill: {name}\n\n{workspace_context}{wrap_external_content(body)}"

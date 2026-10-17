@@ -303,20 +303,22 @@ class Agent:
                         async def background_learn():
                             skill_md = await self.extract_skill()
                             if skill_md and "對話歷史不足" not in skill_md:
+                                import re
                                 import time
 
-                                from pocket_agent.system.paths import user_dir
+                                from pocket_agent.extensions.skills import save_skill, sync_index
+                                from pocket_agent.system.registry import parse_frontmatter
 
-                                skill_dir = user_dir() / "skills"
-                                skill_dir.mkdir(parents=True, exist_ok=True)
-                                fname = f"auto_skill_{int(time.time())}.md"
-                                (skill_dir / fname).write_text(skill_md, encoding="utf-8")
-                                log.info(f"Auto-Learn 完成：已寫入 {fname}")
-
-                                # 同步 FTS5 索引
-                                from pocket_agent.extensions.skills import sync_index
-
-                                sync_index(self.workspace_dirs)
+                                meta, body = parse_frontmatter(skill_md)
+                                raw_name = str(meta.get("name") or f"auto-skill-{int(time.time())}")
+                                safe_name = re.sub(r"[^a-zA-Z0-9_-]", "-", raw_name).strip("-")
+                                if not safe_name:
+                                    safe_name = f"auto-skill-{int(time.time())}"
+                                desc = str(meta.get("description") or "自動從對話歷史萃取之經驗技能")
+                                skill_path = save_skill(safe_name, desc, body.strip() or skill_md, scope="global")
+                                log.info(f"Auto-Learn 完成：已寫入 {skill_path}")
+                                if self.workspace_dirs:
+                                    sync_index(self.workspace_dirs)
 
                         task = asyncio.create_task(background_learn())
                         self._bg_tasks.add(task)
@@ -565,13 +567,16 @@ class Agent:
         )
 
         # --- 資源與上下文管理 ---
+        from pocket_agent.system.paths import scratch_dir
+
+        notes_path = scratch_dir() / "notes.md"
         base += (
             "\n\n[資源管理] 在處理需閱讀大量原始碼的大型任務時："
             "\n1. 請優先使用 `search_files` 或帶有 `start_line`/`end_line` 的 `read_file` "
             "進行精準檢索，避免一次性讀取過大檔案或目錄。"
             "\n2. 若檢索與分析過程冗長，請務必善用 `write_to_file` 工具，將關鍵資訊、變數名稱與待辦事項 (TODO) "
-            "整理並寫入 `.agents/scratch/notes.md` 等暫存檔中（建立外部草稿區/Scratchpad）。"
-            "這樣能確保重要資訊不受 Context Overflow 截斷影響，建立起長期記憶。"
+            f"整理並寫入 `{notes_path}` 等全域沙盒暫存檔中（建立外部草稿區/Scratchpad）。"
+            "這樣能確保重要資訊不受 Context Overflow 截斷影響，且不污染專案工作區。"
         )
 
         # 加入動態預算之專案結構鳥瞰圖 (Repo Map)
@@ -1052,6 +1057,8 @@ class Agent:
                     else:
                         # 未知 MCP 工具預設需要確認，除非明確標示為 safe_read
                         if fc["name"] not in getattr(self, "_safe_read_tools", set()):
+                            if self.on_confirm is None:
+                                raise RuntimeError(f"缺乏使用者確認機制，拒絕執行 MCP 工具 {fc['name']}")
                             ok = await asyncio.to_thread(self.on_confirm, fc["name"], args)
                             if not ok:
                                 raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
@@ -1128,6 +1135,8 @@ class Agent:
         """處理由 Agent Core 內建負責的特化工具邏輯，避免 _run_loop 過度肥大。"""
         import json
 
+        from pocket_agent.tools.fs import wrap_external_content
+
         if name == "run_subagents_parallel":
             tasks = args.get("tasks", [])
             if not tasks:
@@ -1148,8 +1157,7 @@ class Agent:
                 else:
                     combined.append(res)
 
-            result = "\n\n".join(combined)
-            result = f"<external_content>\n{result}\n</external_content>"
+            result = wrap_external_content("\n\n".join(combined))
             if require_save_prompt:
                 result += (
                     "\n\n[系統指示 (System Instruction)]\n"
@@ -1180,7 +1188,7 @@ class Agent:
 
         if is_subagent_tool(name):
             result = await self._run_subagent(args)
-            result = f"<external_content>\n{result}\n</external_content>"
+            result = wrap_external_content(result)
             sa_def = get_subagent(args.get("name", ""))
             if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
                 result += (
@@ -1202,7 +1210,7 @@ class Agent:
         parts: list = [{"type": "input_text", "text": text}]
         for path in attachments:
             self._emit("read", path)
-            result = await self.files.upload(path)
+            result = await self.files.upload(path, workspace_dirs=self.workspace_dirs)
             # PDF 內嵌圖片時 upload() 回傳「文字+多張圖片」的 list，其餘情況是單一 dict
             if isinstance(result, list):
                 parts.extend(result)

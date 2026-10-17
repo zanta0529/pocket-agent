@@ -114,16 +114,22 @@ def make_title(history: list[dict]) -> str:
 
 def save_session(session_id: str, history: list[dict], title: str | None = None) -> None:
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    resolved_title = title or make_title(history)
+    updated_at = time.time()
     payload = {
         "id": session_id,
-        "title": title or make_title(history),
-        "updated_at": time.time(),
+        "title": resolved_title,
+        "updated_at": updated_at,
         "history": history,
     }
     payload_str = json.dumps(payload, ensure_ascii=False)
     signature = _sign_data(payload_str)
 
-    data = {"signature": signature, "payload": payload_str}
+    data = {
+        "signature": signature,
+        "meta": {"id": session_id, "title": resolved_title, "updated_at": updated_at},
+        "payload": payload_str,
+    }
 
     final_path = _path(session_id)
     tmp_path = final_path.with_suffix(".tmp")
@@ -174,25 +180,41 @@ def load_session(session_id: str) -> dict | None:
 
 
 def list_sessions() -> list[dict]:
-    """回傳 [{id, title, updated_at}]，新的在前。"""
+    """回傳 [{id, title, updated_at}]，新的在前，並驗證簽章完整性。"""
     if not SESSIONS_DIR.exists():
         return []
     metas = []
     for f in SESSIONS_DIR.glob("*.json"):
         try:
             raw_data = json.loads(f.read_text(encoding="utf-8"))
-            if "signature" in raw_data and "payload" in raw_data:
-                d = json.loads(raw_data["payload"])
-            else:
+            if "signature" not in raw_data or "payload" not in raw_data:
+                continue
+            expected_sig = _sign_data(raw_data["payload"])
+            is_valid = hmac.compare_digest(expected_sig, raw_data["signature"])
+            if not is_valid:
+                legacy_sig = _sign_data(raw_data["payload"], iterations=LEGACY_PBKDF2_ITERATIONS)
+                is_valid = hmac.compare_digest(legacy_sig, raw_data["signature"])
+            if not is_valid:
                 continue
 
-            metas.append(
-                {
-                    "id": d["id"],
-                    "title": d.get("title", "（無標題）"),
-                    "updated_at": d.get("updated_at", 0),
-                }
-            )
+            meta = raw_data.get("meta")
+            if isinstance(meta, dict) and "id" in meta:
+                metas.append(
+                    {
+                        "id": meta["id"],
+                        "title": meta.get("title", "（無標題）"),
+                        "updated_at": meta.get("updated_at", 0),
+                    }
+                )
+            else:
+                d = json.loads(raw_data["payload"])
+                metas.append(
+                    {
+                        "id": d["id"],
+                        "title": d.get("title", "（無標題）"),
+                        "updated_at": d.get("updated_at", 0),
+                    }
+                )
         except Exception:
             continue
     return sorted(metas, key=lambda m: m["updated_at"], reverse=True)

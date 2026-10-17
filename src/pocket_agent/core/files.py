@@ -54,14 +54,14 @@ class FileUploader:
         self.client = client
         self.cancel_check = cancel_check or (lambda: False)
 
-    async def upload(self, path: str) -> dict | list[dict]:
+    async def upload(self, path: str, workspace_dirs: list[str] | None = None) -> dict | list[dict]:
         """
         轉換附件，回傳可放入 messages content 的字典，或多個字典組成的 list
         （PDF 內嵌圖片時，會是「文字說明 + 數張圖片」）。
         單一附件處理失敗不拋例外——回傳說明性文字，讓對話能繼續進行。
         """
         try:
-            return await self._convert(path)
+            return await self._convert(path, workspace_dirs=workspace_dirs)
         except Exception as e:
             log.exception("附件處理失敗：%s", path)
             name = Path(path).name
@@ -70,8 +70,10 @@ class FileUploader:
                 "text": f"[附件「{name}」處理失敗，已略過：{e}]",
             }
 
-    async def _convert(self, path: str) -> dict | list[dict]:
-        p = Path(path).expanduser().resolve()
+    async def _convert(self, path: str, workspace_dirs: list[str] | None = None) -> dict | list[dict]:
+        from pocket_agent.tools.fs import _validate_safe_path
+
+        p = _validate_safe_path(path, workspace_dirs)
         if not p.exists():
             raise FileNotFoundError(f"找不到檔案或目錄：{p}")
 

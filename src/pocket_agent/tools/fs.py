@@ -1,9 +1,20 @@
 import datetime
 import logging
+import re
 from pathlib import Path
 from typing import Callable
 
 log = logging.getLogger("pocket-agent")
+
+_EXTERNAL_TAG_RE = re.compile(r"<\s*/?\s*external_content(?:\s+[^>]*)?\s*>", re.IGNORECASE)
+
+
+def wrap_external_content(text: str, source: str | None = None) -> str:
+    """將外部不可信內容包裹於 <external_content> 標籤中，並跳脫內嵌的偽造標籤。"""
+    safe_text = _EXTERNAL_TAG_RE.sub("[escaped_tag]", text)
+    open_tag = f'<external_content source="{source}">' if source else "<external_content>"
+    return f"{open_tag}\n{safe_text}\n</external_content>"
+
 
 FS_TOOLS = [
     {
@@ -325,9 +336,21 @@ def call_fs_tool(
                     return [f"{prefix}└── ... (已達深度限制 {max_depth})"]
 
                 try:
-                    entries = list(dir_path.iterdir())
+                    raw_entries = list(dir_path.iterdir())
                 except Exception as e:
                     return [f"{prefix}└── [ERROR 讀取失敗: {e}]"]
+
+                entries: list[Path] = []
+                for entry in raw_entries:
+                    if entry.name == ".git" or entry.name.startswith(".env"):
+                        continue
+                    if entry.is_symlink():
+                        try:
+                            resolved_link = entry.resolve(strict=False)
+                            _validate_safe_path(str(resolved_link), workspace_dirs)
+                        except Exception:
+                            continue
+                    entries.append(entry)
 
                 # 目錄在前，檔案在後，並照名稱排序
                 entries.sort(key=lambda x: (not x.is_dir(), x.name.lower()))
@@ -382,26 +405,35 @@ def call_fs_tool(
             if not target.is_file():
                 return f"[ERROR] 不是一般檔案: {target}"
 
-            content = target.read_text(encoding="utf-8")
-            lines = content.splitlines(keepends=True)
+            MAX_READ_FILE_BYTES = 10 * 1024 * 1024  # 10 MB DoS 防護上限
+            try:
+                fsize = target.stat().st_size
+                if isinstance(fsize, int) and fsize > MAX_READ_FILE_BYTES:
+                    return (
+                        f"[ERROR] 檔案過大 ({fsize:,} Bytes，超過 10 MB 安全上限)。"
+                        "請改用 `search_files` 進行關鍵字檢索。"
+                    )
+            except OSError:
+                pass
 
             start = args.get("start_line")
             end = args.get("end_line")
             char_offset = args.get("char_offset")
             char_offset = max(0, int(char_offset)) if char_offset is not None else 0
-            total_lines = len(lines)
 
             MAX_READ_LINES = 500
             MAX_READ_CHARS = 12000
 
             start_idx = max(0, int(start) - 1) if start else 0
-            end_idx = min(total_lines, int(end)) if end else total_lines
+            req_end_idx = int(end) if end else (MAX_READ_LINES if start is None else None)
 
-            # 若未指定範圍，預設限制在 MAX_READ_LINES
-            if start is None and end is None:
-                end_idx = min(total_lines, MAX_READ_LINES)
-
-            sliced = lines[start_idx:end_idx]
+            sliced: list[str] = []
+            total_lines = 0
+            with target.open("r", encoding="utf-8") as f:
+                for idx, line in enumerate(f):
+                    total_lines += 1
+                    if idx >= start_idx and (req_end_idx is None or idx < req_end_idx):
+                        sliced.append(line)
 
             # 逐行組合並檢查字元數上限
             formatted_lines = []
@@ -475,7 +507,7 @@ def call_fs_tool(
             if notice_parts:
                 inner += "\n\n" + "\n".join(notice_parts)
 
-            return f"<external_content>\n{inner}\n</external_content>"
+            return wrap_external_content(inner)
 
         elif name == "write_to_file":
             content = args.get("content", "")
