@@ -2,12 +2,20 @@
 """Pocket Agent — 命令列 (CLI) 模式"""
 
 import asyncio
+import runpy
+import sys
 
 import click
 from dotenv import load_dotenv
 
 from pocket_agent.system.compat import setup_asyncio_policy
 from pocket_agent.system.paths import env_path
+
+if len(sys.argv) >= 3 and sys.argv[1] == "--internal-mcp-server":
+    _script = sys.argv[2]
+    sys.argv = [_script, *sys.argv[3:]]
+    runpy.run_path(_script, run_name="__main__")
+    raise SystemExit(0)
 
 setup_asyncio_policy()
 load_dotenv(env_path())

@@ -13,7 +13,10 @@ import re
 import shlex
 import subprocess
 
-from mcp.server.mcpserver import MCPServer
+try:
+    from mcp.server.mcpserver import MCPServer
+except ImportError:
+    from mcp.server.fastmcp import FastMCP as MCPServer
 
 mcp = MCPServer("rhel-ops")
 

@@ -7,6 +7,8 @@
 """
 
 import copy
+import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,7 +18,7 @@ import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from pocket_agent.system.paths import mcp_config_path, mcp_example_path
+from pocket_agent.system.paths import bundle_dir, is_frozen, mcp_config_path, mcp_example_path
 
 try:
     from mcp.client.sse import sse_client
@@ -150,17 +152,56 @@ class MCPManager:
                 continue
         return {}
 
+    def _resolve_stdio_params(self, spec: dict) -> StdioServerParameters:
+        raw_cmd = str(spec["command"]).strip()
+        is_py_cmd = raw_cmd.lower() in ("python", "python3", "python.exe")
+
+        resolved_args: list[str] = []
+        for arg in spec.get("args") or []:
+            arg_str = str(arg)
+            p = Path(arg_str)
+            if not p.is_absolute() and not (Path.cwd() / p).exists():
+                for base in (bundle_dir(), self.config_path.parent):
+                    candidate = base / p
+                    if candidate.exists():
+                        arg_str = str(candidate.resolve())
+                        break
+            resolved_args.append(arg_str)
+
+        if is_py_cmd:
+            if is_frozen():
+                command = sys.executable
+                resolved_args = ["--internal-mcp-server", *resolved_args]
+            else:
+                exe_path = Path(sys.executable)
+                if exe_path.name.lower() == "pythonw.exe":
+                    console_py = exe_path.with_name("python.exe")
+                    if console_py.exists():
+                        exe_path = console_py
+                command = str(exe_path)
+        else:
+            command = raw_cmd
+
+        raw_env = spec.get("env")
+        env_dict: dict[str, str] | None = None
+        if raw_env or is_py_cmd:
+            env_dict = dict(os.environ)
+            env_dict.setdefault("PYTHONUTF8", "1")
+            env_dict.setdefault("PYTHONIOENCODING", "utf-8")
+            if isinstance(raw_env, dict):
+                for k, v in raw_env.items():
+                    if v is not None:
+                        env_dict[str(k)] = str(v)
+
+        return StdioServerParameters(command=command, args=resolved_args, env=env_dict)
+
     async def _connect(self, name: str, spec: dict) -> ClientSession:
         transport = spec.get("transport", "stdio")
         closers_before = len(self._exit_stack_closers)
 
         try:
             if transport == "stdio":
-                params = StdioServerParameters(
-                    command=spec["command"],
-                    args=spec.get("args", []),
-                    env=spec.get("env"),
-                )
+                params = self._resolve_stdio_params(spec)
                 read, write, _ = await self._enter(stdio_client(params))
             elif transport == "sse":
                 if not HAS_SSE:

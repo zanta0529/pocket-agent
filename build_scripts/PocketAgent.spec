@@ -21,7 +21,7 @@ datas = [
     (str(ROOT / "subagents"),                       "subagents"),
     (str(ROOT / "mcp_config.example.yaml"),      "."),
     (str(ROOT / ".env.example"),                 "."),
-    (str(ROOT / "mcp_servers" / "browser_mcp.py"), "mcp_servers"),
+    (str(ROOT / "mcp_servers" / "*.py"), "mcp_servers"),
 ]
 
 # mcp 用動態 import 選 transport，openai 也有不少延遲載入的子模組。

@@ -1,5 +1,7 @@
 import asyncio
 import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -156,3 +158,31 @@ def test_mcp_manager_safe_read_tools_registration():
     schemas = {s["name"]: s for s in manager.openai_tools()}
     assert schemas["rhel_system_overview"].get("_is_safe_read") is True
     assert "_is_safe_read" not in schemas["rhel_dangerous_op"]
+
+
+def test_resolve_stdio_params_from_external_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    manager = MCPManager()
+    params = manager._resolve_stdio_params(
+        {
+            "command": "python",
+            "args": ["mcp_servers/rhel_mcp.py"],
+            "env": {"RHEL_HOST": "192.168.1.100", "RHEL_SSH_PORT": 22},
+        }
+    )
+    assert params.command == sys.executable
+    assert Path(params.args[0]).is_absolute()
+    assert Path(params.args[0]).name == "rhel_mcp.py"
+    assert params.env["RHEL_SSH_PORT"] == "22"
+    assert params.env["PYTHONUTF8"] == "1"
+
+    with patch("pocket_agent.extensions.mcp.is_frozen", return_value=True):
+        frozen_params = manager._resolve_stdio_params(
+            {
+                "command": "python",
+                "args": ["mcp_servers/rhel_mcp.py"],
+            }
+        )
+        assert frozen_params.command == sys.executable
+        assert frozen_params.args[0] == "--internal-mcp-server"
+        assert Path(frozen_params.args[1]).name == "rhel_mcp.py"
