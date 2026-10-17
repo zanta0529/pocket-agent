@@ -70,7 +70,8 @@ class MCPManager:
                 session = await self._connect(name, spec)
                 self._sessions.append(session)
                 inject = spec.get("inject") or {}
-                await self._register_tools(name, session, inject)
+                safe_read = spec.get("safe_read_tools") or []
+                await self._register_tools(name, session, inject, safe_read)
                 ready_servers += 1
             except Exception as e:
                 failed_servers += 1
@@ -191,7 +192,13 @@ class MCPManager:
         self._exit_stack_closers.append(cm.__aexit__)
         return *result, cm.__aexit__
 
-    async def _register_tools(self, server_name: str, session: ClientSession, inject: dict) -> None:
+    async def _register_tools(
+        self,
+        server_name: str,
+        session: ClientSession,
+        inject: dict,
+        safe_read_tools: list[str] | tuple[str, ...] | set[str] | str = (),
+    ) -> None:
         response = await session.list_tools()
         for tool in response.tools:
             # 從 schema 移除 inject 參數——模型不需要知道這些
@@ -218,6 +225,10 @@ class MCPManager:
                 "description": tool.description or "",
                 "parameters": params,
             }
+            if safe_read_tools == "*" or (
+                isinstance(safe_read_tools, list | tuple | set) and tool.name in safe_read_tools
+            ):
+                schema["_is_safe_read"] = True
             if tool.name in self._tools:
                 from pocket_agent.core.agent import log
 
