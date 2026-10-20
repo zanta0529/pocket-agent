@@ -13,7 +13,6 @@ import os
 import posixpath
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,6 +32,8 @@ _SEARCH_RE = re.compile(r"^[a-zA-Z0-9_.:@/+\- ]+$")
 
 # 執行期記憶體快取（僅存活於當前行程生命週期，不落盤）
 _RUNTIME_CREDS: dict[str, str] = {}
+
+_VALID_SORT_KEYS = {"cpu", "mem", "memory"}
 
 _VALID_PRIORITIES = {
     "emerg",
@@ -76,6 +77,7 @@ _DENIED_PATH_KEYWORDS = (
     "token",
     "password",
     "passwd-",
+    "opasswd",
     ".ssh",
     ".env",
     "kubeconfig",
@@ -91,7 +93,8 @@ _DENIED_PATH_KEYWORDS = (
 )
 
 _REDACT_KV_RE = re.compile(
-    r"(?i)(\b(?:password|passwd|secret|token|api_key|apikey|client_secret|passphrase)\b"
+    r"(?i)(\b(?:password|passwd|secret|token|api_key|apikey|client_secret|passphrase"
+    r"|private_key|privatekey|preshared_key|presharedkey)\b"
     r"\s*[:=]\s*)([^\s#;\"']+|\"[^\"]*\"|'[^']*')"
 )
 _REDACT_PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
@@ -185,10 +188,27 @@ def _resolve_connection_params(
     ssh_password: str = "",
 ) -> tuple[str, str, str, str]:
     """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得連線四要素。"""
-    host = (ssh_host or _RUNTIME_CREDS.get("RHEL_HOST") or os.getenv("RHEL_HOST") or "").strip()
-    port = (ssh_port or _RUNTIME_CREDS.get("RHEL_SSH_PORT") or os.getenv("RHEL_SSH_PORT") or "").strip()
-    user = (ssh_user or _RUNTIME_CREDS.get("RHEL_SSH_USER") or os.getenv("RHEL_SSH_USER") or "").strip()
-    password = ssh_password or _RUNTIME_CREDS.get("RHEL_SSH_PASSWORD") or os.getenv("RHEL_SSH_PASSWORD") or ""
+    cached_host = _RUNTIME_CREDS.get("RHEL_HOST", "")
+    cached_port = _RUNTIME_CREDS.get("RHEL_SSH_PORT", "")
+    cached_user = _RUNTIME_CREDS.get("RHEL_SSH_USER", "")
+
+    input_host = ssh_host.strip()
+    input_port = ssh_port.strip()
+    input_user = ssh_user.strip()
+
+    host = input_host or cached_host or (os.getenv("RHEL_HOST") or "").strip()
+    port = input_port or cached_port or (os.getenv("RHEL_SSH_PORT") or "").strip()
+    user = input_user or cached_user or (os.getenv("RHEL_SSH_USER") or "").strip()
+
+    # 憑證快取隔離：僅當連線目標（host、user）與既有快取完全相符時才沿用舊密碼，防止跨主機密碼外洩
+    is_same_target = (not input_host or input_host == cached_host) and (not input_user or input_user == cached_user)
+
+    if ssh_password:
+        password = ssh_password
+    elif is_same_target and _RUNTIME_CREDS.get("RHEL_SSH_PASSWORD"):
+        password = _RUNTIME_CREDS["RHEL_SSH_PASSWORD"]
+    else:
+        password = os.getenv("RHEL_SSH_PASSWORD") or ""
 
     if not host:
         host = _tty_prompt("請輸入 RHEL 主機 IP 或位址 (RHEL_HOST): ").strip()
@@ -226,7 +246,7 @@ def _build_ssh_args(
     ssh_password: str = "",
 ) -> tuple[list[str], str, int]:
     host, port, user, password = _resolve_connection_params(ssh_host, ssh_port, ssh_user, ssh_password)
-    strict_host = (os.getenv("RHEL_STRICT_HOST_KEY") or "no").strip()
+    strict_host = (os.getenv("RHEL_STRICT_HOST_KEY") or "accept-new").strip()
 
     try:
         timeout = max(3, min(int(os.getenv("RHEL_CONNECT_TIMEOUT") or "10"), 60))
@@ -234,7 +254,7 @@ def _build_ssh_args(
         timeout = 10
 
     if strict_host not in ("yes", "accept-new", "no"):
-        strict_host = "no"
+        strict_host = "accept-new"
 
     args = [
         "ssh",
@@ -268,37 +288,22 @@ def _build_ssh_args(
     return args, password, timeout
 
 
-def _find_plink() -> str | None:
-    custom = (os.getenv("RHEL_PLINK_PATH") or "").strip()
-    if custom and Path(custom).is_file():
-        return custom
-    found = shutil.which("plink") or shutil.which("plink.exe")
-    if found:
-        return found
-    for candidate in (
-        r"C:\Program Files\PuTTY\plink.exe",
-        r"C:\Program Files (x86)\PuTTY\plink.exe",
-    ):
-        if Path(candidate).is_file():
-            return candidate
-    return None
-
-
 def _run_with_askpass(ssh_args: list[str], password: str, timeout: int, creationflags: int):
     with tempfile.TemporaryDirectory(prefix="rhel_mcp_") as tmp_dir:
         tmp_path = Path(tmp_dir)
-        pw_file = tmp_path / "pw.txt"
-        pw_file.write_text(password, encoding="utf-8")
 
+        # 透過內嵌 Python 腳本自隔離環境變數輸出密碼，100% 記憶體傳遞，杜絕密碼寫入硬碟暫存檔（零落盤）
+        py_cmd = 'import os, sys; sys.stdout.write(os.environ["RHEL_SSH_ASKPASS_PW"] + "\\n")'
         if os.name == "nt":
             askpass_script = tmp_path / "askpass.bat"
-            askpass_script.write_text(f'@echo off\r\ntype "{pw_file}"\r\n', encoding="utf-8")
+            askpass_script.write_text(f'@"{sys.executable}" -c "{py_cmd}"\r\n', encoding="utf-8")
         else:
             askpass_script = tmp_path / "askpass.sh"
-            askpass_script.write_text(f'#!/bin/sh\ncat "{pw_file}"\n', encoding="utf-8")
+            askpass_script.write_text(f"#!/bin/sh\nexec \"{sys.executable}\" -c '{py_cmd}'\n", encoding="utf-8")
             askpass_script.chmod(0o700)
 
         env = dict(os.environ)
+        env["RHEL_SSH_ASKPASS_PW"] = password
         env["SSH_ASKPASS"] = str(askpass_script)
         env["SSH_ASKPASS_REQUIRE"] = "force"
         env.setdefault("DISPLAY", "1")
@@ -527,11 +532,11 @@ def rhel_read_config(
     allowed_case = "|".join(f"{p.rstrip('/')}/*" for p in _ALLOWED_CONFIG_PREFIXES)
     cmd = (
         f"real=$(realpath -e {quoted_path} 2>/dev/null) || {{ echo '[ERROR] 檔案不存在或無法存取'; exit 1; }}; "
-        "case $real in "
+        'case "$real" in '
         f"{denied_case}) "
         "echo '[ERROR] 拒絕存取：解析後之真實路徑屬於敏感機密檔案'; exit 1 ;; "
         f"{allowed_case}) "
-        f"head -n {safe_lines} -- $real ;; "
+        f'head -n {safe_lines} -- "$real" ;; '
         "*) echo '[ERROR] 拒絕存取：解析後之真實路徑不在允許的目錄白名單內'; exit 1 ;; "
         "esac"
     )
@@ -644,9 +649,14 @@ def rhel_process_inspect(
         )
         return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 
-    sort_col = "-%mem" if sort_by.strip().lower() in ("mem", "memory") else "-%cpu"
+    sort_clean = sort_by.strip().lower()
+    if sort_clean not in _VALID_SORT_KEYS:
+        return f"[ERROR] 非法的 sort_by 參數：{sort_by!r}（僅允許 'cpu'、'mem' 或 'memory'）"
+
+    sort_col = "-%mem" if sort_clean in ("mem", "memory") else "-%cpu"
     cmd = (
-        f"echo '=== Top Processes (sorted by {sort_by}) ===' && ps -eo {cols} --sort={sort_col} | head -n {safe_lines}"
+        f"echo '=== Top Processes (sorted by {sort_clean}) ===' && "
+        f"ps -eo {cols} --sort={sort_col} | head -n {safe_lines}"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 

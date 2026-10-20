@@ -109,6 +109,7 @@ def test_query_journal_validation_and_clamping(monkeypatch):
         "/etc/shadow",
         "/etc/gshadow",
         "/etc/sudoers",
+        "/etc/security/opasswd",
         "/etc/pki/tls/private/server.key",
         "/etc/myapp/.env",
         "/etc/kubernetes/admin.conf",
@@ -130,6 +131,7 @@ def test_read_config_allows_safe_etc_path_and_redacts_secrets(monkeypatch):
         "server_name localhost;\n"
         "password = super_secret_db_pass\n"
         'api_key: "abcdef123456"\n'
+        "private_key = hidden_private_key_content\n"
         "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----\n"
     )
     fake_proc = SimpleNamespace(returncode=0, stdout=raw_config, stderr="")
@@ -138,6 +140,7 @@ def test_read_config_allows_safe_etc_path_and_redacts_secrets(monkeypatch):
         assert "server_name localhost;" in out
         assert "super_secret_db_pass" not in out
         assert "abcdef123456" not in out
+        assert "hidden_private_key_content" not in out
         assert "MIIEpAIBAAKCAQEA" not in out
         assert "[REDACTED]" in out
         assert "[REDACTED PRIVATE KEY]" in out
@@ -344,6 +347,20 @@ def test_process_inspect_and_validation(monkeypatch):
         assert bad_search.startswith("[ERROR]")
         mock_run.assert_not_called()
 
+    # 排序欄位白名單與指令注入防禦
+    with patch("subprocess.run", return_value=fake_proc) as mock_run:
+        out_sort_mem = rhel_mcp.rhel_process_inspect(sort_by="mem")
+        assert out_sort_mem == "1234 root python"
+        called_cmd_mem = mock_run.call_args.args[0][-1]
+        assert "--sort=-%mem" in called_cmd_mem
+        assert "sorted by mem" in called_cmd_mem
+
+    with patch("subprocess.run") as mock_run:
+        bad_sort = rhel_mcp.rhel_process_inspect(sort_by="cpu' && reboot && echo '")
+        assert bad_sort.startswith("[ERROR]")
+        assert "非法的 sort_by" in bad_sort
+        mock_run.assert_not_called()
+
 
 def test_network_connections_and_validation(monkeypatch):
     _set_full_creds(monkeypatch)
@@ -385,3 +402,37 @@ def test_package_and_journal_grep(monkeypatch):
         bad_grep = rhel_mcp.rhel_query_journal(grep="pass; rm -rf /")
         assert bad_grep.startswith("[ERROR]")
         mock_run.assert_not_called()
+
+
+def test_run_with_askpass_zero_disk_leak():
+    fake_proc = SimpleNamespace(returncode=0, stdout="pong", stderr="")
+    captured_env = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured_env.update(kwargs.get("env", {}))
+        # 驗證執行期 temp 目錄中不存在任何 pw.txt 明文密碼檔
+        askpass_path = Path(kwargs["env"]["SSH_ASKPASS"])
+        assert not (askpass_path.parent / "pw.txt").exists()
+        return fake_proc
+
+    with patch("subprocess.run", side_effect=fake_subprocess_run):
+        res = rhel_mcp._run_with_askpass(["ssh", "-V"], "SuperSecret!Pw", timeout=5, creationflags=0)
+        assert res.stdout == "pong"
+        assert captured_env.get("RHEL_SSH_ASKPASS_PW") == "SuperSecret!Pw"
+        assert captured_env.get("SSH_ASKPASS_REQUIRE") == "force"
+
+
+def test_cross_host_credentials_not_leaked(monkeypatch):
+    rhel_mcp._RUNTIME_CREDS["RHEL_HOST"] = "192.168.1.10"
+    rhel_mcp._RUNTIME_CREDS["RHEL_SSH_PORT"] = "22"
+    rhel_mcp._RUNTIME_CREDS["RHEL_SSH_USER"] = "admin"
+    rhel_mcp._RUNTIME_CREDS["RHEL_SSH_PASSWORD"] = "OldHostPassword!123"
+
+    # 目標主機變更為不同主機時，禁止沿用舊主機密碼快取
+    prompts = iter(["NewHostPass!456"])
+    with patch("mcp_servers.rhel_mcp._tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
+        host, port, user, pw = rhel_mcp._resolve_connection_params(ssh_host="192.168.1.20")
+        assert host == "192.168.1.20"
+        assert pw == "NewHostPass!456"
+        assert mock_prompt.call_count == 1
+        assert "密碼" in mock_prompt.call_args_list[0].args[0]
