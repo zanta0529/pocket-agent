@@ -63,7 +63,10 @@ class _ConsoleFormatter(logging.Formatter):
                 # 改為與中途思考一致的 dim 灰色 (ANSI 256 色 245)，消除視覺焦慮
                 color_code = "\033[38;5;245m"
             else:
-                icon = "💬"
+                if "compaction" in msg_lower or "cleared" in msg_lower:
+                    icon = "🧹"
+                else:
+                    icon = "💬"
                 color_code = "\033[38;5;245m"
             reset_code = "\033[0m"
 
@@ -357,6 +360,31 @@ class Agent:
         return (f"{text}\n\n" if text.strip() else "") + "⏹ 已由使用者停止"
 
     def clear_history(self) -> None:
+        self.history.clear()
+
+    async def compact_history(self, keep_recent: int = 4) -> tuple[bool, int, int]:
+        """對目前會話歷史進行主動式高密度摘要壓縮（供 /compact 指令或主動調度使用）。
+
+        回傳 (是否成功, 壓縮前 tokens, 壓縮後 tokens)。
+        嚴格透過 HistoryCompactor 保障 tool call 與 output 成對關聯，絕不拆散。
+        """
+        if len(self.history) < 4:
+            return False, 0, 0
+
+        from pocket_agent.core.compaction import HistoryCompactor
+
+        compactor = HistoryCompactor(self.engine, keep_recent_messages=keep_recent)
+        new_items, compacted = await compactor.compact_history(
+            self.history,
+            cancel_check=lambda: self.cancel_requested,
+        )
+        if compacted and new_items:
+            summary_item = next((m for m in new_items if m.get("is_compaction")), None)
+            orig_t = summary_item.get("original_tokens", 0) if summary_item else 0
+            comp_t = summary_item.get("compacted_tokens", 0) if summary_item else 0
+            self.history = list(new_items)
+            return True, orig_t, comp_t
+        return False, 0, 0
         self.history.clear()
 
     def check_new_workspace_dir(self, path_str: str) -> tuple[str, str, Path | None]:
@@ -812,7 +840,23 @@ class Agent:
 
             # ── 統一送出前上下文管理流程 ─────────────────────────────────
             # 1. 優先嘗試清除較舊的工具輸出 (Tool Compact)
-            budget.compact(input_items, instructions, tools)
+            cleared_outputs = budget.compact(input_items, instructions, tools)
+            if cleared_outputs > 0:
+                compacted_by_call_id = {
+                    m["call_id"]: m["output"]
+                    for m in input_items
+                    if isinstance(m, dict)
+                    and m.get("type") == "function_call_output"
+                    and isinstance(m.get("output"), str)
+                    and m["output"].startswith("[舊工具輸出已清除")
+                }
+                for hist_item in self.history:
+                    if (
+                        isinstance(hist_item, dict)
+                        and hist_item.get("type") == "function_call_output"
+                        and hist_item.get("call_id") in compacted_by_call_id
+                    ):
+                        hist_item["output"] = compacted_by_call_id[hist_item["call_id"]]
 
             # 2. 估算全量 Payload (含 history、本輪工具輸出、instructions 與 tools schema)
             estimated_tokens = budget.estimate_items(input_items, instructions, tools)
@@ -827,6 +871,7 @@ class Agent:
                 )
                 if compacted:
                     input_items = new_items
+                    self.history = list(new_items)
                     estimated_tokens = budget.estimate_items(input_items, instructions, tools)
 
             # 4. 若摘要後仍超限且歷史輪次過長，才安全滑動視窗裁減中間對話
@@ -843,6 +888,7 @@ class Agent:
                 tail_msgs = input_items[-10:]
                 # 確保保留之尾端工具呼叫嚴格閉合成對，避免拋出 400 No tool output found 錯誤
                 input_items = head_msgs + [notice] + ensure_paired_tool_calls(tail_msgs)
+                self.history = list(input_items)
                 estimated_tokens = budget.estimate_items(input_items, instructions, tools)
 
             # 5. 若經過上述所有縮減策略後，Payload 總量依然超過可用輸入預算，明確終止送出

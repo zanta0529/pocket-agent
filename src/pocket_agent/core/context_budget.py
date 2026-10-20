@@ -10,7 +10,7 @@ from typing import Any
 log = logging.getLogger("pocket-agent")
 
 # 查不到視窗時的保守保底值（tokens）
-DEFAULT_CONTEXT_WINDOW = 32_000
+DEFAULT_CONTEXT_WINDOW = 128_000
 # 超過視窗此比例時開始清除舊工具結果
 COMPACT_RATIO = 0.7
 # 清除舊結果時的目標水位比例（低於觸發門檻，拉出緩衝空間）
@@ -263,5 +263,5 @@ class ContextBudget:
             items[i]["output"] = placeholder_text
             cleared += 1
         if cleared:
-            log.warning("Context compaction: cleared %d old tool outputs (est. %d tokens now).", cleared, total)
+            log.info("Context compaction: cleared %d old tool outputs (est. %d tokens now).", cleared, total)
         return cleared

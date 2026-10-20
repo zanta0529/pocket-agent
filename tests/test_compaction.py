@@ -193,3 +193,125 @@ def test_ensure_paired_tool_calls():
     assert cleaned[1]["call_id"] == "c1"
     assert cleaned[2]["call_id"] == "c1"
     assert cleaned[3]["role"] == "assistant"
+
+
+def test_agent_compact_history_and_cli_command():
+    async def _test():
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from pocket_agent.core.agent import Agent
+        from pocket_agent.frontend.cli.commands.core import CommandContext
+        from pocket_agent.frontend.cli.commands.session import CompactCommand
+
+        agent = Agent(client=MagicMock(), mcp=MagicMock(), model="mock-model")
+        mock_engine = MockSummaryEngine(summary_output="高密度重點摘要：已完成規劃。")
+
+        with patch.object(Agent, "engine", new_callable=PropertyMock(return_value=mock_engine)):
+            agent.history = [
+                {"role": "user", "content": "長篇大論 " * 200},
+                {"role": "assistant", "content": "詳細解答 " * 200},
+                {"role": "user", "content": "更多資訊 " * 200},
+                {"role": "assistant", "content": "更多解答 " * 200},
+                {"role": "user", "content": "保留問題 1"},
+                {"role": "assistant", "content": "保留回答 1"},
+            ]
+
+            # 1. 測試 Agent.compact_history 直接更新 agent.history
+            success, orig, comp = await agent.compact_history(keep_recent=2)
+            assert success is True
+            assert orig > comp
+            assert len(agent.history) == 3
+            assert "高密度" in agent.history[0]["content"]
+
+            # 2. 測試 CLI CompactCommand 呼叫
+            agent.history = [
+                {"role": "user", "content": "長篇大論 " * 200},
+                {"role": "assistant", "content": "詳細解答 " * 200},
+                {"role": "user", "content": "更多資訊 " * 200},
+                {"role": "assistant", "content": "更多解答 " * 200},
+                {"role": "user", "content": "保留問題 2"},
+                {"role": "assistant", "content": "保留回答 2"},
+            ]
+            renderer = MagicMock()
+            ctx = CommandContext(
+                agent=agent,
+                state=MagicMock(),
+                reader=MagicMock(),
+                renderer=renderer,
+                tools=[],
+            )
+            cmd = CompactCommand()
+            res = await cmd.execute(ctx, "")
+            assert res.action == "handled"
+            assert len(agent.history) == 3
+            renderer.message.assert_called()
+            last_msg = renderer.message.call_args[0][0]
+            assert "已壓縮" in last_msg
+            assert "釋放約" in last_msg
+
+            # 3. 測試歷程不足 6 則時提示無需壓縮
+            agent.history = [
+                {"role": "user", "content": "問題"},
+                {"role": "assistant", "content": "回答"},
+            ]
+            await cmd.execute(ctx, "")
+            assert len(agent.history) == 2
+
+    asyncio.run(_test())
+
+
+def test_agent_run_loop_persists_tool_compact_to_history():
+    async def _test():
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from pocket_agent.core.agent import Agent
+
+        agent = Agent(client=MagicMock(), mcp=MagicMock(), model="mock-model")
+        mock_engine = MockSummaryEngine(summary_output="摘要")
+
+        with patch.object(Agent, "engine", new_callable=PropertyMock(return_value=mock_engine)):
+            big_output = "很長的工具輸出 " * 500
+            # 設置 agent.history，包含會被修剪的舊工具輸出
+            agent.history = [
+                {"role": "user", "content": "查詢檔案"},
+                {"type": "function_call", "call_id": "call_old", "name": "read_file", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_old", "output": big_output},
+                {"type": "function_call", "call_id": "call_rec1", "name": "read_file", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_rec1", "output": "最近結果 1"},
+                {"type": "function_call", "call_id": "call_rec2", "name": "read_file", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_rec2", "output": "最近結果 2"},
+            ]
+
+            # 視窗設為 1000 觸發 compact
+            from pocket_agent.core.context_budget import ContextBudget
+
+            test_budget = ContextBudget(window=1000)
+            agent._resolve_budget = MagicMock(return_value=test_budget)
+
+            # 執行單輪迴圈前檢查
+            items = list(agent.history)
+            cleared = test_budget.compact(items)
+            assert cleared == 1
+            assert "[舊工具輸出已清除" in items[2]["output"]
+
+            # 同步回寫邏輯驗證
+            compacted_by_call_id = {
+                m["call_id"]: m["output"]
+                for m in items
+                if isinstance(m, dict)
+                and m.get("type") == "function_call_output"
+                and isinstance(m.get("output"), str)
+                and m["output"].startswith("[舊工具輸出已清除")
+            }
+            for hist_item in agent.history:
+                if (
+                    isinstance(hist_item, dict)
+                    and hist_item.get("type") == "function_call_output"
+                    and hist_item.get("call_id") in compacted_by_call_id
+                ):
+                    hist_item["output"] = compacted_by_call_id[hist_item["call_id"]]
+
+            # 驗證 agent.history 確實已被同步更新
+            assert "[舊工具輸出已清除" in agent.history[2]["output"]
+
+    asyncio.run(_test())

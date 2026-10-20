@@ -135,45 +135,28 @@ class CompactCommand(CliCommand):
         if args:
             raise ValueError("/compact 不接受參數")
         history = ctx.agent.history
-        if len(history) < 4:
-            ctx.renderer.message("對話歷史不足（需至少 4 則），無需壓縮。")
+        if len(history) < 6:
+            ctx.renderer.message("對話歷史不足（需至少 6 則），無需壓縮。")
             return CommandResult()
 
-        middle = history[2:-2]
-        middle_text = "\n".join(f"[{m['role']}] {str(m.get('content', ''))[:300]}" for m in middle)
-        summary_prompt = "請用繁體中文，以 3–6 句話摘要以下對話的核心要點，讓後續對話能銜接前文脈絡：\n\n" + middle_text
-
-        ctx.renderer.message("壓縮中…（正在向模型請求摘要）", "dim")
+        ctx.renderer.message("壓縮中…（正在建立高密度對話摘要）", "dim")
+        original_len = len(history)
+        keep_recent = 2 if len(history) < 8 else 4
         try:
-            from pocket_agent.core.agent import Agent
-
-            summarizer = Agent(
-                client=ctx.agent.client,
-                mcp=ctx.agent.mcp,
-                model=ctx.agent.model,
-                system_prompt=(
-                    "你是一個精準的對話摘要助手。請直接輸出摘要結果，不要加上任何解釋、問候語或 Markdown 標籤。"
-                ),
-                is_subagent=True,
-                reasoning_effort="none",
-            )
-            _, summary, _ = await summarizer.chat(summary_prompt)
-
-            if not summary or not summary.strip():
-                raise ValueError("模型未回傳有效的摘要內容")
+            success, orig_tokens, comp_tokens = await ctx.agent.compact_history(keep_recent=keep_recent)
         except Exception as e:
             ctx.renderer.message(f"壓縮失敗：{e}", "red")
             return CommandResult()
 
-        if not summary.strip():
-            ctx.renderer.message("摘要結果為空，歷史未變更。", "yellow")
+        if not success:
+            ctx.renderer.message("目前歷史對話結構過短或無顯著壓縮收益，歷史未變更。", "yellow")
             return CommandResult()
 
-        original_len = len(history)
-        notice = {
-            "role": "system",
-            "content": f"[System] 以下為對話摘要（已壓縮 {original_len - 4} 則）：\n{summary.strip()}",
-        }
-        ctx.agent.history = history[:2] + [notice] + history[-2:]
-        ctx.renderer.message(f"✓ 已壓縮：{original_len} 則 → {len(ctx.agent.history)} 則", "green")
+        saved_tokens = max(0, orig_tokens - comp_tokens)
+        ctx.renderer.message(
+            f"✓ 已壓縮：{original_len} 則 → {len(ctx.agent.history)} 則 "
+            f"（原約 {orig_tokens:,} tokens → 壓縮後約 {comp_tokens:,} tokens，"
+            f"釋放約 {saved_tokens:,} tokens）",
+            "green",
+        )
         return CommandResult()
