@@ -215,6 +215,8 @@ def test_agent_web_research_convergence_limits(monkeypatch):
             max_tool_rounds=15,
             provider="openai",
         )
+        agent.web_research_soft_limit = 5
+        agent.web_research_hard_limit = 10
 
         emitted_tool_results = []
 

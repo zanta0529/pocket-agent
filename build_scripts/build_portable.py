@@ -105,8 +105,8 @@ APP_ITEMS = [
 START_BAT = r"""@echo off
 REM Launcher for the portable build.
 REM
-REM pythonw.exe (not python.exe) so no console window appears.
-REM `start ""` detaches, letting this cmd window close immediately.
+REM python.exe for interactive CLI console window.
+REM Detach and open interactive console window.
 REM
 REM ASCII-only on purpose: cmd.exe parses .bat with the OEM codepage
 REM (Big5 on zh-TW), which mangles UTF-8 Chinese into garbage commands.
@@ -122,7 +122,7 @@ set PYTHONNOUSERSITE=1
 set PYTHONPATH=%~dp0app\src
 set PYTHONHOME=
 
-start "" "%~dp0python\pythonw.exe" -m pocket_agent %*
+start "" "%~dp0python\python.exe" -m pocket_agent %*
 endlocal
 """
 

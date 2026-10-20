@@ -302,3 +302,46 @@ def test_list_sessions_rejects_tampered_session(tmp_path, monkeypatch):
     )
     listed = sessions.list_sessions()
     assert [m["id"] for m in listed] == ["valid-sess"]
+
+
+# ==========================================
+# 7. 2026-10-20 審查修補回歸測試：Database MCP 唯讀防護、RHEL MCP 安全通道
+# ==========================================
+def test_database_mcp_readonly_and_block_writes(tmp_path, monkeypatch):
+    import sqlite3
+
+    db_file = tmp_path / "test.db"
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
+        conn.execute("INSERT INTO users (name) VALUES ('alice');")
+        conn.commit()
+
+    monkeypatch.setenv("DB_PATH", str(db_file))
+    from mcp_servers import database_mcp
+
+    # 1. 唯讀查詢正常執行
+    res = database_mcp.db_run_select_query("SELECT id, name FROM users;")
+    assert "alice" in res
+
+    # 2. 阻擋非 SELECT 語句
+    res_non_select = database_mcp.db_run_select_query("DELETE FROM users WHERE id=1;")
+    assert "[ERROR]" in res_non_select
+
+    # 3. 嘗試以多語句或寫入操作突破 SQLite 唯讀保護，必須被 authorizer 或 SQLite ro 模式拒絕
+    database_mcp.db_run_select_query("SELECT 1; DROP TABLE users;")
+    # 在唯讀模式或單一語句下，無法成功刪除資料表
+    with sqlite3.connect(db_file) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users';")
+        assert cursor.fetchone() is not None
+
+
+def test_rhel_mcp_no_plink_pw_leakage():
+    import inspect
+
+    from mcp_servers import rhel_mcp
+
+    src = inspect.getsource(rhel_mcp._run_remote)
+    # 確保原始碼中已無 -pw 命令列參數傳遞密碼之呼叫邏輯
+    assert 'plink_args = [plink_bin, "-batch", "-ssh", "-noagent", "-P", port, "-l", user, "-pw", password]' not in src
+    assert "'-pw'" not in src and '"-pw"' not in src

@@ -158,6 +158,8 @@ class Agent:
 
         self.files = FileUploader(client, cancel_check=lambda: self.cancel_requested)
         self.history: list[dict] = []
+        self.web_research_soft_limit: int | None = None
+        self.web_research_hard_limit: int | None = None
         self.context_usage: ContextUsage | None = None  # 最近一輪的上下文使用快照（/usage 顯示用）
         self._budget = ContextBudget(DEFAULT_CONTEXT_WINDOW)
         self.cancel_requested = False  # 使用者按「停止」時設為 True（跨執行緒安全）
@@ -758,8 +760,10 @@ class Agent:
         web_tool_call_count = 0
         web_convergence_warned = False
         try:
-            web_soft_limit = int(config.get("agent.web_research_soft_limit", 5))
-            web_hard_limit = int(config.get("agent.web_research_hard_limit", 10))
+            s_lim = getattr(self, "web_research_soft_limit", None)
+            web_soft_limit = int(s_lim if s_lim is not None else config.get("agent.web_research_soft_limit", 5))
+            h_lim = getattr(self, "web_research_hard_limit", None)
+            web_hard_limit = int(h_lim if h_lim is not None else config.get("agent.web_research_hard_limit", 10))
         except TypeError, ValueError:
             web_soft_limit, web_hard_limit = 5, 10
 
@@ -976,10 +980,11 @@ class Agent:
                                 "call_id": fc["call_id"],
                                 "name": fc["name"],
                                 "result": result,
-                                "ok": False,
+                                "ok": True,
                             },
                         )
                         self._append_tool_pair(input_items, fc, result)
+                        all_errors = False
                         continue
 
                 self._emit(

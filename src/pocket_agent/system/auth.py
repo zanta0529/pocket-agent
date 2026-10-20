@@ -276,7 +276,7 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
         bucket["code"] = code
         return _page("#10a37f", "✓ 認證成功！請關閉此視窗回到 Pocket Agent。")
 
-    server = uvicorn.Server(uvicorn.Config(app, host="localhost", port=listen_port, log_level="error", log_config=None))
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=listen_port, log_level="error", log_config=None))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
 

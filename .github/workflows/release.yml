@@ -32,7 +32,7 @@ jobs:
 
       - name: Build Portable Version
         run: |
-          python build_portable.py
+          python build_scripts/build_portable.py
 
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2

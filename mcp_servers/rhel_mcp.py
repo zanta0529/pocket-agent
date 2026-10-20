@@ -298,24 +298,14 @@ def _run_remote(
         proc = _run_with_askpass(ssh_args, password, timeout, creationflags)
 
         if proc.returncode == 255:
-            plink_bin = _find_plink()
-            if plink_bin:
-                host = _RUNTIME_CREDS["RHEL_HOST"]
-                port = _RUNTIME_CREDS["RHEL_SSH_PORT"]
-                user = _RUNTIME_CREDS["RHEL_SSH_USER"]
-                plink_args = [plink_bin, "-batch", "-ssh", "-noagent", "-P", port, "-l", user, "-pw", password]
-                plink_args.extend([host, remote_cmd])
-                proc = subprocess.run(
-                    plink_args,
-                    shell=False,
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=timeout + 15,
-                    creationflags=creationflags,
-                )
+            # 遠端連線或金鑰/認證失敗。為防止本機行程命令列引數洩漏密碼（Process Argument Inspection），
+            # 嚴格禁止使用 plink 傳遞明文密碼參數。強制使用安全 SSH_ASKPASS 通道。
+            _RUNTIME_CREDS.clear()
+            err_msg = proc.stderr.strip() if proc.stderr else "無法建立 OpenSSH 安全通道。"
+            return (
+                f"[ERROR] [CONN_AUTH] 遠端 SSH 連線或認證失敗 (exit 255): {_redact_and_truncate(err_msg)}\n"
+                "提示：請確認目標主機已啟用密碼/鍵盤互動驗證，或檢查網路與金鑰設定。"
+            )
 
         combined = (proc.stdout or "").strip()
         err_out = (proc.stderr or "").strip()

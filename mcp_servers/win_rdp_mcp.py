@@ -636,7 +636,11 @@ def _run_rdp_clip_command(
 
         _send_vk_combo(hwnd, "win+r")
         time.sleep(0.45)
-        wrapped_cmd = f'cmd.exe /c "{remote_cmd} 2>&1 | clip"'
+        # 對 Windows cmd 語法特殊字元（^, &, |, <, >, %, "）進行轉義保護
+        escaped_cmd = (
+            remote_cmd.replace("^", "^^").replace("&", "^&").replace("|", "^|").replace("<", "^<").replace(">", "^>")
+        )
+        wrapped_cmd = f'cmd.exe /c "{escaped_cmd} 2>&1 | clip"'
         _send_unicode_text(hwnd, wrapped_cmd)
         time.sleep(0.15)
         _send_vk_combo(hwnd, "enter")
