@@ -148,6 +148,8 @@ python -m pocket_agent
 - `/subagent <name>`：強制委派任務給指定的子代理（例如 `/subagent researcher 查資料`）。另外也支援直接使用 `/<name>` 作為動態捷徑（例如 `/researcher 查資料`）。
 - `/parallel <name:task> | <name:task>`：手動平行啟動多個子代理 (Map-Reduce 模式)。背景會自動彙整成單一最終報告。請留意**必須使用管線符號 `|` 作為分隔**。例如：`/parallel researcher:查庫存 | coder:寫測試`。
 - `/session [list | load <id> | save | delete <id>]`：管理歷史對話 (Session)。無參數時啟動互動式光棒選單，支援儲存與讀取持久化紀錄。
+- `/new`：結束當前會話並開啟全新乾淨的對話（自動儲存既有對話，完整重設上下文記憶、附件與用量統計）。
+- `/rename <新標題>`：重新命名目前對話標題，方便日後透過 `/session` 辨識與載入（支援直接帶參數或互動式輸入）。
 - `/skills [name]`：列出目前可用的所有全域與專案技能，或檢視特定技能內容。
 - `/learn`：自動萃取當前對話中的知識或流程，互動式引導將其儲存為可重複使用的 Skill。
 - `/config`：啟動互動式設定選單，用以編輯全域設定與 API Key。
@@ -187,6 +189,8 @@ python -m pocket_agent --resume
 | /parallel                       | 平行委派給多個子代理，使用 `\|` 分隔 (需注意分隔符號)          |
 | /model                          | 互動式光棒選單切換提供者與模型，Esc 返回                       |
 | /session                        | 互動式光棒選單分頁瀏覽並管理歷史對話                           |
+| /new                            | 開啟全新乾淨會話（自動儲存舊會話，完整清空上下文與暫存）       |
+| /rename                         | 重新命名當前會話標題（方便日後載入，支援互動輸入）             |
 | /skills                         | 列出或檢視可用的技能 (Skills)                                  |
 | /learn                          | 將當前對話萃取為新技能                                         |
 | /config                         | 互動式編輯系統設定檔                                           |
