@@ -109,20 +109,28 @@ def main():
         reqs.update(get_requirements(req_file))
 
     missing = []
-    # Project's own modules (e.g. pocket_agent) should be ignored
-    project_module = "pocket_agent"
-    ignored_pkgs = set(args.ignore)
+    # Project's own modules (e.g. pocket_agent, mcp_servers) should be ignored
+    project_modules = {"pocket_agent", "mcp_servers"}
+    ignored_pkgs = {pkg.lower().replace("_", "-") for pkg in args.ignore}
 
     for imp in all_imports:
         # Ignore standard library and private/relative imports
         if imp in STDLIB or imp.startswith("_"):
             continue
 
+        # Ignore project's own modules or local modules/packages within the repository
+        if (
+            imp in project_modules
+            or (repo_root / imp).is_dir()
+            or (repo_root / f"{imp}.py").is_file()
+            or (repo_root / "src" / imp).is_dir()
+            or (repo_root / "src" / f"{imp}.py").is_file()
+        ):
+            continue
+
         # Map import name to PyPI package name, normalized to use hyphens
         pkg_name = PACKAGE_MAPPING.get(imp, imp).lower().replace("_", "-")
 
-        if pkg_name == project_module.replace("_", "-"):
-            continue
         if pkg_name in ignored_pkgs:
             continue
 
