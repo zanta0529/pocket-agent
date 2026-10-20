@@ -33,6 +33,7 @@ _CONN_PARAM_MAP = {
     "ssh_port": "RHEL_SSH_PORT",
     "ssh_user": "RHEL_SSH_USER",
     "ssh_password": "RHEL_SSH_PASSWORD",
+    "ssh_key_path": "RHEL_SSH_KEY_PATH",
     "rdp_host": "WIN_HOST",
     "rdp_port": "WIN_RDP_PORT",
     "rdp_user": "WIN_RDP_USER",

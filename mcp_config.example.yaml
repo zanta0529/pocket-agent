@@ -59,7 +59,7 @@ servers:
   #   command: python
   #   args: ["mcp_servers/memory_mcp.py"]
 
-  # 遠端 RHEL 主機唯讀探查與維運診斷 (僅限帳號密碼驗證；env 內各項皆可預填、留空或省略，未設定項將於執行時在終端機動態詢問)
+  # 遠端 RHEL 主機唯讀探查與維運診斷（支援 SSH 金鑰與帳密雙軌驗證；env 內各項皆可預填、留空或省略，未設定項將於執行時在終端機動態詢問）
   # rhel_ops:
   #   transport: stdio
   #   command: python
@@ -84,7 +84,10 @@ servers:
   #     RHEL_HOST: ""                        # 選填：主機 IP 或位址（留空或省略時將於執行時詢問）
   #     RHEL_SSH_PORT: ""                    # 選填：SSH 連接埠（留空或省略時將於執行時詢問）
   #     RHEL_SSH_USER: ""                    # 選填：SSH 登入帳號（留空或省略時將於執行時詢問）
-  #     RHEL_SSH_PASSWORD: ""                # 選填：SSH 登入密碼（建議留空或省略，於執行時安全輸入）
+  #     RHEL_SSH_KEY_PATH: ""                # 選填：SSH 私鑰檔案路徑（設定時優先啟用金鑰認證；留空則自動使用帳密模式）
+  #     RHEL_SSH_KEY_PASSPHRASE: ""          # 選填：私鑰解鎖密碼（若私鑰有設 Passphrase，建議留空於執行時安全輸入）
+  #     RHEL_SSH_PASSWORD: ""                # 選填：SSH 登入密碼（使用帳密模式時建議留空或省略，於執行時安全輸入）
+  #     RHEL_STRICT_HOST_KEY: "accept-new"   # 選填：主機金鑰比對策略（預設 accept-new 防範中間人竊聽；可設 accept-new、yes 或 no）
   #     RHEL_CONNECT_TIMEOUT: "10"
 
   # 遠端 Windows 主機 RDP (Port 3389) 視覺控制與結構化唯讀巡檢

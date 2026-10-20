@@ -431,8 +431,59 @@ def test_cross_host_credentials_not_leaked(monkeypatch):
     # 目標主機變更為不同主機時，禁止沿用舊主機密碼快取
     prompts = iter(["NewHostPass!456"])
     with patch("mcp_servers.rhel_mcp._tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
-        host, port, user, pw = rhel_mcp._resolve_connection_params(ssh_host="192.168.1.20")
+        host, port, user, pw, key = rhel_mcp._resolve_connection_params(ssh_host="192.168.1.20")
         assert host == "192.168.1.20"
         assert pw == "NewHostPass!456"
+        assert key == ""
         assert mock_prompt.call_count == 1
         assert "密碼" in mock_prompt.call_args_list[0].args[0]
+
+
+def test_key_mode_generates_pubkey_ssh_args(tmp_path, monkeypatch):
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("dummy-private-key-data", encoding="utf-8")
+
+    monkeypatch.setenv("RHEL_HOST", "192.168.1.50")
+    monkeypatch.setenv("RHEL_SSH_PORT", "22")
+    monkeypatch.setenv("RHEL_SSH_USER", "opsuser")
+    monkeypatch.setenv("RHEL_SSH_KEY_PATH", str(key_file))
+
+    args, pw, timeout = rhel_mcp._build_ssh_args("uname -a")
+    assert "PubkeyAuthentication=yes" in args
+    assert "PubkeyAuthentication=no" not in args
+    assert "IdentitiesOnly=yes" in args
+    assert "IdentityAgent=none" in args
+    assert "-i" in args
+    assert str(key_file.resolve()) in args
+    assert "PreferredAuthentications=keyboard-interactive,password" not in args
+
+
+def test_key_mode_invalid_path_raises_error(monkeypatch):
+    monkeypatch.setenv("RHEL_HOST", "192.168.1.50")
+    monkeypatch.setenv("RHEL_SSH_PORT", "22")
+    monkeypatch.setenv("RHEL_SSH_USER", "opsuser")
+    monkeypatch.setenv("RHEL_SSH_KEY_PATH", "/non/existent/id_ed25519")
+
+    with pytest.raises(ValueError, match="指定的 SSH 私鑰檔案不存在或無法存取"):
+        rhel_mcp._build_ssh_args("id")
+
+
+def test_key_mode_passphrase_passed_via_askpass(tmp_path, monkeypatch):
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("dummy-key", encoding="utf-8")
+
+    monkeypatch.setenv("RHEL_HOST", "192.168.1.50")
+    monkeypatch.setenv("RHEL_SSH_PORT", "22")
+    monkeypatch.setenv("RHEL_SSH_USER", "opsuser")
+    monkeypatch.setenv("RHEL_SSH_KEY_PATH", str(key_file))
+    monkeypatch.setenv("RHEL_SSH_KEY_PASSPHRASE", "MyPassphrase!99")
+
+    args, pw, timeout = rhel_mcp._build_ssh_args("uptime")
+    assert pw == "MyPassphrase!99"
+    assert "PubkeyAuthentication=yes" in args
+
+
+def test_mcp_manager_maps_ssh_key_path():
+    from pocket_agent.extensions.mcp import _CONN_PARAM_MAP
+
+    assert _CONN_PARAM_MAP.get("ssh_key_path") == "RHEL_SSH_KEY_PATH"

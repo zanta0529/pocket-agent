@@ -1,9 +1,10 @@
 """遠端 RHEL 主機唯讀探查與維運診斷 MCP 伺服器。
 
 安全設計原則：
-1. 僅允許帳號＋密碼驗證（強制停用 Pubkey、GSSAPI 與 SSH Agent，不殘留金鑰或免密後門）。
-2. 支援彈性設定：RHEL_HOST、RHEL_SSH_PORT、RHEL_SSH_USER、RHEL_SSH_PASSWORD 皆可於設定檔預填、留空或省略；
-   未設定項目於執行期動態詢問使用者並僅快取於本機記憶體，絕不暴露予 LLM 或寫入日誌。
+1. 雙軌制連線認證：支援指定私鑰認證（含 Passphrase 解鎖）與加固帳密驗證智慧切換；
+   強制停用 GSSAPI、全域 SSH Agent 並鎖定 IdentitiesOnly，絕不讀取或濫用開發者本機 ~/.ssh/ 全域金鑰。
+2. 支援彈性設定：RHEL_HOST、RHEL_SSH_PORT、RHEL_SSH_USER、RHEL_SSH_PASSWORD、RHEL_SSH_KEY_PATH 皆可預填或留空；
+   未設定項目於執行期動態詢問並僅快取於當前行程記憶體，絕不落盤、絕不暴露予 LLM 或寫入日誌。
 3. 100% 結構化唯讀探查工具，所有識別字經正規表示式白名單與 shlex.quote 雙重防護。
 4. 遠端設定檔讀取受白名單目錄、敏感關鍵字黑名單與 realpath 解析保護，並自動遮罩機密欄位。
 """
@@ -186,29 +187,37 @@ def _resolve_connection_params(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
-) -> tuple[str, str, str, str]:
-    """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得連線四要素。"""
+    ssh_key_path: str = "",
+) -> tuple[str, str, str, str, str]:
+    """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得連線五要素。"""
     cached_host = _RUNTIME_CREDS.get("RHEL_HOST", "")
     cached_port = _RUNTIME_CREDS.get("RHEL_SSH_PORT", "")
     cached_user = _RUNTIME_CREDS.get("RHEL_SSH_USER", "")
+    cached_key = _RUNTIME_CREDS.get("RHEL_SSH_KEY_PATH", "")
 
     input_host = ssh_host.strip()
     input_port = ssh_port.strip()
     input_user = ssh_user.strip()
+    input_key = ssh_key_path.strip()
 
     host = input_host or cached_host or (os.getenv("RHEL_HOST") or "").strip()
     port = input_port or cached_port or (os.getenv("RHEL_SSH_PORT") or "").strip()
     user = input_user or cached_user or (os.getenv("RHEL_SSH_USER") or "").strip()
+    key_path = input_key or cached_key or (os.getenv("RHEL_SSH_KEY_PATH") or "").strip()
 
-    # 憑證快取隔離：僅當連線目標（host、user）與既有快取完全相符時才沿用舊密碼，防止跨主機密碼外洩
-    is_same_target = (not input_host or input_host == cached_host) and (not input_user or input_user == cached_user)
+    # 憑證快取隔離：僅當連線目標（host、user、key）與既有快取完全相符時才沿用舊密碼，防止跨主機憑證外洩
+    is_same_target = (
+        (not input_host or input_host == cached_host)
+        and (not input_user or input_user == cached_user)
+        and (not input_key or input_key == cached_key)
+    )
 
     if ssh_password:
         password = ssh_password
     elif is_same_target and _RUNTIME_CREDS.get("RHEL_SSH_PASSWORD"):
         password = _RUNTIME_CREDS["RHEL_SSH_PASSWORD"]
     else:
-        password = os.getenv("RHEL_SSH_PASSWORD") or ""
+        password = os.getenv("RHEL_SSH_KEY_PASSPHRASE") or os.getenv("RHEL_SSH_PASSWORD") or ""
 
     if not host:
         host = _tty_prompt("請輸入 RHEL 主機 IP 或位址 (RHEL_HOST): ").strip()
@@ -216,15 +225,24 @@ def _resolve_connection_params(
         port = _tty_prompt("請輸入 SSH 連接埠 (RHEL_SSH_PORT) [預設 22]: ").strip() or "22"
     if not user:
         user = _tty_prompt(f"請輸入 {host} 的 SSH 登入帳號 (RHEL_SSH_USER): ").strip()
-    if not password:
-        password = _tty_prompt(f"請輸入 {user}@{host} 的 SSH 登入密碼: ", is_password=True)
 
     if not host:
         raise ValueError("未提供 RHEL 主機位址 (RHEL_HOST)。")
     if not user:
         raise ValueError("未提供 SSH 登入帳號 (RHEL_SSH_USER)。")
-    if not password:
-        raise ValueError("未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；本工具僅允許帳號密碼驗證。")
+
+    if key_path:
+        # 金鑰模式：驗證私鑰檔案是否存在
+        resolved_key = Path(key_path).expanduser().resolve()
+        if not resolved_key.is_file():
+            raise ValueError(f"指定的 SSH 私鑰檔案不存在或無法存取：{key_path!r}")
+        key_path = str(resolved_key)
+    else:
+        # 帳密模式：密碼為必填
+        if not password:
+            password = _tty_prompt(f"請輸入 {user}@{host} 的 SSH 登入密碼: ", is_password=True)
+        if not password:
+            raise ValueError("未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；本工具僅允許帳號密碼驗證。")
 
     _validate_identifier(host, "RHEL_HOST")
     _validate_identifier(user, "RHEL_SSH_USER")
@@ -235,7 +253,8 @@ def _resolve_connection_params(
     _RUNTIME_CREDS["RHEL_SSH_PORT"] = port
     _RUNTIME_CREDS["RHEL_SSH_USER"] = user
     _RUNTIME_CREDS["RHEL_SSH_PASSWORD"] = password
-    return host, port, user, password
+    _RUNTIME_CREDS["RHEL_SSH_KEY_PATH"] = key_path
+    return host, port, user, password, key_path
 
 
 def _build_ssh_args(
@@ -244,8 +263,11 @@ def _build_ssh_args(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> tuple[list[str], str, int]:
-    host, port, user, password = _resolve_connection_params(ssh_host, ssh_port, ssh_user, ssh_password)
+    host, port, user, password, key_path = _resolve_connection_params(
+        ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path
+    )
     strict_host = (os.getenv("RHEL_STRICT_HOST_KEY") or "accept-new").strip()
 
     try:
@@ -265,20 +287,35 @@ def _build_ssh_args(
         "-o",
         "BatchMode=no",
         "-o",
-        "PubkeyAuthentication=no",
-        "-o",
         "GSSAPIAuthentication=no",
         "-o",
         "IdentitiesOnly=yes",
         "-o",
         "IdentityAgent=none",
-        "-o",
-        "PreferredAuthentications=keyboard-interactive,password",
-        "-o",
-        "NumberOfPasswordPrompts=1",
         "-p",
         port,
     ]
+    if key_path:
+        args.extend(
+            [
+                "-o",
+                "PubkeyAuthentication=yes",
+                "-i",
+                key_path,
+            ]
+        )
+    else:
+        args.extend(
+            [
+                "-o",
+                "PubkeyAuthentication=no",
+                "-o",
+                "PreferredAuthentications=keyboard-interactive,password",
+                "-o",
+                "NumberOfPasswordPrompts=1",
+            ]
+        )
+
     if strict_host == "no":
         null_dev = "NUL" if os.name == "nt" else "/dev/null"
         args.extend(["-o", f"UserKnownHostsFile={null_dev}"])
@@ -329,9 +366,12 @@ def _run_remote(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     try:
-        ssh_args, password, timeout = _build_ssh_args(remote_cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+        ssh_args, password, timeout = _build_ssh_args(
+            remote_cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path
+        )
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         proc = _run_with_askpass(ssh_args, password, timeout, creationflags)
 
@@ -342,7 +382,7 @@ def _run_remote(
             err_msg = proc.stderr.strip() if proc.stderr else "無法建立 OpenSSH 安全通道。"
             return (
                 f"[ERROR] [CONN_AUTH] 遠端 SSH 連線或認證失敗 (exit 255): {_redact_and_truncate(err_msg)}\n"
-                "提示：請確認目標主機已啟用密碼/鍵盤互動驗證，或檢查網路與金鑰設定。"
+                "提示：請確認目標主機已啟用密碼/金鑰驗證，或檢查網路與金鑰檔案權限設定。"
             )
 
         combined = (proc.stdout or "").strip()
@@ -372,6 +412,7 @@ def rhel_system_overview(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """探查 RHEL 主機系統概況：OS 版本、Kernel、Uptime、CPU/記憶體使用量與前 10 大高負載行程"""
     cmd = (
@@ -381,7 +422,7 @@ def rhel_system_overview(
         "echo '=== Top Processes (by CPU) ===' && "
         "ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu | head -n 11"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -390,6 +431,7 @@ def rhel_storage_and_fs(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """探查 RHEL 儲存與檔案系統狀態：掛載點空間使用率 (df -hT)、Inode 使用率 (df -i) 與區塊裝置 (lsblk)"""
     cmd = (
@@ -397,7 +439,7 @@ def rhel_storage_and_fs(
         "echo '=== Inode Usage ===' && df -i -x tmpfs -x devtmpfs; "
         "echo '=== Block Devices ===' && lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,UUID"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -406,6 +448,7 @@ def rhel_network_status(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """探查 RHEL 網路狀態：網路介面與 IP、路由表、DNS 設定與目前監聽的 TCP/UDP 連接埠"""
     cmd = (
@@ -414,7 +457,7 @@ def rhel_network_status(
         "echo '=== DNS Resolver ===' && cat /etc/resolv.conf 2>/dev/null; "
         "echo '=== Listening Ports ===' && ss -tuln"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -425,12 +468,13 @@ def rhel_service_status(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """查詢 RHEL systemd 服務狀態。不指定 service_name 時列出失敗或活動中的服務；指定時顯示該服務詳細狀態"""
     if failed_only or not service_name.strip():
         state_flag = "--state=failed" if failed_only else "--type=service --state=running,failed"
         cmd = f"systemctl list-units {state_flag} --no-pager --no-legend | head -n 80"
-        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
     try:
         safe_unit = _validate_identifier(service_name, "service_name")
@@ -439,7 +483,7 @@ def rhel_service_status(
 
     quoted = shlex.quote(safe_unit)
     cmd = f"systemctl status {quoted} --no-pager -n 25"
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -453,6 +497,7 @@ def rhel_query_journal(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """結構化檢索 RHEL systemd journald 日誌（支援 unit、優先等級、時間範圍與 grep 關鍵字）"""
     parts = ["journalctl", "--no-pager"]
@@ -487,7 +532,7 @@ def rhel_query_journal(
     safe_lines = max(1, min(int(lines or 50), 200))
     parts.extend(["-n", str(safe_lines)])
 
-    return _run_remote(" ".join(parts), ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(" ".join(parts), ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -496,6 +541,7 @@ def rhel_security_status(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """探查 RHEL 安全性子系統狀態：SELinux 模式與狀態、firewalld 防火牆規則摘要，以及待安裝的安全性更新"""
     cmd = (
@@ -508,7 +554,7 @@ def rhel_security_status(
         "echo '=== Security Updates (dnf) ===' && "
         "dnf updateinfo summary --security 2>/dev/null | tail -n 25"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -519,6 +565,7 @@ def rhel_read_config(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """安全讀取 RHEL 白名單目錄內的公開系統設定檔（自動阻擋敏感機密路徑並遮罩密碼與金鑰）"""
     try:
@@ -540,7 +587,7 @@ def rhel_read_config(
         "*) echo '[ERROR] 拒絕存取：解析後之真實路徑不在允許的目錄白名單內'; exit 1 ;; "
         "esac"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -552,6 +599,7 @@ def rhel_list_directory(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """安全列出 RHEL 白名單目錄（如 /etc、/opt、/srv、/var/log 等）內的檔案清單（可選顯示 SELinux 標籤）"""
     try:
@@ -578,7 +626,7 @@ def rhel_list_directory(
         "*) echo '[ERROR] 拒絕存取：解析後之真實路徑不在允許的目錄白名單內'; exit 1 ;; "
         "esac"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -588,6 +636,7 @@ def rhel_selinux_context(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """查詢指定檔案或目錄的目前 SELinux 安全標籤 (ls -dZ) 與政策預期標籤 (matchpathcon)"""
     try:
@@ -601,7 +650,7 @@ def rhel_selinux_context(
         "echo '=== Expected Context (matchpathcon) ===' && "
         f"(matchpathcon {quoted_path} 2>/dev/null || echo '無 matchpathcon 紀錄或工具未安裝')"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -615,6 +664,7 @@ def rhel_process_inspect(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """深度探查 RHEL 行程資訊：可指定 PID 檢視細節、以關鍵字搜尋行程、或依 CPU/Memory 排序（支援 SELinux 標籤）"""
     safe_lines = max(5, min(int(max_lines or 50), 100))
@@ -633,7 +683,7 @@ def rhel_process_inspect(
             "echo '=== Process SELinux Label ===' && "
             f"(ps -q {safe_pid} -o pid,user,label,comm 2>/dev/null || echo '無 SELinux 標籤資訊')"
         )
-        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
     cols = "pid,ppid,user,%cpu,%mem,stat,label,comm" if show_selinux else "pid,ppid,user,%cpu,%mem,stat,comm"
 
@@ -647,7 +697,7 @@ def rhel_process_inspect(
             f"echo '=== Search Processes matching {quoted_search} ===' && "
             f"ps -eo {cols},args | grep -i -- {quoted_search} | grep -v grep | head -n {safe_lines}"
         )
-        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
     sort_clean = sort_by.strip().lower()
     if sort_clean not in _VALID_SORT_KEYS:
@@ -658,7 +708,7 @@ def rhel_process_inspect(
         f"echo '=== Top Processes (sorted by {sort_clean}) ===' && "
         f"ps -eo {cols} --sort={sort_col} | head -n {safe_lines}"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -672,6 +722,7 @@ def rhel_network_connections(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """利用 ss (Socket Statistics) 結構化探查網路連線狀態（支援 TCP/UDP 協議、狀態過濾、特定 Port 與行程關聯）"""
     proto_clean = protocol.strip().lower()
@@ -700,7 +751,7 @@ def rhel_network_connections(
 
     safe_lines = max(5, min(int(max_lines or 60), 150))
     cmd = f"{base_cmd}{filter_expr} | head -n {safe_lines}"
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -711,6 +762,7 @@ def rhel_package_info(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """查詢 RHEL RPM/DNF 套件資訊、版本與檔案完整性驗證 (rpm -qi, rpm -V, dnf info)"""
     try:
@@ -733,7 +785,7 @@ def rhel_package_info(
             "echo '=== Changelog Summary (recent) ===' && "
             f"rpm -q --changelog {quoted} 2>/dev/null | head -n 20"
         )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -742,6 +794,7 @@ def rhel_container_status(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """探查 RHEL 容器執行環境：檢視 Podman/Docker 容器狀態、映像檔與 Pod 清單"""
     cmd = (
@@ -754,7 +807,7 @@ def rhel_container_status(
         "echo '=== Podman Pods ===' && "
         "(podman pod ps 2>/dev/null | head -n 15 || echo '無 podman pod 紀錄')"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -763,6 +816,7 @@ def rhel_cron_and_timers(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """探查 RHEL 定時排程作業：systemd 定時器 (timers) 與系統 cron 排程清單"""
     cmd = (
@@ -773,7 +827,7 @@ def rhel_cron_and_timers(
         "echo '=== Cron Daily/Hourly Directory Listing ===' && "
         "ls -la /etc/cron.daily /etc/cron.hourly 2>/dev/null | head -n 30"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 @mcp.tool()
@@ -782,6 +836,7 @@ def rhel_hardware_info(
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
+    ssh_key_path: str = "",
 ) -> str:
     """探查 RHEL 主機硬體規格與虛擬化環境：CPU 架構、記憶體規格與虛擬化平台偵測"""
     cmd = (
@@ -793,7 +848,7 @@ def rhel_hardware_info(
         "echo '=== Memory & Swap Details ===' && "
         "(free -h && grep -E '^(MemTotal|MemFree|MemAvailable|SwapTotal|SwapFree)' /proc/meminfo)"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 if __name__ == "__main__":

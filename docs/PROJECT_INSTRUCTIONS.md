@@ -9,7 +9,7 @@
 - 入口為 `main.py`，使用 Click；CLI 使用 Rich／prompt_toolkit。
 - 引擎包含 OpenAI API 與標準 Chat Completions (如 Gemini, Groq 等)；非同步流程使用 asyncio。
 - 認證包含 OAuth PKCE；依賴包含 OpenAI SDK、httpx、FastAPI、uvicorn、keyring。
-- MCP 提供外部工具整合；`browser_mcp.py` 為瀏覽器整合入口 (依賴 Playwright)，`rhel_mcp.py` 為遠端 RHEL 主機結構化唯讀巡檢入口 (透過系統 OpenSSH／Plink 強制帳密驗證)，`win_rdp_mcp.py` 為遠端 Windows 主機 RDP (Port 3389) 視覺控制與結構化唯讀巡檢入口。
+- MCP 提供外部工具整合；`browser_mcp.py` 為瀏覽器整合入口 (依賴 Playwright)，`rhel_mcp.py` 為遠端 RHEL 主機結構化唯讀巡檢入口 (透過系統 OpenSSH 支援指定私鑰與加固帳密雙軌驗證)，`win_rdp_mcp.py` 為遠端 Windows 主機 RDP (Port 3389) 視覺控制與結構化唯讀巡檢入口。
 - 輸出支援 python-docx、python-pptx、ReportLab；PDF 讀取使用 pypdf。
 - session 持久化使用 JSON，設定使用環境變數／YAML；本地索引與快取（RAG FTS5、Skill 檢索、Repo Map AST 快取）使用標準庫 `sqlite3`，禁止自行引入第三方資料庫或 ORM。
 
