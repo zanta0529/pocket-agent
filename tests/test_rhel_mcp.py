@@ -410,9 +410,10 @@ def test_run_with_askpass_zero_disk_leak():
 
     def fake_subprocess_run(cmd, **kwargs):
         captured_env.update(kwargs.get("env", {}))
-        # 驗證執行期 temp 目錄中不存在任何 pw.txt 明文密碼檔
+        # 驗證執行期 temp 目錄中不存在任何 pw.txt 明文密碼檔，且存在獨立的 askpass.py
         askpass_path = Path(kwargs["env"]["SSH_ASKPASS"])
         assert not (askpass_path.parent / "pw.txt").exists()
+        assert (askpass_path.parent / "askpass.py").exists()
         return fake_proc
 
     with patch("subprocess.run", side_effect=fake_subprocess_run):
@@ -487,3 +488,51 @@ def test_mcp_manager_maps_ssh_key_path():
     from pocket_agent.extensions.mcp import _CONN_PARAM_MAP
 
     assert _CONN_PARAM_MAP.get("ssh_key_path") == "RHEL_SSH_KEY_PATH"
+
+
+def test_mcp_manager_does_not_prompt_for_optional_key_path():
+    manager = MCPManager()
+    manager._server_envs["rhel_ops"] = {
+        "RHEL_HOST": "192.168.1.10",
+        "RHEL_SSH_PORT": "22",
+        "RHEL_SSH_USER": "admin",
+    }
+    fake_tools = [
+        SimpleNamespace(
+            name="rhel_system_overview",
+            description="overview",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ssh_host": {"type": "string"},
+                    "ssh_port": {"type": "string"},
+                    "ssh_user": {"type": "string"},
+                    "ssh_password": {"type": "string"},
+                    "ssh_key_path": {"type": "string"},
+                },
+            },
+        ),
+    ]
+    fake_session = SimpleNamespace(
+        list_tools=AsyncMock(return_value=SimpleNamespace(tools=fake_tools)),
+        call_tool=AsyncMock(return_value=MagicMock(content=[MagicMock(text="OK")])),
+    )
+    asyncio.run(
+        manager._register_tools(
+            "rhel_ops",
+            fake_session,
+            inject={},
+            safe_read_tools=["rhel_system_overview"],
+        )
+    )
+    prompt_calls = []
+
+    def fake_prompt(server_name, missing_keys):
+        prompt_calls.append((server_name, missing_keys))
+        return {"RHEL_SSH_PASSWORD": "mypassword"}
+
+    manager.on_prompt_conn = fake_prompt
+    asyncio.run(manager.call("rhel_system_overview", {}))
+
+    # 關鍵驗證：未配置金鑰時，絕不詢問 RHEL_SSH_KEY_PATH，僅詢問 RHEL_SSH_PASSWORD
+    assert prompt_calls == [("rhel_ops", ["RHEL_SSH_PASSWORD"])]

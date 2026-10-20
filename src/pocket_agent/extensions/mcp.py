@@ -120,24 +120,38 @@ class MCPManager:
         resolved: dict[str, str] = {}
         missing: list[str] = []
 
+        # 預先解析已配置或快取的連線參數
         for env_key in entry.conn_params.values():
             val = cached.get(env_key)
             if val is None or val == "":
                 val = server_env.get(env_key)
             if val is None or val == "":
                 val = os.getenv(env_key) or ""
-            clean = str(val) if "PASSWORD" in env_key else str(val).strip()
+            clean = str(val) if "PASSWORD" in env_key or "PASSPHRASE" in env_key else str(val).strip()
             if clean:
                 resolved[env_key] = clean
-            else:
-                missing.append(env_key)
+
+        # 判斷是否已配置金鑰路徑
+        has_key = bool(resolved.get("RHEL_SSH_KEY_PATH"))
+
+        # 判定哪些必要參數缺失需要動態向使用者詢問
+        for env_key in entry.conn_params.values():
+            if env_key in resolved:
+                continue
+            # 金鑰路徑與 Passphrase 均為選填，絕不主動視為 missing 攔截詢問
+            if env_key in ("RHEL_SSH_KEY_PATH", "RHEL_SSH_KEY_PASSPHRASE"):
+                continue
+            # 若已提供金鑰路徑，密碼（作為 Passphrase）亦為選填，不強制詢問
+            if has_key and env_key == "RHEL_SSH_PASSWORD":
+                continue
+            missing.append(env_key)
 
         if missing and self.on_prompt_conn is not None:
             import asyncio
 
             prompted = await asyncio.to_thread(self.on_prompt_conn, entry.server_name, missing)
             for k, v in (prompted or {}).items():
-                clean_v = str(v) if "PASSWORD" in k else str(v).strip()
+                clean_v = str(v) if "PASSWORD" in k or "PASSPHRASE" in k else str(v).strip()
                 if clean_v:
                     cached[k] = clean_v
                     resolved[k] = clean_v

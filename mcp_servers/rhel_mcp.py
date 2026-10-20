@@ -329,14 +329,20 @@ def _run_with_askpass(ssh_args: list[str], password: str, timeout: int, creation
     with tempfile.TemporaryDirectory(prefix="rhel_mcp_") as tmp_dir:
         tmp_path = Path(tmp_dir)
 
-        # 透過內嵌 Python 腳本自隔離環境變數輸出密碼，100% 記憶體傳遞，杜絕密碼寫入硬碟暫存檔（零落盤）
-        py_cmd = 'import os, sys; sys.stdout.write(os.environ["RHEL_SSH_ASKPASS_PW"] + "\\n")'
+        # 透過專用 askpass.py 自隔離環境變數輸出密碼，100% 記憶體傳遞，杜絕密碼寫入硬碟暫存檔（零落盤）
+        # 使用獨立 .py 腳本徹底消除 Windows cmd.exe -c 行內命令字串巢狀雙引號引發之 SyntaxError
+        askpass_py = tmp_path / "askpass.py"
+        askpass_py.write_text(
+            'import os, sys\nsys.stdout.write(os.environ.get("RHEL_SSH_ASKPASS_PW", "") + "\\n")\n',
+            encoding="utf-8",
+        )
+
         if os.name == "nt":
             askpass_script = tmp_path / "askpass.bat"
-            askpass_script.write_text(f'@"{sys.executable}" -c "{py_cmd}"\r\n', encoding="utf-8")
+            askpass_script.write_text(f'@"{sys.executable}" "{askpass_py}"\r\n', encoding="utf-8")
         else:
             askpass_script = tmp_path / "askpass.sh"
-            askpass_script.write_text(f"#!/bin/sh\nexec \"{sys.executable}\" -c '{py_cmd}'\n", encoding="utf-8")
+            askpass_script.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{askpass_py}"\n', encoding="utf-8")
             askpass_script.chmod(0o700)
 
         env = dict(os.environ)
