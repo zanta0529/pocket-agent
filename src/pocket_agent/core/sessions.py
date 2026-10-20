@@ -222,3 +222,15 @@ def list_sessions() -> list[dict]:
 
 def delete_session(session_id: str) -> None:
     _path(session_id).unlink(missing_ok=True)
+
+
+def rename_session(session_id: str, new_title: str) -> bool:
+    """重新命名指定的 session 標題。若該 session 檔案存在則更新並重新簽章回寫。"""
+    clean_title = new_title.strip().replace("\n", " ")[:60]
+    if not clean_title:
+        raise ValueError("標題不得為空。")
+    data = load_session(session_id)
+    if data is None:
+        return False
+    save_session(session_id, data.get("history", []), title=clean_title)
+    return True

@@ -160,3 +160,65 @@ class CompactCommand(CliCommand):
             "green",
         )
         return CommandResult()
+
+
+class NewCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if args:
+            raise ValueError("/new 不接受參數")
+        from pocket_agent.core.sessions import new_session_id, save_session
+
+        old_session_id = ctx.state.session_id
+        # 若原先對話有內容，先自動儲存保護工作成果
+        if ctx.agent.history:
+            try:
+                save_session(old_session_id, ctx.agent.history)
+                saved_msg = f"（已自動儲存前次會話：{old_session_id}）"
+            except Exception as e:
+                saved_msg = f"（前次會話自動存檔失敗：{e}）"
+        else:
+            saved_msg = ""
+
+        # 徹底清空當前上下文與會話狀態
+        ctx.agent.clear_history()
+        ctx.state.session_id = new_session_id()
+        ctx.state.pending_files.clear()
+        ctx.state.last_failed_input = ""
+        ctx.state.session_tokens = 0
+        ctx.state.session_approved_commands.clear()
+        ctx.agent.context_usage = None
+        ctx.agent.last_images.clear()
+        ctx.agent.last_files.clear()
+
+        info = f"✓ 已開啟全新對話（Session ID: {ctx.state.session_id}）· 上下文與暫存已完整清空。"
+        if saved_msg:
+            info += f"\n  {saved_msg}"
+        ctx.renderer.message(info, "green")
+        return CommandResult()
+
+
+class RenameCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        new_title = args.strip()
+        if not new_title:
+            try:
+                prompt_input = await ctx.reader.read("請輸入新的對話標題（或按 Ctrl+C 取消）：")
+                new_title = prompt_input.strip()
+            except KeyboardInterrupt, EOFError:
+                ctx.renderer.message("已取消重新命名。")
+                return CommandResult()
+
+        if not new_title:
+            ctx.renderer.message("標題不得為空，已取消重新命名。", "yellow")
+            return CommandResult()
+
+        clean_title = new_title.replace("\n", " ")[:60]
+        from pocket_agent.core.sessions import rename_session, save_session
+
+        # 若檔案已存在於磁碟則直接更新；否則以當前 history 儲存帶標題之 session
+        renamed = rename_session(ctx.state.session_id, clean_title)
+        if not renamed:
+            save_session(ctx.state.session_id, ctx.agent.history, title=clean_title)
+
+        ctx.renderer.message(f"✓ 已將目前對話重新命名為：「{clean_title}」", "green")
+        return CommandResult()

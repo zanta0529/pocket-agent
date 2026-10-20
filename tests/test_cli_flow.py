@@ -162,3 +162,79 @@ def test_frontend_mcp_startup_messages(result, message, style, tmp_path, monkeyp
     assert calls == expected
     client.close.assert_awaited_once()
     mcp.stop.assert_awaited_once()
+
+
+def test_new_command_cleans_context_and_saves_old_session(tmp_path, monkeypatch):
+    from pocket_agent.core import sessions
+    from pocket_agent.frontend.cli.commands.core import CommandContext
+    from pocket_agent.frontend.cli.commands.session import NewCommand
+
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path)
+    renderer = Mock()
+    reader = Mock()
+    agent = SimpleNamespace(
+        history=[{"role": "user", "content": "舊對話內容"}],
+        clear_history=Mock(side_effect=lambda: agent.history.clear()),
+        context_usage="some_usage",
+        last_images=["img.png"],
+        last_files=["doc.docx"],
+    )
+    state = CliState("openai", "model")
+    old_session_id = state.session_id
+    state.pending_files = ["file.txt"]
+    state.session_tokens = 5000
+    state.last_failed_input = "failed"
+    state.session_approved_commands.add("git status")
+
+    ctx = CommandContext(agent=agent, state=state, reader=reader, renderer=renderer, tools=[])
+    cmd = NewCommand()
+    res = asyncio.run(cmd.execute(ctx, ""))
+    assert res.action == "handled"
+
+    # 1. 驗證原先對話已自動儲存至磁碟
+    saved_old = sessions.load_session(old_session_id)
+    assert saved_old is not None
+    assert saved_old["history"][0]["content"] == "舊對話內容"
+
+    # 2. 驗證新對話具有全新乾淨的狀態與新 Session ID
+    assert state.session_id != old_session_id
+    assert len(agent.history) == 0
+    assert len(state.pending_files) == 0
+    assert state.session_tokens == 0
+    assert state.last_failed_input == ""
+    assert len(state.session_approved_commands) == 0
+    assert agent.context_usage is None
+    assert len(agent.last_images) == 0
+    assert len(agent.last_files) == 0
+    renderer.message.assert_called()
+    assert "已開啟全新對話" in renderer.message.call_args[0][0]
+
+
+def test_rename_command_updates_title_and_persists(tmp_path, monkeypatch):
+    from pocket_agent.core import sessions
+    from pocket_agent.frontend.cli.commands.core import CommandContext
+    from pocket_agent.frontend.cli.commands.session import RenameCommand
+
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path)
+    renderer = Mock()
+    reader = SimpleNamespace(read=AsyncMock(return_value="互動輸入的新標題"))
+    agent = SimpleNamespace(
+        history=[{"role": "user", "content": "初始問題"}],
+    )
+    state = CliState("openai", "model")
+    sessions.save_session(state.session_id, agent.history, title="初始標題")
+
+    ctx = CommandContext(agent=agent, state=state, reader=reader, renderer=renderer, tools=[])
+    cmd = RenameCommand()
+
+    # 1. 測試直接帶參數重新命名
+    res = asyncio.run(cmd.execute(ctx, "新標題 A"))
+    assert res.action == "handled"
+    data_a = sessions.load_session(state.session_id)
+    assert data_a["title"] == "新標題 A"
+
+    # 2. 測試無參數時互動式提示輸入
+    res2 = asyncio.run(cmd.execute(ctx, ""))
+    assert res2.action == "handled"
+    data_b = sessions.load_session(state.session_id)
+    assert data_b["title"] == "互動輸入的新標題"

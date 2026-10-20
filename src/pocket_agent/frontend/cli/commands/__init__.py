@@ -17,7 +17,12 @@ from pocket_agent.frontend.cli.commands.misc import (
     ToolsCommand,
     UsageCommand,
 )
-from pocket_agent.frontend.cli.commands.session import CompactCommand, SessionCommand
+from pocket_agent.frontend.cli.commands.session import (
+    CompactCommand,
+    NewCommand,
+    RenameCommand,
+    SessionCommand,
+)
 from pocket_agent.frontend.cli.commands.subagents import AgentsCommand, ParallelCommand, SubagentCommand
 from pocket_agent.frontend.cli.commands.system import SysRegistryCommand, switch_model
 from pocket_agent.frontend.cli.input import CliInput
@@ -47,6 +52,8 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("rm-file", RmFileCommand())
     registry.register("attachments", AttachmentsCommand())
     registry.register("session", SessionCommand())
+    registry.register("new", NewCommand())
+    registry.register("rename", RenameCommand())
     registry.register("compact", CompactCommand())
     registry.register("agents", AgentsCommand())
     registry.register("subagent", SubagentCommand())
