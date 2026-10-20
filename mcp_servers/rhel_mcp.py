@@ -29,6 +29,7 @@ mcp = MCPServer("rhel-ops")
 MAX_OUTPUT_CHARS = 6000
 _IDENT_RE = re.compile(r"^[a-zA-Z0-9_.@-]+$")
 _SINCE_RE = re.compile(r"^[a-zA-Z0-9_.:+\- ]+$")
+_SEARCH_RE = re.compile(r"^[a-zA-Z0-9_.:@/+\- ]+$")
 
 # 執行期記憶體快取（僅存活於當前行程生命週期，不落盤）
 _RUNTIME_CREDS: dict[str, str] = {}
@@ -54,12 +55,15 @@ _VALID_PRIORITIES = {
 
 _ALLOWED_CONFIG_PREFIXES = (
     "/etc/",
+    "/opt/",
     "/proc/",
+    "/run/systemd/",
     "/srv/",
     "/sys/",
     "/usr/lib/systemd/",
     "/usr/local/etc/",
     "/usr/share/",
+    "/var/log/",
 )
 
 _DENIED_PATH_KEYWORDS = (
@@ -79,6 +83,11 @@ _DENIED_PATH_KEYWORDS = (
     "id_rsa",
     "id_ed25519",
     "id_ecdsa",
+    "secure",
+    "audit",
+    "wtmp",
+    "btmp",
+    "lastlog",
 )
 
 _REDACT_KV_RE = re.compile(
@@ -92,6 +101,30 @@ def _validate_identifier(value: str, field_name: str) -> str:
     clean = value.strip()
     if not clean or clean.startswith("-") or not _IDENT_RE.match(clean):
         raise ValueError(f"非法的 {field_name} 參數格式：{value!r}（僅允許英數字、點、底線、連字號與 @）")
+    return clean
+
+
+def _validate_search_pattern(value: str, field_name: str, max_len: int = 50) -> str:
+    clean = value.strip()
+    if not clean or clean.startswith("-") or not _SEARCH_RE.match(clean) or len(clean) > max_len:
+        raise ValueError(
+            f"非法的 {field_name} 參數格式：{value!r}（僅允許英數字、斜線、冒號、點、空白等安全符號，"
+            f"且限 {max_len} 字元以內）"
+        )
+    return clean
+
+
+def _validate_port(value: str) -> str:
+    clean = value.strip()
+    if not clean.isdigit() or not (1 <= int(clean) <= 65535):
+        raise ValueError(f"非法的連接埠數值：{value!r}（必須為 1~65535 之間的整數）")
+    return clean
+
+
+def _validate_pid(value: str | int) -> str:
+    clean = str(value).strip()
+    if not clean.isdigit() or int(clean) <= 0:
+        raise ValueError(f"非法的行程 PID 數值：{value!r}（必須為正整數）")
     return clean
 
 
@@ -409,13 +442,14 @@ def rhel_query_journal(
     unit: str = "",
     priority: str = "err",
     since: str = "1 hour ago",
+    grep: str = "",
     lines: int = 50,
     ssh_host: str = "",
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
 ) -> str:
-    """結構化檢索 RHEL systemd journald 日誌（強制無分頁並限制行數上限 200 行）"""
+    """結構化檢索 RHEL systemd journald 日誌（支援 unit、優先等級、時間範圍與 grep 關鍵字）"""
     parts = ["journalctl", "--no-pager"]
 
     if unit.strip():
@@ -437,6 +471,13 @@ def rhel_query_journal(
         if not _SINCE_RE.match(since_clean) or len(since_clean) > 40:
             return f"[ERROR] 非法的 since 時間格式：{since!r}"
         parts.extend(["--since", shlex.quote(since_clean)])
+
+    if grep.strip():
+        try:
+            safe_grep = _validate_search_pattern(grep, "grep")
+        except ValueError as e:
+            return f"[ERROR] {e}"
+        parts.extend(["-g", shlex.quote(safe_grep)])
 
     safe_lines = max(1, min(int(lines or 50), 200))
     parts.extend(["-n", str(safe_lines)])
@@ -482,16 +523,265 @@ def rhel_read_config(
 
     safe_lines = max(1, min(int(max_lines or 120), 300))
     quoted_path = shlex.quote(safe_path)
+    denied_case = "|".join(f"*{kw}*" for kw in _DENIED_PATH_KEYWORDS)
     allowed_case = "|".join(f"{p.rstrip('/')}/*" for p in _ALLOWED_CONFIG_PREFIXES)
     cmd = (
         f"real=$(realpath -e {quoted_path} 2>/dev/null) || {{ echo '[ERROR] 檔案不存在或無法存取'; exit 1; }}; "
         "case $real in "
-        "*shadow*|*gshadow*|*sudoers*|*private*|*secret*|*key*|*token*|*.ssh*|*.env*) "
+        f"{denied_case}) "
         "echo '[ERROR] 拒絕存取：解析後之真實路徑屬於敏感機密檔案'; exit 1 ;; "
         f"{allowed_case}) "
         f"head -n {safe_lines} -- $real ;; "
         "*) echo '[ERROR] 拒絕存取：解析後之真實路徑不在允許的目錄白名單內'; exit 1 ;; "
         "esac"
+    )
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+
+@mcp.tool()
+def rhel_list_directory(
+    dir_path: str,
+    show_selinux: bool = False,
+    max_lines: int = 100,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
+    """安全列出 RHEL 白名單目錄（如 /etc、/opt、/srv、/var/log 等）內的檔案清單（可選顯示 SELinux 標籤）"""
+    try:
+        safe_path = _validate_config_path(dir_path)
+    except ValueError as e:
+        return f"[ERROR] {e}"
+
+    safe_lines = max(1, min(int(max_lines or 100), 250))
+    quoted_path = shlex.quote(safe_path)
+    denied_case = "|".join(f"*{kw}*" for kw in _DENIED_PATH_KEYWORDS)
+    allowed_patterns = [p.rstrip("/") for p in _ALLOWED_CONFIG_PREFIXES] + [
+        f"{p.rstrip('/')}/*" for p in _ALLOWED_CONFIG_PREFIXES
+    ]
+    allowed_case = "|".join(allowed_patterns)
+    ls_flags = "-laZ --time-style=long-iso" if show_selinux else "-la --time-style=long-iso"
+    cmd = (
+        f"real=$(realpath -e {quoted_path} 2>/dev/null) || {{ echo '[ERROR] 目錄不存在或無法存取'; exit 1; }}; "
+        "[ -d \"$real\" ] || { echo '[ERROR] 指定路徑並非目錄'; exit 1; }; "
+        "case $real in "
+        f"{denied_case}) "
+        "echo '[ERROR] 拒絕存取：解析後之真實路徑屬於敏感保護目錄'; exit 1 ;; "
+        f"{allowed_case}) "
+        f'ls {ls_flags} -- "$real" | head -n {safe_lines} ;; '
+        "*) echo '[ERROR] 拒絕存取：解析後之真實路徑不在允許的目錄白名單內'; exit 1 ;; "
+        "esac"
+    )
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+
+@mcp.tool()
+def rhel_selinux_context(
+    target_path: str,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
+    """查詢指定檔案或目錄的目前 SELinux 安全標籤 (ls -dZ) 與政策預期標籤 (matchpathcon)"""
+    try:
+        safe_path = _validate_config_path(target_path)
+    except ValueError as e:
+        return f"[ERROR] {e}"
+
+    quoted_path = shlex.quote(safe_path)
+    cmd = (
+        f"echo '=== Current SELinux Context (ls -dZ) ===' && ls -dZ -- {quoted_path} 2>&1; "
+        "echo '=== Expected Context (matchpathcon) ===' && "
+        f"(matchpathcon {quoted_path} 2>/dev/null || echo '無 matchpathcon 紀錄或工具未安裝')"
+    )
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+
+@mcp.tool()
+def rhel_process_inspect(
+    pid: str = "",
+    search: str = "",
+    sort_by: str = "cpu",
+    show_selinux: bool = False,
+    max_lines: int = 50,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
+    """深度探查 RHEL 行程資訊：可指定 PID 檢視細節、以關鍵字搜尋行程、或依 CPU/Memory 排序（支援 SELinux 標籤）"""
+    safe_lines = max(5, min(int(max_lines or 50), 100))
+
+    if pid.strip():
+        try:
+            safe_pid = _validate_pid(pid)
+        except ValueError as e:
+            return f"[ERROR] {e}"
+        cmd = (
+            f"echo '=== Process Detail (PID: {safe_pid}) ===' && "
+            f"ps -fp {safe_pid} 2>/dev/null || echo '行程不存在或已終止'; "
+            "echo '=== Process Status Summary ===' && "
+            f"(cat /proc/{safe_pid}/status 2>/dev/null | "
+            "grep -E '^(Name|State|Tgid|Pid|PPid|Uid|Gid|Threads|VmRSS|VmSize)' || true); "
+            "echo '=== Process SELinux Label ===' && "
+            f"(ps -q {safe_pid} -o pid,user,label,comm 2>/dev/null || echo '無 SELinux 標籤資訊')"
+        )
+        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+    cols = "pid,ppid,user,%cpu,%mem,stat,label,comm" if show_selinux else "pid,ppid,user,%cpu,%mem,stat,comm"
+
+    if search.strip():
+        try:
+            safe_search = _validate_search_pattern(search, "search")
+        except ValueError as e:
+            return f"[ERROR] {e}"
+        quoted_search = shlex.quote(safe_search)
+        cmd = (
+            f"echo '=== Search Processes matching {quoted_search} ===' && "
+            f"ps -eo {cols},args | grep -i -- {quoted_search} | grep -v grep | head -n {safe_lines}"
+        )
+        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+    sort_col = "-%mem" if sort_by.strip().lower() in ("mem", "memory") else "-%cpu"
+    cmd = (
+        f"echo '=== Top Processes (sorted by {sort_by}) ===' && ps -eo {cols} --sort={sort_col} | head -n {safe_lines}"
+    )
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+
+@mcp.tool()
+def rhel_network_connections(
+    protocol: str = "all",
+    state: str = "all",
+    port: str = "",
+    show_process: bool = True,
+    max_lines: int = 60,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
+    """利用 ss (Socket Statistics) 結構化探查網路連線狀態（支援 TCP/UDP 協議、狀態過濾、特定 Port 與行程關聯）"""
+    proto_clean = protocol.strip().lower()
+    proto_flag = "-t" if proto_clean == "tcp" else "-u" if proto_clean == "udp" else "-tu"
+    proc_flag = " -p" if show_process else ""
+
+    state_clean = state.strip().lower()
+    valid_states = {"all", "listening", "established", "time-wait", "close-wait", "syn-sent", "syn-recv"}
+    if state_clean not in valid_states:
+        return f"[ERROR] 非法的 state 參數：{state!r}（允許值：{sorted(valid_states)}）"
+
+    if state_clean == "listening":
+        base_cmd = f"ss {proto_flag}ln{proc_flag}"
+    elif state_clean == "all":
+        base_cmd = f"ss {proto_flag}an{proc_flag}"
+    else:
+        base_cmd = f"ss {proto_flag}an{proc_flag} state {shlex.quote(state_clean)}"
+
+    filter_expr = ""
+    if port.strip():
+        try:
+            safe_port = _validate_port(port)
+        except ValueError as e:
+            return f"[ERROR] {e}"
+        filter_expr = f" sport = :{safe_port} or dport = :{safe_port}"
+
+    safe_lines = max(5, min(int(max_lines or 60), 150))
+    cmd = f"{base_cmd}{filter_expr} | head -n {safe_lines}"
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+
+@mcp.tool()
+def rhel_package_info(
+    package_name: str,
+    verify_integrity: bool = False,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
+    """查詢 RHEL RPM/DNF 套件資訊、版本與檔案完整性驗證 (rpm -qi, rpm -V, dnf info)"""
+    try:
+        safe_pkg = _validate_identifier(package_name, "package_name")
+    except ValueError as e:
+        return f"[ERROR] {e}"
+
+    quoted = shlex.quote(safe_pkg)
+    if verify_integrity:
+        cmd = (
+            f"echo '=== Package Verification (rpm -V) ===' && "
+            f"(rpm -V {quoted} || echo '檔案有變更或未安裝'); "
+            "echo '=== Installed Files (rpm -ql, head 30) ===' && "
+            f"rpm -ql {quoted} 2>/dev/null | head -n 30"
+        )
+    else:
+        cmd = (
+            f"echo '=== Package Info (rpm -qi) ===' && "
+            f"(rpm -qi {quoted} 2>/dev/null || dnf info {quoted} 2>/dev/null || echo '查無此套件'); "
+            "echo '=== Changelog Summary (recent) ===' && "
+            f"rpm -q --changelog {quoted} 2>/dev/null | head -n 20"
+        )
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+
+@mcp.tool()
+def rhel_container_status(
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
+    """探查 RHEL 容器執行環境：檢視 Podman/Docker 容器狀態、映像檔與 Pod 清單"""
+    cmd = (
+        "echo '=== Container Engine Detection ===' && "
+        "(which podman 2>/dev/null || which docker 2>/dev/null || echo '未安裝 podman 或 docker'); "
+        "echo '=== Running/All Containers ===' && "
+        "((podman ps -a --format 'table {{.ID}} {{.Image}} {{.Status}} {{.Names}}' 2>/dev/null || "
+        "docker ps -a --format 'table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}' 2>/dev/null) "
+        "| head -n 30 || echo '無容器或未啟動'); "
+        "echo '=== Podman Pods ===' && "
+        "(podman pod ps 2>/dev/null | head -n 15 || echo '無 podman pod 紀錄')"
+    )
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+
+@mcp.tool()
+def rhel_cron_and_timers(
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
+    """探查 RHEL 定時排程作業：systemd 定時器 (timers) 與系統 cron 排程清單"""
+    cmd = (
+        "echo '=== Active Systemd Timers ===' && "
+        "systemctl list-timers --no-pager --no-legend | head -n 30; "
+        "echo '=== System Crontab (/etc/crontab) ===' && "
+        "cat /etc/crontab 2>/dev/null; "
+        "echo '=== Cron Daily/Hourly Directory Listing ===' && "
+        "ls -la /etc/cron.daily /etc/cron.hourly 2>/dev/null | head -n 30"
+    )
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
+
+
+@mcp.tool()
+def rhel_hardware_info(
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+) -> str:
+    """探查 RHEL 主機硬體規格與虛擬化環境：CPU 架構、記憶體規格與虛擬化平台偵測"""
+    cmd = (
+        "echo '=== Virtualization Platform ===' && "
+        "(systemd-detect-virt || echo '實體機或未偵測到虛擬化層'); "
+        "echo '=== CPU Architecture (lscpu) ===' && "
+        "(lscpu 2>/dev/null | grep -E '^(Architecture|CPU\\(s\\)|Model name|Thread|Core|Socket|Virtualization|NUMA)' "
+        "|| uname -m); "
+        "echo '=== Memory & Swap Details ===' && "
+        "(free -h && grep -E '^(MemTotal|MemFree|MemAvailable|SwapTotal|SwapFree)' /proc/meminfo)"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password)
 

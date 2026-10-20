@@ -72,6 +72,14 @@ servers:
   #     - rhel_query_journal
   #     - rhel_security_status
   #     - rhel_read_config
+  #     - rhel_list_directory
+  #     - rhel_selinux_context
+  #     - rhel_process_inspect
+  #     - rhel_network_connections
+  #     - rhel_package_info
+  #     - rhel_container_status
+  #     - rhel_cron_and_timers
+  #     - rhel_hardware_info
   #   env:
   #     RHEL_HOST: ""                        # 選填：主機 IP 或位址（留空或省略時將於執行時詢問）
   #     RHEL_SSH_PORT: ""                    # 選填：SSH 連接埠（留空或省略時將於執行時詢問）

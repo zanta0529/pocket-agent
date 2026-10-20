@@ -267,3 +267,121 @@ def test_resolve_stdio_params_from_external_cwd(tmp_path, monkeypatch):
         assert frozen_params.command == sys.executable
         assert frozen_params.args[0] == "--internal-mcp-server"
         assert Path(frozen_params.args[1]).name == "rhel_mcp.py"
+
+
+def test_new_paths_allowed_and_sensitive_logs_blocked(monkeypatch):
+    _set_full_creds(monkeypatch)
+    fake_proc = SimpleNamespace(returncode=0, stdout="OK", stderr="")
+
+    # 允許 /opt, /srv, /var/log/nginx
+    with patch("subprocess.run", return_value=fake_proc) as mock_run:
+        out = rhel_mcp.rhel_read_config("/opt/myapp/app.conf")
+        assert out == "OK"
+        out2 = rhel_mcp.rhel_read_config("/srv/web/config.ini")
+        assert out2 == "OK"
+        out3 = rhel_mcp.rhel_read_config("/var/log/nginx/access.log")
+        assert out3 == "OK"
+        assert mock_run.call_count == 3
+
+    # 阻擋 /var/log/secure, /var/log/audit/audit.log, /var/log/wtmp
+    with patch("subprocess.run") as mock_run:
+        res_sec = rhel_mcp.rhel_read_config("/var/log/secure")
+        assert res_sec.startswith("[ERROR]")
+        res_audit = rhel_mcp.rhel_read_config("/var/log/audit/audit.log")
+        assert res_audit.startswith("[ERROR]")
+        res_wtmp = rhel_mcp.rhel_read_config("/var/log/wtmp")
+        assert res_wtmp.startswith("[ERROR]")
+        mock_run.assert_not_called()
+
+
+def test_list_directory_and_selinux_context(monkeypatch):
+    _set_full_creds(monkeypatch)
+    fake_proc = SimpleNamespace(returncode=0, stdout="drwxr-xr-x file.conf", stderr="")
+
+    with patch("subprocess.run", return_value=fake_proc) as mock_run:
+        # 測試一般列出與 show_selinux
+        out = rhel_mcp.rhel_list_directory("/etc/systemd/system", show_selinux=True)
+        assert out == "drwxr-xr-x file.conf"
+        called_cmd = mock_run.call_args.args[0][-1]
+        assert "ls -laZ" in called_cmd
+        assert "/srv/*" in called_cmd
+        assert "/opt/*" in called_cmd
+
+        # 測試 SELinux context 查詢
+        out_ctx = rhel_mcp.rhel_selinux_context("/srv/web/index.html")
+        assert out_ctx == "drwxr-xr-x file.conf"
+        called_cmd_ctx = mock_run.call_args.args[0][-1]
+        assert "ls -dZ -- /srv/web/index.html" in called_cmd_ctx
+        assert "matchpathcon /srv/web/index.html" in called_cmd_ctx
+
+
+def test_process_inspect_and_validation(monkeypatch):
+    _set_full_creds(monkeypatch)
+    fake_proc = SimpleNamespace(returncode=0, stdout="1234 root python", stderr="")
+
+    # PID 查詢與注入防禦
+    with patch("subprocess.run", return_value=fake_proc) as mock_run:
+        out = rhel_mcp.rhel_process_inspect(pid="1234")
+        assert out == "1234 root python"
+        called_cmd = mock_run.call_args.args[0][-1]
+        assert "ps -fp 1234" in called_cmd
+
+    with patch("subprocess.run") as mock_run:
+        bad_pid = rhel_mcp.rhel_process_inspect(pid="1234; reboot")
+        assert bad_pid.startswith("[ERROR]")
+        mock_run.assert_not_called()
+
+    # 關鍵字搜尋與注入防禦
+    with patch("subprocess.run", return_value=fake_proc) as mock_run:
+        out_search = rhel_mcp.rhel_process_inspect(search="nginx", show_selinux=True)
+        assert out_search == "1234 root python"
+        called_cmd_search = mock_run.call_args.args[0][-1]
+        assert "label" in called_cmd_search
+        assert "grep -i -- nginx" in called_cmd_search
+
+    with patch("subprocess.run") as mock_run:
+        bad_search = rhel_mcp.rhel_process_inspect(search="nginx && cat /etc/shadow")
+        assert bad_search.startswith("[ERROR]")
+        mock_run.assert_not_called()
+
+
+def test_network_connections_and_validation(monkeypatch):
+    _set_full_creds(monkeypatch)
+    fake_proc = SimpleNamespace(returncode=0, stdout="tcp ESTAB 0 0", stderr="")
+
+    with patch("subprocess.run", return_value=fake_proc) as mock_run:
+        out = rhel_mcp.rhel_network_connections(protocol="tcp", state="established", port="443")
+        assert out == "tcp ESTAB 0 0"
+        called_cmd = mock_run.call_args.args[0][-1]
+        assert "ss -tan -p state established" in called_cmd
+        assert "sport = :443 or dport = :443" in called_cmd
+
+    with patch("subprocess.run") as mock_run:
+        bad_state = rhel_mcp.rhel_network_connections(state="invalid_state")
+        assert bad_state.startswith("[ERROR]")
+        bad_port = rhel_mcp.rhel_network_connections(port="999999")
+        assert bad_port.startswith("[ERROR]")
+        mock_run.assert_not_called()
+
+
+def test_package_and_journal_grep(monkeypatch):
+    _set_full_creds(monkeypatch)
+    fake_proc = SimpleNamespace(returncode=0, stdout="OK", stderr="")
+
+    with patch("subprocess.run", return_value=fake_proc) as mock_run:
+        out_pkg = rhel_mcp.rhel_package_info("nginx", verify_integrity=True)
+        assert out_pkg == "OK"
+        called_pkg_cmd = mock_run.call_args.args[0][-1]
+        assert "rpm -V nginx" in called_pkg_cmd
+
+        out_j = rhel_mcp.rhel_query_journal(unit="sshd", grep="Failed password")
+        assert out_j == "OK"
+        called_j_cmd = mock_run.call_args.args[0][-1]
+        assert "-g 'Failed password'" in called_j_cmd
+
+    with patch("subprocess.run") as mock_run:
+        bad_pkg = rhel_mcp.rhel_package_info("nginx; id")
+        assert bad_pkg.startswith("[ERROR]")
+        bad_grep = rhel_mcp.rhel_query_journal(grep="pass; rm -rf /")
+        assert bad_grep.startswith("[ERROR]")
+        mock_run.assert_not_called()
