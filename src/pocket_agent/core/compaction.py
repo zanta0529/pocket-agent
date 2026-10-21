@@ -9,6 +9,7 @@ from typing import Any
 
 from pocket_agent.core.context_budget import estimate_tokens
 from pocket_agent.engines.base import BaseEngine, EventText
+from pocket_agent.system.constants import DEFAULT_COMPACTION_KEEP_MESSAGES
 
 log = logging.getLogger("pocket-agent")
 
@@ -26,7 +27,7 @@ SUMMARY_SYSTEM_PROMPT = (
 class HistoryCompactor:
     """負責歷史對話摘要壓縮的專用元件。"""
 
-    def __init__(self, engine: BaseEngine, keep_recent_messages: int = 6):
+    def __init__(self, engine: BaseEngine, keep_recent_messages: int = DEFAULT_COMPACTION_KEEP_MESSAGES):
         self.engine = engine
         self.keep_recent_messages = max(2, keep_recent_messages)
 

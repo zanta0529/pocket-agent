@@ -27,6 +27,7 @@ from pocket_agent.extensions.skills import (
     skills_index_prompt,
 )
 from pocket_agent.system.config import config
+from pocket_agent.system.constants import DEFAULT_MAX_TOOL_ROUNDS
 from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool, is_doc_tool
 from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool, is_document_tool
 from pocket_agent.tools.fs import FS_TOOLS, call_fs_tool, is_fs_tool
@@ -127,7 +128,8 @@ def setup_logging():
 
 log = logging.getLogger("pocket-agent")
 
-DEFAULT_MAX_TOOL_ROUNDS = 20
+# 向後相容別名 (對齊 constants.py)
+DEFAULT_MAX_TOOL_ROUNDS = DEFAULT_MAX_TOOL_ROUNDS
 
 
 class Agent:

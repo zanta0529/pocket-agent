@@ -4,7 +4,20 @@ import re
 from pathlib import Path
 from typing import Callable
 
+from pocket_agent.system.constants import (
+    DEFAULT_READ_FILE_LINES,
+    DEFAULT_SEARCH_MAX_RESULTS,
+    DEFAULT_TOOL_OUTPUT_CHARS,
+    MAX_FILE_SEARCH_SIZE_BYTES,
+    MAX_READ_FILE_BYTES,
+)
+
 log = logging.getLogger("pocket-agent")
+
+# 向後相容別名 (對齊 constants.py)
+MAX_READ_LINES = DEFAULT_READ_FILE_LINES
+MAX_READ_CHARS = DEFAULT_TOOL_OUTPUT_CHARS
+SEARCH_MAX_RESULTS = DEFAULT_SEARCH_MAX_RESULTS
 
 _EXTERNAL_TAG_RE = re.compile(r"<\s*/?\s*external_content(?:\s+[^>]*)?\s*>", re.IGNORECASE)
 
@@ -405,12 +418,11 @@ def call_fs_tool(
             if not target.is_file():
                 return f"[ERROR] 不是一般檔案: {target}"
 
-            MAX_READ_FILE_BYTES = 10 * 1024 * 1024  # 10 MB DoS 防護上限
             try:
                 fsize = target.stat().st_size
                 if isinstance(fsize, int) and fsize > MAX_READ_FILE_BYTES:
                     return (
-                        f"[ERROR] 檔案過大 ({fsize:,} Bytes，超過 10 MB 安全上限)。"
+                        f"[ERROR] 檔案過大 ({fsize:,} Bytes，超過 {MAX_READ_FILE_BYTES // (1024 * 1024)} MB 安全上限)。"
                         "請改用 `search_files` 進行關鍵字檢索。"
                     )
             except OSError:
@@ -420,9 +432,6 @@ def call_fs_tool(
             end = args.get("end_line")
             char_offset = args.get("char_offset")
             char_offset = max(0, int(char_offset)) if char_offset is not None else 0
-
-            MAX_READ_LINES = 500
-            MAX_READ_CHARS = 12000
 
             start_idx = max(0, int(start) - 1) if start else 0
             req_end_idx = int(end) if end else (MAX_READ_LINES if start is None else None)
@@ -659,9 +668,9 @@ def call_fs_tool(
                 # 如果沒有給 query，就只是搜檔名
                 if not query:
                     results.append(rel_path)
-                    if len(results) >= 100:
+                    if len(results) >= DEFAULT_SEARCH_MAX_RESULTS:
                         results.append(
-                            "... (結果過多，已自動截斷前 100 筆)\n"
+                            f"... (結果過多，已自動截斷前 {DEFAULT_SEARCH_MAX_RESULTS} 筆)\n"
                             "[系統建議] 若要尋找特定內容，請利用 search_files 設定 `query`，\n"
                             "或利用 `file_pattern` 限縮範圍。"
                         )
@@ -669,9 +678,9 @@ def call_fs_tool(
                     continue
 
                 # 如果有 query，進行全文檢索
-                # DoS 防護：略過超過 5 MB 的大檔
+                # DoS 防護：略過超過 MAX_FILE_SEARCH_SIZE_BYTES 的大檔
                 try:
-                    if p.stat().st_size > 5 * 1024 * 1024:
+                    if p.stat().st_size > MAX_FILE_SEARCH_SIZE_BYTES:
                         continue
                 except Exception:
                     continue
@@ -681,9 +690,9 @@ def call_fs_tool(
                     for i, line in enumerate(lines):
                         if query in line:
                             results.append(f"{rel_path}:{i + 1}: {line.strip()}")
-                            if len(results) >= 100:
+                            if len(results) >= DEFAULT_SEARCH_MAX_RESULTS:
                                 results.append(
-                                    "... (結果過多，已自動截斷前 100 筆)\n"
+                                    f"... (結果過多，已自動截斷前 {DEFAULT_SEARCH_MAX_RESULTS} 筆)\n"
                                     "[系統建議] 若要繼續閱讀特定檔案，"
                                     "請使用 `read_file` 並設定 `start_line`/`end_line`；\n"
                                     "若要精準搜尋，請在 `search_files` 設定更精確的 `query` 或 `file_pattern`。"

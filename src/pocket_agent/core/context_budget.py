@@ -7,20 +7,28 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from pocket_agent.system.constants import (
+    CHARS_PER_TOKEN_ESTIMATE,
+    DEFAULT_COMPACT_RATIO,
+    DEFAULT_COMPACT_TARGET_RATIO,
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_KEEP_RECENT_OUTPUTS,
+    DEFAULT_RESERVE_OUTPUT_TOKENS,
+    DEFAULT_SAFETY_MARGIN_TOKENS,
+    DEFAULT_TOOL_OUTPUT_RATIO,
+)
+
 log = logging.getLogger("pocket-agent")
 
-# 查不到視窗時的保守保底值（tokens）
-DEFAULT_CONTEXT_WINDOW = 128_000
-# 超過視窗此比例時開始清除舊工具結果
-COMPACT_RATIO = 0.7
-# 清除舊結果時的目標水位比例（低於觸發門檻，拉出緩衝空間）
-COMPACT_TARGET_RATIO = 0.6
-# 單筆工具輸出佔視窗的上限比例
-TOOL_OUTPUT_RATIO = 0.08
-# 無 tokenizer 時的保守估算：約 3 字元 1 token
-CHARS_PER_TOKEN = 3
-# 清除舊結果時保留的最近工具輸出數量
-KEEP_RECENT_OUTPUTS = 2
+# 向後相容別名 (對齊 constants.py)
+COMPACT_RATIO = DEFAULT_COMPACT_RATIO
+COMPACT_TARGET_RATIO = DEFAULT_COMPACT_TARGET_RATIO
+TOOL_OUTPUT_RATIO = DEFAULT_TOOL_OUTPUT_RATIO
+CHARS_PER_TOKEN = CHARS_PER_TOKEN_ESTIMATE
+KEEP_RECENT_OUTPUTS = DEFAULT_KEEP_RECENT_OUTPUTS
+DEFAULT_RESERVE_OUTPUT = DEFAULT_RESERVE_OUTPUT_TOKENS
+DEFAULT_SAFETY_MARGIN = DEFAULT_SAFETY_MARGIN_TOKENS
+
 # 使用率顏色分界
 WARN_RATIO = 0.7
 CRITICAL_RATIO = 0.85
@@ -135,11 +143,6 @@ class ContextUsage:
             )
         lines.append(f"視窗來源：{self.source}")
         return lines
-
-
-# 預設預留輸出/推理空間與安全餘裕（tokens）
-DEFAULT_RESERVE_OUTPUT = 4096
-DEFAULT_SAFETY_MARGIN = 1024
 
 
 class ContextBudget:

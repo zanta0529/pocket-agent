@@ -13,11 +13,13 @@ from typing import Any
 
 from pocket_agent.core.context_budget import estimate_tokens
 from pocket_agent.system.config import config
+from pocket_agent.system.constants import DEFAULT_REPO_MAP_BUDGET_TOKENS
 from pocket_agent.system.paths import user_dir
 
 log = logging.getLogger("pocket-agent")
 
-DEFAULT_REPO_MAP_BUDGET = 1024
+# 向後相容別名 (對齊 constants.py)
+DEFAULT_REPO_MAP_BUDGET = DEFAULT_REPO_MAP_BUDGET_TOKENS
 
 _IGNORE_DIRS = {
     ".git",

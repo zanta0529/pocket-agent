@@ -15,10 +15,18 @@ import subprocess
 import sys
 import threading
 
+from pocket_agent.system.constants import (
+    DEFAULT_CLI_TIMEOUT_SEC,
+    DEFAULT_PROCESS_BUFFER_BYTES,
+    DEFAULT_TOOL_OUTPUT_CHARS,
+    MAX_CLI_TIMEOUT_SEC,
+)
+
 log = logging.getLogger("pocket-agent")
 
-MAX_OUTPUT = 12000  # 回傳給模型的最大字元數（對齊 fs.py read_file 上限，適合 64k~128k 視窗）
-MAX_OUTPUT_BYTES = 1024 * 1024  # 讀取子行程輸出的位元組上限（1 MB 安全緩衝區）
+# 向後相容別名 (對齊 constants.py)
+MAX_OUTPUT = DEFAULT_TOOL_OUTPUT_CHARS  # 回傳給模型的最大字元數 (適合 64k~128k 視窗)
+MAX_OUTPUT_BYTES = DEFAULT_PROCESS_BUFFER_BYTES  # 讀取子行程輸出的位元組上限 (1 MB 安全緩衝區)
 
 
 def _decode_candidates() -> list[str]:
@@ -195,12 +203,15 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         return "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]"
 
     try:
-        timeout = min(int(args.get("timeout_sec") or 60), 600)
+        timeout = min(
+            int(args.get("timeout_sec") or DEFAULT_CLI_TIMEOUT_SEC),
+            MAX_CLI_TIMEOUT_SEC,
+        )
     except (
         TypeError,
         ValueError,
     ):
-        timeout = 60
+        timeout = DEFAULT_CLI_TIMEOUT_SEC
 
     # GUI 程式底下跑 console 指令不要閃出黑視窗
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0

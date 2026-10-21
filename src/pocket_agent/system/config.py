@@ -5,6 +5,20 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pocket_agent.system.constants import (
+    DEFAULT_CLI_TIMEOUT_SEC,
+    DEFAULT_COMPACT_TARGET_RATIO,
+    DEFAULT_MAX_TOOL_ROUNDS,
+    DEFAULT_PROCESS_BUFFER_BYTES,
+    DEFAULT_READ_FILE_LINES,
+    DEFAULT_REPO_MAP_BUDGET_TOKENS,
+    DEFAULT_RESERVE_OUTPUT_TOKENS,
+    DEFAULT_SAFETY_MARGIN_TOKENS,
+    DEFAULT_SPILLOVER_HEAD_CHARS,
+    DEFAULT_SPILLOVER_TAIL_CHARS,
+    DEFAULT_TOOL_OUTPUT_CHARS,
+)
+
 log = logging.getLogger("pocket-agent")
 
 CONFIG_PATH = Path.home() / ".pocket-agent" / "config.json"
@@ -33,19 +47,23 @@ DEFAULT_CONFIG = {
     "active_provider": "openai",
     "active_model": "gpt-6-astra",
     "system": {
-        "max_tool_rounds": 20,
+        "max_tool_rounds": DEFAULT_MAX_TOOL_ROUNDS,
         "log_level": "WARNING",
         "use_sandbox": "none",
         "sandbox_container": "pocket_sandbox",
         "auto_learn": False,
         "context_window": None,
-        "context_reserve_output": 4096,
-        "context_safety_margin": 1024,
-        "context_compact_target_ratio": 0.6,
+        "context_reserve_output": DEFAULT_RESERVE_OUTPUT_TOKENS,
+        "context_safety_margin": DEFAULT_SAFETY_MARGIN_TOKENS,
+        "context_compact_target_ratio": DEFAULT_COMPACT_TARGET_RATIO,
+        "tool_output_chars": DEFAULT_TOOL_OUTPUT_CHARS,
+        "process_buffer_bytes": DEFAULT_PROCESS_BUFFER_BYTES,
+        "read_file_lines": DEFAULT_READ_FILE_LINES,
+        "cli_timeout_sec": DEFAULT_CLI_TIMEOUT_SEC,
         "spillover_threshold_chars": None,
-        "spillover_head_chars": 1500,
-        "spillover_tail_chars": 1500,
-        "repo_map_budget": 1024,
+        "spillover_head_chars": DEFAULT_SPILLOVER_HEAD_CHARS,
+        "spillover_tail_chars": DEFAULT_SPILLOVER_TAIL_CHARS,
+        "repo_map_budget": DEFAULT_REPO_MAP_BUDGET_TOKENS,
         "housekeeping_enabled": True,
         "housekeeping_ttl_days": 7,
         "housekeeping_max_files": 100,
@@ -119,6 +137,10 @@ class EnvConfigProvider(ConfigProvider):
         "system.spillover_threshold_chars": "POCKET_AGENT_SPILLOVER_THRESHOLD",
         "system.spillover_head_chars": "POCKET_AGENT_SPILLOVER_HEAD",
         "system.spillover_tail_chars": "POCKET_AGENT_SPILLOVER_TAIL",
+        "system.tool_output_chars": "POCKET_AGENT_TOOL_OUTPUT_CHARS",
+        "system.process_buffer_bytes": "POCKET_AGENT_PROCESS_BUFFER_BYTES",
+        "system.read_file_lines": "POCKET_AGENT_READ_FILE_LINES",
+        "system.cli_timeout_sec": "POCKET_AGENT_CLI_TIMEOUT_SEC",
         "system.repo_map_budget": "POCKET_AGENT_REPO_MAP_BUDGET",
         "system.housekeeping_enabled": "POCKET_AGENT_HOUSEKEEPING_ENABLED",
         "system.housekeeping_ttl_days": "POCKET_AGENT_HOUSEKEEPING_TTL_DAYS",

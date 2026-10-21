@@ -29,7 +29,12 @@ _pw = None
 _browser = None
 _page = None
 
-MAX_TEXT = 6000
+try:
+    from pocket_agent.system.constants import DEFAULT_TOOL_OUTPUT_CHARS
+
+    MAX_TEXT = DEFAULT_TOOL_OUTPUT_CHARS
+except ImportError:
+    MAX_TEXT = 12000
 
 # 可互動元素的標記 JS：加上 data-mcp-ref 屬性並回傳清單
 _SNAPSHOT_JS = """
@@ -129,8 +134,12 @@ async def browser_snapshot() -> str:
     state = await _page_state(page)
     if not elements:
         return f"{state}\n\n（頁面上沒有可互動元素）"
-    if len(elements) > MAX_TEXT:
-        elements = elements[:MAX_TEXT] + "\n…（元素太多已截斷）"
+    total_el_len = len(elements)
+    if total_el_len > MAX_TEXT:
+        elements = (
+            elements[:MAX_TEXT]
+            + f"\n\n... (元素過多，已達單次輸出上限 {MAX_TEXT} 字元，原始長度共 {total_el_len:,} 字元)"
+        )
     return f"{state}\n\n可互動元素：\n{elements}"
 
 
@@ -140,8 +149,12 @@ async def browser_get_text() -> str:
     page = await _ensure_page()
     text = await page.evaluate("() => document.body ? document.body.innerText : ''")
     text = text.strip()
-    if len(text) > MAX_TEXT:
-        text = text[:MAX_TEXT] + "\n…（內容太長已截斷）"
+    total_text_len = len(text)
+    if total_text_len > MAX_TEXT:
+        text = (
+            text[:MAX_TEXT]
+            + f"\n\n... (內容過長，已達單次輸出上限 {MAX_TEXT} 字元，原始文字共 {total_text_len:,} 字元)"
+        )
     return f"{await _page_state(page)}\n\n{text}"
 
 

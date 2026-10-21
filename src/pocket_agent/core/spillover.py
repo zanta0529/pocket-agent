@@ -12,11 +12,17 @@ from pathlib import Path
 from typing import Any
 
 from pocket_agent.system.config import config
+from pocket_agent.system.constants import (
+    DEFAULT_SPILLOVER_HEAD_CHARS,
+    DEFAULT_SPILLOVER_TAIL_CHARS,
+    DEFAULT_TOOL_OUTPUT_CHARS,
+)
 
 log = logging.getLogger("pocket-agent")
 
-DEFAULT_HEAD_CHARS = 1500
-DEFAULT_TAIL_CHARS = 1500
+# 向後相容別名 (對齊 constants.py)
+DEFAULT_HEAD_CHARS = DEFAULT_SPILLOVER_HEAD_CHARS
+DEFAULT_TAIL_CHARS = DEFAULT_SPILLOVER_TAIL_CHARS
 
 
 class SpilloverManager:
@@ -55,9 +61,9 @@ class SpilloverManager:
         if not isinstance(text, str):
             return text
 
-        # 動態門檻：優先讀取設定，否則採用傳入的 max_chars，保底 6,000 字元
+        # 動態門檻：優先讀取設定，否則採用傳入的 max_chars，保底 DEFAULT_TOOL_OUTPUT_CHARS
         cfg_threshold = config.get("system.spillover_threshold_chars")
-        threshold = int(cfg_threshold) if cfg_threshold is not None else (max_chars or 6000)
+        threshold = int(cfg_threshold) if cfg_threshold is not None else (max_chars or DEFAULT_TOOL_OUTPUT_CHARS)
 
         total_len = len(text)
         if total_len <= threshold:

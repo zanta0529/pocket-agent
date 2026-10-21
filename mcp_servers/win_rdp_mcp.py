@@ -33,7 +33,13 @@ except ImportError:
 
 mcp = MCPServer("win-rdp-ops")
 
-MAX_OUTPUT_CHARS = 6000
+try:
+    from pocket_agent.system.constants import DEFAULT_TOOL_OUTPUT_CHARS
+
+    MAX_OUTPUT_CHARS = DEFAULT_TOOL_OUTPUT_CHARS
+except ImportError:
+    MAX_OUTPUT_CHARS = 12000
+
 _HOST_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 _USER_RE = re.compile(r"^[a-zA-Z0-9_.@\\\-]+$")
 _SERVICE_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
@@ -157,8 +163,12 @@ def _redact_and_truncate(text: str) -> str:
         return "(沒有輸出)"
     redacted = _REDACT_PEM_RE.sub("[REDACTED PRIVATE KEY]", text)
     redacted = _REDACT_KV_RE.sub(r"\1[REDACTED]", redacted)
-    if len(redacted) > MAX_OUTPUT_CHARS:
-        return redacted[:MAX_OUTPUT_CHARS] + "\n... (輸出過長已截斷)"
+    total_len = len(redacted)
+    if total_len > MAX_OUTPUT_CHARS:
+        return (
+            redacted[:MAX_OUTPUT_CHARS]
+            + f"\n\n... (內容過長，已達單次輸出上限 {MAX_OUTPUT_CHARS} 字元，原始輸出共 {total_len:,} 字元)"
+        )
     return redacted
 
 

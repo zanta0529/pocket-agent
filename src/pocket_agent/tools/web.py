@@ -6,6 +6,13 @@ from urllib.parse import urlparse
 
 import httpx
 
+from pocket_agent.system.constants import (
+    DEFAULT_MAX_REDIRECTS,
+    DEFAULT_NETWORK_TIMEOUT_SEC,
+    DEFAULT_WEB_CONTENT_MAX_CHARS,
+    MAX_RESPONSE_BYTES,
+)
+
 log = logging.getLogger("pocket-agent")
 
 WEB_TOOLS = [
@@ -81,8 +88,8 @@ def _strip_html(html_str: str) -> str:
         return re.sub(r"<[^>]+>", " ", html_str)
 
 
-MAX_RESPONSE_BYTES = 2 * 1024 * 1024  # 單次回應最多讀取 2 MB，避免記憶體耗盡
-MAX_REDIRECTS = 5
+# 向後相容別名 (對齊 constants.py)
+MAX_REDIRECTS = DEFAULT_MAX_REDIRECTS
 _REDIRECT_CODES = (301, 302, 303, 307, 308)
 _EXTERNAL_TAG_RE = re.compile(r"<\s*/?\s*external_content\s*>", re.IGNORECASE)
 
@@ -195,7 +202,7 @@ def _fetch_pinned(url: str, ip: str, headers: dict) -> tuple[int, dict, bytes, b
                 url,
                 headers=headers,
                 impersonate="chrome",
-                timeout=15.0,
+                timeout=DEFAULT_NETWORK_TIMEOUT_SEC,
                 allow_redirects=False,
                 stream=True,
                 resolve=[f"{host}:{port}:{ip}"],
@@ -214,7 +221,7 @@ def _fetch_pinned(url: str, ip: str, headers: dict) -> tuple[int, dict, bytes, b
     pinned_headers["Host"] = parsed.netloc.rsplit("@", 1)[-1]
     extensions = {"sni_hostname": host} if parsed.scheme == "https" else {}
     # trust_env=False：避免環境 proxy 重新解析主機名稱而繞過固定 IP
-    with httpx.Client(timeout=15.0, follow_redirects=False, trust_env=False) as client:
+    with httpx.Client(timeout=DEFAULT_NETWORK_TIMEOUT_SEC, follow_redirects=False, trust_env=False) as client:
         with client.stream("GET", pinned_url, headers=pinned_headers, extensions=extensions) as r:
             body, truncated = _read_limited(r.iter_bytes())
             return r.status_code, {k.lower(): v for k, v in r.headers.items()}, body, truncated, curl_missing
@@ -275,7 +282,7 @@ def _read_url(url: str, headers: dict) -> str:
         text = _strip_html(text)
 
     # 限制長度避免爆 Context
-    max_len = 15000
+    max_len = DEFAULT_WEB_CONTENT_MAX_CHARS
     inner = text
     if len(text) > max_len:
         inner = text[:max_len] + f"\n\n... (內容過長，已截斷前 {max_len} 字元)"
@@ -319,13 +326,25 @@ def call_web_tool(name: str, args: dict) -> str:
             try:
                 from curl_cffi import requests as c_requests
 
-                resp = c_requests.post(url, data={"q": query}, headers=headers, impersonate="chrome", timeout=15.0)
+                resp = c_requests.post(
+                    url,
+                    data={"q": query},
+                    headers=headers,
+                    impersonate="chrome",
+                    timeout=DEFAULT_NETWORK_TIMEOUT_SEC,
+                )
                 resp.raise_for_status()
             except Exception as curl_e:
                 # 若 curl_cffi 失敗 (缺套件、SSL 憑證、403等)，降級使用 httpx
                 log.debug("search_web: curl_cffi 失敗，降級 httpx: %s", curl_e)
                 try:
-                    resp = httpx.post(url, data={"q": query}, headers=headers, follow_redirects=True, timeout=15.0)
+                    resp = httpx.post(
+                        url,
+                        data={"q": query},
+                        headers=headers,
+                        follow_redirects=True,
+                        timeout=DEFAULT_NETWORK_TIMEOUT_SEC,
+                    )
                     resp.raise_for_status()
                 except httpx.HTTPError as httpx_e:
                     return (
