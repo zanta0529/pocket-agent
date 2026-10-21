@@ -4,9 +4,10 @@
 1. 雙軌制連線認證：支援指定私鑰認證（含 Passphrase 解鎖）與加固帳密驗證智慧切換；
    強制停用 GSSAPI、全域 SSH Agent 並鎖定 IdentitiesOnly，絕不讀取或濫用開發者本機 ~/.ssh/ 全域金鑰。
 2. 支援彈性設定：RHEL_HOST、RHEL_SSH_PORT、RHEL_SSH_USER、RHEL_SSH_PASSWORD、RHEL_SSH_KEY_PATH 皆可預填或留空；
-   未設定項目於執行期動態詢問並僅快取於當前行程記憶體，絕不落盤、絕不暴露予 LLM 或寫入日誌。
-3. 100% 結構化唯讀探查工具，所有識別字經正規表示式白名單與 shlex.quote 雙重防護。
-4. 遠端設定檔讀取受白名單目錄、敏感關鍵字黑名單與 realpath 解析保護，並自動遮罩機密欄位。
+   未設定項目於執行期詢問並快取於當前行程；不主動將密碼寫入暫存腳本或日誌。
+3. 提供預先定義的唯讀查詢；參數經驗證及 Shell 引號保護，不提供任意指令入口。
+4. 以目錄邊界、真實路徑檢查及已知機密格式遮罩降低外洩風險，不能辨識所有未知機密。
+   建議使用專用低權限帳號；可寫目錄的替換競態與 ASKPASS 後代清理仍有平台限制。
 """
 
 import getpass
@@ -17,10 +18,9 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import threading
+import time
 import warnings
 from pathlib import Path
-from typing import BinaryIO
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -92,6 +92,7 @@ _DENIED_PATH_KEYWORDS = (
     "wtmp",
     "btmp",
     "lastlog",
+    ".netrc",
 )
 
 _REDACT_KV_RE = re.compile(
@@ -103,7 +104,7 @@ _REDACT_PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:--
 # 遇到敏感欄位時遮蔽整行剩餘內容，涵蓋 JSON、CLI 引數及未閉合的引號。
 _REDACT_SECRET_LINE_RE = re.compile(
     r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
-    r"|authorization|database_url|aws_access_key_id|private_key|preshared_key)\b[^\r\n\x00]*"
+    r"|psk|authorization|database_url|aws_access_key_id|private_key|preshared_key)\b[^\r\n\x00]*"
 )
 _REDACT_URL_RE = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+:[^\s/@]+@")
 MAX_CAPTURE_BYTES = 1024 * 1024  # 1 MB 安全串流緩衝上限，兼顧長日誌容錯與防爆記憶體 DoS
@@ -159,9 +160,53 @@ def _validate_config_path(file_path: str) -> str:
     return norm
 
 
+def _remote_path_guard(path: str, *, directory: bool) -> str:
+    """以同一套規則檢查實際路徑；不能消除可寫目錄內的替換競態。"""
+    denied = "|".join(f"*{keyword}*" for keyword in _DENIED_PATH_KEYWORDS)
+    allowed = [f"{prefix.rstrip('/')}/*" for prefix in _ALLOWED_CONFIG_PREFIXES]
+    if directory:
+        allowed.extend(prefix.rstrip("/") for prefix in _ALLOWED_CONFIG_PREFIXES)
+    kind = "d" if directory else "f"
+    return (
+        f"real=$(realpath -e -- {shlex.quote(path)} 2>/dev/null) || "
+        "{ echo '[ERROR] 路徑不存在或無法解析'; exit 1; }; "
+        "lower=$(printf '%s' \"$real\" | LC_ALL=C tr '[:upper:]' '[:lower:]') || exit 1; "
+        f'case "$lower" in {denied}) '
+        "echo '[ERROR] 拒絕存取：解析後路徑包含敏感關鍵字'; exit 1 ;; esac; "
+        f'case "$real" in {"|".join(allowed)}) ;; '
+        "*) echo '[ERROR] 拒絕存取：解析後路徑不在目錄白名單內'; exit 1 ;; esac; "
+        f'[ -{kind} "$real" ] || '
+        "{ echo '[ERROR] 不支援的檔案類型'; exit 1; }; "
+    )
+
+
+def _diagnostic_command(command: str) -> str:
+    """使用 RHEL Bash 保存管線錯誤；限量顯示仍排空上游，避免 head 的 SIGPIPE。"""
+    script = 'set -E -o pipefail; trap \'rc=$?; printf "[ERROR] 查詢區段失敗 (exit %s)\\n" "$rc" >&2\' ERR; ' + command
+    return "bash -c " + shlex.quote(script)
+
+
 def _redact_and_truncate(text: str) -> str:
     if not text:
         return "(沒有輸出)"
+    if any(ord(char) < 32 and char not in "\n\r\t" for char in text) or "\ufffd" in text:
+        return "[ERROR] 輸出包含二進位或無法安全解碼的內容，已捨棄。"
+    # 未知縮排／引號語法無法可靠判定敏感值邊界，整份拒絕而非只遮住第一行。
+    if re.search(
+        r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
+        r"|psk|authorization|private_key|preshared_key)\b[\"']?\s*[:=][ \t]*"
+        r"(?:[|>][^\r\n]*|\"[^\"\r\n]*|'[^'\r\n]*|[ \t]*)(?:\r?\n|\Z)",
+        text,
+    ):
+        return "[ERROR] 偵測到無法安全判定範圍的敏感欄位，已捨棄內容。"
+    if re.search(
+        r"(?im)^[^\r\n]*(?:password|passwd|secret|token|passphrase|api[_-]?key|psk)"
+        r"[^\r\n]*[:=][^\r\n]*\r?\n[ \t]+\S",
+        text,
+    ):
+        return "[ERROR] 敏感欄位後含縮排延續內容，已捨棄。"
+    if re.search(r"(?im)^\s*(?:machine|default|login|password)\s*$", text):
+        return "[ERROR] 偵測到跨行憑證格式，已捨棄內容。"
     redacted = _REDACT_PEM_RE.sub("[REDACTED PRIVATE KEY]", text)
     redacted = _REDACT_KV_RE.sub(r"\1[REDACTED]", redacted)
     redacted = _REDACT_SECRET_LINE_RE.sub("[REDACTED]", redacted)
@@ -368,59 +413,67 @@ def _build_ssh_args(
 
 
 def _capture_ssh(
-    ssh_args: list[str], *, timeout: int, creationflags: int, env: dict[str, str]
+    ssh_args: list[str], *, timeout: float, creationflags: int, env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
-    """雙管線並行排空；總接收量超限即中止，不回傳可能截斷的機密。"""
-    with subprocess.Popen(
+    """非阻塞輪詢雙管線；共同期限涵蓋主行程及 EOF，失敗時捨棄所有片段。
+
+    Python 3.14 支援 Windows 管線 set_blocking；不支援時直接失敗，不退回阻塞讀取。
+    本機只終止 SSH 主行程，不保證清除所有 ASKPASS 後代行程。
+    """
+    deadline = time.monotonic() + timeout
+    proc = subprocess.Popen(
         ssh_args,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        bufsize=0,
         creationflags=creationflags,
         env=env,
-    ) as proc:
-        buffers = [bytearray(), bytearray()]
-        lock = threading.Lock()
-        exceeded = threading.Event()
-
-        def drain(stream: BinaryIO, index: int) -> None:
-            while chunk := stream.read(4096):
-                with lock:
-                    if exceeded.is_set():
-                        continue
-                    if sum(map(len, buffers)) + len(chunk) > MAX_CAPTURE_BYTES:
-                        exceeded.set()
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                    else:
-                        buffers[index].extend(chunk)
-
-        assert proc.stdout is not None and proc.stderr is not None
-        threads = [
-            threading.Thread(target=drain, args=(stream, index), daemon=True)
-            for index, stream in enumerate((proc.stdout, proc.stderr))
-        ]
-        for thread in threads:
-            thread.start()
+    )
+    buffers = [bytearray(), bytearray()]
+    streams = [proc.stdout, proc.stderr]
+    total = 0
+    try:
+        assert all(stream is not None for stream in streams)
+        active = {index: stream.fileno() for index, stream in enumerate(streams) if stream is not None}
+        for fd in active.values():
+            os.set_blocking(fd, False)
+        while active or proc.poll() is None:
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired("ssh", timeout)
+            progressed = False
+            for index, fd in list(active.items()):
+                try:
+                    chunk = os.read(fd, 4096)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    del active[index]
+                    continue
+                progressed = True
+                total += len(chunk)
+                if total > MAX_CAPTURE_BYTES:
+                    return subprocess.CompletedProcess(ssh_args, 1, "", "輸出超過安全位元組上限，已中止並捨棄內容。")
+                buffers[index].extend(chunk)
+            if not progressed:
+                time.sleep(min(0.01, max(0, deadline - time.monotonic())))
         try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            try:
+            output = [data.decode("utf-8", errors="strict") for data in buffers]
+        except UnicodeDecodeError:
+            return subprocess.CompletedProcess(ssh_args, 1, "", "輸出無法安全解碼，已捨棄內容。")
+        return subprocess.CompletedProcess(ssh_args, proc.returncode, *output)
+    finally:
+        # 無讀取執行緒，也不使用 Popen context manager 的無上限 wait。
+        try:
+            if proc.poll() is None:
                 proc.kill()
-            except Exception:
-                pass
-            proc.wait()
-            raise
+            proc.wait(timeout=1)
+        except OSError, subprocess.TimeoutExpired:
+            pass
         finally:
-            for thread in threads:
-                thread.join()
-        if exceeded.is_set():
-            return subprocess.CompletedProcess(ssh_args, 1, "", "輸出超過安全位元組上限，已中止並捨棄內容。")
-        return subprocess.CompletedProcess(
-            ssh_args, proc.returncode, *(data.decode("utf-8", errors="replace") for data in buffers)
-        )
+            for stream in streams:
+                if stream is not None:
+                    stream.close()
 
 
 def _run_with_askpass(
@@ -429,7 +482,7 @@ def _run_with_askpass(
     with tempfile.TemporaryDirectory(prefix="rhel_mcp_") as tmp_dir:
         tmp_path = Path(tmp_dir)
 
-        # 透過專用 askpass.py 自隔離環境變數輸出密碼，100% 記憶體傳遞，杜絕密碼寫入硬碟暫存檔（零落盤）
+        # 暫存腳本不含密碼；密碼透過子行程環境傳遞，仍受本機行程權限與系統診斷機制影響。
         # 使用獨立 .py 腳本徹底消除 Windows cmd.exe -c 行內命令字串巢狀雙引號引發之 SyntaxError
         askpass_py = tmp_path / "askpass.py"
         askpass_py.write_text(
@@ -484,7 +537,7 @@ def _run_remote(
 ) -> str:
     try:
         ssh_args, password, timeout = _build_ssh_args(
-            remote_cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path
+            _diagnostic_command(remote_cmd), ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path
         )
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         proc = _run_with_askpass(ssh_args, password, timeout, creationflags)
@@ -502,24 +555,19 @@ def _run_remote(
         combined = (proc.stdout or "").strip()
         err_out = (proc.stderr or "").strip()
         if proc.returncode != 0 and not combined:
-            if proc.returncode == 255 or "permission denied" in err_out.lower() or "access denied" in err_out.lower():
-                _RUNTIME_CREDS.clear()
-                return (
-                    f"[ERROR] [CONN_AUTH] 遠端連線或認證失敗 (exit {proc.returncode}): {_redact_and_truncate(err_out)}"
-                )
             return f"[ERROR] 遠端執行失敗 (exit {proc.returncode}): {_redact_and_truncate(err_out)}"
         if err_out:
             combined = f"{combined}\n[STDERR]\n{err_out}"
         if proc.returncode != 0:
             combined = f"[ERROR] 遠端指令部分或全部失敗 (exit {proc.returncode})\n{combined}"
         return _redact_and_truncate(combined)
-    except ValueError as e:
+    except ValueError:
         _RUNTIME_CREDS.clear()
-        return f"[ERROR] [CONN_AUTH] {e}"
+        return "[ERROR] [CONN_AUTH] 連線參數或安全檢查失敗，請確認設定。"
     except subprocess.TimeoutExpired:
         return "[ERROR] SSH 遠端指令執行逾時，已中止連線。"
-    except Exception as e:
-        return f"[ERROR] {e}"
+    except Exception:
+        return "[ERROR] SSH 執行或安全擷取失敗，未回傳原始例外內容。"
 
 
 @mcp.tool()
@@ -532,11 +580,11 @@ def rhel_system_overview(
 ) -> str:
     """探查 RHEL 主機系統概況：OS 版本、Kernel、Uptime、CPU/記憶體使用量與前 10 大高負載行程"""
     cmd = (
-        "echo '=== OS Release ===' && cat /etc/redhat-release /etc/os-release 2>/dev/null | head -n 15; "
+        "echo '=== OS Release ===' && cat /etc/redhat-release /etc/os-release 2>/dev/null | sed -n '1,15p'; "
         "echo '=== Kernel & Uptime ===' && uname -srm && uptime; "
         "echo '=== Memory (MB) ===' && free -m; "
         "echo '=== Top Processes (by CPU) ===' && "
-        "ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu | head -n 11"
+        "ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu | sed -n '1,11p'"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
@@ -589,13 +637,13 @@ def rhel_service_status(
     """查詢 RHEL systemd 服務狀態。不指定 service_name 時列出失敗或活動中的服務；指定時顯示該服務詳細狀態"""
     if failed_only or not service_name.strip():
         state_flag = "--state=failed" if failed_only else "--type=service --state=running,failed"
-        cmd = f"systemctl list-units {state_flag} --no-pager --no-legend | head -n 80"
+        cmd = f"systemctl list-units {state_flag} --no-pager --no-legend | sed -n '1,80p'"
         return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
     try:
         safe_unit = _validate_identifier(service_name, "service_name")
     except ValueError as e:
-        return f"[ERROR] {e}"
+        return _redact_and_truncate(f"[ERROR] {e}")
 
     quoted = shlex.quote(safe_unit)
     cmd = f"systemctl status {quoted} --no-pager -n 25"
@@ -622,7 +670,7 @@ def rhel_query_journal(
         try:
             safe_unit = _validate_identifier(unit, "unit")
         except ValueError as e:
-            return f"[ERROR] {e}"
+            return _redact_and_truncate(f"[ERROR] {e}")
         parts.extend(["-u", shlex.quote(safe_unit)])
 
     prio_aliases = {"error": "err", "warn": "warning", "critical": "crit"}
@@ -642,7 +690,7 @@ def rhel_query_journal(
         try:
             safe_grep = _validate_search_pattern(grep, "grep")
         except ValueError as e:
-            return f"[ERROR] {e}"
+            return _redact_and_truncate(f"[ERROR] {e}")
         parts.extend(["-g", shlex.quote(safe_grep)])
 
     safe_lines = max(1, min(int(lines or 50), 200))
@@ -689,23 +737,19 @@ def rhel_read_config(
     try:
         safe_path = _validate_config_path(file_path)
     except ValueError as e:
-        return f"[ERROR] {e}"
+        return _redact_and_truncate(f"[ERROR] {e}")
 
     safe_lines = max(1, min(int(max_lines or 120), 300))
-    quoted_path = shlex.quote(safe_path)
-    denied_case = "|".join(f"*{kw}*" for kw in _DENIED_PATH_KEYWORDS)
-    allowed_case = "|".join(f"{p.rstrip('/')}/*" for p in _ALLOWED_CONFIG_PREFIXES)
-    cmd = (
-        f"real=$(realpath -e {quoted_path} 2>/dev/null) || {{ echo '[ERROR] 檔案不存在或無法存取'; exit 1; }}; "
-        'case "$real" in '
-        f"{denied_case}) "
-        "echo '[ERROR] 拒絕存取：解析後之真實路徑屬於敏感機密檔案'; exit 1 ;; "
-        f"{allowed_case}) "
-        f'head -n {safe_lines} -- "$real" ;; '
-        "*) echo '[ERROR] 拒絕存取：解析後之真實路徑不在允許的目錄白名單內'; exit 1 ;; "
-        "esac"
-    )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    # 不先截行：完整有界內容經統一遮罩後才限制顯示行數。
+    # 多讀一個位元組，使超大檔案觸發本機總量上限並捨棄全部輸出。
+    cmd = _remote_path_guard(safe_path, directory=False) + f'head -c {MAX_CAPTURE_BYTES + 1} -- "$real"'
+    result = _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    if "[ERROR]" in result or "[STDERR]" in result:
+        return result
+    display_lines = result.splitlines()
+    if len(display_lines) > safe_lines:
+        return "\n".join(display_lines[:safe_lines]) + "\n[提示：已達 max_lines 顯示上限]"
+    return result
 
 
 @mcp.tool()
@@ -723,27 +767,11 @@ def rhel_list_directory(
     try:
         safe_path = _validate_config_path(dir_path)
     except ValueError as e:
-        return f"[ERROR] {e}"
+        return _redact_and_truncate(f"[ERROR] {e}")
 
     safe_lines = max(1, min(int(max_lines or 100), 250))
-    quoted_path = shlex.quote(safe_path)
-    denied_case = "|".join(f"*{kw}*" for kw in _DENIED_PATH_KEYWORDS)
-    allowed_patterns = [p.rstrip("/") for p in _ALLOWED_CONFIG_PREFIXES] + [
-        f"{p.rstrip('/')}/*" for p in _ALLOWED_CONFIG_PREFIXES
-    ]
-    allowed_case = "|".join(allowed_patterns)
     ls_flags = "-laZ --time-style=long-iso" if show_selinux else "-la --time-style=long-iso"
-    cmd = (
-        f"real=$(realpath -e {quoted_path} 2>/dev/null) || {{ echo '[ERROR] 目錄不存在或無法存取'; exit 1; }}; "
-        "[ -d \"$real\" ] || { echo '[ERROR] 指定路徑並非目錄'; exit 1; }; "
-        "case $real in "
-        f"{denied_case}) "
-        "echo '[ERROR] 拒絕存取：解析後之真實路徑屬於敏感保護目錄'; exit 1 ;; "
-        f"{allowed_case}) "
-        f'ls {ls_flags} -- "$real" | head -n {safe_lines} ;; '
-        "*) echo '[ERROR] 拒絕存取：解析後之真實路徑不在允許的目錄白名單內'; exit 1 ;; "
-        "esac"
-    )
+    cmd = _remote_path_guard(safe_path, directory=True) + f"ls {ls_flags} -- \"$real\" | sed -n '1,{safe_lines}p'"
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
@@ -760,7 +788,7 @@ def rhel_selinux_context(
     try:
         safe_path = _validate_config_path(target_path)
     except ValueError as e:
-        return f"[ERROR] {e}"
+        return _redact_and_truncate(f"[ERROR] {e}")
 
     quoted_path = shlex.quote(safe_path)
     cmd = (
@@ -791,7 +819,7 @@ def rhel_process_inspect(
         try:
             safe_pid = _validate_pid(pid)
         except ValueError as e:
-            return f"[ERROR] {e}"
+            return _redact_and_truncate(f"[ERROR] {e}")
         cmd = (
             f"echo '=== Process Detail (PID: {safe_pid}) ===' && "
             f"ps -fp {safe_pid} 2>/dev/null || echo '行程不存在或已終止'; "
@@ -809,11 +837,11 @@ def rhel_process_inspect(
         try:
             safe_search = _validate_search_pattern(search, "search")
         except ValueError as e:
-            return f"[ERROR] {e}"
+            return _redact_and_truncate(f"[ERROR] {e}")
         quoted_search = shlex.quote(safe_search)
         cmd = (
             f"echo '=== Search Processes matching {quoted_search} ===' && "
-            f"ps -eo {cols} | grep -i -- {quoted_search} | grep -v grep | head -n {safe_lines}"
+            f"ps -eo {cols} | grep -i -- {quoted_search} | grep -v grep | sed -n '1,{safe_lines}p'"
         )
         return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
@@ -824,7 +852,7 @@ def rhel_process_inspect(
     sort_col = "-%mem" if sort_clean in ("mem", "memory") else "-%cpu"
     cmd = (
         f"echo '=== Top Processes (sorted by {sort_clean}) ===' && "
-        f"ps -eo {cols} --sort={sort_col} | head -n {safe_lines}"
+        f"ps -eo {cols} --sort={sort_col} | sed -n '1,{safe_lines}p'"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
@@ -866,11 +894,11 @@ def rhel_network_connections(
         try:
             safe_port = _validate_port(port)
         except ValueError as e:
-            return f"[ERROR] {e}"
+            return _redact_and_truncate(f"[ERROR] {e}")
         filter_expr = f" sport = :{safe_port} or dport = :{safe_port}"
 
     safe_lines = max(5, min(int(max_lines or 60), 150))
-    cmd = f"{base_cmd}{filter_expr} | head -n {safe_lines}"
+    cmd = f"{base_cmd}{filter_expr} | sed -n '1,{safe_lines}p'"
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
@@ -888,7 +916,7 @@ def rhel_package_info(
     try:
         safe_pkg = _validate_identifier(package_name, "package_name")
     except ValueError as e:
-        return f"[ERROR] {e}"
+        return _redact_and_truncate(f"[ERROR] {e}")
 
     quoted = shlex.quote(safe_pkg)
     if verify_integrity:
@@ -896,7 +924,7 @@ def rhel_package_info(
             f"echo '=== Package Verification (rpm -V) ===' && "
             f"(rpm -V {quoted} || echo '檔案有變更或未安裝'); "
             "echo '=== Installed Files (rpm -ql, head 30) ===' && "
-            f"rpm -ql {quoted} 2>/dev/null | head -n 30"
+            f"rpm -ql {quoted} 2>/dev/null | sed -n '1,30p'"
         )
     else:
         cmd = (
@@ -905,7 +933,7 @@ def rhel_package_info(
             f"dnf --cacheonly --setopt=logfile=/dev/null --setopt=debuglevel=0 info {quoted} || "
             "echo '[ERROR] 查無套件或快取不足，不自動更新中繼資料'); "
             "echo '=== Changelog Summary (recent) ===' && "
-            f"rpm -q --changelog {quoted} 2>/dev/null | head -n 20"
+            f"rpm -q --changelog {quoted} 2>/dev/null | sed -n '1,20p'"
         )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
@@ -925,9 +953,9 @@ def rhel_container_status(
         "echo '=== Running/All Containers ===' && "
         "((podman ps -a --format 'table {{.ID}} {{.Image}} {{.Status}} {{.Names}}' 2>/dev/null || "
         "docker ps -a --format 'table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}' 2>/dev/null) "
-        "| head -n 30 || echo '無容器或未啟動'); "
+        "| sed -n '1,30p' || echo '[ERROR] 容器查詢失敗，無法判定容器狀態'); "
         "echo '=== Podman Pods ===' && "
-        "(podman pod ps 2>/dev/null | head -n 15 || echo '無 podman pod 紀錄')"
+        "(podman pod ps 2>/dev/null | sed -n '1,15p' || echo '[ERROR] Pod 查詢失敗，無法判定 Pod 狀態')"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
@@ -943,11 +971,11 @@ def rhel_cron_and_timers(
     """探查 RHEL 定時排程作業：systemd 定時器 (timers) 與系統 cron 排程清單"""
     cmd = (
         "echo '=== Active Systemd Timers ===' && "
-        "systemctl list-timers --no-pager --no-legend | head -n 30; "
+        "systemctl list-timers --no-pager --no-legend | sed -n '1,30p'; "
         "echo '=== System Crontab (/etc/crontab) ===' && "
         "cat /etc/crontab 2>/dev/null; "
         "echo '=== Cron Daily/Hourly Directory Listing ===' && "
-        "ls -la /etc/cron.daily /etc/cron.hourly 2>/dev/null | head -n 30"
+        "ls -la /etc/cron.daily /etc/cron.hourly 2>/dev/null | sed -n '1,30p'"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 

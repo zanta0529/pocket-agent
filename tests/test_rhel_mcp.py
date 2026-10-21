@@ -1,4 +1,5 @@
 import asyncio
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -39,7 +40,7 @@ def test_missing_params_prompts_tty_and_rejects_empty_password(monkeypatch):
     with patch("mcp_servers.rhel_mcp._tty_prompt", return_value="") as mock_prompt:
         out = rhel_mcp.rhel_system_overview()
         assert out.startswith("[ERROR]")
-        assert "RHEL_SSH_PASSWORD" in out
+        assert "連線參數" in out
         mock_prompt.assert_called_once()
 
 
@@ -101,7 +102,7 @@ def test_query_journal_validation_and_clamping(monkeypatch):
         out = rhel_mcp.rhel_query_journal(unit="sshd.service", priority="warning", since="2 hours ago", lines=999)
         assert out == "journal line 1"
         called_args = mock_run.call_args.args[0]
-        remote_cmd = called_args[-1]
+        remote_cmd = shlex.split(called_args[-1])[2]
         assert "--no-pager" in remote_cmd
         assert "-u sshd.service" in remote_cmd
         assert "-p warning" in remote_cmd
@@ -152,7 +153,7 @@ def test_read_config_allows_safe_etc_path_and_redacts_secrets(monkeypatch):
         assert "[REDACTED]" in out
         assert "[REDACTED PRIVATE KEY]" in out
         mock_run.assert_called_once()
-        remote_cmd = mock_run.call_args.args[0][-1]
+        remote_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "/srv/*" in remote_cmd
         assert "/usr/share/*" in remote_cmd
 
@@ -312,7 +313,7 @@ def test_list_directory_and_selinux_context(monkeypatch):
         # 測試一般列出與 show_selinux
         out = rhel_mcp.rhel_list_directory("/etc/systemd/system", show_selinux=True)
         assert out == "drwxr-xr-x file.conf"
-        called_cmd = mock_run.call_args.args[0][-1]
+        called_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "ls -laZ" in called_cmd
         assert "/srv/*" in called_cmd
         assert "/opt/*" in called_cmd
@@ -320,7 +321,7 @@ def test_list_directory_and_selinux_context(monkeypatch):
         # 測試 SELinux context 查詢
         out_ctx = rhel_mcp.rhel_selinux_context("/srv/web/index.html")
         assert out_ctx == "drwxr-xr-x file.conf"
-        called_cmd_ctx = mock_run.call_args.args[0][-1]
+        called_cmd_ctx = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "ls -dZ -- /srv/web/index.html" in called_cmd_ctx
         assert "matchpathcon /srv/web/index.html" in called_cmd_ctx
 
@@ -333,7 +334,7 @@ def test_process_inspect_and_validation(monkeypatch):
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
         out = rhel_mcp.rhel_process_inspect(pid="1234")
         assert out == "1234 root python"
-        called_cmd = mock_run.call_args.args[0][-1]
+        called_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "ps -fp 1234" in called_cmd
 
     with patch("mcp_servers.rhel_mcp._capture_ssh") as mock_run:
@@ -345,7 +346,7 @@ def test_process_inspect_and_validation(monkeypatch):
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
         out_search = rhel_mcp.rhel_process_inspect(search="nginx", show_selinux=True)
         assert out_search == "1234 root python"
-        called_cmd_search = mock_run.call_args.args[0][-1]
+        called_cmd_search = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "label" in called_cmd_search
         assert "grep -i -- nginx" in called_cmd_search
 
@@ -358,7 +359,7 @@ def test_process_inspect_and_validation(monkeypatch):
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
         out_sort_mem = rhel_mcp.rhel_process_inspect(sort_by="mem")
         assert out_sort_mem == "1234 root python"
-        called_cmd_mem = mock_run.call_args.args[0][-1]
+        called_cmd_mem = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "--sort=-%mem" in called_cmd_mem
         assert "sorted by mem" in called_cmd_mem
 
@@ -376,7 +377,7 @@ def test_network_connections_and_validation(monkeypatch):
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
         out = rhel_mcp.rhel_network_connections(protocol="tcp", state="established", port="443")
         assert out == "tcp ESTAB 0 0"
-        called_cmd = mock_run.call_args.args[0][-1]
+        called_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "ss -tan -p state established" in called_cmd
         assert "sport = :443 or dport = :443" in called_cmd
 
@@ -395,12 +396,12 @@ def test_package_and_journal_grep(monkeypatch):
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
         out_pkg = rhel_mcp.rhel_package_info("nginx", verify_integrity=True)
         assert out_pkg == "OK"
-        called_pkg_cmd = mock_run.call_args.args[0][-1]
+        called_pkg_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "rpm -V nginx" in called_pkg_cmd
 
         out_j = rhel_mcp.rhel_query_journal(unit="sshd", grep="Failed password")
         assert out_j == "OK"
-        called_j_cmd = mock_run.call_args.args[0][-1]
+        called_j_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "-g 'Failed password'" in called_j_cmd
 
     with patch("mcp_servers.rhel_mcp._capture_ssh") as mock_run:
@@ -566,18 +567,17 @@ def test_mcp_manager_does_not_prompt_for_optional_key_path():
 
 def test_capture_ssh_exceeded_quota_kills_process():
     """驗證當 stdout/stderr 串流累積超過 MAX_CAPTURE_BYTES (1MB) 時，觸發 proc.kill 並回傳中止訊息"""
-    import io
-
-    with patch("subprocess.Popen") as mock_popen:
+    with (
+        patch("subprocess.Popen") as mock_popen,
+        patch.object(rhel_mcp.os, "set_blocking"),
+        patch.object(rhel_mcp.os, "read", return_value=b"X" * 4096),
+    ):
         mock_proc = MagicMock()
-        chunk = b"X" * (rhel_mcp.MAX_CAPTURE_BYTES + 4096)
-        mock_proc.stdout = io.BytesIO(chunk)
-        mock_proc.stderr = io.BytesIO(b"")
-        mock_proc.wait = MagicMock(return_value=0)
-        mock_proc.kill = MagicMock()
-        mock_popen.return_value.__enter__.return_value = mock_proc
-
+        mock_proc.stdout.fileno.return_value = 10
+        mock_proc.stderr.fileno.return_value = 11
+        mock_proc.poll.return_value = None
+        mock_popen.return_value = mock_proc
         res = rhel_mcp._capture_ssh(["ssh", "test"], timeout=5, creationflags=0, env={})
-        mock_proc.kill.assert_called()
+        mock_proc.kill.assert_called_once()
         assert res.returncode == 1
         assert "輸出超過安全位元組上限" in res.stderr
