@@ -14,7 +14,14 @@ from pocket_agent.extensions.mcp import MCPManager
 @pytest.fixture(autouse=True)
 def _clean_rhel_env_and_cache(monkeypatch):
     rhel_mcp._RUNTIME_CREDS.clear()
-    for key in ("RHEL_HOST", "RHEL_SSH_PORT", "RHEL_SSH_USER", "RHEL_SSH_PASSWORD", "RHEL_SSH_KEY_PATH"):
+    for key in (
+        "RHEL_HOST",
+        "RHEL_SSH_PORT",
+        "RHEL_SSH_USER",
+        "RHEL_SSH_PASSWORD",
+        "RHEL_SSH_KEY_PATH",
+        "RHEL_SSH_KEY_PASSPHRASE",
+    ):
         monkeypatch.delenv(key, raising=False)
 
 
