@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 import uuid
+import warnings
 from ctypes import wintypes
 from pathlib import Path
 from typing import Any
@@ -175,7 +176,14 @@ def _redact_and_truncate(text: str) -> str:
 def _tty_prompt(prompt_text: str, *, is_password: bool = False) -> str:
     """當獨立執行且未由上層注入時，直接透過作業系統終端機設備（CONIN$/CONOUT$ 或 /dev/tty）詢問。"""
     if is_password:
-        return getpass.getpass(prompt_text)
+        if os.name == "nt" and sys.stdin is not sys.__stdin__:
+            raise ValueError("沒有安全的互動終端機，請由上層注入連線參數。")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            try:
+                return getpass.getpass(prompt_text)
+            except (getpass.GetPassWarning, EOFError, OSError) as exc:
+                raise ValueError("無法安全讀取密碼，請由上層注入連線參數。") from exc
 
     tty_in_name = "CONIN$" if os.name == "nt" else "/dev/tty"
     tty_out_name = "CONOUT$" if os.name == "nt" else "/dev/tty"
@@ -187,10 +195,8 @@ def _tty_prompt(prompt_text: str, *, is_password: bool = False) -> str:
             tty_out.write(prompt_text)
             tty_out.flush()
             return tty_in.readline().strip()
-    except OSError:
-        sys.stderr.write(prompt_text)
-        sys.stderr.flush()
-        return sys.stdin.readline().strip()
+    except OSError as exc:
+        raise ValueError("沒有可用的互動終端機，請由上層注入連線參數；不讀取 MCP stdin。") from exc
 
 
 def _resolve_connection_params(
@@ -200,10 +206,17 @@ def _resolve_connection_params(
     rdp_password: str = "",
 ) -> tuple[str, str, str, str]:
     """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得 RDP 連線四要素。"""
-    host = (rdp_host or _RUNTIME_CREDS.get("WIN_HOST") or os.getenv("WIN_HOST") or "").strip()
-    port = (rdp_port or _RUNTIME_CREDS.get("WIN_RDP_PORT") or os.getenv("WIN_RDP_PORT") or "").strip()
-    user = (rdp_user or _RUNTIME_CREDS.get("WIN_RDP_USER") or os.getenv("WIN_RDP_USER") or "").strip()
-    password = rdp_password or _RUNTIME_CREDS.get("WIN_RDP_PASSWORD") or os.getenv("WIN_RDP_PASSWORD") or ""
+    cached_host = _RUNTIME_CREDS.get("WIN_HOST", "")
+    cached_port = _RUNTIME_CREDS.get("WIN_RDP_PORT", "")
+    cached_user = _RUNTIME_CREDS.get("WIN_RDP_USER", "")
+
+    input_host = rdp_host.strip()
+    input_port = rdp_port.strip()
+    input_user = rdp_user.strip()
+
+    host = input_host or cached_host or (os.getenv("WIN_HOST") or "").strip()
+    port = input_port or cached_port or (os.getenv("WIN_RDP_PORT") or "").strip()
+    user = input_user or cached_user or (os.getenv("WIN_RDP_USER") or "").strip()
 
     if not host:
         host = _tty_prompt("請輸入 Windows 主機 IP 或位址 (WIN_HOST): ").strip()
@@ -211,20 +224,36 @@ def _resolve_connection_params(
         port = _tty_prompt("請輸入 RDP 連接埠 (WIN_RDP_PORT) [預設 3389]: ").strip() or "3389"
     if not user:
         user = _tty_prompt(f"請輸入 {host} 的 Windows 登入帳號 (WIN_RDP_USER): ").strip()
-    if not password:
-        password = _tty_prompt(f"請輸入 {user}@{host} 的 Windows 登入密碼: ", is_password=True)
 
     if not host:
         raise ValueError("未提供 Windows 主機位址 (WIN_HOST)。")
     if not user:
         raise ValueError("未提供 Windows 登入帳號 (WIN_RDP_USER)。")
-    if not password:
-        raise ValueError("未提供 Windows 登入密碼 (WIN_RDP_PASSWORD)；本工具僅允許帳號密碼驗證。")
 
     _validate_host(host)
     _validate_user(user)
     if not port.isdigit() or not (1 <= int(port) <= 65535):
         raise ValueError(f"非法的 WIN_RDP_PORT：{port!r}（必須為 1~65535 之間的整數）")
+    port = str(int(port))
+
+    target = (host, port, user)
+    cached_target = (cached_host, cached_port, cached_user)
+    env_target = (
+        (os.getenv("WIN_HOST") or "").strip(),
+        (os.getenv("WIN_RDP_PORT") or "3389").strip(),
+        (os.getenv("WIN_RDP_USER") or "").strip(),
+    )
+
+    password = rdp_password
+    if not password and target == cached_target:
+        password = _RUNTIME_CREDS.get("WIN_RDP_PASSWORD", "")
+    if not password and target == env_target:
+        password = os.getenv("WIN_RDP_PASSWORD") or ""
+
+    if not password:
+        password = _tty_prompt(f"請輸入 {user}@{host} 的 Windows 登入密碼: ", is_password=True)
+    if not password:
+        raise ValueError("未提供 Windows 登入密碼 (WIN_RDP_PASSWORD)；本工具僅允許帳號密碼驗證。")
 
     _RUNTIME_CREDS["WIN_HOST"] = host
     _RUNTIME_CREDS["WIN_RDP_PORT"] = port
@@ -243,8 +272,11 @@ def _parse_resolution(res_str: str | None = None) -> tuple[int, int]:
     return w, h
 
 
-def _build_rdp_file_content(host: str, port: str, user: str, resolution: str | None = None) -> str:
-    """產生強制關閉智慧卡／WebAuthn／磁碟掛載後門、僅開啟剪貼簿通道之視窗化 .rdp 設定內容。"""
+def _build_rdp_file_content(host: str, port: str, resolution: str | None = None) -> str:
+    """產生強制關閉智慧卡／WebAuthn／磁碟掛載後門、僅開啟剪貼簿通道之視窗化 .rdp 設定內容。
+
+    零落盤保證：本檔案內絕不寫入 username 或 password 機敏資訊；帳密全數透過 Windows 記憶體憑證管理器傳遞。
+    """
     w, h = _parse_resolution(resolution)
     full_addr = host if port == "3389" else f"{host}:{port}"
     lines = [
@@ -271,7 +303,6 @@ def _build_rdp_file_content(host: str, port: str, user: str, resolution: str | N
         "disable cursor setting:i:0",
         "bitmapcachepersistenable:i:1",
         f"full address:s:{full_addr}",
-        f"username:s:{user}",
         "audiomode:i:2",
         "redirectprinters:i:0",
         "redirectcomports:i:0",
@@ -487,7 +518,7 @@ def _ensure_rdp_session(
     except ValueError:
         timeout = 15
 
-    rdp_content = _build_rdp_file_content(host, port, user)
+    rdp_content = _build_rdp_file_content(host, port)
     tmp_dir = Path(tempfile.mkdtemp(prefix="pocket_rdp_"))
     rdp_file = tmp_dir / "session.rdp"
     rdp_file.write_text(rdp_content, encoding="utf-8")
@@ -585,11 +616,18 @@ def _send_vk_combo(hwnd: int, combo_str: str) -> None:
         raise RuntimeError("無法將遠端桌面視窗置於前景，已中止按鍵發送以保護本機視窗。")
 
     user32 = ctypes.windll.user32
+    if int(user32.GetForegroundWindow()) != int(hwnd):
+        raise RuntimeError("遠端桌面視窗失去前景焦點，已中止按鍵發送以保護本機視窗。")
+
     KEYEVENTF_KEYUP = 0x0002
     for vk in vks:
+        if int(user32.GetForegroundWindow()) != int(hwnd):
+            raise RuntimeError("偵測到前景視窗焦點轉移，已緊急中止按鍵發送以杜絕注入本機視窗。")
         user32.keybd_event(vk, 0, 0, 0)
         time.sleep(0.03)
     for vk in reversed(vks):
+        if int(user32.GetForegroundWindow()) != int(hwnd):
+            raise RuntimeError("偵測到前景視窗焦點轉移，已緊急中止按鍵釋放以杜絕注入本機視窗。")
         user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
         time.sleep(0.03)
 
@@ -599,6 +637,9 @@ def _send_unicode_text(hwnd: int, text: str) -> None:
         raise RuntimeError("無法將遠端桌面視窗置於前景，已中止文字輸入以保護本機視窗。")
 
     user32 = ctypes.windll.user32
+    if int(user32.GetForegroundWindow()) != int(hwnd):
+        raise RuntimeError("遠端桌面視窗失去前景焦點，已中止文字輸入以保護本機視窗。")
+
     KEYEVENTF_UNICODE = 0x0004
     KEYEVENTF_KEYUP = 0x0002
 
@@ -618,6 +659,8 @@ def _send_unicode_text(hwnd: int, text: str) -> None:
         _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
 
     for ch in text:
+        if int(user32.GetForegroundWindow()) != int(hwnd):
+            raise RuntimeError("偵測到前景視窗焦點轉移，已緊急中止文字輸入以杜絕注入本機視窗。")
         code = ord(ch)
         inp_down = INPUT(type=1, u=INPUT_UNION(ki=KEYBDINPUT(0, code, KEYEVENTF_UNICODE, 0, 0)))
         inp_up = INPUT(type=1, u=INPUT_UNION(ki=KEYBDINPUT(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, 0)))
@@ -633,7 +676,14 @@ def _run_rdp_clip_command(
     rdp_user: str = "",
     rdp_password: str = "",
 ) -> str:
-    """透過 RDP 視窗 Win+R 執行唯讀命令並以 `| clip` 經由 CLIPRDR 虛擬通道取回純文字輸出。"""
+    """透過 RDP 視窗 Win+R 執行唯讀命令並以 `| clip` 經由 CLIPRDR 虛擬通道取回純文字輸出。
+
+    安全與隱私防護：
+    1. 執行前於記憶體備份本機剪貼簿，結束後立即還原，杜絕本機使用者複製的內容被抹除。
+    2. 採用專屬 UUID 雙端 Enveloped Sentinel 簽章包裹遠端輸出，只有嚴格符合簽章才擷取，
+       杜絕本機使用者的個人私密剪貼簿內容流入 LLM。
+    """
+    orig_clipboard = ""
     try:
         hwnd, host = _ensure_rdp_session(rdp_host, rdp_port, rdp_user, rdp_password)
         try:
@@ -641,8 +691,15 @@ def _run_rdp_clip_command(
         except ValueError:
             timeout = 15
 
-        sentinel = f"__POCKET_AGENT_RDP_WAIT_{uuid.uuid4().hex}__"
-        _set_clipboard_text(sentinel)
+        # 1. 記憶體備份本機原剪貼簿
+        orig_clipboard = _get_clipboard_text()
+
+        # 2. 隨機簽章包裹標記 (Enveloped Sentinel)
+        token = uuid.uuid4().hex
+        start_tag = f"__PKT_CLIP_START_{token}__"
+        end_tag = f"__PKT_CLIP_END_{token}__"
+        wait_marker = f"__PKT_WAIT_{token}__"
+        _set_clipboard_text(wait_marker)
 
         _send_vk_combo(hwnd, "win+r")
         time.sleep(0.45)
@@ -650,22 +707,23 @@ def _run_rdp_clip_command(
         escaped_cmd = (
             remote_cmd.replace("^", "^^").replace("&", "^&").replace("|", "^|").replace("<", "^<").replace(">", "^>")
         )
-        wrapped_cmd = f'cmd.exe /c "{escaped_cmd} 2>&1 | clip"'
+        wrapped_cmd = f'cmd.exe /c "(echo {start_tag} & {escaped_cmd} & echo {end_tag}) 2>&1 | clip"'
         _send_unicode_text(hwnd, wrapped_cmd)
         time.sleep(0.15)
         _send_vk_combo(hwnd, "enter")
 
         deadline = time.time() + timeout
-        result_text = sentinel
+        result_text = None
         while time.time() < deadline:
             time.sleep(0.4)
             current = _get_clipboard_text()
-            if current and current != sentinel and current != wrapped_cmd:
-                result_text = current
+            if current and start_tag in current and end_tag in current:
+                s_idx = current.find(start_tag) + len(start_tag)
+                e_idx = current.find(end_tag)
+                result_text = current[s_idx:e_idx].strip()
                 break
 
-        _set_clipboard_text("")
-        if result_text == sentinel:
+        if result_text is None:
             return (
                 f"[ERROR] 透過 RDP 剪貼簿通道於 {host} 執行唯讀巡檢逾時（{timeout} 秒）。\n"
                 "可能原因：\n"
@@ -673,7 +731,7 @@ def _run_rdp_clip_command(
                 "2. 目標 Windows 主機群組原則停用了剪貼簿重導向（CLIPRDR）。\n"
                 "建議改呼叫 `win_rdp_screenshot` 檢視目前遠端桌面畫面狀態。"
             )
-        return _redact_and_truncate(result_text.strip())
+        return _redact_and_truncate(result_text)
     except ValueError as e:
         _RUNTIME_CREDS.clear()
         return f"[ERROR] [CONN_AUTH] 參數驗證失敗: {e}"
@@ -681,6 +739,10 @@ def _run_rdp_clip_command(
         msg = str(e)
         tag = "[CONN_AUTH] " if "等待 mstsc.exe 遠端桌面視窗連線" in msg else ""
         return f"[ERROR] {tag}RDP 遠端巡檢執行異常: {e}"
+    finally:
+        # 3. 立即還原使用者原本的本機剪貼簿資料
+        if orig_clipboard is not None:
+            _set_clipboard_text(orig_clipboard)
 
 
 # ── Layer A: RDP GUI Vision & Input Tools ────────────────────────────────

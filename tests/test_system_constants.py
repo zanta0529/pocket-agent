@@ -107,8 +107,9 @@ def test_module_aliases_backward_compatibility():
 
 def test_mcp_servers_output_chars_aligned():
     """驗證獨立 MCP 伺服器模組亦同步採用 12,000 字元上限。"""
-    from mcp_servers import browser_mcp, rhel_mcp, win_rdp_mcp
+    from mcp_servers import browser_mcp, database_mcp, rhel_mcp, win_rdp_mcp
 
     assert rhel_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert win_rdp_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert browser_mcp.MAX_TEXT == constants.DEFAULT_TOOL_OUTPUT_CHARS
+    assert database_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS

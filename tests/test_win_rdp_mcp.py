@@ -56,9 +56,11 @@ def test_missing_password_rejected_and_partial_config_cached(monkeypatch):
 
 def test_rdp_file_disables_backdoors_and_enables_clipboard(monkeypatch):
     monkeypatch.setenv("WIN_RDP_RESOLUTION", "1600x900")
-    content = win_rdp_mcp._build_rdp_file_content("10.20.30.40", "3390", r"CORP\winadmin")
+    # 零落盤安全保證：.rdp 設定檔絕不包含 username 或 password
+    content = win_rdp_mcp._build_rdp_file_content("10.20.30.40", "3390")
     assert "full address:s:10.20.30.40:3390" in content
-    assert r"username:s:CORP\winadmin" in content
+    assert "username:s:" not in content
+    assert "password" not in content.lower()
     assert "desktopwidth:i:1600" in content
     assert "desktopheight:i:900" in content
     assert "redirectclipboard:i:1" in content
@@ -223,3 +225,55 @@ def test_mcp_manager_strips_rdp_params_and_prompts_only_win_keys():
         "rdp_user": r"CORP\ops",
         "rdp_password": "RdpSecret!",
     }
+
+
+def test_tty_prompt_non_interactive_raises_value_error():
+    """驗證無 TTY 終端機時直接拋出 ValueError，絕不降級至 sys.stdin.readline() 污染 MCP 協定。"""
+    with patch("builtins.open", side_effect=OSError("No CONIN$ device")):
+        with pytest.raises(ValueError, match="沒有可用的互動終端機"):
+            win_rdp_mcp._tty_prompt("請輸入主機位址: ")
+
+
+def test_run_rdp_clip_command_preserves_and_restores_user_clipboard():
+    """驗證執行 RDP 剪貼簿巡檢前備份本機剪貼簿，且執行完畢後立即還原使用者原資料。"""
+    user_private_data = "MyPersonalPasswordOrPrivateMessage123"
+    clipboard_state = [user_private_data]
+
+    def fake_get():
+        return clipboard_state[0]
+
+    def fake_set(val):
+        clipboard_state[0] = val
+
+    with (
+        patch("mcp_servers.win_rdp_mcp._ensure_rdp_session", return_value=(999, "10.20.30.40")),
+        patch("mcp_servers.win_rdp_mcp._send_vk_combo"),
+        patch("mcp_servers.win_rdp_mcp._send_unicode_text"),
+        patch("mcp_servers.win_rdp_mcp._get_clipboard_text", side_effect=fake_get),
+        patch("mcp_servers.win_rdp_mcp._set_clipboard_text", side_effect=fake_set),
+    ):
+        # 模擬遠端執行產出專屬簽章包裹內容
+        def remote_exec_simulator(*args, **kwargs):
+            # 取出送進去的 wrapped_cmd
+            cmd = args[1]
+            import re
+
+            m = re.search(r"echo (__PKT_CLIP_START_[a-f0-9]+__) & .* & echo (__PKT_CLIP_END_[a-f0-9]+__)", cmd)
+            if m:
+                s_tag, e_tag = m.group(1), m.group(2)
+                clipboard_state[0] = f"{s_tag}\nRemote Execution OK Result\n{e_tag}"
+
+        with patch("mcp_servers.win_rdp_mcp._send_unicode_text", side_effect=remote_exec_simulator):
+            out = win_rdp_mcp._run_rdp_clip_command("hostname", rdp_host="10.20.30.40", rdp_password="pw")
+            assert "Remote Execution OK Result" in out
+            # 驗證本機原剪貼簿完好無損地被還原
+            assert clipboard_state[0] == user_private_data
+
+
+def test_focus_loss_aborts_key_sending():
+    """驗證當前景視窗焦點轉移時，立即中止按鍵發送以杜絕注入本機視窗。"""
+    with patch("mcp_servers.win_rdp_mcp._focus_rdp_window", return_value=True):
+        # 模擬呼叫時視窗為前景，但在發送過程中焦點轉移為其他視窗 (如 Teams)
+        with patch("ctypes.windll.user32.GetForegroundWindow", side_effect=[999, 999, 888]):
+            with pytest.raises(RuntimeError, match="焦點轉移"):
+                win_rdp_mcp._send_vk_combo(999, "win+r")
