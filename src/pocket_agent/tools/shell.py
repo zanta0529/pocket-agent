@@ -17,8 +17,8 @@ import threading
 
 log = logging.getLogger("pocket-agent")
 
-MAX_OUTPUT = 8000  # 回傳給模型的最大字元數
-MAX_OUTPUT_BYTES = MAX_OUTPUT * 4  # 讀取子行程輸出的位元組上限（UTF-8 最多 4 位元組／字元）
+MAX_OUTPUT = 12000  # 回傳給模型的最大字元數（對齊 fs.py read_file 上限，適合 64k~128k 視窗）
+MAX_OUTPUT_BYTES = 1024 * 1024  # 讀取子行程輸出的位元組上限（1 MB 安全緩衝區）
 
 
 def _decode_candidates() -> list[str]:
@@ -174,7 +174,24 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     else:
         allowed = False
 
-    if not allowed:
+    if allowed is True:
+        pass
+    elif isinstance(allowed, str) and allowed.strip():
+        return (
+            f"[使用者拒絕執行此指令，並提供後續指示：\n"
+            f"「{allowed.strip()}」\n"
+            "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的指令。]"
+        )
+    elif isinstance(allowed, tuple) and len(allowed) == 2 and not allowed[0]:
+        custom_inst = str(allowed[1]).strip()
+        if custom_inst:
+            return (
+                f"[使用者拒絕執行此指令，並提供後續指示：\n"
+                f"「{custom_inst}」\n"
+                "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的指令。]"
+            )
+        return "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]"
+    elif not allowed:
         return "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]"
 
     try:
@@ -251,7 +268,10 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
                 text = text[:MAX_OUTPUT]
                 truncated[0] = True
             if truncated[0]:
-                text += "\n…（輸出過長，已提早截斷）"
+                text += (
+                    f"\n…（輸出過長，已提早截斷至前 {MAX_OUTPUT} 字元）\n"
+                    "[系統提示：若需檢視後續內容或特定錯誤，請透過 grep、head/tail 或加上更精確的過濾指令再次執行]"
+                )
             return text.strip()
 
         try:

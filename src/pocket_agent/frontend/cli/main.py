@@ -421,7 +421,7 @@ class CliFrontend(FrontendStrategy):
             renderer._state = state
 
             # F1：CLI 工具確認機制（三重授權）
-            def _cli_confirm(*args_tuple) -> bool:
+            def _cli_confirm(*args_tuple) -> bool | str:
                 from rich.panel import Panel
                 from rich.text import Text
 
@@ -463,28 +463,53 @@ class CliFrontend(FrontendStrategy):
                 renderer.console.print(panel)
 
                 try:
-                    ans = input("允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | N: 拒絕] ").strip()
+                    ans = input("允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] ").strip()
 
-                    if status:
-                        status.start()
-
-                    if ans == "y" or ans == "Y":
+                    if ans in ("y", "Y"):
+                        if status:
+                            status.start()
                         return True
                     elif ans == "a":
                         state.session_approved_commands.add(command.strip())
                         renderer.message(f"✓ 已同意本次對話中自動執行指令: {command}", "green")
+                        if status:
+                            status.start()
                         return True
                     elif ans == "A":
                         prefix = add_command_to_allowlist(command)
                         renderer._ensure_newline()
                         renderer.message(f"✓ 已將「{prefix}」加入指令白名單，未來將自動執行此指令。", "green")
+                        if status:
+                            status.start()
                         return True
-                    return False
-                except EOFError:
+                    elif ans in ("c", "C"):
+                        renderer._ensure_newline()
+                        custom_inst = input("👉 請輸入給代理工具的指示：").strip()
+                        if not custom_inst:
+                            renderer.message("未輸入指示，已取消執行指令。", "yellow")
+                            if status:
+                                status.start()
+                            return False
+                        if hasattr(agent, "user_instructions"):
+                            agent.user_instructions.append(custom_inst)
+                        renderer.message(f"✓ 已收到您的指示：「{custom_inst}」，已轉達給 Agent 並加入規範。", "green")
+                        if status:
+                            status.start()
+                        return custom_inst
+                    elif ans and ans not in ("n", "N"):
+                        # 智慧相容：使用者直接輸入口語指示
+                        custom_inst = ans
+                        if hasattr(agent, "user_instructions"):
+                            agent.user_instructions.append(custom_inst)
+                        renderer.message(f"✓ 已收到您的指示：「{custom_inst}」，已轉達給 Agent 並加入規範。", "green")
+                        if status:
+                            status.start()
+                        return custom_inst
+
                     if status:
                         status.start()
                     return False
-                except KeyboardInterrupt:
+                except EOFError, KeyboardInterrupt:
                     if status:
                         status.start()
                     return False

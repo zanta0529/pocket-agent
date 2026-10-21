@@ -189,6 +189,8 @@ class NewCommand(CliCommand):
         ctx.agent.context_usage = None
         ctx.agent.last_images.clear()
         ctx.agent.last_files.clear()
+        if hasattr(ctx.agent, "user_instructions") and isinstance(ctx.agent.user_instructions, list):
+            ctx.agent.user_instructions.clear()
 
         info = f"✓ 已開啟全新對話（Session ID: {ctx.state.session_id}）· 上下文與暫存已完整清空。"
         if saved_msg:

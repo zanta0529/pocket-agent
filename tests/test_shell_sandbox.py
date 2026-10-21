@@ -78,3 +78,28 @@ def test_shell_tool_docker_sandbox():
             assert call_args[0] == ["docker", "exec", "my_sandbox", "sh", "-c", "npm test"]
             assert call_kwargs["shell"] is False
             assert "tests passed" in result
+
+
+def test_shell_tool_custom_instruction():
+    """測試使用者自訂指示會被正確包裝於拒絕訊息中回傳給模型，且不執行指令"""
+    args = {"command": "pytest tests/"}
+
+    with patch("pocket_agent.tools.shell.subprocess.Popen") as mock_popen:
+        custom_inst = "請不要自己執行測試指令，而是最後再把指令列出來由我自己手動執行"
+        result = call_shell_tool("run_command", args, confirm=lambda _: custom_inst)
+
+        mock_popen.assert_not_called()
+        assert "使用者拒絕執行此指令" in result
+        assert custom_inst in result
+        assert "切勿再次嘗試執行違背該指示的指令" in result
+
+
+def test_shell_tool_tuple_rejection_with_instruction():
+    """測試 confirm 回傳 (False, instruction) 時正確包裝"""
+    args = {"command": "git commit -m 'test'"}
+
+    with patch("pocket_agent.tools.shell.subprocess.Popen") as mock_popen:
+        result = call_shell_tool("run_command", args, confirm=lambda _: (False, "改由手動提交"))
+
+        mock_popen.assert_not_called()
+        assert "改由手動提交" in result

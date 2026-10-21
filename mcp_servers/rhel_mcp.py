@@ -17,7 +17,10 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
+import warnings
 from pathlib import Path
+from typing import BinaryIO
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -26,7 +29,7 @@ except ImportError:
 
 mcp = MCPServer("rhel-ops")
 
-MAX_OUTPUT_CHARS = 6000
+MAX_OUTPUT_CHARS = 12000
 _IDENT_RE = re.compile(r"^[a-zA-Z0-9_.@-]+$")
 _SINCE_RE = re.compile(r"^[a-zA-Z0-9_.:+\- ]+$")
 _SEARCH_RE = re.compile(r"^[a-zA-Z0-9_.:@/+\- ]+$")
@@ -58,10 +61,8 @@ _VALID_PRIORITIES = {
 _ALLOWED_CONFIG_PREFIXES = (
     "/etc/",
     "/opt/",
-    "/proc/",
     "/run/systemd/",
     "/srv/",
-    "/sys/",
     "/usr/lib/systemd/",
     "/usr/local/etc/",
     "/usr/share/",
@@ -98,7 +99,14 @@ _REDACT_KV_RE = re.compile(
     r"|private_key|privatekey|preshared_key|presharedkey)\b"
     r"\s*[:=]\s*)([^\s#;\"']+|\"[^\"]*\"|'[^']*')"
 )
-_REDACT_PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
+_REDACT_PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)")
+# 遇到敏感欄位時遮蔽整行剩餘內容，涵蓋 JSON、CLI 引數及未閉合的引號。
+_REDACT_SECRET_LINE_RE = re.compile(
+    r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
+    r"|authorization|database_url|aws_access_key_id|private_key|preshared_key)\b[^\r\n\x00]*"
+)
+_REDACT_URL_RE = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+:[^\s/@]+@")
+MAX_CAPTURE_BYTES = 1024 * 1024  # 1 MB 安全串流緩衝上限，兼顧長日誌容錯與防爆記憶體 DoS
 
 
 def _validate_identifier(value: str, field_name: str) -> str:
@@ -156,15 +164,27 @@ def _redact_and_truncate(text: str) -> str:
         return "(沒有輸出)"
     redacted = _REDACT_PEM_RE.sub("[REDACTED PRIVATE KEY]", text)
     redacted = _REDACT_KV_RE.sub(r"\1[REDACTED]", redacted)
+    redacted = _REDACT_SECRET_LINE_RE.sub("[REDACTED]", redacted)
+    redacted = _REDACT_URL_RE.sub(r"\1[REDACTED]@", redacted)
     if len(redacted) > MAX_OUTPUT_CHARS:
-        return redacted[:MAX_OUTPUT_CHARS] + "\n... (輸出過長已截斷)"
+        return (
+            redacted[:MAX_OUTPUT_CHARS] + f"\n... (輸出過長已截斷，已達 {MAX_OUTPUT_CHARS} 字元上限)\n"
+            "[提示：若需檢視後續內容或關鍵錯誤，請使用 grep 參數過濾關鍵字、縮短 since 時間範圍，或調整 max_lines 行數]"
+        )
     return redacted
 
 
 def _tty_prompt(prompt_text: str, *, is_password: bool = False) -> str:
     """當獨立執行且未由上層注入時，直接透過作業系統終端機設備（CONIN$/CONOUT$ 或 /dev/tty）詢問。"""
     if is_password:
-        return getpass.getpass(prompt_text)
+        if os.name == "nt" and sys.stdin is not sys.__stdin__:
+            raise ValueError("沒有安全的互動終端機，請由上層注入連線參數。")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            try:
+                return getpass.getpass(prompt_text)
+            except (getpass.GetPassWarning, EOFError, OSError) as exc:
+                raise ValueError("無法安全讀取密碼，請由上層注入連線參數。") from exc
 
     tty_in_name = "CONIN$" if os.name == "nt" else "/dev/tty"
     tty_out_name = "CONOUT$" if os.name == "nt" else "/dev/tty"
@@ -176,10 +196,8 @@ def _tty_prompt(prompt_text: str, *, is_password: bool = False) -> str:
             tty_out.write(prompt_text)
             tty_out.flush()
             return tty_in.readline().strip()
-    except OSError:
-        sys.stderr.write(prompt_text)
-        sys.stderr.flush()
-        return sys.stdin.readline().strip()
+    except OSError as exc:
+        raise ValueError("沒有可用的互動終端機，請由上層注入連線參數；不讀取 MCP stdin。") from exc
 
 
 def _resolve_connection_params(
@@ -205,20 +223,6 @@ def _resolve_connection_params(
     user = input_user or cached_user or (os.getenv("RHEL_SSH_USER") or "").strip()
     key_path = input_key or cached_key or (os.getenv("RHEL_SSH_KEY_PATH") or "").strip()
 
-    # 憑證快取隔離：僅當連線目標（host、user、key）與既有快取完全相符時才沿用舊密碼，防止跨主機憑證外洩
-    is_same_target = (
-        (not input_host or input_host == cached_host)
-        and (not input_user or input_user == cached_user)
-        and (not input_key or input_key == cached_key)
-    )
-
-    if ssh_password:
-        password = ssh_password
-    elif is_same_target and _RUNTIME_CREDS.get("RHEL_SSH_PASSWORD"):
-        password = _RUNTIME_CREDS["RHEL_SSH_PASSWORD"]
-    else:
-        password = os.getenv("RHEL_SSH_KEY_PASSPHRASE") or os.getenv("RHEL_SSH_PASSWORD") or ""
-
     if not host:
         host = _tty_prompt("請輸入 RHEL 主機 IP 或位址 (RHEL_HOST): ").strip()
     if not port:
@@ -237,7 +241,29 @@ def _resolve_connection_params(
         if not resolved_key.is_file():
             raise ValueError(f"指定的 SSH 私鑰檔案不存在或無法存取：{key_path!r}")
         key_path = str(resolved_key)
-    else:
+
+    host = _validate_identifier(host, "RHEL_HOST")
+    user = _validate_identifier(user, "RHEL_SSH_USER")
+    port = str(int(_validate_port(port)))
+    target = (host, port, user, key_path)
+    cached_target = (cached_host, cached_port, cached_user, cached_key)
+    env_key = (os.getenv("RHEL_SSH_KEY_PATH") or "").strip()
+    if env_key:
+        env_key = str(Path(env_key).expanduser().resolve())
+    env_target = (
+        (os.getenv("RHEL_HOST") or "").strip(),
+        (os.getenv("RHEL_SSH_PORT") or "22").strip(),
+        (os.getenv("RHEL_SSH_USER") or "").strip(),
+        env_key,
+    )
+    password = ssh_password
+    if not password and target == cached_target:
+        password = _RUNTIME_CREDS.get("RHEL_SSH_PASSWORD", "")
+    if not password and target == env_target:
+        env_name = "RHEL_SSH_KEY_PASSPHRASE" if key_path else "RHEL_SSH_PASSWORD"
+        password = os.getenv(env_name) or ""
+
+    if not key_path:
         # 帳密模式：密碼為必填
         if not password:
             password = _tty_prompt(f"請輸入 {user}@{host} 的 SSH 登入密碼: ", is_password=True)
@@ -280,6 +306,16 @@ def _build_ssh_args(
 
     args = [
         "ssh",
+        "-F",
+        "none",
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "ControlPath=none",
+        "-o",
+        "PermitLocalCommand=no",
+        "-o",
+        "ProxyCommand=none",
         "-o",
         f"ConnectTimeout={timeout}",
         "-o",
@@ -300,6 +336,12 @@ def _build_ssh_args(
             [
                 "-o",
                 "PubkeyAuthentication=yes",
+                "-o",
+                "PreferredAuthentications=publickey",
+                "-o",
+                "PasswordAuthentication=no",
+                "-o",
+                "KbdInteractiveAuthentication=no",
                 "-i",
                 key_path,
             ]
@@ -325,7 +367,65 @@ def _build_ssh_args(
     return args, password, timeout
 
 
-def _run_with_askpass(ssh_args: list[str], password: str, timeout: int, creationflags: int):
+def _capture_ssh(
+    ssh_args: list[str], *, timeout: int, creationflags: int, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """雙管線並行排空；總接收量超限即中止，不回傳可能截斷的機密。"""
+    with subprocess.Popen(
+        ssh_args,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creationflags,
+        env=env,
+    ) as proc:
+        buffers = [bytearray(), bytearray()]
+        lock = threading.Lock()
+        exceeded = threading.Event()
+
+        def drain(stream: BinaryIO, index: int) -> None:
+            while chunk := stream.read(4096):
+                with lock:
+                    if exceeded.is_set():
+                        continue
+                    if sum(map(len, buffers)) + len(chunk) > MAX_CAPTURE_BYTES:
+                        exceeded.set()
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    else:
+                        buffers[index].extend(chunk)
+
+        assert proc.stdout is not None and proc.stderr is not None
+        threads = [
+            threading.Thread(target=drain, args=(stream, index), daemon=True)
+            for index, stream in enumerate((proc.stdout, proc.stderr))
+        ]
+        for thread in threads:
+            thread.start()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            proc.wait()
+            raise
+        finally:
+            for thread in threads:
+                thread.join()
+        if exceeded.is_set():
+            return subprocess.CompletedProcess(ssh_args, 1, "", "輸出超過安全位元組上限，已中止並捨棄內容。")
+        return subprocess.CompletedProcess(
+            ssh_args, proc.returncode, *(data.decode("utf-8", errors="replace") for data in buffers)
+        )
+
+
+def _run_with_askpass(
+    ssh_args: list[str], password: str, timeout: int, creationflags: int
+) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory(prefix="rhel_mcp_") as tmp_dir:
         tmp_path = Path(tmp_dir)
 
@@ -352,18 +452,7 @@ def _run_with_askpass(ssh_args: list[str], password: str, timeout: int, creation
         env.setdefault("DISPLAY", "1")
         env.pop("SSH_AUTH_SOCK", None)
 
-        return subprocess.run(
-            ssh_args,
-            shell=False,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout + 15,
-            creationflags=creationflags,
-            env=env,
-        )
+        return _capture_ssh(ssh_args, timeout=timeout + 15, creationflags=creationflags, env=env)
 
 
 def _run_remote(
@@ -400,8 +489,10 @@ def _run_remote(
                     f"[ERROR] [CONN_AUTH] 遠端連線或認證失敗 (exit {proc.returncode}): {_redact_and_truncate(err_out)}"
                 )
             return f"[ERROR] 遠端執行失敗 (exit {proc.returncode}): {_redact_and_truncate(err_out)}"
-        if err_out and combined and proc.returncode != 0:
+        if err_out:
             combined = f"{combined}\n[STDERR]\n{err_out}"
+        if proc.returncode != 0:
+            combined = f"[ERROR] 遠端指令部分或全部失敗 (exit {proc.returncode})\n{combined}"
         return _redact_and_truncate(combined)
     except ValueError as e:
         _RUNTIME_CREDS.clear()
@@ -553,12 +644,14 @@ def rhel_security_status(
     cmd = (
         "echo '=== SELinux Status ===' && (sestatus || getenforce) 2>/dev/null; "
         "echo '=== Recent SELinux AVC Denials ===' && "
-        "(ausearch -m avc -ts recent 2>/dev/null | tail -n 20 || "
-        "journalctl -t setroubleshoot --no-pager -n 15 2>/dev/null || echo '無權限或無近期 AVC 紀錄'); "
+        "(bash -o pipefail -c 'ausearch -m avc -ts recent | tail -n 20' || "
+        "journalctl -t setroubleshoot --no-pager -n 15 || echo '[ERROR] AVC 查詢失敗'); "
         "echo '=== Firewalld State ===' && "
         "(firewall-cmd --state && firewall-cmd --list-all) 2>/dev/null || echo 'firewalld 未執行或需要權限'; "
         "echo '=== Security Updates (dnf) ===' && "
-        "dnf updateinfo summary --security 2>/dev/null | tail -n 25"
+        "dnf --cacheonly --setopt=logfile=/dev/null --setopt=debuglevel=0 "
+        "updateinfo summary --security || "
+        "echo '[ERROR] 安全更新查詢失敗；快取可能不足或過期，不自動更新中繼資料'"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
@@ -701,7 +794,7 @@ def rhel_process_inspect(
         quoted_search = shlex.quote(safe_search)
         cmd = (
             f"echo '=== Search Processes matching {quoted_search} ===' && "
-            f"ps -eo {cols},args | grep -i -- {quoted_search} | grep -v grep | head -n {safe_lines}"
+            f"ps -eo {cols} | grep -i -- {quoted_search} | grep -v grep | head -n {safe_lines}"
         )
         return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
@@ -732,6 +825,8 @@ def rhel_network_connections(
 ) -> str:
     """利用 ss (Socket Statistics) 結構化探查網路連線狀態（支援 TCP/UDP 協議、狀態過濾、特定 Port 與行程關聯）"""
     proto_clean = protocol.strip().lower()
+    if proto_clean not in {"all", "tcp", "udp"}:
+        return "[ERROR] 非法的 protocol 參數（僅允許 all、tcp、udp）。"
     proto_flag = "-t" if proto_clean == "tcp" else "-u" if proto_clean == "udp" else "-tu"
     proc_flag = " -p" if show_process else ""
 
@@ -787,7 +882,9 @@ def rhel_package_info(
     else:
         cmd = (
             f"echo '=== Package Info (rpm -qi) ===' && "
-            f"(rpm -qi {quoted} 2>/dev/null || dnf info {quoted} 2>/dev/null || echo '查無此套件'); "
+            f"(rpm -qi {quoted} 2>/dev/null || "
+            f"dnf --cacheonly --setopt=logfile=/dev/null --setopt=debuglevel=0 info {quoted} || "
+            "echo '[ERROR] 查無套件或快取不足，不自動更新中繼資料'); "
             "echo '=== Changelog Summary (recent) ===' && "
             f"rpm -q --changelog {quoted} 2>/dev/null | head -n 20"
         )

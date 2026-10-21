@@ -238,3 +238,67 @@ def test_rename_command_updates_title_and_persists(tmp_path, monkeypatch):
     assert res2.action == "handled"
     data_b = sessions.load_session(state.session_id)
     assert data_b["title"] == "互動輸入的新標題"
+
+
+def test_cli_confirm_with_custom_instruction(tmp_path, monkeypatch):
+    """測試在 CLI 確認流程中輸入 c 自訂指示，或直接輸入口語指示時，會記錄至 agent 並回傳指示"""
+    monkeypatch.chdir(tmp_path)
+    client = SimpleNamespace(close=AsyncMock())
+    mcp = SimpleNamespace(
+        start=AsyncMock(return_value=MCPStartupResult(0, 0, 0, 0)),
+        stop=AsyncMock(),
+        list_tools=Mock(return_value=[]),
+    )
+    agent = SimpleNamespace(client=client, on_stream=None, history=[], user_instructions=[])
+    reader = SimpleNamespace(read=AsyncMock(side_effect=EOFError))
+
+    with (
+        patch("pocket_agent.system.paths.user_dir", return_value=tmp_path),
+        patch("pocket_agent.system.auth.get_provider_client", return_value=client),
+        patch("pocket_agent.system.auth.get_model", return_value="model"),
+        patch("pocket_agent.system.auth.load_config", return_value={"active_provider": "openai"}),
+        patch("pocket_agent.system.auth.fetch_available_models", return_value=["model"]),
+        patch("pocket_agent.extensions.mcp.MCPManager", return_value=mcp),
+        patch("pocket_agent.core.agent.Agent", return_value=agent),
+        patch("pocket_agent.frontend.cli.input.CliInput", return_value=reader),
+        patch("rich.console.Console", return_value=Console(file=StringIO())),
+        patch("pocket_agent.core.sessions.save_session"),
+        patch("pocket_agent.frontend.cli.main.conversation", new_callable=AsyncMock),
+    ):
+        asyncio.run(CliFrontend()._run_cli("system"))
+
+    confirm_func = agent.on_confirm
+    assert confirm_func is not None
+
+    # 1. 測試輸入 c 並提供自訂指示
+    custom_text = "請不要自己執行測試指令，改由手動執行"
+    with patch("builtins.input", side_effect=["c", custom_text]):
+        res = confirm_func("pytest tests/")
+        assert res == custom_text
+        assert custom_text in agent.user_instructions
+
+    # 2. 測試智慧相容：直接輸入口語指示
+    direct_text = "請先不要動資料庫，先列出 SQL 即可"
+    with patch("builtins.input", side_effect=[direct_text]):
+        res2 = confirm_func("drop table users;")
+        assert res2 == direct_text
+        assert direct_text in agent.user_instructions
+
+
+def test_agent_dynamic_instructions_with_user_instructions():
+    """測試 Agent._instructions 會即時注入使用者指示"""
+    from pocket_agent.core.agent import Agent
+
+    client = Mock()
+    mcp = Mock()
+    mcp.openai_tools.return_value = []
+    agent = Agent(client=client, mcp=mcp, model="test-model")
+    agent.user_instructions.append("請不要自行執行測試，最後列出指令即可")
+
+    instructions = agent._instructions()
+    assert "[使用者即時指示，請務必嚴格遵守]" in instructions
+    assert "- 請不要自行執行測試，最後列出指令即可" in instructions
+
+    # 驗證 clear_history 會清空指示
+    agent.clear_history()
+    assert len(agent.user_instructions) == 0
