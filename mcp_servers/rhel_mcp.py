@@ -433,16 +433,35 @@ def _run_with_askpass(
         # 使用獨立 .py 腳本徹底消除 Windows cmd.exe -c 行內命令字串巢狀雙引號引發之 SyntaxError
         askpass_py = tmp_path / "askpass.py"
         askpass_py.write_text(
-            'import os, sys\nsys.stdout.write(os.environ.get("RHEL_SSH_ASKPASS_PW", "") + "\\n")\n',
+            "import os, sys\n"
+            'sys.stdout.buffer.write((os.environ.get("RHEL_SSH_ASKPASS_PW", "") + "\\n").encode("utf-8"))\n',
             encoding="utf-8",
         )
 
+        is_frozen = getattr(sys, "frozen", False)
+        exe_path = Path(sys.executable)
+        is_pocket_agent_exe = is_frozen or "pocket-agent" in exe_path.stem.lower()
+
+        python_exe = str(exe_path)
+        if not is_frozen and exe_path.name.lower() == "pythonw.exe":
+            console_py = exe_path.with_name("python.exe")
+            if console_py.exists():
+                python_exe = str(console_py)
+
+        extra_flag = " --internal-mcp-server" if is_pocket_agent_exe else ""
+
         if os.name == "nt":
             askpass_script = tmp_path / "askpass.bat"
-            askpass_script.write_text(f'@"{sys.executable}" "{askpass_py}"\r\n', encoding="utf-8")
+            askpass_script.write_text(
+                f'@"{python_exe}"{extra_flag} "{askpass_py}"\r\n',
+                encoding="utf-8",
+            )
         else:
             askpass_script = tmp_path / "askpass.sh"
-            askpass_script.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{askpass_py}"\n', encoding="utf-8")
+            askpass_script.write_text(
+                f'#!/bin/sh\nexec "{python_exe}"{extra_flag} "{askpass_py}"\n',
+                encoding="utf-8",
+            )
             askpass_script.chmod(0o700)
 
         env = dict(os.environ)

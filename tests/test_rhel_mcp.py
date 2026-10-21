@@ -411,7 +411,7 @@ def test_package_and_journal_grep(monkeypatch):
         mock_run.assert_not_called()
 
 
-def test_run_with_askpass_zero_disk_leak():
+def test_run_with_askpass_zero_disk_leak(monkeypatch):
     fake_proc = SimpleNamespace(returncode=0, stdout="pong", stderr="")
     captured_env = {}
 
@@ -421,6 +421,8 @@ def test_run_with_askpass_zero_disk_leak():
         askpass_path = Path(kwargs["env"]["SSH_ASKPASS"])
         assert not (askpass_path.parent / "pw.txt").exists()
         assert (askpass_path.parent / "askpass.py").exists()
+        script_content = askpass_path.read_text(encoding="utf-8")
+        assert "--internal-mcp-server" not in script_content
         return fake_proc
 
     with patch("mcp_servers.rhel_mcp._capture_ssh", side_effect=fake_subprocess_run):
@@ -428,6 +430,23 @@ def test_run_with_askpass_zero_disk_leak():
         assert res.stdout == "pong"
         assert captured_env.get("RHEL_SSH_ASKPASS_PW") == "SuperSecret!Pw"
         assert captured_env.get("SSH_ASKPASS_REQUIRE") == "force"
+
+
+def test_run_with_askpass_frozen_pocket_agent(monkeypatch):
+    fake_proc = SimpleNamespace(returncode=0, stdout="pong", stderr="")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\app\pocket-agent.exe")
+
+    def fake_subprocess_run(cmd, **kwargs):
+        askpass_path = Path(kwargs["env"]["SSH_ASKPASS"])
+        script_content = askpass_path.read_text(encoding="utf-8")
+        assert "--internal-mcp-server" in script_content
+        assert r"C:\app\pocket-agent.exe" in script_content
+        return fake_proc
+
+    with patch("mcp_servers.rhel_mcp._capture_ssh", side_effect=fake_subprocess_run):
+        res = rhel_mcp._run_with_askpass(["ssh", "-V"], "SuperSecret!Pw", timeout=5, creationflags=0)
+        assert res.stdout == "pong"
 
 
 def test_cross_host_credentials_not_leaked(monkeypatch):

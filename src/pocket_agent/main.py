@@ -4,6 +4,7 @@
 import asyncio
 import runpy
 import sys
+from pathlib import Path
 
 import click
 from dotenv import load_dotenv
@@ -14,6 +15,11 @@ from pocket_agent.system.paths import env_path
 if len(sys.argv) >= 3 and sys.argv[1] == "--internal-mcp-server":
     _script = sys.argv[2]
     sys.argv = [_script, *sys.argv[3:]]
+    runpy.run_path(_script, run_name="__main__")
+    raise SystemExit(0)
+elif len(sys.argv) >= 2 and sys.argv[1].endswith(".py") and Path(sys.argv[1]).is_file():
+    _script = str(Path(sys.argv[1]).resolve())
+    sys.argv = [_script, *sys.argv[2:]]
     runpy.run_path(_script, run_name="__main__")
     raise SystemExit(0)
 
