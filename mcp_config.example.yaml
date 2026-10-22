@@ -87,7 +87,7 @@ servers:
   #     RHEL_SSH_KEY_PATH: ""                # 選填：SSH 私鑰檔案路徑（設定時優先啟用金鑰認證；留空則自動使用帳密模式）
   #     RHEL_SSH_KEY_PASSPHRASE: ""          # 選填：私鑰解鎖密碼（若私鑰有設 Passphrase，建議留空於執行時安全輸入）
   #     RHEL_SSH_PASSWORD: ""                # 選填：SSH 登入密碼（使用帳密模式時建議留空或省略，於執行時安全輸入）
-  #     RHEL_STRICT_HOST_KEY: "accept-new"   # 選填：主機金鑰比對策略（預設 accept-new 防範中間人竊聽；可設 accept-new、yes 或 no）
+  #     RHEL_STRICT_HOST_KEY: "accept-new"   # 選填：主機金鑰策略（預設 accept-new 兼顧首次連線便利與防金鑰竄改；可設 yes 採最高嚴格清單核驗）
   #     RHEL_CONNECT_TIMEOUT: "10"
 
   # 遠端 Windows 主機 RDP (Port 3389) 視覺控制與結構化唯讀巡檢

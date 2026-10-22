@@ -228,7 +228,7 @@ def test_package_info_excludes_dnf_fallback() -> None:
     assert "rpm -qi" in command
 
 
-def test_ssh_args_enforces_strict_host_key_and_dedicated_known_hosts() -> None:
+def test_ssh_args_enforces_strict_host_key_and_dedicated_known_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
     args, _, _ = rhel_mcp._build_ssh_args(
         "uptime",
         ssh_host="192.168.1.50",
@@ -239,6 +239,17 @@ def test_ssh_args_enforces_strict_host_key_and_dedicated_known_hosts() -> None:
     assert "StrictHostKeyChecking=accept-new" in args
     assert any("UserKnownHostsFile=" in a for a in args)
     assert "StrictHostKeyChecking=no" not in args
+
+    # 驗證透過環境變數可切換為 yes
+    monkeypatch.setenv("RHEL_STRICT_HOST_KEY", "yes")
+    strict_args, _, _ = rhel_mcp._build_ssh_args(
+        "uptime",
+        ssh_host="192.168.1.50",
+        ssh_port="22",
+        ssh_user="testuser",
+        ssh_password="password",
+    )
+    assert "StrictHostKeyChecking=yes" in strict_args
 
 
 def test_host_validation_supports_ipv6_and_rejects_options() -> None:

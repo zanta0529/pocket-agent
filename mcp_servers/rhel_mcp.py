@@ -415,6 +415,9 @@ def _build_ssh_args(
     except ValueError:
         timeout = 10
 
+    strict_env = (os.getenv("RHEL_STRICT_HOST_KEY") or "accept-new").strip().lower()
+    strict_host = "yes" if strict_env in ("yes", "strict", "true", "1") else "accept-new"
+
     args = [
         "ssh",
         "-F",
@@ -430,7 +433,7 @@ def _build_ssh_args(
         "-o",
         f"ConnectTimeout={timeout}",
         "-o",
-        "StrictHostKeyChecking=accept-new",
+        f"StrictHostKeyChecking={strict_host}",
         "-o",
         f"UserKnownHostsFile={known_hosts_file}",
         "-o",
