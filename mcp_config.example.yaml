@@ -50,6 +50,10 @@ servers:
   #   transport: stdio
   #   command: python
   #   args: ["mcp_servers/sqlite_mcp.py"]
+  #   safe_read_tools:
+  #     - sqlite_list_tables
+  #     - sqlite_describe_schema
+  #     - sqlite_run_select_query
   #   env:
   #     DB_PATH: "dev.db"
 
