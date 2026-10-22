@@ -55,7 +55,7 @@ servers:
   #     - sqlite_describe_schema
   #     - sqlite_run_select_query
   #   env:
-  #     DB_PATH: "dev.db"
+  #     DB_PATH: "dev.db" # 選填：SQLite 資料庫完整路徑與檔名（留空、null 或省略時將於執行時詢問）
 
   # 長期記憶與上下文管理 (預設存於 ~/.pocket-agent/memory.json)
   # memory:

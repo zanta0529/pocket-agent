@@ -1,13 +1,22 @@
-"""單元測試：驗證 SQLite MCP (sqlite_mcp.py) 之唯讀保護、串流防爆、連線釋放、機密遮罩與向下相容。"""
+"""單元測試：驗證 SQLite MCP (sqlite_mcp.py) 之唯讀保護、串流防爆、連線釋放、機密遮罩、互動詢問與向下相容。"""
 
 import os
 import sqlite3
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from mcp_servers import sqlite_mcp
+
+
+@pytest.fixture(autouse=True)
+def _clean_sqlite_cache():
+    """每次測試前自動清空 SQLite MCP 執行期記憶體快取。"""
+    sqlite_mcp._RUNTIME_CREDS.clear()
+    yield
+    sqlite_mcp._RUNTIME_CREDS.clear()
 
 
 @pytest.fixture
@@ -151,3 +160,59 @@ def test_sqlite_connection_closing_guaranteed(temp_db):
     test_conn.execute("CREATE TABLE test_lock (id INT);")
     test_conn.commit()
     test_conn.close()
+
+
+def test_sqlite_missing_db_path_prompts_and_caches(monkeypatch, temp_db):
+    """驗證未設定 DB_PATH 時透過 _tty_prompt 互動詢問並成功快取於記憶體。"""
+    monkeypatch.delenv("DB_PATH", raising=False)
+
+    with patch("mcp_servers.sqlite_mcp._tty_prompt", return_value=str(temp_db)) as mock_prompt:
+        # 第一次呼叫：觸發互動輸入
+        out1 = sqlite_mcp.sqlite_list_tables()
+        assert "users" in out1
+        mock_prompt.assert_called_once()
+
+        # 第二次呼叫：直接命中快取，不應再次詢問
+        out2 = sqlite_mcp.sqlite_describe_schema("users")
+        assert "username" in out2
+        assert mock_prompt.call_count == 1
+
+
+@pytest.mark.parametrize("empty_val", ["", "   ", "null", "NULL", "None", "none", "~"])
+def test_sqlite_empty_or_null_db_path_prompts(monkeypatch, temp_db, empty_val):
+    """驗證 DB_PATH 為空白、null、None 或波浪號時皆會觸發提示詢問。"""
+    monkeypatch.setenv("DB_PATH", empty_val)
+
+    with patch("mcp_servers.sqlite_mcp._tty_prompt", return_value=f'"{temp_db}"') as mock_prompt:
+        resolved = sqlite_mcp.get_db_path()
+        assert resolved == temp_db.resolve()
+        mock_prompt.assert_called_once()
+
+
+def test_sqlite_prompt_empty_input_returns_error(monkeypatch):
+    """驗證使用者在提示輸入空白或取消時回傳錯誤。"""
+    monkeypatch.delenv("DB_PATH", raising=False)
+
+    with patch("mcp_servers.sqlite_mcp._tty_prompt", return_value="   ") as mock_prompt:
+        out = sqlite_mcp.sqlite_list_tables()
+        assert "[ERROR]" in out
+        assert "未提供 SQLite 資料庫路徑" in out
+        mock_prompt.assert_called_once()
+
+
+def test_sqlite_prompt_nonexistent_file_returns_error(monkeypatch):
+    """驗證使用者輸入不存在之檔案路徑時回傳 FileNotFoundError 錯誤。"""
+    monkeypatch.delenv("DB_PATH", raising=False)
+
+    fake_path = r"C:\pocket_agent_nonexistent_dir\missing.db"
+    with patch("mcp_servers.sqlite_mcp._tty_prompt", return_value=fake_path) as mock_prompt:
+        out = sqlite_mcp.sqlite_list_tables()
+        assert "[ERROR]" in out
+        assert "找不到指定的資料庫檔案" in out
+        mock_prompt.assert_called_once()
+
+
+def test_sqlite_custom_path_direct_override(temp_db):
+    """驗證 get_db_path 支援傳入 custom_path 覆寫。"""
+    resolved = sqlite_mcp.get_db_path(str(temp_db))
+    assert resolved == temp_db.resolve()

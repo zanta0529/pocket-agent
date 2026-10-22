@@ -6,6 +6,8 @@
 3. 連線資源確保釋放，杜絕 Windows 檔案佔用與鎖死。
 4. 內建機密欄位與正則遮罩，防止資料庫機敏欄位（密碼、Token、金鑰）外洩至 LLM 上下文。
 5. 100% 記憶體運作，不產生任何磁碟暫存檔（零落盤）。
+6. 支援彈性路徑設定：DB_PATH 可於 mcp_config.yaml 預填、留空、設為 null 或省略；
+   未設定或為空時於執行期互動詢問並快取於記憶體。
 """
 
 import os
@@ -24,6 +26,9 @@ except ImportError:
 
 mcp = MCPServer("sqlite")
 
+# 執行期記憶體快取（僅存活於當前行程生命週期，不落盤）
+_RUNTIME_CREDS: dict[str, str] = {}
+
 _REDACT_SECRET_RE = re.compile(
     r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
     r"|authorization|private_key|preshared_key)\b[^\r\n\x00]*"
@@ -37,16 +42,56 @@ def _redact_output(text: str) -> str:
     return _REDACT_SECRET_RE.sub("[REDACTED]", text)
 
 
-def get_db_path() -> Path:
-    """解析並驗證 DB_PATH 目標檔案路徑。"""
-    db_path = os.getenv("DB_PATH")
-    if not db_path:
-        raise ValueError("缺少 DB_PATH 環境變數。請在 mcp_config.yaml 中使用 env 指定 SQLite 資料庫路徑。")
-    p = Path(db_path).resolve()
+def _is_empty_or_null(val: str | None) -> bool:
+    """檢查字串是否為空值、空白、null 或無效預留值。"""
+    if val is None:
+        return True
+    cleaned = val.strip()
+    return not cleaned or cleaned.lower() in ("null", "none", "~")
+
+
+def _tty_prompt(prompt_text: str) -> str:
+    """當未於設定檔指定 DB_PATH 時，直接透過作業系統終端機設備（CONIN$/CONOUT$ 或 /dev/tty）詢問使用者。"""
+    tty_in_name = "CONIN$" if os.name == "nt" else "/dev/tty"
+    tty_out_name = "CONOUT$" if os.name == "nt" else "/dev/tty"
+    try:
+        with (
+            open(tty_out_name, "w", encoding="utf-8") as tty_out,
+            open(tty_in_name, encoding="utf-8") as tty_in,
+        ):
+            tty_out.write(prompt_text)
+            tty_out.flush()
+            return tty_in.readline().strip()
+    except OSError as exc:
+        raise ValueError(
+            "沒有可用的互動終端機，請於環境變數或 mcp_config.yaml 設定 DB_PATH；不讀取 MCP stdin。"
+        ) from exc
+
+
+def get_db_path(custom_path: str = "") -> Path:
+    """解析並驗證 DB_PATH 目標檔案路徑。若未設定或為空，則提示使用者輸入並快取於記憶體。"""
+    raw_path = custom_path.strip().strip("'\"") if custom_path else ""
+
+    if _is_empty_or_null(raw_path):
+        env_val = os.getenv("DB_PATH")
+        if not _is_empty_or_null(env_val):
+            raw_path = env_val.strip().strip("'\"")
+        elif not _is_empty_or_null(_RUNTIME_CREDS.get("DB_PATH")):
+            raw_path = _RUNTIME_CREDS["DB_PATH"]
+        else:
+            prompt_text = "請輸入要連線的 SQLite 資料庫完整路徑與檔名 (DB_PATH): "
+            raw_path = _tty_prompt(prompt_text).strip().strip("'\"")
+
+    if _is_empty_or_null(raw_path):
+        raise ValueError("未提供 SQLite 資料庫路徑 (DB_PATH)。")
+
+    p = Path(raw_path).expanduser().resolve()
     if not p.exists():
         raise FileNotFoundError(f"找不到指定的資料庫檔案：{p}")
     if not p.is_file():
         raise ValueError(f"指定的資料庫路徑並非檔案：{p}")
+
+    _RUNTIME_CREDS["DB_PATH"] = str(p)
     return p
 
 
