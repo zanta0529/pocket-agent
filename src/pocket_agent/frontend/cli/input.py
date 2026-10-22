@@ -34,6 +34,7 @@ BUILTINS = {
     "help": "指令說明",
     "learn": "從近期對話萃取為共用技能",
     "logout": "登出",
+    "mcp": "MCP 工具清單",
     "model": "切換當次提供者與模型",
     "new": "開啟全新乾淨對話（自動儲存既有對話，完整清空上下文）",
     "parallel": "手動平行啟動多個子代理 (用法: /parallel <name>:<task> | <name>:<task>)",
@@ -43,7 +44,6 @@ BUILTINS = {
     "session": "查看／載入歷史對話",
     "skills": "列出目前所有可用的全域與專案技能",
     "subagent": "強制委派任務給指定的子代理",
-    "tools": "工具清單",
     "undo": "時光機：還原上一次被 AI 修改的檔案",
     "usage": "顯示當前對話累計 Token 用量",
     "workspace": "顯示目前的工作區路徑清單",
@@ -146,6 +146,8 @@ class SlashCommandCompleter(Completer):
                 matches.append((name, description))
             elif name == "usage" and "quota".startswith(text[1:]):
                 matches.append((name, description))
+            elif name == "mcp" and "tools".startswith(text[1:]):
+                matches.append((name, description))
 
         PAGE_SIZE = 10
         total = len(matches)
@@ -178,6 +180,8 @@ class SlashCommandCompleter(Completer):
                 display_name = "exit (quit)"
             elif name == "usage":
                 display_name = "usage (quota)"
+            elif name == "mcp":
+                display_name = "mcp (tools)"
             yield Completion(
                 name, start_position=-(len(text) - 1), display=display_name, display_meta=plain(description)
             )

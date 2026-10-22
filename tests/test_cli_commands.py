@@ -216,3 +216,30 @@ def test_config_set_numeric_and_bool_types():
     res_bool = sys_registry.execute("/config set test_bool false", None)
     assert res_bool.status == "success"
     assert config.get("test_bool") is False
+
+
+def test_mcp_command():
+    renderer = Mock()
+    handler = _make_handler(renderer=renderer)
+    handler.tools = ["browser_click", "sqlite_query"]
+    handler.context.tools = handler.tools
+
+    # 1. 測試 /mcp 正確列印工具清單
+    asyncio.run(handler.dispatch("/mcp"))
+    renderer.message.assert_called_with("MCP 工具：browser_click, sqlite_query")
+
+    # 2. 測試舊指令別名 /tools 保持相容
+    renderer.reset_mock()
+    asyncio.run(handler.dispatch("/tools"))
+    renderer.message.assert_called_with("MCP 工具：browser_click, sqlite_query")
+
+    # 3. 測試無工具時輸出「無」
+    renderer.reset_mock()
+    handler.tools = []
+    handler.context.tools = []
+    asyncio.run(handler.dispatch("/mcp"))
+    renderer.message.assert_called_with("MCP 工具：無")
+
+    # 4. 測試帶參數時拋出 ValueError
+    with pytest.raises(ValueError, match="/mcp 不接受參數"):
+        asyncio.run(handler.dispatch("/mcp extra"))

@@ -211,12 +211,15 @@ class AttachmentsCommand(CliCommand):
         return CommandResult()
 
 
-class ToolsCommand(CliCommand):
+class McpCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/tools 不接受參數")
+            raise ValueError("/mcp 不接受參數")
         ctx.renderer.message("MCP 工具：" + (", ".join(ctx.tools) or "無"))
         return CommandResult()
+
+
+ToolsCommand = McpCommand
 
 
 class SkillsCommand(CliCommand):

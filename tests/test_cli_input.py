@@ -166,3 +166,19 @@ def test_selection_restores_chat_prompt_options():
         assert reader.session.prompt_async.call_args.kwargs["completer"] is reader.completer
 
     asyncio.run(scenario())
+
+
+def test_slash_command_alias_display_names():
+    completer = SlashCommandCompleter(CliState("openai", "model"))
+    with (
+        patch("pocket_agent.system.commands.list_commands", return_value=[]),
+        patch("pocket_agent.extensions.skills.list_skills", return_value=[]),
+        patch("pocket_agent.core.subagents.list_subagents", return_value=[]),
+    ):
+        completions = {c.text: c.display_text for c in completer.get_completions(Document("/mcp"), CompleteEvent())}
+        assert completions.get("mcp") == "mcp (tools)"
+
+        tools_completions = {
+            c.text: c.display_text for c in completer.get_completions(Document("/tools"), CompleteEvent())
+        }
+        assert tools_completions.get("mcp") == "mcp (tools)"

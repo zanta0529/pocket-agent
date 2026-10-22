@@ -181,7 +181,7 @@ python -m pocket_agent --resume
 | Ctrl+L                          | 清除終端機畫面顯示，但不清除對話歷史                           |
 | Ctrl+C（輸入期間）              | 有文字時清空輸入，空白時提示退出方式；不清附件                 |
 | Ctrl+D（空輸入）或 /exit、/quit | 離開                                                           |
-| /help、/tools                   | 查看指令、MCP 工具清單                                         |
+| /help、/mcp                     | 查看指令、MCP 工具清單                                         |
 | /usage、/quota                  | 顯示當前對話累計 Token 用量                                    |
 | /clean                          | 執行管家維護（Housekeeping），批次清理過期日誌、截圖與暫存檔案 |
 | /codesearch、/cs                | 快速搜尋工作區的程式碼片段並加入上下文                         |
