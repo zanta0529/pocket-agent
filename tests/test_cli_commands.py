@@ -220,26 +220,53 @@ def test_config_set_numeric_and_bool_types():
 
 def test_mcp_command():
     renderer = Mock()
-    handler = _make_handler(renderer=renderer)
-    handler.tools = ["browser_click", "sqlite_query"]
+    agent = Mock()
+    mock_mcp = Mock()
+    mock_mcp.get_grouped_tools.return_value = {
+        "rhel-ops": [
+            {"name": "rhel_system_overview", "description": "系統概況"},
+            {"name": "rhel_storage_and_fs", "description": "儲存與檔案系統"},
+        ],
+        "win-rdp": [
+            {"name": "win_rdp_screenshot", "description": "遠端桌面截圖"},
+        ],
+    }
+    agent.mcp = mock_mcp
+    handler = _make_handler(agent=agent, renderer=renderer)
+    handler.tools = ["rhel_system_overview", "rhel_storage_and_fs", "win_rdp_screenshot"]
     handler.context.tools = handler.tools
 
-    # 1. 測試 /mcp 正確列印工具清單
+    # 1. 測試 /mcp 正確分組輸出
     asyncio.run(handler.dispatch("/mcp"))
-    renderer.message.assert_called_with("MCP 工具：browser_click, sqlite_query")
+    assert renderer.console.print.called
+    printed_texts = [str(call.args[0]) for call in renderer.console.print.call_args_list if call.args]
+    all_output = "".join(printed_texts)
+    assert "rhel-ops" in all_output
+    assert "win-rdp" in all_output
+    assert "rhel_system_overview" in all_output
+    assert "win_rdp_screenshot" in all_output
 
     # 2. 測試舊指令別名 /tools 保持相容
-    renderer.reset_mock()
+    renderer.console.print.reset_mock()
     asyncio.run(handler.dispatch("/tools"))
-    renderer.message.assert_called_with("MCP 工具：browser_click, sqlite_query")
+    assert renderer.console.print.called
 
-    # 3. 測試無工具時輸出「無」
-    renderer.reset_mock()
+    # 3. 測試 /mcp <server_name> 查詢特定 MCP 工具之詳細說明
+    renderer.console.print.reset_mock()
+    asyncio.run(handler.dispatch("/mcp rhel-ops"))
+    detail_output = "".join(str(call.args[0]) for call in renderer.console.print.call_args_list if call.args)
+    assert "rhel-ops" in detail_output
+    assert "系統概況" in detail_output
+
+    # 4. 測試查詢不存在的 MCP 工具
+    renderer.message.reset_mock()
+    asyncio.run(handler.dispatch("/mcp nonexistent"))
+    renderer.message.assert_called_with("找不到 MCP 工具「nonexistent」。目前啟用的工具：rhel-ops, win-rdp", "yellow")
+
+    # 5. 測試無工具時輸出未掛載訊息
+    renderer.message.reset_mock()
+    mock_mcp.get_grouped_tools.return_value = {}
     handler.tools = []
     handler.context.tools = []
     asyncio.run(handler.dispatch("/mcp"))
-    renderer.message.assert_called_with("MCP 工具：無")
-
-    # 4. 測試帶參數時拋出 ValueError
-    with pytest.raises(ValueError, match="/mcp 不接受參數"):
-        asyncio.run(handler.dispatch("/mcp extra"))
+    renderer.message.assert_called_with("目前未掛載任何 MCP 工具。")

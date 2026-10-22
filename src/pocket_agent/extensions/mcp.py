@@ -215,6 +215,18 @@ class MCPManager:
             self._runtime_conn_cache.pop(entry.server_name, None)
         return wrap_external_content(joined)
 
+    def get_grouped_tools(self) -> dict[str, list[dict[str, str]]]:
+        """回傳依 MCP 伺服器分組的工具資訊清單。"""
+        grouped: dict[str, list[dict[str, str]]] = {}
+        for entry in self._tools.values():
+            grouped.setdefault(entry.server_name, []).append(
+                {
+                    "name": entry.name,
+                    "description": (entry.schema.get("description") or "").strip(),
+                }
+            )
+        return grouped
+
     def list_tools(self) -> list[str]:
         return list(self._tools.keys())
 

@@ -213,9 +213,102 @@ class AttachmentsCommand(CliCommand):
 
 class McpCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
-        if args:
-            raise ValueError("/mcp 不接受參數")
-        ctx.renderer.message("MCP 工具：" + (", ".join(ctx.tools) or "無"))
+        mcp_manager = getattr(ctx.agent, "mcp", None)
+        grouped: dict[str, list[dict[str, str]]] = {}
+
+        if mcp_manager is not None and hasattr(mcp_manager, "get_grouped_tools"):
+            grouped = mcp_manager.get_grouped_tools()
+        elif mcp_manager is not None and hasattr(mcp_manager, "_tools") and mcp_manager._tools:
+            for entry in mcp_manager._tools.values():
+                grouped.setdefault(entry.server_name, []).append(
+                    {
+                        "name": entry.name,
+                        "description": (entry.schema.get("description") or "").strip(),
+                    }
+                )
+
+        # Fallback: 若無 MCPManager 物件但有 ctx.tools (例如測試環境或直接傳遞)
+        if not grouped and ctx.tools:
+            for tool_name in ctx.tools:
+                server_key = "mcp"
+                for prefix in ("rhel_", "win_rdp_", "browser_", "sqlite_"):
+                    if tool_name.startswith(prefix):
+                        server_key = prefix.rstrip("_").replace("_", "-")
+                        break
+                grouped.setdefault(server_key, []).append({"name": tool_name, "description": ""})
+
+        if not grouped:
+            ctx.renderer.message("目前未掛載任何 MCP 工具。")
+            return CommandResult()
+
+        arg = args.strip()
+        if arg:
+            # 支援查看特定 MCP 工具的詳細功能說明
+            matched_server = None
+            for s_name in grouped:
+                if s_name.lower() == arg.lower():
+                    matched_server = s_name
+                    break
+            if not matched_server:
+                ctx.renderer.message(
+                    f"找不到 MCP 工具「{arg}」。目前啟用的工具：{', '.join(grouped.keys())}",
+                    "yellow",
+                )
+                return CommandResult()
+
+            tools = grouped[matched_server]
+            ctx.renderer.console.print()
+            header = Text(f"📦 {matched_server}", style="bold cyan")
+            header.append(f" (共 {len(tools)} 個功能)\n", style="dim")
+            ctx.renderer.console.print(header)
+
+            for t in tools:
+                line = Text(f"  • {t['name']}", style="bold green")
+                desc = t.get("description")
+                if desc:
+                    first_line = desc.split("\n")[0].strip()
+                    line.append(f"\n    {first_line}", style="dim")
+                ctx.renderer.console.print(line)
+            ctx.renderer.console.print()
+            return CommandResult()
+
+        # 預設無參數：以分組方式清晰呈現啟用的 MCP 工具與功能清單
+        total_tools = sum(len(t) for t in grouped.values())
+        ctx.renderer.console.print()
+        header = Text("🔌 已啟用的 MCP 工具\n", style="bold magenta")
+        header.append(f"{len(grouped)} 個服務已連線，共提供 {total_tools} 個功能", style="dim")
+        ctx.renderer.console.print(header)
+        ctx.renderer.console.print()
+
+        width = getattr(ctx.renderer.console, "width", 80) or 80
+        num_cols = max(1, min(3, (width - 4) // 32))
+        col_width = max(24, (width - 6) // num_cols)
+
+        for server_name, tools in grouped.items():
+            title = Text(f"📦 {server_name} ", style="bold cyan")
+            title.append(f"({len(tools)} 個功能)", style="bold yellow")
+            ctx.renderer.console.print(title)
+
+            for i in range(0, len(tools), num_cols):
+                row_tools = tools[i : i + num_cols]
+                line = Text("   ")
+                for j, t in enumerate(row_tools):
+                    tool_text = f"• {t['name']}"
+                    if j < len(row_tools) - 1:
+                        tool_text = tool_text.ljust(col_width)
+                    line.append(tool_text, style="green")
+                ctx.renderer.console.print(line)
+            ctx.renderer.console.print()
+
+        tip = Text("💡 提示：輸入 ", style="dim")
+        tip.append("/mcp <工具名稱>", style="bold yellow")
+        tip.append(" 可查看該 MCP 工具的詳細功能說明（例如 ", style="dim")
+        sample_server = next(iter(grouped.keys()))
+        tip.append(f"/mcp {sample_server}", style="cyan")
+        tip.append("）", style="dim")
+        ctx.renderer.console.print(tip)
+        ctx.renderer.console.print()
+
         return CommandResult()
 
 
