@@ -187,14 +187,10 @@ class MCPManager:
                     full_args[target_key] = str(new_path)
                     log.info(f"Artifact redirected from {original_path} to {new_path}")
 
-        safe_log_args = {
-            k: ("[REDACTED]" if any(s in k.lower() for s in ("password", "secret", "token", "key")) else v)
-            for k, v in full_args.items()
-        }
-        log.debug("MCP call_tool name=%r full_args=%r", tool_name, safe_log_args)
-
+        # 工具內容可能包含未知機密；所有 MCP 呼叫統一只記錄中繼資料。
+        log.debug("MCP call_tool name=%r", tool_name)
         result = await entry.session.call_tool(tool_name, full_args)
-        log.debug("MCP raw result content=%r", result.content)
+        log.debug("MCP result name=%r blocks=%d", tool_name, len(result.content))
 
         parts = []
         for block in result.content:

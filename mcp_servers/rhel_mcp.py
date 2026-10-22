@@ -6,11 +6,13 @@
 2. 支援彈性設定：RHEL_HOST、RHEL_SSH_PORT、RHEL_SSH_USER、RHEL_SSH_PASSWORD、RHEL_SSH_KEY_PATH 皆可預填或留空；
    未設定項目於執行期詢問並快取於當前行程；不主動將密碼寫入暫存腳本或日誌。
 3. 提供預先定義的唯讀查詢；參數經驗證及 Shell 引號保護，不提供任意指令入口。
-4. 以目錄邊界、真實路徑檢查及已知機密格式遮罩降低外洩風險，不能辨識所有未知機密。
+4. 設定檔僅回傳批准的 SELINUX 列舉值；日誌僅回傳等級計數，目錄列舉暫停提供。
+   其他診斷仍使用已知機密遮罩，不能辨識所有未知機密，亦不保證整段對話不落盤。
    建議使用專用低權限帳號；可寫目錄的替換競態與 ASKPASS 後代清理仍有平台限制。
 """
 
 import getpass
+import json
 import os
 import posixpath
 import re
@@ -634,10 +636,13 @@ def rhel_service_status(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """查詢 RHEL systemd 服務狀態。不指定 service_name 時列出失敗或活動中的服務；指定時顯示該服務詳細狀態"""
+    """查詢 systemd 狀態；未指定服務時回傳數量，指定時只回傳狀態屬性，不含日誌或命令列。"""
     if failed_only or not service_name.strip():
         state_flag = "--state=failed" if failed_only else "--type=service --state=running,failed"
-        cmd = f"systemctl list-units {state_flag} --no-pager --no-legend | sed -n '1,80p'"
+        cmd = (
+            f"systemctl list-units {state_flag} --no-pager --no-legend --plain "
+            "| awk 'END {print \"matching_units=\" NR}'"
+        )
         return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
     try:
@@ -646,7 +651,10 @@ def rhel_service_status(
         return _redact_and_truncate(f"[ERROR] {e}")
 
     quoted = shlex.quote(safe_unit)
-    cmd = f"systemctl status {quoted} --no-pager -n 25"
+    cmd = (
+        f"systemctl show {quoted} --no-pager "
+        "--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus,Result"
+    )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
@@ -663,8 +671,10 @@ def rhel_query_journal(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """結構化檢索 RHEL systemd journald 日誌（支援 unit、優先等級、時間範圍與 grep 關鍵字）"""
-    parts = ["journalctl", "--no-pager"]
+    """查詢有界 journald 等級計數；不回傳訊息原文。grep 暫不支援，lines 為樣本上限。"""
+    if grep.strip():
+        return "[ERROR] 安全摘要模式不接受訊息關鍵字；請使用 unit、priority 與 since 篩選。"
+    parts = ["journalctl", "--no-pager", "--output=json", "--output-fields=PRIORITY", "--quiet"]
 
     if unit.strip():
         try:
@@ -686,17 +696,24 @@ def rhel_query_journal(
             return f"[ERROR] 非法的 since 時間格式：{since!r}"
         parts.extend(["--since", shlex.quote(since_clean)])
 
-    if grep.strip():
-        try:
-            safe_grep = _validate_search_pattern(grep, "grep")
-        except ValueError as e:
-            return _redact_and_truncate(f"[ERROR] {e}")
-        parts.extend(["-g", shlex.quote(safe_grep)])
-
     safe_lines = max(1, min(int(lines or 50), 200))
     parts.extend(["-n", str(safe_lines)])
-
-    return _run_remote(" ".join(parts), ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    result = _run_remote(" ".join(parts), ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    if result.startswith("[ERROR]") or "[STDERR]" in result:
+        return "[ERROR] 日誌摘要查詢失敗；可能缺少權限或不支援指定的 journalctl 選項。"
+    counts = {str(level): 0 for level in range(8)}
+    try:
+        for line in [] if result == "(沒有輸出)" else result.splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            level = record.get("PRIORITY")
+            if not isinstance(level, str) or level not in counts:
+                return "[ERROR] 日誌摘要格式不符，已捨棄。"
+            counts[level] += 1
+    except ValueError, AttributeError:
+        return "[ERROR] 日誌摘要格式不符，已捨棄。"
+    return json.dumps({"sample_limit": safe_lines, "sample_count": sum(counts.values()), "priorities": counts})
 
 
 @mcp.tool()
@@ -710,9 +727,8 @@ def rhel_security_status(
     """探查 RHEL 安全性子系統狀態：SELinux 模式與狀態、firewalld 防火牆規則摘要，以及待安裝的安全性更新"""
     cmd = (
         "echo '=== SELinux Status ===' && (sestatus || getenforce) 2>/dev/null; "
-        "echo '=== Recent SELinux AVC Denials ===' && "
-        "(bash -o pipefail -c 'ausearch -m avc -ts recent | tail -n 20' || "
-        "journalctl -t setroubleshoot --no-pager -n 15 || echo '[ERROR] AVC 查詢失敗'); "
+        "echo '=== Recent SELinux AVC Denials ==='; "
+        "echo '[提示] 不回傳 AVC 原文；請使用 rhel_query_journal 取得有界等級摘要'; "
         "echo '=== Firewalld State ===' && "
         "(firewall-cmd --state && firewall-cmd --list-all) 2>/dev/null || echo 'firewalld 未執行或需要權限'; "
         "echo '=== Security Updates (dnf) ===' && "
@@ -733,22 +749,19 @@ def rhel_read_config(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """安全讀取 RHEL 白名單目錄內的公開系統設定檔（自動阻擋敏感機密路徑並遮罩密碼與金鑰）"""
-    try:
-        safe_path = _validate_config_path(file_path)
-    except ValueError as e:
-        return _redact_and_truncate(f"[ERROR] {e}")
-
-    safe_lines = max(1, min(int(max_lines or 120), 300))
-    # 不先截行：完整有界內容經統一遮罩後才限制顯示行數。
-    # 多讀一個位元組，使超大檔案觸發本機總量上限並捨棄全部輸出。
-    cmd = _remote_path_guard(safe_path, directory=False) + f'head -c {MAX_CAPTURE_BYTES + 1} -- "$real"'
+    """僅提供 /etc/selinux/config 的 SELINUX 列舉值；不提供任意設定檔原文。"""
+    if file_path != "/etc/selinux/config":
+        return "[ERROR] 安全摘要模式僅支援 /etc/selinux/config 的 SELINUX 欄位，不讀取其他設定檔。"
+    cmd = (
+        _remote_path_guard(file_path, directory=False) + "awk -F= '/^[[:space:]]*SELINUX[[:space:]]*=/ {"
+        'v=$2; gsub(/[[:space:]]/,"",v); '
+        'if (v == "enforcing" || v == "permissive" || v == "disabled") print "SELINUX=" v'
+        '}\' -- "$real"'
+    )
     result = _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
-    if "[ERROR]" in result or "[STDERR]" in result:
-        return result
-    display_lines = result.splitlines()
-    if len(display_lines) > safe_lines:
-        return "\n".join(display_lines[:safe_lines]) + "\n[提示：已達 max_lines 顯示上限]"
+    allowed = {"SELINUX=enforcing", "SELINUX=permissive", "SELINUX=disabled"}
+    if result not in allowed:
+        return "[ERROR] 無法取得唯一且有效的 SELINUX 設定，已捨棄內容。"
     return result
 
 
@@ -763,16 +776,8 @@ def rhel_list_directory(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """安全列出 RHEL 白名單目錄（如 /etc、/opt、/srv、/var/log 等）內的檔案清單（可選顯示 SELinux 標籤）"""
-    try:
-        safe_path = _validate_config_path(dir_path)
-    except ValueError as e:
-        return _redact_and_truncate(f"[ERROR] {e}")
-
-    safe_lines = max(1, min(int(max_lines or 100), 250))
-    ls_flags = "-laZ --time-style=long-iso" if show_selinux else "-la --time-style=long-iso"
-    cmd = _remote_path_guard(safe_path, directory=True) + f"ls {ls_flags} -- \"$real\" | sed -n '1,{safe_lines}p'"
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    """目錄列舉暫停提供；保留介面，但不讀取或回傳檔名及符號連結目標。"""
+    return "[ERROR] 安全摘要模式不提供目錄列舉；請使用特定的系統診斷工具。"
 
 
 @mcp.tool()
@@ -822,7 +827,7 @@ def rhel_process_inspect(
             return _redact_and_truncate(f"[ERROR] {e}")
         cmd = (
             f"echo '=== Process Detail (PID: {safe_pid}) ===' && "
-            f"ps -fp {safe_pid} 2>/dev/null || echo '行程不存在或已終止'; "
+            f"ps -p {safe_pid} -o pid,ppid,user,stat,comm 2>/dev/null || echo '行程不存在或已終止'; "
             "echo '=== Process Status Summary ===' && "
             f"(cat /proc/{safe_pid}/status 2>/dev/null | "
             "grep -E '^(Name|State|Tgid|Pid|PPid|Uid|Gid|Threads|VmRSS|VmSize)' || true); "
@@ -921,10 +926,12 @@ def rhel_package_info(
     quoted = shlex.quote(safe_pkg)
     if verify_integrity:
         cmd = (
-            f"echo '=== Package Verification (rpm -V) ===' && "
-            f"(rpm -V {quoted} || echo '檔案有變更或未安裝'); "
-            "echo '=== Installed Files (rpm -ql, head 30) ===' && "
-            f"rpm -ql {quoted} 2>/dev/null | sed -n '1,30p'"
+            f"rpm -q {quoted} >/dev/null 2>&1 || "
+            "{ echo '[ERROR] 套件未安裝或資料庫查詢失敗'; exit 1; }; "
+            f"if rpm -V --noscripts {quoted} >/dev/null 2>&1; then rc=0; else rc=$?; fi; "
+            "case $rc in 0) echo 'verification=unchanged' ;; "
+            "1) echo 'verification=differences_or_verification_error' ;; "
+            "*) echo '[ERROR] RPM 驗證失敗'; exit 1 ;; esac"
         )
     else:
         cmd = (
@@ -968,14 +975,15 @@ def rhel_cron_and_timers(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 定時排程作業：systemd 定時器 (timers) 與系統 cron 排程清單"""
+    """提供已載入 timer 與系統 crontab 項目計數，不回傳名稱、帳號或執行命令。"""
     cmd = (
-        "echo '=== Active Systemd Timers ===' && "
-        "systemctl list-timers --no-pager --no-legend | sed -n '1,30p'; "
-        "echo '=== System Crontab (/etc/crontab) ===' && "
-        "cat /etc/crontab 2>/dev/null; "
-        "echo '=== Cron Daily/Hourly Directory Listing ===' && "
-        "ls -la /etc/cron.daily /etc/cron.hourly 2>/dev/null | sed -n '1,30p'"
+        "echo '=== Loaded Timer Count ===' && "
+        "systemctl list-units --type=timer --all --no-pager --no-legend "
+        "| awk 'END {print \"loaded_timers=\" NR}'; "
+        "echo '=== System Crontab Entry Count ===' && "
+        "awk '/^[[:space:]]*($|#)/ {next} "
+        "/^[[:space:]]*[A-Za-z_][A-Za-z_0-9]*[[:space:]]*=/ {next} "
+        '{n++} END {print "system_crontab_entries=" n+0}\' /etc/crontab'
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 

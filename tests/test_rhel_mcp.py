@@ -97,10 +97,11 @@ def test_query_journal_validation_and_clamping(monkeypatch):
         assert res_bad_since.startswith("[ERROR]")
         mock_run.assert_not_called()
 
-    fake_proc = SimpleNamespace(returncode=0, stdout="journal line 1", stderr="")
+    fake_proc = SimpleNamespace(returncode=0, stdout='{"PRIORITY":"4"}', stderr="")
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
         out = rhel_mcp.rhel_query_journal(unit="sshd.service", priority="warning", since="2 hours ago", lines=999)
-        assert out == "journal line 1"
+        assert '"sample_count": 1' in out
+        assert "journal line" not in out
         called_args = mock_run.call_args.args[0]
         remote_cmd = shlex.split(called_args[-1])[2]
         assert "--no-pager" in remote_cmd
@@ -133,29 +134,17 @@ def test_read_config_blocks_sensitive_and_unallowed_paths(monkeypatch, blocked_p
         mock_run.assert_not_called()
 
 
-def test_read_config_allows_safe_etc_path_and_redacts_secrets(monkeypatch):
+def test_read_config_returns_only_approved_enum(monkeypatch):
     _set_full_creds(monkeypatch)
-    raw_config = (
-        "server_name localhost;\n"
-        "password = super_secret_db_pass\n"
-        'api_key: "abcdef123456"\n'
-        "private_key = hidden_private_key_content\n"
-        "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----\n"
-    )
-    fake_proc = SimpleNamespace(returncode=0, stdout=raw_config, stderr="")
+    fake_proc = SimpleNamespace(returncode=0, stdout="SELINUX=enforcing", stderr="")
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
-        out = rhel_mcp.rhel_read_config("/usr/share/nginx/nginx.conf", max_lines=50)
-        assert "server_name localhost;" in out
-        assert "super_secret_db_pass" not in out
-        assert "abcdef123456" not in out
-        assert "hidden_private_key_content" not in out
-        assert "MIIEpAIBAAKCAQEA" not in out
-        assert "[REDACTED]" in out
-        assert "[REDACTED PRIVATE KEY]" in out
-        mock_run.assert_called_once()
+        assert rhel_mcp.rhel_read_config("/etc/selinux/config") == "SELINUX=enforcing"
         remote_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
-        assert "/srv/*" in remote_cmd
-        assert "/usr/share/*" in remote_cmd
+        assert "awk -F=" in remote_cmd
+        assert "head -c" not in remote_cmd
+    with patch("mcp_servers.rhel_mcp._capture_ssh") as mock_run:
+        assert rhel_mcp.rhel_read_config("/usr/share/nginx/nginx.conf").startswith("[ERROR]")
+        mock_run.assert_not_called()
 
 
 def test_remote_timeout_and_truncation(monkeypatch):
@@ -284,15 +273,11 @@ def test_new_paths_allowed_and_sensitive_logs_blocked(monkeypatch):
     _set_full_creds(monkeypatch)
     fake_proc = SimpleNamespace(returncode=0, stdout="OK", stderr="")
 
-    # 允許 /opt, /srv, /var/log/nginx
+    # 應用程式設定與日誌不再因目錄名稱而取得讀取資格。
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
-        out = rhel_mcp.rhel_read_config("/opt/myapp/app.conf")
-        assert out == "OK"
-        out2 = rhel_mcp.rhel_read_config("/srv/web/config.ini")
-        assert out2 == "OK"
-        out3 = rhel_mcp.rhel_read_config("/var/log/nginx/access.log")
-        assert out3 == "OK"
-        assert mock_run.call_count == 3
+        for path in ("/opt/myapp/app.conf", "/srv/web/config.ini", "/var/log/nginx/access.log"):
+            assert rhel_mcp.rhel_read_config(path).startswith("[ERROR]")
+        mock_run.assert_not_called()
 
     # 阻擋 /var/log/secure, /var/log/audit/audit.log, /var/log/wtmp
     with patch("mcp_servers.rhel_mcp._capture_ssh") as mock_run:
@@ -310,13 +295,10 @@ def test_list_directory_and_selinux_context(monkeypatch):
     fake_proc = SimpleNamespace(returncode=0, stdout="drwxr-xr-x file.conf", stderr="")
 
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
-        # 測試一般列出與 show_selinux
+        # 目錄列舉停止提供，且不得建立連線。
         out = rhel_mcp.rhel_list_directory("/etc/systemd/system", show_selinux=True)
-        assert out == "drwxr-xr-x file.conf"
-        called_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
-        assert "ls -laZ" in called_cmd
-        assert "/srv/*" in called_cmd
-        assert "/opt/*" in called_cmd
+        assert out.startswith("[ERROR]")
+        mock_run.assert_not_called()
 
         # 測試 SELinux context 查詢
         out_ctx = rhel_mcp.rhel_selinux_context("/srv/web/index.html")
@@ -335,7 +317,8 @@ def test_process_inspect_and_validation(monkeypatch):
         out = rhel_mcp.rhel_process_inspect(pid="1234")
         assert out == "1234 root python"
         called_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
-        assert "ps -fp 1234" in called_cmd
+        assert "ps -p 1234 -o pid,ppid,user,stat,comm" in called_cmd
+        assert "ps -fp" not in called_cmd
 
     with patch("mcp_servers.rhel_mcp._capture_ssh") as mock_run:
         bad_pid = rhel_mcp.rhel_process_inspect(pid="1234; reboot")
@@ -397,12 +380,13 @@ def test_package_and_journal_grep(monkeypatch):
         out_pkg = rhel_mcp.rhel_package_info("nginx", verify_integrity=True)
         assert out_pkg == "OK"
         called_pkg_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
-        assert "rpm -V nginx" in called_pkg_cmd
+        assert "rpm -V --noscripts nginx" in called_pkg_cmd
+        assert "rpm -ql" not in called_pkg_cmd
 
+        mock_run.reset_mock()
         out_j = rhel_mcp.rhel_query_journal(unit="sshd", grep="Failed password")
-        assert out_j == "OK"
-        called_j_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
-        assert "-g 'Failed password'" in called_j_cmd
+        assert out_j.startswith("[ERROR]")
+        mock_run.assert_not_called()
 
     with patch("mcp_servers.rhel_mcp._capture_ssh") as mock_run:
         bad_pkg = rhel_mcp.rhel_package_info("nginx; id")
@@ -581,3 +565,28 @@ def test_capture_ssh_exceeded_quota_kills_process():
         mock_proc.kill.assert_called_once()
         assert res.returncode == 1
         assert "輸出超過安全位元組上限" in res.stderr
+
+
+def test_mcp_logs_metadata_without_arguments_or_results(caplog):
+    manager = MCPManager()
+    fake_session = SimpleNamespace(
+        list_tools=AsyncMock(
+            return_value=SimpleNamespace(
+                tools=[
+                    SimpleNamespace(
+                        name="rhel_summary",
+                        description="summary",
+                        inputSchema={"type": "object", "properties": {}},
+                    )
+                ]
+            )
+        ),
+        call_tool=AsyncMock(return_value=SimpleNamespace(content=[SimpleNamespace(text="synthetic-result-value")])),
+    )
+    asyncio.run(manager._register_tools("rhel_ops", fake_session, inject={}, safe_read_tools=[]))
+    with caplog.at_level("DEBUG"):
+        result = asyncio.run(manager.call("rhel_summary", {"query": "synthetic-argument-value"}))
+    assert "synthetic-result-value" in result
+    assert "synthetic-result-value" not in caplog.text
+    assert "synthetic-argument-value" not in caplog.text
+    assert "rhel_summary" in caplog.text

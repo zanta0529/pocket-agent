@@ -60,13 +60,15 @@ def test_netrc_rejected_before_connection() -> None:
     remote.assert_not_called()
 
 
-def test_read_uses_byte_limit_and_displays_lines_after_redaction() -> None:
-    with patch.object(rhel_mcp, "_run_remote", return_value="public\n[REDACTED]\nlast") as remote:
-        result = rhel_mcp.rhel_read_config("/srv/app/custom.conf", max_lines=1)
-    command = remote.call_args.args[0]
-    assert f"head -c {rhel_mcp.MAX_CAPTURE_BYTES + 1}" in command
-    assert "head -n" not in command
-    assert result == "public\n[提示：已達 max_lines 顯示上限]"
+@pytest.mark.parametrize(
+    "payload",
+    ["credential = synthetic-value", "redis-cli -a synthetic-value", "SELINUX=synthetic-value"],
+)
+def test_config_summary_rejects_unapproved_output(payload: str) -> None:
+    with patch.object(rhel_mcp, "_run_remote", return_value=payload):
+        result = rhel_mcp.rhel_read_config("/etc/selinux/config", max_lines=1)
+    assert result.startswith("[ERROR]")
+    assert "synthetic-value" not in result
 
 
 def test_permission_denied_preserves_credentials() -> None:
@@ -139,3 +141,71 @@ def test_real_path_guard_rejects_fifo_before_open(tmp_path: Path, monkeypatch) -
     result = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=3)
     assert result.returncode != 0
     assert "不支援的檔案類型" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"PRIORITY":"3","MESSAGE":"synthetic-value"}',
+        '{"PRIORITY":"3","EXTRA":"synthetic-value"}',
+    ],
+)
+def test_journal_only_returns_counts(payload: str) -> None:
+    with patch.object(rhel_mcp, "_run_remote", return_value=payload) as remote:
+        result = rhel_mcp.rhel_query_journal()
+    assert "synthetic-value" not in result
+    assert '"sample_count": 1' in result
+    assert "--output-fields=PRIORITY" in remote.call_args.args[0]
+
+
+@pytest.mark.parametrize("payload", ["synthetic-value", "[]", '{"PRIORITY":[]}', "[ERROR] synthetic-value"])
+def test_journal_rejects_invalid_output_without_echo(payload: str) -> None:
+    with patch.object(rhel_mcp, "_run_remote", return_value=payload):
+        result = rhel_mcp.rhel_query_journal()
+    assert result.startswith("[ERROR]")
+    assert "synthetic-value" not in result
+
+
+def test_service_command_excludes_logs_and_execution_properties() -> None:
+    with patch.object(rhel_mcp, "_run_remote", return_value="ActiveState=active") as remote:
+        rhel_mcp.rhel_service_status("sshd.service")
+    command = remote.call_args.args[0]
+    assert "systemctl show" in command
+    assert "systemctl status" not in command
+    assert "ExecStart" not in command
+    assert "Environment" not in command
+
+
+def test_cron_and_security_commands_do_not_return_raw_sources() -> None:
+    with patch.object(rhel_mcp, "_run_remote", return_value="OK") as remote:
+        rhel_mcp.rhel_cron_and_timers()
+        cron_command = remote.call_args.args[0]
+        rhel_mcp.rhel_security_status()
+        security_command = remote.call_args.args[0]
+    assert "cat /etc/crontab" not in cron_command
+    assert "system_crontab_entries=" in cron_command
+    assert "ls -la" not in cron_command
+    assert "ausearch" not in security_command
+    assert "journalctl -t" not in security_command
+
+
+def test_rpm_verification_never_executes_scripts_or_returns_paths() -> None:
+    with patch.object(rhel_mcp, "_run_remote", return_value="OK") as remote:
+        rhel_mcp.rhel_package_info("synthetic-package", verify_integrity=True)
+    command = remote.call_args.args[0]
+    assert "rpm -V --noscripts synthetic-package" in command
+    assert "rpm -ql" not in command
+    assert "if rpm -V" in command
+
+
+def test_empty_journal_has_zero_sample_count() -> None:
+    with patch.object(rhel_mcp, "_run_remote", return_value="(沒有輸出)"):
+        result = rhel_mcp.rhel_query_journal()
+    assert '"sample_count": 0' in result
+
+
+def test_directory_listing_is_rejected_before_connection() -> None:
+    with patch.object(rhel_mcp, "_run_remote") as remote:
+        result = rhel_mcp.rhel_list_directory("/etc", show_selinux=True)
+    assert result.startswith("[ERROR]")
+    remote.assert_not_called()

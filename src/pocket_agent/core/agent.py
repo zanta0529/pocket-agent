@@ -953,12 +953,12 @@ class Agent:
                         elif isinstance(event, EventToolCallDelta):
                             if event.call_id in func_calls:
                                 func_calls[event.call_id]["arguments"] += event.delta
-                            log.debug("TOOL args.delta call_id=%s delta=%r", event.call_id, event.delta)
+                            log.debug("TOOL args.delta call_id=%s chars=%d", event.call_id, len(event.delta))
 
                         elif isinstance(event, EventToolCallDone):
                             if event.call_id in func_calls:
                                 func_calls[event.call_id]["arguments"] = event.full_args
-                            log.debug("TOOL item.done call_id=%s full_args=%r", event.call_id, event.full_args)
+                            log.debug("TOOL item.done call_id=%s chars=%d", event.call_id, len(event.full_args))
 
                         elif isinstance(event, EventImageGenerationDone):
                             path = save_image_b64(event.b64)
@@ -1067,7 +1067,7 @@ class Agent:
                             args = json.loads(fixed_raw) if fixed_raw else {}
                             log.info("Auto-fixed JSON decode error.")
                         except json.JSONDecodeError:
-                            log.error("JSONDecodeError on args even after fallback: %r", raw)
+                            log.error("JSONDecodeError on tool args after fallback; chars=%d", len(raw))
                             result = (
                                 f"[ERROR] JSON 解碼失敗: {e}。"
                                 "請檢查跳脫字元，特別是 Windows 路徑中的反斜線，建議改用正斜線 (/)。"
@@ -1084,7 +1084,7 @@ class Agent:
                             self._append_tool_pair(input_items, fc, result)
                             continue
 
-                    log.debug("TOOL calling %s args=%r", fc["name"], args)
+                    log.debug("TOOL calling %s", fc["name"])
 
                     if not self._is_subagent:
                         await asyncio.to_thread(
@@ -1144,7 +1144,7 @@ class Agent:
                             elif not ok:
                                 raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
                         result = await self.mcp.call(fc["name"], args)
-                    log.debug("TOOL result=%r", result)
+                    log.debug("TOOL result name=%s chars=%d", fc["name"], len(result) if isinstance(result, str) else 0)
 
                     if not self._is_subagent:
                         await asyncio.to_thread(
@@ -1170,8 +1170,12 @@ class Agent:
                                 "請檢視現有資訊是否充足，優先開始產出解答或建立檔案，避免無休止調研。"
                             )
                 except Exception as e:
-                    log.error("TOOL error %s: %s", type(e).__name__, e)
-                    result = f"[ERROR] {e}"
+                    if fc["name"].startswith("rhel_"):
+                        log.error("TOOL error name=%s type=%s", fc["name"], type(e).__name__)
+                        result = "[ERROR] RHEL 工具執行失敗，未回傳原始例外內容。"
+                    else:
+                        log.error("TOOL error %s: %s", type(e).__name__, e)
+                        result = f"[ERROR] {e}"
                     ok_status = False
 
                 self._emit(
