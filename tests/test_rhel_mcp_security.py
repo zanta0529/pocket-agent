@@ -187,6 +187,8 @@ def test_cron_and_security_commands_do_not_return_raw_sources() -> None:
     assert "ls -la" not in cron_command
     assert "ausearch" not in security_command
     assert "journalctl -t" not in security_command
+    assert "dnf updateinfo" not in security_command
+    assert "[UNSUPPORTED] 安全更新查詢已停用" in security_command
 
 
 def test_rpm_verification_never_executes_scripts_or_returns_paths() -> None:
@@ -209,3 +211,49 @@ def test_directory_listing_is_rejected_before_connection() -> None:
         result = rhel_mcp.rhel_list_directory("/etc", show_selinux=True)
     assert result.startswith("[ERROR]")
     remote.assert_not_called()
+
+
+def test_container_status_is_disabled_before_connection() -> None:
+    with patch.object(rhel_mcp, "_run_remote") as remote:
+        result = rhel_mcp.rhel_container_status()
+    assert result.startswith("[ERROR] [UNSUPPORTED]")
+    remote.assert_not_called()
+
+
+def test_package_info_excludes_dnf_fallback() -> None:
+    with patch.object(rhel_mcp, "_run_remote", return_value="OK") as remote:
+        rhel_mcp.rhel_package_info("nginx", verify_integrity=False)
+    command = remote.call_args.args[0]
+    assert "dnf" not in command
+    assert "rpm -qi" in command
+
+
+def test_ssh_args_enforces_strict_host_key_and_dedicated_known_hosts() -> None:
+    args, _, _ = rhel_mcp._build_ssh_args(
+        "uptime",
+        ssh_host="192.168.1.50",
+        ssh_port="22",
+        ssh_user="testuser",
+        ssh_password="password",
+    )
+    assert "StrictHostKeyChecking=yes" in args
+    assert any("UserKnownHostsFile=" in a for a in args)
+    assert "StrictHostKeyChecking=no" not in args
+    assert "StrictHostKeyChecking=accept-new" not in args
+
+
+def test_host_validation_supports_ipv6_and_rejects_options() -> None:
+    assert rhel_mcp._validate_host("192.168.1.1") == "192.168.1.1"
+    assert rhel_mcp._validate_host("2001:db8::1") == "[2001:db8::1]"
+    assert rhel_mcp._validate_host("[::1]") == "[::1]"
+    assert rhel_mcp._validate_host("rhel.example.com") == "rhel.example.com"
+    with pytest.raises(ValueError):
+        rhel_mcp._validate_host("-oProxyCommand=calc")
+
+
+def test_credentials_ttl_clears_after_timeout() -> None:
+    rhel_mcp._RUNTIME_CREDS["RHEL_HOST"] = "192.168.1.1"
+    rhel_mcp._CREDS_UPDATED_AT = 100.0
+    with patch.object(rhel_mcp.time, "monotonic", return_value=100.0 + 700.0):
+        rhel_mcp._check_creds_ttl()
+    assert rhel_mcp._RUNTIME_CREDS == {}

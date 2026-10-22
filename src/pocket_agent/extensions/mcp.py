@@ -49,6 +49,7 @@ class ToolEntry:
     schema: dict  # 送給模型的 schema（已移除 inject 參數）
     inject: dict = field(default_factory=dict)  # 自動注入的參數值
     conn_params: dict[str, str] = field(default_factory=dict)
+    is_sensitive: bool = False
 
 
 @dataclass(frozen=True)
@@ -92,7 +93,16 @@ class MCPManager:
                 self._sessions.append(session)
                 inject = spec.get("inject") or {}
                 safe_read = spec.get("safe_read_tools") or []
-                await self._register_tools(name, session, inject, safe_read)
+                is_sensitive = bool(spec.get("is_sensitive", False))
+                cmd_str = str(spec.get("command", "")).lower()
+                args_str = " ".join(str(a).lower() for a in (spec.get("args") or []))
+                if (
+                    name.lower() in ("rhel-ops", "rhel", "win-rdp", "win_rdp")
+                    or "rhel_mcp" in cmd_str
+                    or "rhel_mcp" in args_str
+                ):
+                    is_sensitive = True
+                await self._register_tools(name, session, inject, safe_read, is_sensitive=is_sensitive)
                 ready_servers += 1
             except Exception as e:
                 failed_servers += 1
@@ -208,6 +218,13 @@ class MCPManager:
     def list_tools(self) -> list[str]:
         return list(self._tools.keys())
 
+    def is_sensitive_tool(self, tool_name: str) -> bool:
+        """依據本機受信任伺服器註冊中繼資料，判定指定工具是否屬於高敏感系統工具。"""
+        entry = self._tools.get(tool_name)
+        if entry is not None:
+            return bool(entry.is_sensitive)
+        return tool_name.startswith("rhel_") or tool_name.startswith("win_rdp_")
+
     # ── Internal ──────────────────────────────────
 
     def _load_config(self) -> dict:
@@ -308,6 +325,7 @@ class MCPManager:
         session: ClientSession,
         inject: dict,
         safe_read_tools: list[str] | tuple[str, ...] | set[str] | str = (),
+        is_sensitive: bool = False,
     ) -> None:
         response = await session.list_tools()
         for tool in response.tools:
@@ -358,6 +376,7 @@ class MCPManager:
                 schema=schema,
                 inject=inject,
                 conn_params=conn_params,
+                is_sensitive=is_sensitive,
             )
 
 

@@ -112,7 +112,17 @@ def make_title(history: list[dict]) -> str:
     return "（無標題）"
 
 
-def save_session(session_id: str, history: list[dict], title: str | None = None) -> None:
+def save_session(
+    session_id: str,
+    history: list[dict],
+    title: str | None = None,
+    is_sensitive: bool = False,
+) -> None:
+    if is_sensitive:
+        return
+    for msg in history:
+        if isinstance(msg, dict) and msg.get("is_sensitive"):
+            return
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     resolved_title = title or make_title(history)
     updated_at = time.time()

@@ -74,7 +74,7 @@ class SessionCommand(CliCommand):
                 data = load_session(selected["id"])
                 if data is None:
                     raise ValueError(f"找不到 session：{selected['id']}")
-                if ctx.agent.history:
+                if ctx.agent.history and not getattr(ctx.agent, "is_sensitive_session", False):
                     save_session(ctx.state.session_id, ctx.agent.history)
                 ctx.agent.history = data["history"]
                 ctx.state.session_id = data["id"]
@@ -98,7 +98,7 @@ class SessionCommand(CliCommand):
             data = load_session(sub_arg)
             if data is None:
                 raise ValueError(f"找不到 session：{sub_arg}")
-            if ctx.agent.history:
+            if ctx.agent.history and not getattr(ctx.agent, "is_sensitive_session", False):
                 save_session(ctx.state.session_id, ctx.agent.history)
             ctx.agent.history = data["history"]
             ctx.state.session_id = data["id"]
@@ -110,6 +110,8 @@ class SessionCommand(CliCommand):
         elif sub == "save":
             if not ctx.agent.history:
                 ctx.renderer.message("對話歷史為空，略過儲存。")
+            elif getattr(ctx.agent, "is_sensitive_session", False):
+                ctx.renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
             else:
                 save_session(ctx.state.session_id, ctx.agent.history)
                 ctx.renderer.message(f"已存檔：{ctx.state.session_id}", "green")
@@ -171,16 +173,20 @@ class NewCommand(CliCommand):
         old_session_id = ctx.state.session_id
         # 若原先對話有內容，先自動儲存保護工作成果
         if ctx.agent.history:
-            try:
-                save_session(old_session_id, ctx.agent.history)
-                saved_msg = f"（已自動儲存前次會話：{old_session_id}）"
-            except Exception as e:
-                saved_msg = f"（前次會話自動存檔失敗：{e}）"
+            if getattr(ctx.agent, "is_sensitive_session", False):
+                saved_msg = "（前次會話涉及敏感主機診斷，不予持久化儲存）"
+            else:
+                try:
+                    save_session(old_session_id, ctx.agent.history)
+                    saved_msg = f"（已自動儲存前次會話：{old_session_id}）"
+                except Exception as e:
+                    saved_msg = f"（前次會話自動存檔失敗：{e}）"
         else:
             saved_msg = ""
 
         # 徹底清空當前上下文與會話狀態
         ctx.agent.clear_history()
+        ctx.agent.is_sensitive_session = False
         ctx.state.session_id = new_session_id()
         ctx.state.pending_files.clear()
         ctx.state.last_failed_input = ""
@@ -212,6 +218,10 @@ class RenameCommand(CliCommand):
 
         if not new_title:
             ctx.renderer.message("標題不得為空，已取消重新命名。", "yellow")
+            return CommandResult()
+
+        if getattr(ctx.agent, "is_sensitive_session", False):
+            ctx.renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，不予持久化儲存。", "yellow")
             return CommandResult()
 
         clean_title = new_title.replace("\n", " ")[:60]

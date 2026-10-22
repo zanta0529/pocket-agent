@@ -22,6 +22,9 @@ def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer"
 
     if not agent.history:
         return
+    if getattr(agent, "is_sensitive_session", False):
+        renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
+        return
     try:
         save_session(state.session_id, agent.history)
     except Exception:

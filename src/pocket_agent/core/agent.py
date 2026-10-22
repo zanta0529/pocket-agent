@@ -171,6 +171,7 @@ class Agent:
         self.last_images: list[Path] = []  # 本輪 chat 產生的圖片路徑（GUI 顯示用）
         self.last_files: list[Path] = []  # 本輪 chat 產生的文件路徑（GUI 顯示用）
         self.workspace_dirs: list[str] = []  # CLI 與 GUI 共用的工作區路徑清單（使用者透過 /add-dir 明確授權）
+        self.is_sensitive_session: bool = False  # 敏感工具呼叫後設為 True，防止對話內容與衍生內容落盤
 
         self.active_subagents: list["Agent"] = []  # 追蹤執行中的子代理，用於連動取消與狀態監控
         self._bg_tasks: set[asyncio.Task] = set()  # 追蹤背景任務以防垃圾回收
@@ -1144,6 +1145,9 @@ class Agent:
                             elif not ok:
                                 raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
                         result = await self.mcp.call(fc["name"], args)
+                        if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
+                            if self.mcp.is_sensitive_tool(fc["name"]):
+                                self.is_sensitive_session = True
                     log.debug("TOOL result name=%s chars=%d", fc["name"], len(result) if isinstance(result, str) else 0)
 
                     if not self._is_subagent:
@@ -1170,9 +1174,15 @@ class Agent:
                                 "請檢視現有資訊是否充足，優先開始產出解答或建立檔案，避免無休止調研。"
                             )
                 except Exception as e:
-                    if fc["name"].startswith("rhel_"):
+                    is_sensitive = False
+                    if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
+                        is_sensitive = self.mcp.is_sensitive_tool(fc["name"])
+                    else:
+                        is_sensitive = fc["name"].startswith("rhel_") or fc["name"].startswith("win_rdp_")
+                    if is_sensitive:
+                        self.is_sensitive_session = True
                         log.error("TOOL error name=%s type=%s", fc["name"], type(e).__name__)
-                        result = "[ERROR] RHEL 工具執行失敗，未回傳原始例外內容。"
+                        result = "[ERROR] 敏感診斷工具執行失敗，未回傳原始例外內容。"
                     else:
                         log.error("TOOL error %s: %s", type(e).__name__, e)
                         result = f"[ERROR] {e}"

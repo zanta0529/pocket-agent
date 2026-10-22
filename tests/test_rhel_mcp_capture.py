@@ -1,5 +1,6 @@
 """隔離的擷取生命週期測試；不啟動 SSH。"""
 
+import os
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -114,3 +115,17 @@ def test_real_child_holding_pipe_has_bounded_capture() -> None:
     with pytest.raises(subprocess.TimeoutExpired):
         rhel_mcp._capture_ssh([sys.executable, "-c", script], timeout=0.2, creationflags=0, env=dict(os.environ))
     assert time.monotonic() - started < 1.8
+
+
+def test_askpass_environment_whitelist_filters_sensitive_vars(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-synthetic-secret-12345")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-aws-secret")
+    monkeypatch.setenv("SYSTEMROOT", os.environ.get("SYSTEMROOT", "C:\\Windows"))
+    with patch.object(rhel_mcp, "_capture_ssh") as mock_capture:
+        mock_capture.return_value = subprocess.CompletedProcess([], 0, "OK", "")
+        rhel_mcp._run_with_askpass(["ssh"], "testpw", timeout=5, creationflags=0)
+    passed_env = mock_capture.call_args.kwargs.get("env", {})
+    assert "OPENAI_API_KEY" not in passed_env
+    assert "AWS_SECRET_ACCESS_KEY" not in passed_env
+    assert passed_env.get("RHEL_SSH_ASKPASS_PW") == "testpw"
+    assert "SSH_ASKPASS" in passed_env

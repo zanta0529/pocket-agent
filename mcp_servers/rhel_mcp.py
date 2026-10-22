@@ -12,6 +12,7 @@
 """
 
 import getpass
+import ipaddress
 import json
 import os
 import posixpath
@@ -38,6 +39,17 @@ _SEARCH_RE = re.compile(r"^[a-zA-Z0-9_.:@/+\- ]+$")
 
 # 執行期記憶體快取（僅存活於當前行程生命週期，不落盤）
 _RUNTIME_CREDS: dict[str, str] = {}
+_CREDS_UPDATED_AT: float = 0.0
+_CREDS_TTL_SECONDS: float = 600.0  # 10 分鐘閒置清除
+
+
+def _check_creds_ttl() -> None:
+    global _CREDS_UPDATED_AT
+    now = time.monotonic()
+    if _RUNTIME_CREDS and (now - _CREDS_UPDATED_AT > _CREDS_TTL_SECONDS):
+        _RUNTIME_CREDS.clear()
+        _CREDS_UPDATED_AT = 0.0
+
 
 _VALID_SORT_KEYS = {"cpu", "mem", "memory"}
 
@@ -112,10 +124,25 @@ _REDACT_URL_RE = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+:[^\s/@]+@")
 MAX_CAPTURE_BYTES = 1024 * 1024  # 1 MB 安全串流緩衝上限，兼顧長日誌容錯與防爆記憶體 DoS
 
 
+def _validate_host(value: str) -> str:
+    clean = value.strip()
+    if not clean or clean.startswith("-"):
+        raise ValueError("非法的 RHEL_HOST 參數格式。")
+    raw_ip = clean.strip("[]")
+    try:
+        ip = ipaddress.ip_address(raw_ip)
+        return f"[{ip}]" if ip.version == 6 else str(ip)
+    except ValueError:
+        pass
+    if not _IDENT_RE.match(clean):
+        raise ValueError("非法的 RHEL_HOST 參數格式（僅允許合法的 IPv4、IPv6 或主機名稱）。")
+    return clean
+
+
 def _validate_identifier(value: str, field_name: str) -> str:
     clean = value.strip()
     if not clean or clean.startswith("-") or not _IDENT_RE.match(clean):
-        raise ValueError(f"非法的 {field_name} 參數格式：{value!r}（僅允許英數字、點、底線、連字號與 @）")
+        raise ValueError(f"非法的 {field_name} 參數格式（僅允許英數字、點、底線、連字號與 @，且不得以連字號開頭）")
     return clean
 
 
@@ -123,8 +150,7 @@ def _validate_search_pattern(value: str, field_name: str, max_len: int = 50) -> 
     clean = value.strip()
     if not clean or clean.startswith("-") or not _SEARCH_RE.match(clean) or len(clean) > max_len:
         raise ValueError(
-            f"非法的 {field_name} 參數格式：{value!r}（僅允許英數字、斜線、冒號、點、空白等安全符號，"
-            f"且限 {max_len} 字元以內）"
+            f"非法的 {field_name} 參數格式（僅允許英數字、斜線、冒號、點、空白等安全符號，且限 {max_len} 字元以內）"
         )
     return clean
 
@@ -132,14 +158,14 @@ def _validate_search_pattern(value: str, field_name: str, max_len: int = 50) -> 
 def _validate_port(value: str) -> str:
     clean = value.strip()
     if not clean.isdigit() or not (1 <= int(clean) <= 65535):
-        raise ValueError(f"非法的連接埠數值：{value!r}（必須為 1~65535 之間的整數）")
+        raise ValueError("非法的連接埠數值（必須為 1~65535 之間的整數）")
     return clean
 
 
 def _validate_pid(value: str | int) -> str:
     clean = str(value).strip()
     if not clean.isdigit() or int(clean) <= 0:
-        raise ValueError(f"非法的行程 PID 數值：{value!r}（必須為正整數）")
+        raise ValueError("非法的行程 PID 數值（必須為正整數）")
     return clean
 
 
@@ -153,12 +179,12 @@ def _validate_config_path(file_path: str) -> str:
     norm = posixpath.normpath(raw)
     if not any(norm.startswith(prefix) or norm == prefix.rstrip("/") for prefix in _ALLOWED_CONFIG_PREFIXES):
         allowed_str = "、".join(_ALLOWED_CONFIG_PREFIXES)
-        raise ValueError(f"拒絕存取：{norm} 不在允許的唯讀探查目錄白名單內（{allowed_str}）。")
+        raise ValueError(f"拒絕存取：指定路徑不在允許的唯讀探查目錄白名單內（{allowed_str}）。")
 
     lower_path = norm.lower()
     for kw in _DENIED_PATH_KEYWORDS:
         if kw in lower_path:
-            raise ValueError(f"拒絕存取：路徑包含敏感保護關鍵字 {kw!r}，禁止讀取。")
+            raise ValueError("拒絕存取：路徑包含敏感保護關鍵字，禁止讀取。")
     return norm
 
 
@@ -184,7 +210,10 @@ def _remote_path_guard(path: str, *, directory: bool) -> str:
 
 def _diagnostic_command(command: str) -> str:
     """使用 RHEL Bash 保存管線錯誤；限量顯示仍排空上游，避免 head 的 SIGPIPE。"""
-    script = 'set -E -o pipefail; trap \'rc=$?; printf "[ERROR] 查詢區段失敗 (exit %s)\\n" "$rc" >&2\' ERR; ' + command
+    script = (
+        "export LC_ALL=C; set -E -o pipefail; "
+        'trap \'rc=$?; printf "[ERROR] 查詢區段失敗 (exit %s)\\n" "$rc" >&2\' ERR; ' + command
+    )
     return "bash -c " + shlex.quote(script)
 
 
@@ -255,6 +284,7 @@ def _resolve_connection_params(
     ssh_key_path: str = "",
 ) -> tuple[str, str, str, str, str]:
     """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得連線五要素。"""
+    _check_creds_ttl()
     cached_host = _RUNTIME_CREDS.get("RHEL_HOST", "")
     cached_port = _RUNTIME_CREDS.get("RHEL_SSH_PORT", "")
     cached_user = _RUNTIME_CREDS.get("RHEL_SSH_USER", "")
@@ -289,7 +319,7 @@ def _resolve_connection_params(
             raise ValueError(f"指定的 SSH 私鑰檔案不存在或無法存取：{key_path!r}")
         key_path = str(resolved_key)
 
-    host = _validate_identifier(host, "RHEL_HOST")
+    host = _validate_host(host)
     user = _validate_identifier(user, "RHEL_SSH_USER")
     port = str(int(_validate_port(port)))
     target = (host, port, user, key_path)
@@ -317,16 +347,18 @@ def _resolve_connection_params(
         if not password:
             raise ValueError("未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；本工具僅允許帳號密碼驗證。")
 
-    _validate_identifier(host, "RHEL_HOST")
+    _validate_host(host)
     _validate_identifier(user, "RHEL_SSH_USER")
     if not port.isdigit() or not (1 <= int(port) <= 65535):
-        raise ValueError(f"非法的 RHEL_SSH_PORT：{port!r}（必須為 1~65535 之間的整數）")
+        raise ValueError("非法的 RHEL_SSH_PORT 數值（必須為 1~65535 之間的整數）")
 
     _RUNTIME_CREDS["RHEL_HOST"] = host
     _RUNTIME_CREDS["RHEL_SSH_PORT"] = port
     _RUNTIME_CREDS["RHEL_SSH_USER"] = user
     _RUNTIME_CREDS["RHEL_SSH_PASSWORD"] = password
     _RUNTIME_CREDS["RHEL_SSH_KEY_PATH"] = key_path
+    global _CREDS_UPDATED_AT
+    _CREDS_UPDATED_AT = time.monotonic()
     return host, port, user, password, key_path
 
 
@@ -341,15 +373,22 @@ def _build_ssh_args(
     host, port, user, password, key_path = _resolve_connection_params(
         ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path
     )
-    strict_host = (os.getenv("RHEL_STRICT_HOST_KEY") or "accept-new").strip()
+    try:
+        from pocket_agent.system.paths import user_dir
+
+        default_known_hosts = user_dir() / "rhel_known_hosts"
+    except ImportError:
+        default_known_hosts = Path.home() / ".pocket-agent" / "rhel_known_hosts"
+
+    known_hosts_file = os.getenv("RHEL_KNOWN_HOSTS_FILE", str(default_known_hosts))
+    Path(known_hosts_file).parent.mkdir(parents=True, exist_ok=True)
+    if not Path(known_hosts_file).exists():
+        Path(known_hosts_file).touch(mode=0o600, exist_ok=True)
 
     try:
         timeout = max(3, min(int(os.getenv("RHEL_CONNECT_TIMEOUT") or "10"), 60))
     except ValueError:
         timeout = 10
-
-    if strict_host not in ("yes", "accept-new", "no"):
-        strict_host = "accept-new"
 
     args = [
         "ssh",
@@ -366,7 +405,9 @@ def _build_ssh_args(
         "-o",
         f"ConnectTimeout={timeout}",
         "-o",
-        f"StrictHostKeyChecking={strict_host}",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        f"UserKnownHostsFile={known_hosts_file}",
         "-o",
         "BatchMode=no",
         "-o",
@@ -405,10 +446,6 @@ def _build_ssh_args(
             ]
         )
 
-    if strict_host == "no":
-        null_dev = "NUL" if os.name == "nt" else "/dev/null"
-        args.extend(["-o", f"UserKnownHostsFile={null_dev}"])
-
     target = f"{user}@{host}"
     args.extend(["--", target, remote_cmd])
     return args, password, timeout
@@ -420,9 +457,12 @@ def _capture_ssh(
     """非阻塞輪詢雙管線；共同期限涵蓋主行程及 EOF，失敗時捨棄所有片段。
 
     Python 3.14 支援 Windows 管線 set_blocking；不支援時直接失敗，不退回阻塞讀取。
-    本機只終止 SSH 主行程，不保證清除所有 ASKPASS 後代行程。
+    本機強制終止 SSH 主行程與所有後代行程。
     """
     deadline = time.monotonic() + timeout
+    extra_popen_args = {}
+    if os.name != "nt":
+        extra_popen_args["start_new_session"] = True
     proc = subprocess.Popen(
         ssh_args,
         stdin=subprocess.DEVNULL,
@@ -431,6 +471,7 @@ def _capture_ssh(
         bufsize=0,
         creationflags=creationflags,
         env=env,
+        **extra_popen_args,
     )
     buffers = [bytearray(), bytearray()]
     streams = [proc.stdout, proc.stderr]
@@ -468,7 +509,22 @@ def _capture_ssh(
         # 無讀取執行緒，也不使用 Popen context manager 的無上限 wait。
         try:
             if proc.poll() is None:
-                proc.kill()
+                if os.name == "nt":
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                        )
+                    except Exception:
+                        proc.kill()
+                else:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), 9)
+                    except Exception:
+                        proc.kill()
             proc.wait(timeout=1)
         except OSError, subprocess.TimeoutExpired:
             pass
@@ -519,7 +575,26 @@ def _run_with_askpass(
             )
             askpass_script.chmod(0o700)
 
-        env = dict(os.environ)
+        safe_keys = {
+            "SYSTEMROOT",
+            "WINDIR",
+            "PATH",
+            "PATHEXT",
+            "TMP",
+            "TEMP",
+            "USERPROFILE",
+            "HOME",
+            "HOMEPATH",
+            "HOMEDRIVE",
+            "COMSPEC",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TERM",
+            "DISPLAY",
+            "SSH_ASKPASS_REQUIRE",
+        }
+        env = {k: v for k, v in os.environ.items() if k.upper() in safe_keys}
         env["RHEL_SSH_ASKPASS_PW"] = password
         env["SSH_ASKPASS"] = str(askpass_script)
         env["SSH_ASKPASS_REQUIRE"] = "force"
@@ -548,23 +623,25 @@ def _run_remote(
             # 遠端連線或金鑰/認證失敗。為防止本機行程命令列引數洩漏密碼（Process Argument Inspection），
             # 嚴格禁止使用 plink 傳遞明文密碼參數。強制使用安全 SSH_ASKPASS 通道。
             _RUNTIME_CREDS.clear()
-            err_msg = proc.stderr.strip() if proc.stderr else "無法建立 OpenSSH 安全通道。"
+            global _CREDS_UPDATED_AT
+            _CREDS_UPDATED_AT = 0.0
+
             return (
-                f"[ERROR] [CONN_AUTH] 遠端 SSH 連線或認證失敗 (exit 255): {_redact_and_truncate(err_msg)}\n"
+                "[ERROR] [CONN_AUTH] 遠端 SSH 連線或認證失敗 (exit 255)\n"
                 "提示：請確認目標主機已啟用密碼/金鑰驗證，或檢查網路與金鑰檔案權限設定。"
             )
 
         combined = (proc.stdout or "").strip()
-        err_out = (proc.stderr or "").strip()
+
         if proc.returncode != 0 and not combined:
-            return f"[ERROR] 遠端執行失敗 (exit {proc.returncode}): {_redact_and_truncate(err_out)}"
-        if err_out:
-            combined = f"{combined}\n[STDERR]\n{err_out}"
+            return f"[ERROR] 遠端執行失敗 (exit {proc.returncode})"
+
         if proc.returncode != 0:
             combined = f"[ERROR] 遠端指令部分或全部失敗 (exit {proc.returncode})\n{combined}"
         return _redact_and_truncate(combined)
     except ValueError:
         _RUNTIME_CREDS.clear()
+        _CREDS_UPDATED_AT = 0.0
         return "[ERROR] [CONN_AUTH] 連線參數或安全檢查失敗，請確認設定。"
     except subprocess.TimeoutExpired:
         return "[ERROR] SSH 遠端指令執行逾時，已中止連線。"
@@ -687,19 +764,19 @@ def rhel_query_journal(
     prio = prio_aliases.get(priority.strip().lower(), priority.strip().lower())
     if prio and prio not in ("all", "none"):
         if prio not in _VALID_PRIORITIES:
-            return f"[ERROR] 非法的 priority 參數：{priority!r}（允許值：{sorted(_VALID_PRIORITIES)}）"
+            return f"[ERROR] 非法的 priority 參數（允許值：{sorted(_VALID_PRIORITIES)}）"
         parts.extend(["-p", shlex.quote(prio)])
 
     since_clean = since.strip()
     if since_clean:
         if not _SINCE_RE.match(since_clean) or len(since_clean) > 40:
-            return f"[ERROR] 非法的 since 時間格式：{since!r}"
+            return "[ERROR] 非法的 since 時間格式（僅允許安全字元集且限 40 字元以內）"
         parts.extend(["--since", shlex.quote(since_clean)])
 
     safe_lines = max(1, min(int(lines or 50), 200))
     parts.extend(["-n", str(safe_lines)])
     result = _run_remote(" ".join(parts), ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
-    if result.startswith("[ERROR]") or "[STDERR]" in result:
+    if result.startswith("[ERROR]"):
         return "[ERROR] 日誌摘要查詢失敗；可能缺少權限或不支援指定的 journalctl 選項。"
     counts = {str(level): 0 for level in range(8)}
     try:
@@ -732,9 +809,7 @@ def rhel_security_status(
         "echo '=== Firewalld State ===' && "
         "(firewall-cmd --state && firewall-cmd --list-all) 2>/dev/null || echo 'firewalld 未執行或需要權限'; "
         "echo '=== Security Updates (dnf) ===' && "
-        "dnf --cacheonly --setopt=logfile=/dev/null --setopt=debuglevel=0 "
-        "updateinfo summary --security || "
-        "echo '[ERROR] 安全更新查詢失敗；快取可能不足或過期，不自動更新中繼資料'"
+        "echo '[UNSUPPORTED] 安全更新查詢已停用（DNF 快取存取存在潛在副作用）'"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
@@ -852,7 +927,7 @@ def rhel_process_inspect(
 
     sort_clean = sort_by.strip().lower()
     if sort_clean not in _VALID_SORT_KEYS:
-        return f"[ERROR] 非法的 sort_by 參數：{sort_by!r}（僅允許 'cpu'、'mem' 或 'memory'）"
+        return "[ERROR] 非法的 sort_by 參數（僅允許 'cpu'、'mem' 或 'memory'）。"
 
     sort_col = "-%mem" if sort_clean in ("mem", "memory") else "-%cpu"
     cmd = (
@@ -885,7 +960,7 @@ def rhel_network_connections(
     state_clean = state.strip().lower()
     valid_states = {"all", "listening", "established", "time-wait", "close-wait", "syn-sent", "syn-recv"}
     if state_clean not in valid_states:
-        return f"[ERROR] 非法的 state 參數：{state!r}（允許值：{sorted(valid_states)}）"
+        return f"[ERROR] 非法的 state 參數（允許值：{sorted(valid_states)}）"
 
     if state_clean == "listening":
         base_cmd = f"ss {proto_flag}ln{proc_flag}"
@@ -937,8 +1012,7 @@ def rhel_package_info(
         cmd = (
             f"echo '=== Package Info (rpm -qi) ===' && "
             f"(rpm -qi {quoted} 2>/dev/null || "
-            f"dnf --cacheonly --setopt=logfile=/dev/null --setopt=debuglevel=0 info {quoted} || "
-            "echo '[ERROR] 查無套件或快取不足，不自動更新中繼資料'); "
+            "echo '[ERROR] 查無套件，不自動透過 DNF 查詢中繼資料'); "
             "echo '=== Changelog Summary (recent) ===' && "
             f"rpm -q --changelog {quoted} 2>/dev/null | sed -n '1,20p'"
         )
@@ -953,18 +1027,8 @@ def rhel_container_status(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 容器執行環境：檢視 Podman/Docker 容器狀態、映像檔與 Pod 清單"""
-    cmd = (
-        "echo '=== Container Engine Detection ===' && "
-        "(which podman 2>/dev/null || which docker 2>/dev/null || echo '未安裝 podman 或 docker'); "
-        "echo '=== Running/All Containers ===' && "
-        "((podman ps -a --format 'table {{.ID}} {{.Image}} {{.Status}} {{.Names}}' 2>/dev/null || "
-        "docker ps -a --format 'table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}' 2>/dev/null) "
-        "| sed -n '1,30p' || echo '[ERROR] 容器查詢失敗，無法判定容器狀態'); "
-        "echo '=== Podman Pods ===' && "
-        "(podman pod ps 2>/dev/null | sed -n '1,15p' || echo '[ERROR] Pod 查詢失敗，無法判定 Pod 狀態')"
-    )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    """探查 RHEL 容器執行環境；在未證明無副作用前暫停提供。"""
+    return "[ERROR] [UNSUPPORTED] 安全摘要模式下暫停提供容器狀態探查（尚未證明命令無副作用）。"
 
 
 @mcp.tool()
