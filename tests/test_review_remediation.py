@@ -305,9 +305,9 @@ def test_list_sessions_rejects_tampered_session(tmp_path, monkeypatch):
 
 
 # ==========================================
-# 7. 2026-10-20 審查修補回歸測試：Database MCP 唯讀防護、RHEL MCP 安全通道
+# 7. 2026-10-20 審查修補回歸測試：SQLite MCP 唯讀防護、RHEL MCP 安全通道
 # ==========================================
-def test_database_mcp_readonly_and_block_writes(tmp_path, monkeypatch):
+def test_sqlite_mcp_readonly_and_block_writes(tmp_path, monkeypatch):
     import sqlite3
 
     db_file = tmp_path / "test.db"
@@ -317,18 +317,18 @@ def test_database_mcp_readonly_and_block_writes(tmp_path, monkeypatch):
         conn.commit()
 
     monkeypatch.setenv("DB_PATH", str(db_file))
-    from mcp_servers import database_mcp
+    from mcp_servers import sqlite_mcp
 
     # 1. 唯讀查詢正常執行
-    res = database_mcp.db_run_select_query("SELECT id, name FROM users;")
+    res = sqlite_mcp.sqlite_run_select_query("SELECT id, name FROM users;")
     assert "alice" in res
 
     # 2. 阻擋非 SELECT 語句
-    res_non_select = database_mcp.db_run_select_query("DELETE FROM users WHERE id=1;")
+    res_non_select = sqlite_mcp.sqlite_run_select_query("DELETE FROM users WHERE id=1;")
     assert "[ERROR]" in res_non_select
 
     # 3. 嘗試以多語句或寫入操作突破 SQLite 唯讀保護，必須被 authorizer 或 SQLite ro 模式拒絕
-    database_mcp.db_run_select_query("SELECT 1; DROP TABLE users;")
+    sqlite_mcp.sqlite_run_select_query("SELECT 1; DROP TABLE users;")
     # 在唯讀模式或單一語句下，無法成功刪除資料表
     with sqlite3.connect(db_file) as conn:
         cursor = conn.cursor()

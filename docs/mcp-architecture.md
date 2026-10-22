@@ -148,3 +148,35 @@ Pocket Agent 的解決方案：
 | `WIN_RDP_PASSWORD`   | 彈性        | `""`         | 首次呼叫工具時於終端機以隱藏輸入（不回顯）方式詢問登入密碼     | 登入遠端 Windows 的密碼。建議留空或省略，於對話執行期動態輸入以確保設定檔不落盤明文密碼。 |
 | `WIN_RDP_TIMEOUT`    | 選填        | `"15"`       | 套用預設值 `15` 秒                                             | 等待 RDP 視窗連線與剪貼簿通道回傳結果的逾時秒數（`5` ~ `60`）。                        |
 | `WIN_RDP_RESOLUTION` | 選填        | `"1280x800"` | 套用預設視窗解析度 `1280x800`                                  | 遠端桌面視窗客戶區解析度（格式 `<寬>x<高>`，範圍 `640x480` ~ `3840x2160`）。           |
+
+---
+
+## 內建 SQLite 本機資料庫唯讀檢索伺服器 (`mcp_servers/sqlite_mcp.py`)
+
+`sqlite_mcp.py` 為隨附的本機 SQLite 資料庫結構探查與唯讀查詢伺服器。透過 SQLite Authorizer 與唯讀 URI 強制執行沙盒防護，杜絕寫入或破壞性異動。
+
+### 1. 提供的結構化工具清單
+
+所有工具均為唯讀操作，建議於 `mcp_config.yaml` 中加入 `safe_read_tools`：
+
+| 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
+| :--- | :--- | :--- | :--- |
+| `sqlite_list_tables` | 是 | 列出資料庫中的所有非系統資料表清單 | 無 |
+| `sqlite_describe_schema` | 是 | 顯示指定資料表的 Schema（欄位、型別、主鍵與 NOT NULL 約束） | `table_name`（必填） |
+| `sqlite_run_select_query` | 是 | 執行唯讀的 SELECT 或 WITH 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填，僅限 SELECT／WITH 語句） |
+
+> 註：為維持向下相容性，亦提供 `db_list_tables`、`db_describe_schema` 與 `db_run_select_query` 之別名支援。
+
+### 2. 安全防禦邊界
+
+- **URI mode=ro 與 Authorizer 雙重唯讀防護**：連線以 `file:<path>?mode=ro` URI 開啟，並於連線底層掛載 `sqlite3.set_authorizer`，嚴格封鎖所有 INSERT、UPDATE、DELETE、DROP、ALTER 等異動指令，並封鎖未授權的 PRAGMA 操作（僅允許 `table_info`、`index_list` 等結構探查 PRAGMA）。
+- **SQL 語意前綴檢查**：查詢語句僅允許以 `SELECT` 或 `WITH`（CTE）開頭，阻絕任意多語句注入或前綴繞過。
+- **串流防爆與 OOM 防護**：採用 `fetchmany` 批次提取，單次輸出嚴格受 `MAX_OUTPUT_CHARS`（預設 12,000 字元）限制，超限時自動友善截斷並提示加上 `WHERE` 或 `LIMIT/OFFSET`。
+- **機密欄位正則遮罩**：查詢結果自動針對 `password`、`token`、`secret`、`api_key` 等敏感字眼進行正規遮罩為 `[REDACTED]`。
+- **連線保證釋放**：查詢後立即在 `finally` 區塊關閉連線，杜絕 Windows 平台檔案佔用鎖死問題。
+
+### 3. 環境變數與配置參數表 (`servers.sqlite.env`)
+
+| 參數名稱 | 必填 / 選填 | 預設值 | 說明 |
+| :--- | :--- | :--- | :--- |
+| `DB_PATH` | 必填 | 無 | 目標 SQLite 資料庫檔案的絕對或相對路徑（例如 `dev.db`）。 |

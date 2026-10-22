@@ -45,11 +45,11 @@ servers:
   #   env:
   #     GITHUB_TOKEN: "your_github_personal_access_token"
 
-  # 本機資料庫檢索 (唯讀 SELECT 查詢)
-  # database:
+  # 本機 SQLite 資料庫檢索 (唯讀 SELECT 查詢)
+  # sqlite:
   #   transport: stdio
   #   command: python
-  #   args: ["mcp_servers/database_mcp.py"]
+  #   args: ["mcp_servers/sqlite_mcp.py"]
   #   env:
   #     DB_PATH: "dev.db"
 

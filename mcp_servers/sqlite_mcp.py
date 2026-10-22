@@ -22,7 +22,7 @@ try:
 except ImportError:
     MAX_OUTPUT_CHARS = 12000
 
-mcp = MCPServer("database")
+mcp = MCPServer("sqlite")
 
 _REDACT_SECRET_RE = re.compile(
     r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
@@ -81,8 +81,8 @@ def _get_readonly_connection() -> sqlite3.Connection:
 
 
 @mcp.tool()
-def db_list_tables() -> str:
-    """列出資料庫中的所有資料表"""
+def sqlite_list_tables() -> str:
+    """列出 SQLite 資料庫中的所有資料表"""
     conn = None
     try:
         conn = _get_readonly_connection()
@@ -100,8 +100,8 @@ def db_list_tables() -> str:
 
 
 @mcp.tool()
-def db_describe_schema(table_name: str) -> str:
-    """顯示指定資料表的 Schema (欄位與型別)"""
+def sqlite_describe_schema(table_name: str) -> str:
+    """顯示指定 SQLite 資料表的 Schema (欄位與型別)"""
     conn = None
     try:
         clean_name = table_name.strip().strip("'\"`")
@@ -130,7 +130,7 @@ def db_describe_schema(table_name: str) -> str:
 
 
 @mcp.tool()
-def db_run_select_query(query: str) -> str:
+def sqlite_run_select_query(query: str) -> str:
     """執行唯讀的 SELECT 或 WITH 查詢以檢視資料 (具備串流防爆與機密欄位遮罩)"""
     clean_query = query.strip()
     upper_q = clean_query.upper()
@@ -186,6 +186,12 @@ def db_run_select_query(query: str) -> str:
     finally:
         if conn:
             conn.close()
+
+
+# 向後相容別名 (Backward compatibility aliases)
+db_list_tables = sqlite_list_tables
+db_describe_schema = sqlite_describe_schema
+db_run_select_query = sqlite_run_select_query
 
 
 if __name__ == "__main__":
