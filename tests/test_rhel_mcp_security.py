@@ -236,10 +236,9 @@ def test_ssh_args_enforces_strict_host_key_and_dedicated_known_hosts() -> None:
         ssh_user="testuser",
         ssh_password="password",
     )
-    assert "StrictHostKeyChecking=yes" in args
+    assert "StrictHostKeyChecking=accept-new" in args
     assert any("UserKnownHostsFile=" in a for a in args)
     assert "StrictHostKeyChecking=no" not in args
-    assert "StrictHostKeyChecking=accept-new" not in args
 
 
 def test_host_validation_supports_ipv6_and_rejects_options() -> None:

@@ -385,6 +385,31 @@ def _build_ssh_args(
     if not Path(known_hosts_file).exists():
         Path(known_hosts_file).touch(mode=0o600, exist_ok=True)
 
+    # 若專屬 known_hosts 缺少該主機，但本機 ~/.ssh/known_hosts 已有使用者過去核可之可信紀錄，安全同步匯入
+    if Path(known_hosts_file).exists():
+        try:
+            content = Path(known_hosts_file).read_text(encoding="utf-8", errors="ignore")
+            clean_host = host.strip("[]")
+            if clean_host not in content:
+                user_known_hosts = Path.home() / ".ssh" / "known_hosts"
+                if user_known_hosts.exists():
+                    user_lines = [
+                        line
+                        for line in user_known_hosts.read_text(encoding="utf-8", errors="ignore").splitlines()
+                        if line.strip()
+                        and (
+                            line.startswith(f"{clean_host} ")
+                            or line.startswith(f"[{clean_host}]:")
+                            or line.startswith(f"{host} ")
+                        )
+                    ]
+                    if user_lines:
+                        with open(known_hosts_file, "a", encoding="utf-8") as f:
+                            for entry in user_lines:
+                                f.write(f"{entry}\n")
+        except Exception:
+            pass
+
     try:
         timeout = max(3, min(int(os.getenv("RHEL_CONNECT_TIMEOUT") or "10"), 60))
     except ValueError:
@@ -405,7 +430,7 @@ def _build_ssh_args(
         "-o",
         f"ConnectTimeout={timeout}",
         "-o",
-        "StrictHostKeyChecking=yes",
+        "StrictHostKeyChecking=accept-new",
         "-o",
         f"UserKnownHostsFile={known_hosts_file}",
         "-o",
@@ -577,12 +602,19 @@ def _run_with_askpass(
 
         safe_keys = {
             "SYSTEMROOT",
+            "SYSTEMDRIVE",
             "WINDIR",
+            "PROGRAMDATA",
+            "PROGRAMFILES",
+            "PROGRAMFILES(X86)",
             "PATH",
             "PATHEXT",
             "TMP",
             "TEMP",
             "USERPROFILE",
+            "ALLUSERSPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
             "HOME",
             "HOMEPATH",
             "HOMEDRIVE",
@@ -620,15 +652,25 @@ def _run_remote(
         proc = _run_with_askpass(ssh_args, password, timeout, creationflags)
 
         if proc.returncode == 255:
-            # 遠端連線或金鑰/認證失敗。為防止本機行程命令列引數洩漏密碼（Process Argument Inspection），
-            # 嚴格禁止使用 plink 傳遞明文密碼參數。強制使用安全 SSH_ASKPASS 通道。
-            _RUNTIME_CREDS.clear()
-            global _CREDS_UPDATED_AT
-            _CREDS_UPDATED_AT = 0.0
+            stderr_lower = (proc.stderr or "").lower()
+            if "host key verification failed" in stderr_lower or "known_hosts" in stderr_lower:
+                return (
+                    "[ERROR] [HOST_KEY_MISMATCH] 目標主機金鑰驗證失敗 (exit 255)\n"
+                    "提示：目標主機公鑰與專屬已知清單紀錄不符（可能主機金鑰曾變更或存在安全風險），連線已被拒絕。"
+                )
+
+            if "permission denied" in stderr_lower:
+                _RUNTIME_CREDS.clear()
+                global _CREDS_UPDATED_AT
+                _CREDS_UPDATED_AT = 0.0
+                return (
+                    "[ERROR] [CONN_AUTH] 遠端 SSH 認證失敗 (Permission denied, exit 255)\n"
+                    "提示：請確認帳號與密碼/金鑰是否正確，且目標主機已啟用對應認證方式。"
+                )
 
             return (
                 "[ERROR] [CONN_AUTH] 遠端 SSH 連線或認證失敗 (exit 255)\n"
-                "提示：請確認目標主機已啟用密碼/金鑰驗證，或檢查網路與金鑰檔案權限設定。"
+                "提示：請確認網路連線、目標主機防火牆與 SSH 連接埠，或檢查已知主機清單。"
             )
 
         combined = (proc.stdout or "").strip()

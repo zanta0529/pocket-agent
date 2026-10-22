@@ -74,7 +74,7 @@ class SessionCommand(CliCommand):
                 data = load_session(selected["id"])
                 if data is None:
                     raise ValueError(f"找不到 session：{selected['id']}")
-                if ctx.agent.history and not getattr(ctx.agent, "is_sensitive_session", False):
+                if ctx.agent.history and getattr(ctx.agent, "is_sensitive_session", False) is not True:
                     save_session(ctx.state.session_id, ctx.agent.history)
                 ctx.agent.history = data["history"]
                 ctx.state.session_id = data["id"]
@@ -98,7 +98,7 @@ class SessionCommand(CliCommand):
             data = load_session(sub_arg)
             if data is None:
                 raise ValueError(f"找不到 session：{sub_arg}")
-            if ctx.agent.history and not getattr(ctx.agent, "is_sensitive_session", False):
+            if ctx.agent.history and getattr(ctx.agent, "is_sensitive_session", False) is not True:
                 save_session(ctx.state.session_id, ctx.agent.history)
             ctx.agent.history = data["history"]
             ctx.state.session_id = data["id"]
@@ -110,7 +110,7 @@ class SessionCommand(CliCommand):
         elif sub == "save":
             if not ctx.agent.history:
                 ctx.renderer.message("對話歷史為空，略過儲存。")
-            elif getattr(ctx.agent, "is_sensitive_session", False):
+            elif getattr(ctx.agent, "is_sensitive_session", False) is True:
                 ctx.renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
             else:
                 save_session(ctx.state.session_id, ctx.agent.history)
@@ -173,7 +173,7 @@ class NewCommand(CliCommand):
         old_session_id = ctx.state.session_id
         # 若原先對話有內容，先自動儲存保護工作成果
         if ctx.agent.history:
-            if getattr(ctx.agent, "is_sensitive_session", False):
+            if getattr(ctx.agent, "is_sensitive_session", False) is True:
                 saved_msg = "（前次會話涉及敏感主機診斷，不予持久化儲存）"
             else:
                 try:
@@ -220,7 +220,7 @@ class RenameCommand(CliCommand):
             ctx.renderer.message("標題不得為空，已取消重新命名。", "yellow")
             return CommandResult()
 
-        if getattr(ctx.agent, "is_sensitive_session", False):
+        if getattr(ctx.agent, "is_sensitive_session", False) is True:
             ctx.renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，不予持久化儲存。", "yellow")
             return CommandResult()
 

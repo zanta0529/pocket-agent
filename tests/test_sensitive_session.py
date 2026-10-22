@@ -87,7 +87,6 @@ def test_session_commands_block_saving_on_sensitive_agent(tmp_path, monkeypatch)
         reader=MagicMock(),
         renderer=renderer,
         tools=[],
-        command_name="session",
     )
 
     # 1. 測試 /session save
