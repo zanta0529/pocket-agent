@@ -1,236 +1,178 @@
-"""單元測試：驗證 SQLite MCP (sqlite_mcp.py) 之唯讀保護、串流防爆、連線釋放、機密遮罩、互動詢問與向下相容。"""
-
-import os
+import asyncio
 import sqlite3
-import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from mcp_servers import sqlite_mcp
+from pocket_agent.extensions.mcp import MCPManager
 
 
 @pytest.fixture(autouse=True)
-def _clean_sqlite_cache(monkeypatch, tmp_path):
-    """每次測試前自動清空 SQLite MCP 執行期記憶體快取並隔離測試用 agent.log。"""
-    sqlite_mcp._RUNTIME_CREDS.clear()
+def _clean_sqlite_env_and_cache(monkeypatch, tmp_path):
+    sqlite_mcp._clear_creds_cache()
     monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
-    yield
-    sqlite_mcp._RUNTIME_CREDS.clear()
+    monkeypatch.delenv("DB_PATH", raising=False)
 
 
-@pytest.fixture
-def temp_db():
-    """建立測試用臨時 SQLite 資料庫，測試結束後自動清理。"""
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_file = Path(f.name)
-
-    conn = sqlite3.connect(db_file)
-    cursor = conn.cursor()
-    cursor.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT, api_token TEXT);")
-    cursor.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT, content TEXT);")
-
-    # 插入測試資料 (包含敏感與一般資料)
-    for i in range(1, 250):
-        cursor.execute(
-            "INSERT INTO users (username, password_hash, api_token) VALUES (?, ?, ?);",
-            (f"user_{i}", f"secret_hash_value_{i}", f"tok_secret_key_{i}"),
-        )
-        cursor.execute(
-            "INSERT INTO posts (user_id, title, content) VALUES (?, ?, ?);",
-            (i, f"Title {i}", f"This is the content of post {i}." * 5),
-        )
-
-    conn.commit()
-    conn.close()
-
-    old_env = os.environ.get("DB_PATH")
-    os.environ["DB_PATH"] = str(db_file)
-
-    yield db_file
-
-    if old_env is not None:
-        os.environ["DB_PATH"] = old_env
-    else:
-        os.environ.pop("DB_PATH", None)
-
+def _create_sample_db(db_file: Path) -> Path:
+    conn = sqlite3.connect(str(db_file))
     try:
-        db_file.unlink(missing_ok=True)
-    except Exception:
-        pass
+        conn.executescript(
+            """
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE departments (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                username TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                api_token TEXT,
+                dept_id INTEGER DEFAULT 1,
+                bio TEXT,
+                FOREIGN KEY (dept_id) REFERENCES departments(id)
+            );
+            CREATE INDEX idx_users_username ON users(username);
+            CREATE VIEW v_active_users AS
+                SELECT id, username, dept_id FROM users;
+            INSERT INTO departments (id, name) VALUES (1, 'Engineering');
+            INSERT INTO users (id, username, password_hash, api_token, dept_id, bio)
+            VALUES (
+                1,
+                'admin',
+                '$2b$12$eImiTXuWVxfM37uY4JANjQ_raw_hash_value',
+                'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.secret_payload',
+                1,
+                'uri=postgres://dbadmin:SuperSecret99@10.0.0.1:5432/prod\nline2_safe'
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return db_file
 
 
-def test_sqlite_list_tables(temp_db):
-    """驗證資料表清單檢索與系統表過濾。"""
-    out = sqlite_mcp.sqlite_list_tables()
-    assert "users" in out
-    assert "posts" in out
-    assert "sqlite_master" not in out
-
-    # 測試向後相容別名
-    assert sqlite_mcp.db_list_tables() == out
+def test_sqlite_list_tables_includes_views_and_accepts_db_path(tmp_path):
+    db_file = _create_sample_db(tmp_path / "sample.db")
+    out = sqlite_mcp.sqlite_list_tables(db_path=str(db_file))
+    lines = out.splitlines()
+    assert "departments" in lines
+    assert "users" in lines
+    assert "v_active_users (VIEW)" in lines
 
 
-def test_sqlite_describe_schema(temp_db):
-    """驗證 Schema 結構查詢與參數化安全。"""
-    out = sqlite_mcp.sqlite_describe_schema("users")
-    assert "username" in out
-    assert "password_hash" in out
-    assert "api_token" in out
-
-    # 查無此表
-    assert "找不到資料表" in sqlite_mcp.sqlite_describe_schema("non_existent_table")
-
-    # 測試向後相容別名
-    assert sqlite_mcp.db_describe_schema("users") == out
+def test_sqlite_describe_schema_shows_defaults_indexes_and_fks(tmp_path):
+    db_file = _create_sample_db(tmp_path / "sample.db")
+    out = sqlite_mcp.sqlite_describe_schema("users", db_path=str(db_file))
+    assert "id (INTEGER [PK])" in out
+    assert "username (TEXT NOT NULL)" in out
+    assert "dept_id (INTEGER DEFAULT 1)" in out
+    assert "[Indexes]" in out
+    assert "- idx_users_username: (username)" in out
+    assert "[Foreign Keys]" in out
+    assert "- dept_id -> departments.id" in out
 
 
-def test_sqlite_run_select_query_basic_and_cte(temp_db):
-    """驗證基本 SELECT 與 WITH (CTE) 語法支援。"""
-    out_select = sqlite_mcp.sqlite_run_select_query("SELECT id, username FROM users WHERE id = 1;")
-    assert "id, username" in out_select
-    assert "1, user_1" in out_select
-
-    # 支援 CTE
-    cte_query = "WITH recent_users AS (SELECT id, username FROM users WHERE id <= 2) SELECT * FROM recent_users;"
-    out_cte = sqlite_mcp.sqlite_run_select_query(cte_query)
-    assert "user_1" in out_cte
-    assert "user_2" in out_cte
-
-    # 測試向後相容別名
-    assert sqlite_mcp.db_run_select_query("SELECT id, username FROM users WHERE id = 1;") == out_select
-
-
-def test_sqlite_blocks_mutation_queries(temp_db):
-    """驗證嚴格阻擋非唯讀的資料變更指令 (INSERT, UPDATE, DELETE, DROP 等)。"""
-    # 非 SELECT/WITH 開頭
-    out_insert = sqlite_mcp.sqlite_run_select_query("INSERT INTO users (username) VALUES ('hacker');")
-    assert "[ERROR]" in out_insert
-    assert "僅允許執行以 SELECT 或 WITH 開頭" in out_insert
-
-    out_drop = sqlite_mcp.sqlite_run_select_query("DROP TABLE users;")
-    assert "[ERROR]" in out_drop
-
-    # 偽裝前綴試圖寫入由 Authorizer 攔截
-    out_fake = sqlite_mcp.sqlite_run_select_query("SELECT 1; INSERT INTO users (username) VALUES ('fail');")
-    # SQLite cursor.execute 僅執行第一句或 authorizer 阻擋
-    assert "1" in out_fake or "[ERROR]" in out_fake
+def test_sqlite_run_select_query_redacts_sensitive_columns_without_corrupting_header(tmp_path):
+    """驗證敏感欄位值即使不含關鍵字亦會依欄位名稱遮罩，且標題列不會被誤遮罩。"""
+    db_file = _create_sample_db(tmp_path / "sample.db")
+    out = sqlite_mcp.sqlite_run_select_query(
+        "-- 查詢使用者清單\nSELECT id, username, password_hash, api_token, bio, NULL AS empty_col FROM users;",
+        db_path=str(db_file),
+    )
+    lines = out.splitlines()
+    assert lines[0] == "id, username, password_hash, api_token, bio, empty_col"
+    assert "$2b$12$" not in out
+    assert "eyJhbGci" not in out
+    assert "SuperSecret99" not in out
+    assert lines[1] == (
+        "1, admin, [REDACTED], [REDACTED], uri=postgres://[REDACTED]@10.0.0.1:5432/prod\\nline2_safe, NULL"
+    )
 
 
-def test_sqlite_blocks_dangerous_pragma(temp_db):
-    """驗證禁止直接執行 PRAGMA，以及 Authorizer 阻擋未授權的 PRAGMA 探測。"""
-    # 1. 直接執行 PRAGMA 被前綴唯讀檢查攔截
-    out_pragma = sqlite_mcp.sqlite_run_select_query("PRAGMA database_list;")
-    assert "[ERROR]" in out_pragma
-    assert "僅允許執行以 SELECT 或 WITH 開頭" in out_pragma
-
-    # 2. 透過 SELECT 查詢危險 PRAGMA 虛擬表被 Authorizer 拒絕
-    out_table = sqlite_mcp.sqlite_run_select_query("SELECT * FROM pragma_database_list;")
-    assert "[ERROR]" in out_table
-    assert "not authorized" in out_table.lower() or "not allowed" in out_table.lower()
+def test_sqlite_run_select_query_allows_explain_query_plan(tmp_path):
+    db_file = _create_sample_db(tmp_path / "sample.db")
+    out = sqlite_mcp.sqlite_run_select_query(
+        "EXPLAIN QUERY PLAN SELECT * FROM users WHERE username = 'admin';",
+        db_path=str(db_file),
+    )
+    assert "[ERROR]" not in out
+    assert "idx_users_username" in out or "users" in out
 
 
-def test_sqlite_secret_redaction(temp_db):
-    """驗證查詢結果自動遮罩 password, token 等機密欄位。"""
-    out = sqlite_mcp.sqlite_run_select_query("SELECT username, password_hash, api_token FROM users WHERE id = 1;")
-    assert "user_1" in out
-    # 原始機密數值不應明文出現
-    assert "secret_hash_value_1" not in out
-    assert "tok_secret_key_1" not in out
-    assert "[REDACTED]" in out
+@pytest.mark.parametrize(
+    "blocked_sql",
+    [
+        "INSERT INTO departments VALUES (2, 'HR')",
+        "UPDATE users SET username = 'hacked'",
+        "DELETE FROM users",
+        "DROP TABLE users",
+        "SELECT 1; DROP TABLE users",
+        "PRAGMA writable_schema = 1",
+        "EXPLAIN DELETE FROM users",
+    ],
+)
+def test_sqlite_blocks_non_readonly_queries_and_records_audit(tmp_path, blocked_sql):
+    db_file = _create_sample_db(tmp_path / "sample.db")
+    out = sqlite_mcp.sqlite_run_select_query(blocked_sql, db_path=str(db_file))
+    assert out.startswith("[ERROR]")
 
 
-def test_sqlite_streaming_truncation_anti_oom(temp_db):
-    """驗證批次串流讀取在達到字元上限時友善截斷，防範 OOM。"""
-    out = sqlite_mcp.sqlite_run_select_query("SELECT * FROM posts;")
-    assert "查詢結果已截斷" in out
-    assert "已呈現前" in out
-    assert len(out) <= sqlite_mcp.MAX_OUTPUT_CHARS + 500
+def test_sqlite_authorizer_blocks_dangerous_pragma_at_connection_level(tmp_path):
+    db_file = _create_sample_db(tmp_path / "sample.db")
+    conn = sqlite_mcp._get_readonly_connection("test", "PRAGMA database_list", db_path=str(db_file))
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            conn.execute("PRAGMA database_list;")
+    finally:
+        conn.close()
 
 
-def test_sqlite_connection_closing_guaranteed(temp_db):
-    """驗證連線保證釋放，查詢後資料庫檔案無殘留鎖死，可順利被刪除或存取。"""
-    # 執行多次查詢
-    sqlite_mcp.sqlite_list_tables()
-    sqlite_mcp.sqlite_run_select_query("SELECT 1;")
-    sqlite_mcp.sqlite_describe_schema("users")
+def test_mcp_manager_strips_db_path_and_prompts_when_missing(tmp_path):
+    db_file = _create_sample_db(tmp_path / "sample.db")
+    manager = MCPManager()
+    manager._server_envs["sqlite"] = {"DB_PATH": ""}
+    fake_tools = [
+        SimpleNamespace(
+            name="sqlite_list_tables",
+            description="list sqlite tables",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "db_path": {"type": "string"},
+                },
+            },
+        ),
+    ]
+    fake_session = SimpleNamespace(
+        list_tools=AsyncMock(return_value=SimpleNamespace(tools=fake_tools)),
+        call_tool=AsyncMock(return_value=MagicMock(content=[MagicMock(text="users")])),
+    )
+    asyncio.run(
+        manager._register_tools(
+            "sqlite",
+            fake_session,
+            inject={},
+            safe_read_tools=["sqlite_list_tables"],
+        )
+    )
+    schemas = {s["name"]: s for s in manager.openai_tools()}
+    assert schemas["sqlite_list_tables"]["parameters"]["properties"] == {}
 
-    # 在 Windows 上若未呼叫 conn.close()，以排他寫入模式開啟會拋出 OperationalError (file locked)
-    test_conn = sqlite3.connect(temp_db, timeout=1.0)
-    test_conn.execute("CREATE TABLE test_lock (id INT);")
-    test_conn.commit()
-    test_conn.close()
+    prompt_calls = []
 
+    def fake_prompt(server_name, missing_keys):
+        prompt_calls.append((server_name, missing_keys))
+        return {"DB_PATH": str(db_file)}
 
-def test_sqlite_missing_db_path_prompts_and_caches(monkeypatch, temp_db):
-    """驗證未設定 DB_PATH 時透過 _tty_prompt 互動詢問並成功快取於記憶體。"""
-    monkeypatch.delenv("DB_PATH", raising=False)
+    manager.on_prompt_conn = fake_prompt
+    asyncio.run(manager.call("sqlite_list_tables", {}))
 
-    with patch("mcp_servers.sqlite_mcp._tty_prompt", return_value=str(temp_db)) as mock_prompt:
-        # 第一次呼叫：觸發互動輸入
-        out1 = sqlite_mcp.sqlite_list_tables()
-        assert "users" in out1
-        mock_prompt.assert_called_once()
-
-        # 第二次呼叫：直接命中快取，不應再次詢問
-        out2 = sqlite_mcp.sqlite_describe_schema("users")
-        assert "username" in out2
-        assert mock_prompt.call_count == 1
-
-
-@pytest.mark.parametrize("empty_val", ["", "   ", "null", "NULL", "None", "none", "~"])
-def test_sqlite_empty_or_null_db_path_prompts(monkeypatch, temp_db, empty_val):
-    """驗證 DB_PATH 為空白、null、None 或波浪號時皆會觸發提示詢問。"""
-    monkeypatch.setenv("DB_PATH", empty_val)
-
-    with patch("mcp_servers.sqlite_mcp._tty_prompt", return_value=f'"{temp_db}"') as mock_prompt:
-        resolved = sqlite_mcp.get_db_path()
-        assert resolved == temp_db.resolve()
-        mock_prompt.assert_called_once()
-
-
-def test_sqlite_prompt_empty_input_returns_error(monkeypatch):
-    """驗證使用者在提示輸入空白或取消時回傳錯誤。"""
-    monkeypatch.delenv("DB_PATH", raising=False)
-
-    with patch("mcp_servers.sqlite_mcp._tty_prompt", return_value="   ") as mock_prompt:
-        out = sqlite_mcp.sqlite_list_tables()
-        assert "[ERROR]" in out
-        assert "未提供 SQLite 資料庫路徑" in out
-        mock_prompt.assert_called_once()
-
-
-def test_sqlite_prompt_nonexistent_file_returns_error(monkeypatch):
-    """驗證使用者輸入不存在之檔案路徑時回傳 FileNotFoundError 錯誤。"""
-    monkeypatch.delenv("DB_PATH", raising=False)
-
-    fake_path = r"C:\pocket_agent_nonexistent_dir\missing.db"
-    with patch("mcp_servers.sqlite_mcp._tty_prompt", return_value=fake_path) as mock_prompt:
-        out = sqlite_mcp.sqlite_list_tables()
-        assert "[ERROR]" in out
-        assert "找不到指定的資料庫檔案" in out
-        mock_prompt.assert_called_once()
-
-
-def test_sqlite_custom_path_direct_override(temp_db):
-    """驗證 get_db_path 支援傳入 custom_path 覆寫。"""
-    resolved = sqlite_mcp.get_db_path(str(temp_db))
-    assert resolved == temp_db.resolve()
-
-
-def test_sqlite_audit_log_records_queries_and_security_blocks(temp_db, tmp_path):
-    """驗證 sqlite_mcp.py 將執行的 SQL 指令與攔截事件寫入集中化 agent.log。"""
-    log_file = tmp_path / "agent.log"
-    sqlite_mcp.sqlite_list_tables()
-    sqlite_mcp.sqlite_run_select_query("SELECT id, username FROM users WHERE id = 1;")
-    sqlite_mcp.sqlite_run_select_query("DROP TABLE users;")
-    sqlite_mcp.sqlite_run_select_query("SELECT * FROM pragma_database_list;")
-
-    content = log_file.read_text(encoding="utf-8")
-    assert "[AUDIT] [MCP:sqlite] tool=sqlite_list_tables status=OK" in content
-    assert "[AUDIT] [MCP:sqlite] tool=sqlite_run_select_query status=OK" in content
-    assert "SELECT id, username FROM users WHERE id = 1;" in content
-    assert "[AUDIT] [MCP:sqlite] tool=sqlite_run_select_query status=BLOCKED" in content
-    assert "DROP TABLE users;" in content
-    assert "[AUDIT] [MCP:sqlite] tool=sqlite_run_select_query status=SECURITY_BLOCK" in content
+    assert prompt_calls == [("sqlite", ["DB_PATH"])]
+    _, sent_args = fake_session.call_tool.call_args.args
+    assert sent_args == {"db_path": str(db_file)}

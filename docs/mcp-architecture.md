@@ -168,25 +168,25 @@ Pocket Agent 的解決方案：
 
 | 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
 | :--- | :--- | :--- | :--- |
-| `sqlite_list_tables` | 是 | 列出資料庫中的所有非系統資料表清單 | 無 |
-| `sqlite_describe_schema` | 是 | 顯示指定資料表的 Schema（欄位、型別、主鍵與 NOT NULL 約束） | `table_name`（必填） |
-| `sqlite_run_select_query` | 是 | 執行唯讀的 SELECT 或 WITH 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填，僅限 SELECT／WITH 語句） |
+| `sqlite_list_tables` | 是 | 列出資料庫中的所有非系統資料表與檢視表（`VIEW`）清單 | 無 |
+| `sqlite_describe_schema` | 是 | 顯示指定資料表或檢視表的 Schema（欄位、型別、主鍵、`NOT NULL`、`DEFAULT` 預設值、索引與外鍵） | `table_name`（必填） |
+| `sqlite_run_select_query` | 是 | 執行唯讀的 `SELECT`、`WITH` 或 `EXPLAIN` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填，僅限 `SELECT`／`WITH`／`EXPLAIN SELECT` 語句） |
 
 > 註：為維持向下相容性，亦提供 `db_list_tables`、`db_describe_schema` 與 `db_run_select_query` 之別名支援。
 
 ### 2. 安全防禦邊界
 
-- **URI mode=ro 與 Authorizer 雙重唯讀防護**：連線以 `file:<path>?mode=ro` URI 開啟，並於連線底層掛載 `sqlite3.set_authorizer`，嚴格封鎖所有 INSERT、UPDATE、DELETE、DROP、ALTER 等異動指令，並封鎖未授權的 PRAGMA 操作（僅允許 `table_info`、`index_list` 等結構探查 PRAGMA）。
-- **SQL 語意前綴檢查**：查詢語句僅允許以 `SELECT` 或 `WITH`（CTE）開頭，阻絕任意多語句注入或前綴繞過。
+- **URI mode=ro 與 Authorizer 雙重唯讀防護**：連線以 `file:<path>?mode=ro` URI 開啟，並於連線底層掛載 `sqlite3.set_authorizer`，嚴格封鎖所有 INSERT、UPDATE、DELETE、DROP、ALTER 等異動指令，並封鎖未授權的 PRAGMA 操作（僅允許 `table_info`、`index_list`、`index_info`、`foreign_key_list` 等結構探查 PRAGMA）。
+- **SQL 語意前綴與單一語句檢查**：清除開頭註解後僅允許以 `SELECT`、`WITH`（CTE）或 `EXPLAIN SELECT` 開頭，嚴格阻絕多重語句（`;`）注入或寫入關鍵字。
 - **串流防爆與 OOM 防護**：採用 `fetchmany` 批次提取，單次輸出嚴格受 `MAX_OUTPUT_CHARS`（預設 12,000 字元）限制，超限時自動友善截斷並提示加上 `WHERE` 或 `LIMIT/OFFSET`。
-- **機密欄位正則遮罩**：查詢結果自動針對 `password`、`token`、`secret`、`api_key` 等敏感字眼進行正規遮罩為 `[REDACTED]`。
-- **連線保證釋放**：查詢後立即在 `finally` 區塊關閉連線，杜絕 Windows 平台檔案佔用鎖死問題。
+- **欄位與內容雙重機密遮罩**：查詢結果自動針對敏感欄位名稱（`_SENSITIVE_COL_RE`，如 `password_hash`、`api_token`、`secret`）整欄遮罩為 `[REDACTED]`，並針對一般欄位的敏感鍵值、連線 URI 內嵌帳密（`scheme://user:pass@host`）與 PEM 私鑰進行正規遮罩。
+- **連線保證釋放與彈性路徑快取**：查詢後立即在 `finally` 區塊關閉連線，杜絕 Windows 平台檔案佔用鎖死問題；`DB_PATH` 支援由 `MCPManager` 隱藏參數並在未設定時暫停 CLI 動畫互動詢問（記憶體快取具 10 分鐘閒置過期與失敗自動清除機制）。
 
 ### 3. 環境變數與配置參數表 (`servers.sqlite.env`)
 
 | 參數名稱 | 必填 / 選填 | 預設值 | 說明 |
 | :--- | :--- | :--- | :--- |
-| `DB_PATH` | 必填 | 無 | 目標 SQLite 資料庫檔案的絕對或相對路徑（例如 `dev.db`）。 |
+| `DB_PATH` | 彈性 | `""` | 目標 SQLite 資料庫檔案的絕對或相對路徑（例如 `dev.db`）；留空或省略時於首次呼叫工具時互動詢問並快取於記憶體。 |
 
 ---
 
@@ -199,16 +199,16 @@ Pocket Agent 的解決方案：
 | 伺服器 | 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
 | :--- | :--- | :--- | :--- | :--- |
 | `mysql` | `mysql_list_databases` | 是 | 列出遠端 MySQL／MariaDB 主機上目前帳號可見的所有資料庫清單 | 無 |
-| `mysql` | `mysql_list_tables` | 是 | 列出目標資料庫（或所有非系統資料庫）中的所有基底資料表 | `database`（選填） |
-| `mysql` | `mysql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA.COLUMNS` 顯示欄位、型別、主鍵與 NOT NULL 約束 | `table_name`（必填）、`database`（選填） |
-| `mysql` | `mysql_run_select_query` | 是 | 執行唯讀的單一 `SELECT` 或 `WITH` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
+| `mysql` | `mysql_list_tables` | 是 | 列出目標資料庫（或所有非系統資料庫）中的所有基底資料表與檢視表（`VIEW`） | `database`（選填） |
+| `mysql` | `mysql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA` 顯示欄位、型別、主鍵、`NOT NULL`、`DEFAULT` 預設值、索引與外鍵 | `table_name`（必填）、`database`（選填） |
+| `mysql` | `mysql_run_select_query` | 是 | 執行唯讀的單一 `SELECT`、`WITH` 或 `EXPLAIN` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
 | `mssql` | `mssql_list_databases` | 是 | 列出遠端 SQL Server 主機上所有線上（ONLINE）資料庫清單 | 無 |
-| `mssql` | `mssql_list_tables` | 是 | 列出目標 SQL Server 資料庫中的所有基底資料表 | `database`（選填） |
-| `mssql` | `mssql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA` 顯示欄位、型別、主鍵與 NOT NULL 約束 | `table_name`（必填，支援 `table` 或 `schema.table`）、`database`（選填） |
+| `mssql` | `mssql_list_tables` | 是 | 列出目標 SQL Server 資料庫中的所有基底資料表與檢視表（`VIEW`） | `database`（選填） |
+| `mssql` | `mssql_describe_schema` | 是 | 透過參數化查詢顯示欄位、完整型別（含長度與精度）、主鍵、`NOT NULL`、`DEFAULT` 預設值、索引與外鍵 | `table_name`（必填，支援 `table` 或 `schema.table`）、`database`（選填） |
 | `mssql` | `mssql_run_select_query` | 是 | 執行唯讀的單一 `SELECT` 或 `WITH` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
 
 ### 2. 安全防禦邊界
 
 - **連線與交易層級強制唯讀**：`mysql_mcp.py` 連線後立即執行 `SET SESSION TRANSACTION READ ONLY` 與 `START TRANSACTION READ ONLY`；`mssql_mcp.py` 啟用 `ApplicationIntent=ReadOnly` 與 `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED`，且兩者皆設為 `autocommit=False`，並於 `finally` 區塊強制 `rollback()` 與 `close()`。
-- **單一查詢與危險關鍵字封鎖**：清除開頭註解後僅允許 `SELECT` 或 `WITH` 開頭，嚴格禁止多重語句（分號注入）以及 `INTO`、`FOR UPDATE`、`EXEC`、`EXECUTE`、`xp_cmdshell`、`OPENROWSET`、`BULK` 等具寫入或系統副作用之語法。
-- **彈性憑證配置與機密遮罩**：`MYSQL_HOST`／`MYSQL_PORT`／`MYSQL_USER`／`MYSQL_PASSWORD`／`MYSQL_DATABASE` 與 `MSSQL_HOST`／`MSSQL_PORT`／`MSSQL_USER`／`MSSQL_PASSWORD`／`MSSQL_DATABASE` 皆支援設定檔預填、留空或省略並於執行期互動詢問（快取於記憶體，認證失敗自動清除）；查詢結果自動針對敏感欄位名稱與機密字串遮罩為 `[REDACTED]`。
+- **單一查詢與危險關鍵字封鎖**：清除開頭註解（含 `--`、`/* */` 及 MySQL `#`）後僅允許 `SELECT` 或 `WITH`（MySQL 亦支援 `EXPLAIN`）開頭，嚴格禁止多重語句（分號注入）以及 `INTO`、`FOR UPDATE`、`EXEC`、`EXECUTE`、`xp_cmdshell`、`OPENROWSET`、`BULK` 等具寫入或系統副作用之語法。
+- **彈性憑證配置與機密遮罩**：`MYSQL_HOST`／`MYSQL_PORT`／`MYSQL_USER`／`MYSQL_PASSWORD`／`MYSQL_DATABASE` 與 `MSSQL_HOST`／`MSSQL_PORT`／`MSSQL_USER`／`MSSQL_PASSWORD`／`MSSQL_DATABASE` 皆支援設定檔預填（含 IPv6 位址正規化比對）、留空或省略並於執行期互動詢問（快取於記憶體，認證失敗自動清除）；查詢結果自動針對敏感欄位名稱、機密鍵值、連線 URI 內嵌帳密與 PEM 私鑰遮罩為 `[REDACTED]`。

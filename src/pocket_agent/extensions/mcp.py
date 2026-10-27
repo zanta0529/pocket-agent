@@ -48,6 +48,7 @@ _CONN_PARAM_MAP = {
     "mssql_user": "MSSQL_USER",
     "mssql_password": "MSSQL_PASSWORD",
     "mssql_database": "MSSQL_DATABASE",
+    "db_path": "DB_PATH",
 }
 
 

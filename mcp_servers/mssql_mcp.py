@@ -51,6 +51,8 @@ _REDACT_SECRET_RE = re.compile(
     r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
     r"|authorization|private_key|preshared_key|connectionstring)\b[^\r\n\x00]*"
 )
+_REDACT_URL_RE = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@\"']+:[^\s/@\"']+@")
+_REDACT_PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
 _REDACT_KV_RE = re.compile(
     r"(?i)(\b(?:password|passwd|secret|token|api_key|apikey|client_secret|passphrase|connectionstring)\b"
     r"\s*[:=]\s*)([^\s#;\"',)]+|\"[^\"]*\"|'[^']*')"
@@ -150,10 +152,22 @@ def _clear_creds_cache() -> None:
 
 
 def _redact_output(text: str) -> str:
-    """自動遮罩查詢結果中的敏感機密欄位與鍵值。"""
+    """自動遮罩查詢結果中的敏感機密欄位、連線 URI 帳密與私鑰。"""
     if not text:
         return text
-    return _REDACT_SECRET_RE.sub("[REDACTED]", text)
+    out = _REDACT_PEM_RE.sub("[REDACTED_PRIVATE_KEY]", text)
+    out = _REDACT_URL_RE.sub(r"\1[REDACTED]@", out)
+    return _REDACT_SECRET_RE.sub("[REDACTED]", out)
+
+
+def _format_cell_value(val: object, *, is_sensitive: bool = False) -> str:
+    """格式化單一欄位值：敏感欄強制遮罩、None 轉為 NULL、多行文字遮罩後單行化。"""
+    if is_sensitive:
+        return "[REDACTED]"
+    if val is None:
+        return "NULL"
+    redacted = _redact_output(str(val))
+    return redacted.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
 
 
 def _is_empty_or_null(val: str | None) -> bool:
@@ -318,11 +332,24 @@ def _resolve_connection_params(
     if database:
         database = _validate_identifier(database, "MSSQL_DATABASE")
 
+    norm_env_host = ""
+    if env_host:
+        try:
+            norm_env_host = _validate_host(env_host)
+        except ValueError:
+            norm_env_host = ""
+    norm_env_port = ""
+    if env_port:
+        try:
+            norm_env_port = _validate_port(env_port)
+        except ValueError:
+            norm_env_port = ""
+
     target_auth = (host, port, user)
     cached_auth = (cached_host, cached_port, cached_user)
     env_matches = (
-        (not env_host or env_host == host)
-        and (not env_port or _validate_port(env_port) == port)
+        (not norm_env_host or norm_env_host == host)
+        and (not norm_env_port or norm_env_port == port)
         and (not env_user or env_user == user)
     )
 
@@ -563,14 +590,14 @@ def mssql_list_tables(
         try:
             if explicit_db:
                 sql_executed = (
-                    f"SELECT TABLE_SCHEMA, TABLE_NAME FROM [{explicit_db}].INFORMATION_SCHEMA.TABLES "
-                    "WHERE TABLE_TYPE = 'BASE TABLE' "
+                    f"SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM [{explicit_db}].INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') "
                     "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
                 )
             else:
                 sql_executed = (
-                    "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-                    "WHERE TABLE_TYPE = 'BASE TABLE' "
+                    "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') "
                     "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
                 )
             cursor.execute(sql_executed)
@@ -585,7 +612,10 @@ def mssql_list_tables(
         for row in tables:
             if len(row) >= 2:
                 schema_name, tbl_name = str(row[0]), str(row[1])
-                lines.append(tbl_name if schema_name.lower() == "dbo" else f"{schema_name}.{tbl_name}")
+                base = tbl_name if schema_name.lower() == "dbo" else f"{schema_name}.{tbl_name}"
+                if len(row) >= 3 and str(row[2]).upper() == "VIEW":
+                    base += " (VIEW)"
+                lines.append(base)
             else:
                 lines.append(str(row[0]))
         return "\n".join(lines)
@@ -677,7 +707,8 @@ def mssql_describe_schema(
         db_prefix = f"[{explicit_db}]." if explicit_db else ""
         raw_sql = (
             "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, "
-            "CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS IS_PK "
+            "CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS IS_PK, "
+            "c.CHARACTER_MAXIMUM_LENGTH, c.NUMERIC_PRECISION, c.NUMERIC_SCALE "
             f"FROM {db_prefix}INFORMATION_SCHEMA.COLUMNS c "
             "LEFT JOIN ("
             "  SELECT ku.TABLE_SCHEMA, ku.TABLE_NAME, ku.COLUMN_NAME "
@@ -697,9 +728,49 @@ def mssql_describe_schema(
         sql = _adapt_placeholders(raw_sql, conn)
         sql_executed = f"{sql} [schema={target_schema!r}, table={target_table!r}]"
         cursor = conn.cursor()
+        idx_rows: list[Any] = []
+        fk_rows: list[Any] = []
         try:
             cursor.execute(sql, (target_schema, target_table))
             columns = cursor.fetchall()
+            if columns and len(columns[0]) >= 8:
+                try:
+                    idx_raw_sql = (
+                        "SELECT i.name AS index_name, i.is_unique, col.name AS column_name "
+                        f"FROM {db_prefix}sys.indexes i "
+                        f"JOIN {db_prefix}sys.index_columns ic "
+                        "  ON i.object_id = ic.object_id AND i.index_id = ic.index_id "
+                        f"JOIN {db_prefix}sys.columns col "
+                        "  ON ic.object_id = col.object_id AND ic.column_id = col.column_id "
+                        f"JOIN {db_prefix}sys.tables t ON i.object_id = t.object_id "
+                        f"JOIN {db_prefix}sys.schemas s ON t.schema_id = s.schema_id "
+                        "WHERE i.name IS NOT NULL AND s.name = %s AND t.name = %s "
+                        "ORDER BY i.name, ic.key_ordinal;"
+                    )
+                    cursor.execute(_adapt_placeholders(idx_raw_sql, conn), (target_schema, target_table))
+                    fetched_idx = cursor.fetchall()
+                    if fetched_idx and fetched_idx != columns:
+                        idx_rows = list(fetched_idx)
+
+                    fk_raw_sql = (
+                        "SELECT cp.name AS column_name, tr.name AS ref_table, cr.name AS ref_column "
+                        f"FROM {db_prefix}sys.foreign_key_columns fkc "
+                        f"JOIN {db_prefix}sys.tables tp ON fkc.parent_object_id = tp.object_id "
+                        f"JOIN {db_prefix}sys.schemas sp ON tp.schema_id = sp.schema_id "
+                        f"JOIN {db_prefix}sys.columns cp "
+                        "  ON fkc.parent_object_id = cp.object_id AND fkc.parent_column_id = cp.column_id "
+                        f"JOIN {db_prefix}sys.tables tr ON fkc.referenced_object_id = tr.object_id "
+                        f"JOIN {db_prefix}sys.columns cr "
+                        "  ON fkc.referenced_object_id = cr.object_id AND fkc.referenced_column_id = cr.column_id "
+                        "WHERE sp.name = %s AND tp.name = %s "
+                        "ORDER BY fkc.constraint_column_id;"
+                    )
+                    cursor.execute(_adapt_placeholders(fk_raw_sql, conn), (target_schema, target_table))
+                    fetched_fk = cursor.fetchall()
+                    if fetched_fk and fetched_fk != columns:
+                        fk_rows = list(fetched_fk)
+                except Exception:
+                    pass
         finally:
             cursor.close()
 
@@ -725,10 +796,44 @@ def mssql_describe_schema(
             col_name = str(c[0])
             col_type = str(c[1] or "NVARCHAR").upper()
             is_nullable = str(c[2] or "").upper()
+            col_default = c[3]
             is_pk = bool(c[4])
+            char_len = c[5] if len(c) > 5 else None
+            num_prec = c[6] if len(c) > 6 else None
+            num_scale = c[7] if len(c) > 7 else None
+            if col_type in ("VARCHAR", "NVARCHAR", "CHAR", "NCHAR", "BINARY", "VARBINARY") and char_len is not None:
+                len_str = "MAX" if int(char_len) == -1 else str(char_len)
+                col_type = f"{col_type}({len_str})"
+            elif col_type in ("DECIMAL", "NUMERIC") and num_prec is not None:
+                scale_str = f",{num_scale}" if num_scale is not None else ""
+                col_type = f"{col_type}({num_prec}{scale_str})"
             pk_tag = " [PK]" if is_pk else ""
             null_tag = " NOT NULL" if is_nullable == "NO" else ""
-            lines.append(f"{col_name} ({col_type}{pk_tag}{null_tag})")
+            default_tag = f" DEFAULT {col_default}" if col_default is not None else ""
+            lines.append(f"{col_name} ({col_type}{pk_tag}{null_tag}{default_tag})")
+
+        if idx_rows:
+            idx_map: dict[str, tuple[bool, list[str]]] = {}
+            for r in idx_rows:
+                if len(r) >= 3:
+                    iname = str(r[0])
+                    is_uniq = bool(r[1])
+                    cname = str(r[2])
+                    if iname not in idx_map:
+                        idx_map[iname] = (is_uniq, [])
+                    idx_map[iname][1].append(cname)
+            if idx_map:
+                lines.append("\n[Indexes]")
+                for iname, (is_uniq, cols) in idx_map.items():
+                    u_tag = "UNIQUE " if is_uniq else ""
+                    lines.append(f"- {iname}: {u_tag}({', '.join(cols)})")
+
+        if fk_rows:
+            fk_lines = [f"- {r[0]} -> {r[1]}.{r[2]}" for r in fk_rows if len(r) >= 3]
+            if fk_lines:
+                lines.append("\n[Foreign Keys]")
+                lines.extend(fk_lines)
+
         return "\n".join(lines)
     except _ConnAuthError as e:
         _audit_log(
@@ -801,8 +906,7 @@ def mssql_run_select_query(
                 for row in batch:
                     total_rows += 1
                     formatted_vals = [
-                        "[REDACTED]" if idx in sensitive_indices else _redact_output(str(val))
-                        for idx, val in enumerate(row)
+                        _format_cell_value(val, is_sensitive=(idx in sensitive_indices)) for idx, val in enumerate(row)
                     ]
                     row_str = ", ".join(formatted_vals)
                     if chars_count + len(row_str) + 1 > MAX_OUTPUT_CHARS:

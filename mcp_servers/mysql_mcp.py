@@ -49,6 +49,8 @@ _REDACT_SECRET_RE = re.compile(
     r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
     r"|authorization|private_key|preshared_key|connectionstring)\b[^\r\n\x00]*"
 )
+_REDACT_URL_RE = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@\"']+:[^\s/@\"']+@")
+_REDACT_PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
 _REDACT_KV_RE = re.compile(
     r"(?i)(\b(?:password|passwd|secret|token|api_key|apikey|client_secret|passphrase|connectionstring)\b"
     r"\s*[:=]\s*)([^\s#;\"',)]+|\"[^\"]*\"|'[^']*')"
@@ -148,10 +150,22 @@ def _clear_creds_cache() -> None:
 
 
 def _redact_output(text: str) -> str:
-    """自動遮罩查詢結果中的敏感機密欄位與鍵值。"""
+    """自動遮罩查詢結果中的敏感機密欄位、連線 URI 帳密與私鑰。"""
     if not text:
         return text
-    return _REDACT_SECRET_RE.sub("[REDACTED]", text)
+    out = _REDACT_PEM_RE.sub("[REDACTED_PRIVATE_KEY]", text)
+    out = _REDACT_URL_RE.sub(r"\1[REDACTED]@", out)
+    return _REDACT_SECRET_RE.sub("[REDACTED]", out)
+
+
+def _format_cell_value(val: object, *, is_sensitive: bool = False) -> str:
+    """格式化單一欄位值：敏感欄強制遮罩、None 轉為 NULL、多行文字遮罩後單行化。"""
+    if is_sensitive:
+        return "[REDACTED]"
+    if val is None:
+        return "NULL"
+    redacted = _redact_output(str(val))
+    return redacted.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
 
 
 def _is_empty_or_null(val: str | None) -> bool:
@@ -201,10 +215,10 @@ def _validate_identifier(value: str, field_name: str) -> str:
 
 
 def _strip_leading_sql_comments(sql: str) -> str:
-    """移除 SQL 開頭的單行 (--) 與多行 (/* */) 註解，以便精準檢查語句前綴。"""
+    """移除 SQL 開頭的單行 (-- 或 #) 與多行 (/* */) 註解，以便精準檢查語句前綴。"""
     s = sql.lstrip()
     while s:
-        if s.startswith("--"):
+        if s.startswith("--") or s.startswith("#"):
             newline_idx = s.find("\n")
             if newline_idx == -1:
                 return ""
@@ -220,7 +234,7 @@ def _strip_leading_sql_comments(sql: str) -> str:
 
 
 def _validate_select_query(query: str) -> str:
-    """驗證 SQL 查詢是否為純唯讀單一 SELECT / WITH 語句。"""
+    """驗證 SQL 查詢是否為純唯讀單一 SELECT / WITH / EXPLAIN 語句。"""
     stripped = _strip_leading_sql_comments(query).strip()
     if not stripped:
         raise ValueError("查詢語句不可為空。")
@@ -230,8 +244,8 @@ def _validate_select_query(query: str) -> str:
     if ";" in without_trailing_semi:
         raise ValueError("基於安全考量，禁止執行包含分號之多重 SQL 語句。")
 
-    if not re.match(r"(?i)^(?:SELECT|WITH)\b", without_trailing_semi):
-        raise ValueError("基於安全考量，僅允許執行以 SELECT 或 WITH 開頭之唯讀查詢。")
+    if not re.match(r"(?i)^(?:EXPLAIN\s+(?:FORMAT\s*=\s*\w+\s+)?)?(?:SELECT|WITH)\b", without_trailing_semi):
+        raise ValueError("基於安全考量，僅允許執行以 SELECT、WITH 或 EXPLAIN SELECT 開頭之唯讀查詢。")
 
     if _FORBIDDEN_MYSQL_RE.search(without_trailing_semi):
         raise ValueError("基於安全考量，查詢包含禁止執行的寫入、鎖定或系統變更關鍵字。")
@@ -309,11 +323,24 @@ def _resolve_connection_params(
     if database:
         database = _validate_identifier(database, "MYSQL_DATABASE")
 
+    norm_env_host = ""
+    if env_host:
+        try:
+            norm_env_host = _validate_host(env_host)
+        except ValueError:
+            norm_env_host = ""
+    norm_env_port = ""
+    if env_port:
+        try:
+            norm_env_port = _validate_port(env_port)
+        except ValueError:
+            norm_env_port = ""
+
     target_auth = (host, port, user)
     cached_auth = (cached_host, cached_port, cached_user)
     env_matches = (
-        (not env_host or env_host == host)
-        and (not env_port or _validate_port(env_port) == port)
+        (not norm_env_host or norm_env_host == host)
+        and (not norm_env_port or norm_env_port == port)
         and (not env_user or env_user == user)
     )
 
@@ -512,15 +539,20 @@ def mysql_list_tables(
                 return f"[ERROR] {e}"
 
         conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
-        target_db = explicit_db or _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
+        target_db = (
+            explicit_db
+            or _clean_param(mysql_database)
+            or _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
+            or _clean_param(os.getenv("MYSQL_DATABASE"))
+        )
         target = _format_audit_target(mysql_host, mysql_port, mysql_user, target_db)
 
         cursor = conn.cursor()
         try:
             if target_db:
                 sql_executed = (
-                    "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-                    "WHERE TABLE_SCHEMA = %s AND TABLE_TYPE = 'BASE TABLE' "
+                    "SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_SCHEMA = %s AND TABLE_TYPE IN ('BASE TABLE', 'VIEW') "
                     "ORDER BY TABLE_NAME;"
                 )
                 cursor.execute(sql_executed, (target_db,))
@@ -534,11 +566,13 @@ def mysql_list_tables(
                 )
                 if not tables:
                     return "資料庫中沒有資料表。"
-                return "\n".join(str(t[0]) for t in tables)
+                return "\n".join(
+                    f"{t[0]} (VIEW)" if len(t) > 1 and str(t[1]).upper() == "VIEW" else str(t[0]) for t in tables
+                )
 
             sql_executed = (
-                "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-                "WHERE TABLE_TYPE = 'BASE TABLE' "
+                "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') "
                 "AND TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys') "
                 "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
             )
@@ -556,7 +590,13 @@ def mysql_list_tables(
 
         if not tables:
             return "資料庫中沒有資料表。"
-        return "\n".join(f"{t[0]}.{t[1]}" if len(t) >= 2 else str(t[0]) for t in tables)
+        out_lines = []
+        for t in tables:
+            base = f"{t[0]}.{t[1]}" if len(t) >= 2 else str(t[0])
+            if len(t) >= 3 and str(t[2]).upper() == "VIEW":
+                base += " (VIEW)"
+            out_lines.append(base)
+        return "\n".join(out_lines)
     except _ConnAuthError as e:
         _audit_log(
             "mysql_list_tables",
@@ -624,10 +664,17 @@ def mysql_describe_schema(
             return f"[ERROR] {e}"
 
         conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
-        target_schema = explicit_schema or _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
+        target_schema = (
+            explicit_schema
+            or _clean_param(mysql_database)
+            or _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
+            or _clean_param(os.getenv("MYSQL_DATABASE"))
+        )
         target = _format_audit_target(mysql_host, mysql_port, mysql_user, target_schema)
 
         cursor = conn.cursor()
+        idx_rows: list[Any] = []
+        fk_rows: list[Any] = []
         try:
             if target_schema:
                 sql_executed = (
@@ -647,6 +694,53 @@ def mysql_describe_schema(
                 )
                 cursor.execute(sql_executed, (target_table,))
             columns = cursor.fetchall()
+
+            if columns:
+                try:
+                    if target_schema:
+                        idx_sql = (
+                            "SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME "
+                            "FROM INFORMATION_SCHEMA.STATISTICS "
+                            "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s "
+                            "ORDER BY INDEX_NAME, SEQ_IN_INDEX;"
+                        )
+                        cursor.execute(idx_sql, (target_schema, target_table))
+                    else:
+                        idx_sql = (
+                            "SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME "
+                            "FROM INFORMATION_SCHEMA.STATISTICS "
+                            "WHERE TABLE_NAME = %s "
+                            "AND TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys') "
+                            "ORDER BY INDEX_NAME, SEQ_IN_INDEX;"
+                        )
+                        cursor.execute(idx_sql, (target_table,))
+                    fetched_idx = cursor.fetchall()
+                    if fetched_idx and fetched_idx != columns:
+                        idx_rows = list(fetched_idx)
+
+                    if target_schema:
+                        fk_sql = (
+                            "SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME "
+                            "FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE "
+                            "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s "
+                            "AND REFERENCED_TABLE_NAME IS NOT NULL "
+                            "ORDER BY ORDINAL_POSITION;"
+                        )
+                        cursor.execute(fk_sql, (target_schema, target_table))
+                    else:
+                        fk_sql = (
+                            "SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME "
+                            "FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE "
+                            "WHERE TABLE_NAME = %s AND REFERENCED_TABLE_NAME IS NOT NULL "
+                            "AND TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys') "
+                            "ORDER BY ORDINAL_POSITION;"
+                        )
+                        cursor.execute(fk_sql, (target_table,))
+                    fetched_fk = cursor.fetchall()
+                    if fetched_fk and fetched_fk != columns:
+                        fk_rows = list(fetched_fk)
+                except Exception:
+                    pass
         finally:
             cursor.close()
 
@@ -672,10 +766,35 @@ def mysql_describe_schema(
             col_name = str(c[0])
             col_type = str(c[1] or "TEXT").upper()
             is_nullable = str(c[2] or "").upper()
+            col_default = c[3]
             col_key = str(c[4] or "").upper()
             pk_tag = " [PK]" if col_key == "PRI" else ""
             null_tag = " NOT NULL" if is_nullable == "NO" else ""
-            lines.append(f"{col_name} ({col_type}{pk_tag}{null_tag})")
+            default_tag = f" DEFAULT {col_default}" if col_default is not None else ""
+            lines.append(f"{col_name} ({col_type}{pk_tag}{null_tag}{default_tag})")
+
+        if idx_rows:
+            idx_map: dict[str, tuple[bool, list[str]]] = {}
+            for r in idx_rows:
+                if len(r) >= 3:
+                    iname = str(r[0])
+                    is_uniq = not bool(int(r[1])) if str(r[1]).isdigit() else not bool(r[1])
+                    cname = str(r[2])
+                    if iname not in idx_map:
+                        idx_map[iname] = (is_uniq, [])
+                    idx_map[iname][1].append(cname)
+            if idx_map:
+                lines.append("\n[Indexes]")
+                for iname, (is_uniq, cols) in idx_map.items():
+                    u_tag = "UNIQUE " if is_uniq else ""
+                    lines.append(f"- {iname}: {u_tag}({', '.join(cols)})")
+
+        if fk_rows:
+            fk_lines = [f"- {r[0]} -> {r[1]}.{r[2]}" for r in fk_rows if len(r) >= 3]
+            if fk_lines:
+                lines.append("\n[Foreign Keys]")
+                lines.extend(fk_lines)
+
         return "\n".join(lines)
     except _ConnAuthError as e:
         _audit_log(
@@ -748,8 +867,7 @@ def mysql_run_select_query(
                 for row in batch:
                     total_rows += 1
                     formatted_vals = [
-                        "[REDACTED]" if idx in sensitive_indices else _redact_output(str(val))
-                        for idx, val in enumerate(row)
+                        _format_cell_value(val, is_sensitive=(idx in sensitive_indices)) for idx, val in enumerate(row)
                     ]
                     row_str = ", ".join(formatted_vals)
                     if chars_count + len(row_str) + 1 > MAX_OUTPUT_CHARS:

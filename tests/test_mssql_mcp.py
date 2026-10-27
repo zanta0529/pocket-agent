@@ -361,3 +361,90 @@ def test_mssql_audit_log_records_queries_and_blocks_without_leaking_password(mon
     assert "[AUDIT] [MCP:mssql] tool=mssql_run_select_query status=BLOCKED" in content
     assert "EXEC xp_cmdshell 'whoami';" in content
     assert "SqlSecret#2026" not in content
+
+
+def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port_tolerance(monkeypatch):
+    """驗證 IPv6 環境變數正規化比對可讀取密碼，且無效的環境變數埠號不會干擾顯式參數。"""
+    monkeypatch.setenv("MSSQL_HOST", "[fe80::1]")
+    monkeypatch.setenv("MSSQL_PORT", "not_a_port")
+    monkeypatch.setenv("MSSQL_USER", "sa_reader")
+    monkeypatch.setenv("MSSQL_PASSWORD", "Ipv6Secret!99")
+
+    with patch("mcp_servers.mssql_mcp._tty_prompt") as mock_prompt:
+        host, port, user, pw, _ = mssql_mcp._resolve_connection_params(
+            mssql_host="fe80::1",
+            mssql_port="1433",
+        )
+        assert host == "fe80::1"
+        assert port == "1433"
+        assert user == "sa_reader"
+        assert pw == "Ipv6Secret!99"
+        mock_prompt.assert_not_called()
+
+
+def test_redact_url_pem_and_format_cell_null_multiline():
+    """驗證 URI 帳密、PEM 私鑰遮罩，以及 NULL 與多行文字單行化格式。"""
+    uri_text = "conn=mssql://sa:TopSecret123@10.0.0.5:1433/prod"
+    redacted_uri = mssql_mcp._redact_output(uri_text)
+    assert "TopSecret123" not in redacted_uri
+    assert "mssql://[REDACTED]@10.0.0.5:1433/prod" in redacted_uri
+
+    pem_text = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
+    assert mssql_mcp._redact_output(pem_text) == "[REDACTED_PRIVATE_KEY]"
+
+    assert mssql_mcp._format_cell_value(None) == "NULL"
+    assert mssql_mcp._format_cell_value("raw_secret", is_sensitive=True) == "[REDACTED]"
+    multiline_cell = "header_ok\npassword=MySecret789\nfooter_ok"
+    formatted = mssql_mcp._format_cell_value(multiline_cell)
+    assert "\n" not in formatted
+    assert "MySecret789" not in formatted
+    assert formatted == "header_ok\\n[REDACTED]\\nfooter_ok"
+
+
+def test_mssql_list_tables_marks_views(monkeypatch):
+    """驗證 mssql_list_tables 支援顯示檢視表並標註 (VIEW)。"""
+    _set_full_mssql_env(monkeypatch)
+    conn, _ = _make_fake_conn(
+        rows=[
+            ("dbo", "Users", "BASE TABLE"),
+            ("dbo", "v_ActiveUsers", "VIEW"),
+            ("sales", "v_MonthlySummary", "VIEW"),
+        ]
+    )
+    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+        out = mssql_mcp.mssql_list_tables()
+
+    assert "Users" in out
+    assert "v_ActiveUsers (VIEW)" in out
+    assert "sales.v_MonthlySummary (VIEW)" in out
+
+
+def test_mssql_describe_schema_includes_length_precision_default_indexes_and_fks(monkeypatch):
+    """驗證 mssql_describe_schema 輸出欄位長度/精度、預設值、索引與外鍵。"""
+    _set_full_mssql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    col_rows = [
+        ("id", "int", "NO", None, 1, None, 10, 0),
+        ("email", "nvarchar", "NO", None, 0, 255, None, None),
+        ("notes", "nvarchar", "YES", "('')", 0, -1, None, None),
+        ("amount", "decimal", "NO", "((0.00))", 0, None, 18, 2),
+    ]
+    idx_rows = [
+        ("UQ_Orders_Email", 1, "email"),
+    ]
+    fk_rows = [
+        ("user_id", "Users", "id"),
+    ]
+    cursor.fetchall.side_effect = [col_rows, idx_rows, fk_rows]
+
+    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+        out = mssql_mcp.mssql_describe_schema("dbo.Orders")
+
+    assert "id (INT [PK] NOT NULL)" in out
+    assert "email (NVARCHAR(255) NOT NULL)" in out
+    assert "notes (NVARCHAR(MAX) DEFAULT (''))" in out
+    assert "amount (DECIMAL(18,2) NOT NULL DEFAULT ((0.00)))" in out
+    assert "[Indexes]" in out
+    assert "- UQ_Orders_Email: UNIQUE (email)" in out
+    assert "[Foreign Keys]" in out
+    assert "- user_id -> Users.id" in out
