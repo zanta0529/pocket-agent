@@ -1423,11 +1423,14 @@ def rhel_cron_and_timers(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """提供已載入 timer 與系統 crontab 項目計數，不回傳名稱、帳號或執行命令。"""
+    """查詢 systemd timers 排程清單（含上次與下次觸發時間、對應服務與啟用狀態）及系統 crontab 項目計數。"""
     cmd = (
-        "echo '=== Loaded Timer Count ===' && "
-        "systemctl list-units --type=timer --all --no-pager --no-legend "
-        "| awk 'END {print \"loaded_timers=\" NR}'; "
+        "echo '=== Systemd Timers Schedule (NEXT | LEFT | LAST | PASSED | UNIT | ACTIVATES) ===' && "
+        "systemctl list-timers --all --no-pager --no-legend "
+        '| awk \'NR <= 100 {gsub(/@[^.[:space:]]+/, "@*"); print} END {print "loaded_timers=" NR}\'; '
+        "echo '=== Systemd Timer Unit Files (UNIT FILE | STATE | VENDOR PRESET) ===' && "
+        "systemctl list-unit-files --type=timer --no-pager --no-legend "
+        '| awk \'NR <= 100 {gsub(/@[^.[:space:]]+/, "@*"); print} END {print "timer_unit_files=" NR}\'; '
         "echo '=== System Crontab Entry Count ===' && "
         "awk '/^[[:space:]]*($|#)/ {next} "
         "/^[[:space:]]*[A-Za-z_][A-Za-z_0-9]*[[:space:]]*=/ {next} "

@@ -710,6 +710,14 @@ def test_diagnostic_commands_enriched_sections(monkeypatch):
         cmd_proc = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "|| echo '查無符合條件的行程'" in cmd_proc
 
+        rhel_mcp.rhel_cron_and_timers()
+        cmd_timers = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "systemctl list-timers --all --no-pager --no-legend" in cmd_timers
+        assert "systemctl list-unit-files --type=timer --no-pager --no-legend" in cmd_timers
+        assert 'gsub(/@[^.[:space:]]+/, "@*")' in cmd_timers
+        assert "loaded_timers=" in cmd_timers
+        assert "system_crontab_entries=" in cmd_timers
+
 
 def test_ipv6_env_host_matches_password_and_known_hosts_prefix_safety(monkeypatch, tmp_path):
     """驗證 IPv6 環境變數正規化比對，以及 known_hosts 前綴重疊時仍能精確同步且不黏行。"""
