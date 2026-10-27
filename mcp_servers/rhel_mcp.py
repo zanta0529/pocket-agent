@@ -843,11 +843,14 @@ def rhel_system_overview(
         "echo '=== OS Release ===' && cat /etc/redhat-release /etc/os-release 2>/dev/null | sed -n '1,15p'; "
         "echo '=== Kernel & Uptime ===' && uname -srm && uptime && "
         "(rpm -q kernel --last 2>/dev/null | sed -n '1,5p' || true) && "
+        "(grubby --default-kernel 2>/dev/null || true) && "
         "(timedatectl show --property=NTPSynchronized,NTP,Timezone 2>/dev/null || true) && "
         "(chronyc tracking 2>/dev/null || true) && "
         "(tuned-adm active 2>/dev/null || true); "
-        "echo '=== Pressure Stall Information (PSI) ===' && "
-        "(head -n 2 /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io 2>/dev/null || true); "
+        "echo '=== CPU / IO Wait & Pressure (vmstat / PSI) ===' && "
+        "(vmstat -w 2>/dev/null || true) && "
+        "(head -n 2 /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io 2>/dev/null "
+        "|| echo 'PSI 未啟用 (預設需核心參數 psi=1)'); "
         "echo '=== Memory (MB) ===' && free -m; "
         "echo '=== Top Processes (by CPU) ===' && "
         "ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu | sed -n '1,11p'"
@@ -1101,10 +1104,10 @@ def rhel_read_config(
         )
         return "[ERROR] 安全摘要模式僅支援 /etc/selinux/config 的 SELINUX 欄位，不讀取其他設定檔。"
     cmd = (
-        _remote_path_guard(file_path, directory=False) + "awk -F= '/^[[:space:]]*SELINUX[[:space:]]*=/ {"
+        _remote_path_guard(file_path, directory=False) + "awk -F= -- '/^[[:space:]]*SELINUX[[:space:]]*=/ {"
         'v=$2; gsub(/[[:space:]]/,"",v); '
         'if (v == "enforcing" || v == "permissive" || v == "disabled") print "SELINUX=" v'
-        '}\' -- "$real"'
+        '}\' "$real"'
     )
     result = _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_read_config")
     allowed = {"SELINUX=enforcing", "SELINUX=permissive", "SELINUX=disabled"}

@@ -141,7 +141,8 @@ def test_read_config_returns_only_approved_enum(monkeypatch):
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
         assert rhel_mcp.rhel_read_config("/etc/selinux/config") == "SELINUX=enforcing"
         remote_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
-        assert "awk -F=" in remote_cmd
+        assert "awk -F= --" in remote_cmd
+        assert '\' -- "$real"' not in remote_cmd
         assert "head -c" not in remote_cmd
     with patch("mcp_servers.rhel_mcp._capture_ssh") as mock_run:
         assert rhel_mcp.rhel_read_config("/usr/share/nginx/nginx.conf").startswith("[ERROR]")
@@ -674,9 +675,11 @@ def test_diagnostic_commands_enriched_sections(monkeypatch):
         rhel_mcp.rhel_system_overview()
         cmd_overview = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "rpm -q kernel --last" in cmd_overview
+        assert "grubby --default-kernel" in cmd_overview
         assert "timedatectl show --property=NTPSynchronized,NTP,Timezone" in cmd_overview
         assert "chronyc tracking" in cmd_overview
         assert "tuned-adm active" in cmd_overview
+        assert "vmstat -w" in cmd_overview
         assert "/proc/pressure/cpu" in cmd_overview
 
         rhel_mcp.rhel_storage_and_fs()
