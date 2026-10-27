@@ -124,6 +124,67 @@ _REDACT_URL_RE = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+:[^\s/@]+@")
 MAX_CAPTURE_BYTES = 1024 * 1024  # 1 MB 安全串流緩衝上限，兼顧長日誌容錯與防爆記憶體 DoS
 
 
+def _get_audit_log_path() -> Path:
+    """解析集中化稽核日誌 (agent.log) 路徑。"""
+    env_log = (os.getenv("POCKET_AGENT_LOG_FILE") or "").strip()
+    if env_log:
+        return Path(env_log).expanduser().resolve()
+    try:
+        from pocket_agent.system.paths import log_dir
+
+        return log_dir() / "agent.log"
+    except ImportError:
+        src_dir = Path(__file__).resolve().parent.parent / "src"
+        if src_dir.is_dir() and str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+            try:
+                from pocket_agent.system.paths import log_dir
+
+                return log_dir() / "agent.log"
+            except ImportError:
+                pass
+        return Path.home() / ".pocket-agent" / "logs" / "agent.log"
+
+
+def _format_audit_target(host: str = "", port: str = "", user: str = "") -> str:
+    h = host.strip() or _RUNTIME_CREDS.get("RHEL_HOST", "") or (os.getenv("RHEL_HOST") or "").strip() or "?"
+    p = port.strip() or _RUNTIME_CREDS.get("RHEL_SSH_PORT", "") or (os.getenv("RHEL_SSH_PORT") or "").strip() or "22"
+    u = user.strip() or _RUNTIME_CREDS.get("RHEL_SSH_USER", "") or (os.getenv("RHEL_SSH_USER") or "").strip() or "?"
+    return f"{u}@{h}:{p}"
+
+
+def _audit_log(
+    tool_name: str,
+    command: str,
+    *,
+    target: str = "",
+    status: str = "OK",
+    detail: str = "",
+) -> None:
+    """將 MCP 工具執行的遠端指令與敏感操作寫入 Pocket Agent 集中化日誌 (agent.log) 供稽核使用。"""
+    try:
+        log_path = _get_audit_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        now_t = time.time()
+        lt = time.localtime(now_t)
+        ms = int((now_t - int(now_t)) * 1000)
+        ts = f"{time.strftime('%Y-%m-%d %H:%M:%S', lt)},{ms:03d}"
+        safe_cmd = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", command).splitlines()).strip()
+        safe_target = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", target).splitlines()).strip()
+        safe_detail = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", detail).splitlines()).strip()
+        parts = [f"{ts} [AUDIT] [MCP:rhel-ops] tool={tool_name} status={status}"]
+        if safe_target:
+            parts.append(f"target={safe_target}")
+        if safe_cmd:
+            parts.append(f"command={safe_cmd!r}")
+        if safe_detail:
+            parts.append(f"detail={safe_detail!r}")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(" ".join(parts) + "\n")
+    except Exception:
+        pass
+
+
 def _validate_host(value: str) -> str:
     clean = value.strip()
     if not clean or clean.startswith("-"):
@@ -646,23 +707,40 @@ def _run_remote(
     ssh_user: str = "",
     ssh_password: str = "",
     ssh_key_path: str = "",
+    *,
+    tool_name: str = "rhel_remote",
 ) -> str:
     try:
         ssh_args, password, timeout = _build_ssh_args(
             _diagnostic_command(remote_cmd), ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path
         )
+        target_str = _format_audit_target(ssh_host, ssh_port, ssh_user)
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         proc = _run_with_askpass(ssh_args, password, timeout, creationflags)
 
         if proc.returncode == 255:
             stderr_lower = (proc.stderr or "").lower()
             if "host key verification failed" in stderr_lower or "known_hosts" in stderr_lower:
+                _audit_log(
+                    tool_name,
+                    remote_cmd,
+                    target=target_str,
+                    status="HOST_KEY_MISMATCH",
+                    detail="Host key verification failed (exit 255)",
+                )
                 return (
                     "[ERROR] [HOST_KEY_MISMATCH] 目標主機金鑰驗證失敗 (exit 255)\n"
                     "提示：目標主機公鑰與專屬已知清單紀錄不符（可能主機金鑰曾變更或存在安全風險），連線已被拒絕。"
                 )
 
             if "permission denied" in stderr_lower:
+                _audit_log(
+                    tool_name,
+                    remote_cmd,
+                    target=target_str,
+                    status="AUTH_FAIL",
+                    detail="Permission denied (exit 255)",
+                )
                 _RUNTIME_CREDS.clear()
                 global _CREDS_UPDATED_AT
                 _CREDS_UPDATED_AT = 0.0
@@ -671,6 +749,13 @@ def _run_remote(
                     "提示：請確認帳號與密碼/金鑰是否正確，且目標主機已啟用對應認證方式。"
                 )
 
+            _audit_log(
+                tool_name,
+                remote_cmd,
+                target=target_str,
+                status="CONN_FAIL",
+                detail="SSH connection or authentication failed (exit 255)",
+            )
             return (
                 "[ERROR] [CONN_AUTH] 遠端 SSH 連線或認證失敗 (exit 255)\n"
                 "提示：請確認網路連線、目標主機防火牆與 SSH 連接埠，或檢查已知主機清單。"
@@ -679,18 +764,55 @@ def _run_remote(
         combined = (proc.stdout or "").strip()
 
         if proc.returncode != 0 and not combined:
+            _audit_log(
+                tool_name,
+                remote_cmd,
+                target=target_str,
+                status="ERROR",
+                detail=f"exit {proc.returncode}",
+            )
             return f"[ERROR] 遠端執行失敗 (exit {proc.returncode})"
 
         if proc.returncode != 0:
+            _audit_log(
+                tool_name,
+                remote_cmd,
+                target=target_str,
+                status="PARTIAL_ERROR",
+                detail=f"exit {proc.returncode}",
+            )
             combined = f"[ERROR] 遠端指令部分或全部失敗 (exit {proc.returncode})\n{combined}"
+        else:
+            _audit_log(tool_name, remote_cmd, target=target_str, status="OK")
         return _redact_and_truncate(combined)
-    except ValueError:
+    except ValueError as e:
+        _audit_log(
+            tool_name,
+            remote_cmd,
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
         _RUNTIME_CREDS.clear()
         _CREDS_UPDATED_AT = 0.0
         return "[ERROR] [CONN_AUTH] 連線參數或安全檢查失敗，請確認設定。"
     except subprocess.TimeoutExpired:
+        _audit_log(
+            tool_name,
+            remote_cmd,
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="TIMEOUT",
+            detail="SSH command execution timed out",
+        )
         return "[ERROR] SSH 遠端指令執行逾時，已中止連線。"
     except Exception:
+        _audit_log(
+            tool_name,
+            remote_cmd,
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="ERROR",
+            detail="SSH execution exception",
+        )
         return "[ERROR] SSH 執行或安全擷取失敗，未回傳原始例外內容。"
 
 
@@ -710,7 +832,7 @@ def rhel_system_overview(
         "echo '=== Top Processes (by CPU) ===' && "
         "ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu | sed -n '1,11p'"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_system_overview")
 
 
 @mcp.tool()
@@ -727,7 +849,7 @@ def rhel_storage_and_fs(
         "echo '=== Inode Usage ===' && df -i -x tmpfs -x devtmpfs; "
         "echo '=== Block Devices ===' && lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,UUID"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_storage_and_fs")
 
 
 @mcp.tool()
@@ -745,7 +867,7 @@ def rhel_network_status(
         "echo '=== DNS Resolver ===' && cat /etc/resolv.conf 2>/dev/null; "
         "echo '=== Listening Ports ===' && ss -tuln"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_network_status")
 
 
 @mcp.tool()
@@ -765,11 +887,26 @@ def rhel_service_status(
             f"systemctl list-units {state_flag} --no-pager --no-legend --plain "
             "| awk 'END {print \"matching_units=\" NR}'"
         )
-        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+        return _run_remote(
+            cmd,
+            ssh_host,
+            ssh_port,
+            ssh_user,
+            ssh_password,
+            ssh_key_path,
+            tool_name="rhel_service_status",
+        )
 
     try:
         safe_unit = _validate_identifier(service_name, "service_name")
     except ValueError as e:
+        _audit_log(
+            "rhel_service_status",
+            f"service_name={service_name!r}",
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="BLOCKED",
+            detail=str(e),
+        )
         return _redact_and_truncate(f"[ERROR] {e}")
 
     quoted = shlex.quote(safe_unit)
@@ -777,7 +914,7 @@ def rhel_service_status(
         f"systemctl show {quoted} --no-pager "
         "--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus,Result"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_service_status")
 
 
 @mcp.tool()
@@ -795,6 +932,13 @@ def rhel_query_journal(
 ) -> str:
     """查詢有界 journald 等級計數；不回傳訊息原文。grep 暫不支援，lines 為樣本上限。"""
     if grep.strip():
+        _audit_log(
+            "rhel_query_journal",
+            f"unit={unit!r} grep={grep!r}",
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="BLOCKED",
+            detail="grep parameter rejected in safe summary mode",
+        )
         return "[ERROR] 安全摘要模式不接受訊息關鍵字；請使用 unit、priority 與 since 篩選。"
     parts = ["journalctl", "--no-pager", "--output=json", "--output-fields=PRIORITY", "--quiet"]
 
@@ -802,6 +946,13 @@ def rhel_query_journal(
         try:
             safe_unit = _validate_identifier(unit, "unit")
         except ValueError as e:
+            _audit_log(
+                "rhel_query_journal",
+                f"unit={unit!r}",
+                target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+                status="BLOCKED",
+                detail=str(e),
+            )
             return _redact_and_truncate(f"[ERROR] {e}")
         parts.extend(["-u", shlex.quote(safe_unit)])
 
@@ -809,18 +960,40 @@ def rhel_query_journal(
     prio = prio_aliases.get(priority.strip().lower(), priority.strip().lower())
     if prio and prio not in ("all", "none"):
         if prio not in _VALID_PRIORITIES:
+            _audit_log(
+                "rhel_query_journal",
+                f"priority={priority!r}",
+                target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+                status="BLOCKED",
+                detail="Invalid priority",
+            )
             return f"[ERROR] 非法的 priority 參數（允許值：{sorted(_VALID_PRIORITIES)}）"
         parts.extend(["-p", shlex.quote(prio)])
 
     since_clean = since.strip()
     if since_clean:
         if not _SINCE_RE.match(since_clean) or len(since_clean) > 40:
+            _audit_log(
+                "rhel_query_journal",
+                f"since={since!r}",
+                target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+                status="BLOCKED",
+                detail="Invalid since format",
+            )
             return "[ERROR] 非法的 since 時間格式（僅允許安全字元集且限 40 字元以內）"
         parts.extend(["--since", shlex.quote(since_clean)])
 
     safe_lines = max(1, min(int(lines or 50), 200))
     parts.extend(["-n", str(safe_lines)])
-    result = _run_remote(" ".join(parts), ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    result = _run_remote(
+        " ".join(parts),
+        ssh_host,
+        ssh_port,
+        ssh_user,
+        ssh_password,
+        ssh_key_path,
+        tool_name="rhel_query_journal",
+    )
     if result.startswith("[ERROR]"):
         return "[ERROR] 日誌摘要查詢失敗；可能缺少權限或不支援指定的 journalctl 選項。"
     counts = {str(level): 0 for level in range(8)}
@@ -856,7 +1029,7 @@ def rhel_security_status(
         "echo '=== Security Updates (dnf) ===' && "
         "echo '[UNSUPPORTED] 安全更新查詢已停用（DNF 快取存取存在潛在副作用）'"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_security_status")
 
 
 @mcp.tool()
@@ -871,6 +1044,13 @@ def rhel_read_config(
 ) -> str:
     """僅提供 /etc/selinux/config 的 SELINUX 列舉值；不提供任意設定檔原文。"""
     if file_path != "/etc/selinux/config":
+        _audit_log(
+            "rhel_read_config",
+            f"file_path={file_path!r}",
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="BLOCKED",
+            detail="Only /etc/selinux/config is permitted",
+        )
         return "[ERROR] 安全摘要模式僅支援 /etc/selinux/config 的 SELINUX 欄位，不讀取其他設定檔。"
     cmd = (
         _remote_path_guard(file_path, directory=False) + "awk -F= '/^[[:space:]]*SELINUX[[:space:]]*=/ {"
@@ -878,7 +1058,7 @@ def rhel_read_config(
         'if (v == "enforcing" || v == "permissive" || v == "disabled") print "SELINUX=" v'
         '}\' -- "$real"'
     )
-    result = _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    result = _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_read_config")
     allowed = {"SELINUX=enforcing", "SELINUX=permissive", "SELINUX=disabled"}
     if result not in allowed:
         return "[ERROR] 無法取得唯一且有效的 SELINUX 設定，已捨棄內容。"
@@ -897,6 +1077,13 @@ def rhel_list_directory(
     ssh_key_path: str = "",
 ) -> str:
     """目錄列舉暫停提供；保留介面，但不讀取或回傳檔名及符號連結目標。"""
+    _audit_log(
+        "rhel_list_directory",
+        f"dir_path={dir_path!r}",
+        target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+        status="BLOCKED",
+        detail="Directory listing disabled in safe summary mode",
+    )
     return "[ERROR] 安全摘要模式不提供目錄列舉；請使用特定的系統診斷工具。"
 
 
@@ -913,6 +1100,13 @@ def rhel_selinux_context(
     try:
         safe_path = _validate_config_path(target_path)
     except ValueError as e:
+        _audit_log(
+            "rhel_selinux_context",
+            f"target_path={target_path!r}",
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="BLOCKED",
+            detail=str(e),
+        )
         return _redact_and_truncate(f"[ERROR] {e}")
 
     quoted_path = shlex.quote(safe_path)
@@ -921,7 +1115,7 @@ def rhel_selinux_context(
         "echo '=== Expected Context (matchpathcon) ===' && "
         f"(matchpathcon {quoted_path} 2>/dev/null || echo '無 matchpathcon 紀錄或工具未安裝')"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_selinux_context")
 
 
 @mcp.tool()
@@ -944,6 +1138,13 @@ def rhel_process_inspect(
         try:
             safe_pid = _validate_pid(pid)
         except ValueError as e:
+            _audit_log(
+                "rhel_process_inspect",
+                f"pid={pid!r}",
+                target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+                status="BLOCKED",
+                detail=str(e),
+            )
             return _redact_and_truncate(f"[ERROR] {e}")
         cmd = (
             f"echo '=== Process Detail (PID: {safe_pid}) ===' && "
@@ -954,7 +1155,15 @@ def rhel_process_inspect(
             "echo '=== Process SELinux Label ===' && "
             f"(ps -q {safe_pid} -o pid,user,label,comm 2>/dev/null || echo '無 SELinux 標籤資訊')"
         )
-        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+        return _run_remote(
+            cmd,
+            ssh_host,
+            ssh_port,
+            ssh_user,
+            ssh_password,
+            ssh_key_path,
+            tool_name="rhel_process_inspect",
+        )
 
     cols = "pid,ppid,user,%cpu,%mem,stat,label,comm" if show_selinux else "pid,ppid,user,%cpu,%mem,stat,comm"
 
@@ -962,16 +1171,38 @@ def rhel_process_inspect(
         try:
             safe_search = _validate_search_pattern(search, "search")
         except ValueError as e:
+            _audit_log(
+                "rhel_process_inspect",
+                f"search={search!r}",
+                target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+                status="BLOCKED",
+                detail=str(e),
+            )
             return _redact_and_truncate(f"[ERROR] {e}")
         quoted_search = shlex.quote(safe_search)
         cmd = (
             f"echo '=== Search Processes matching {quoted_search} ===' && "
             f"ps -eo {cols} | grep -i -- {quoted_search} | grep -v grep | sed -n '1,{safe_lines}p'"
         )
-        return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+        return _run_remote(
+            cmd,
+            ssh_host,
+            ssh_port,
+            ssh_user,
+            ssh_password,
+            ssh_key_path,
+            tool_name="rhel_process_inspect",
+        )
 
     sort_clean = sort_by.strip().lower()
     if sort_clean not in _VALID_SORT_KEYS:
+        _audit_log(
+            "rhel_process_inspect",
+            f"sort_by={sort_by!r}",
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="BLOCKED",
+            detail="Invalid sort_by parameter",
+        )
         return "[ERROR] 非法的 sort_by 參數（僅允許 'cpu'、'mem' 或 'memory'）。"
 
     sort_col = "-%mem" if sort_clean in ("mem", "memory") else "-%cpu"
@@ -979,7 +1210,7 @@ def rhel_process_inspect(
         f"echo '=== Top Processes (sorted by {sort_clean}) ===' && "
         f"ps -eo {cols} --sort={sort_col} | sed -n '1,{safe_lines}p'"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_process_inspect")
 
 
 @mcp.tool()
@@ -998,6 +1229,13 @@ def rhel_network_connections(
     """利用 ss (Socket Statistics) 結構化探查網路連線狀態（支援 TCP/UDP 協議、狀態過濾、特定 Port 與行程關聯）"""
     proto_clean = protocol.strip().lower()
     if proto_clean not in {"all", "tcp", "udp"}:
+        _audit_log(
+            "rhel_network_connections",
+            f"protocol={protocol!r}",
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="BLOCKED",
+            detail="Invalid protocol parameter",
+        )
         return "[ERROR] 非法的 protocol 參數（僅允許 all、tcp、udp）。"
     proto_flag = "-t" if proto_clean == "tcp" else "-u" if proto_clean == "udp" else "-tu"
     proc_flag = " -p" if show_process else ""
@@ -1005,6 +1243,13 @@ def rhel_network_connections(
     state_clean = state.strip().lower()
     valid_states = {"all", "listening", "established", "time-wait", "close-wait", "syn-sent", "syn-recv"}
     if state_clean not in valid_states:
+        _audit_log(
+            "rhel_network_connections",
+            f"state={state!r}",
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="BLOCKED",
+            detail="Invalid state parameter",
+        )
         return f"[ERROR] 非法的 state 參數（允許值：{sorted(valid_states)}）"
 
     if state_clean == "listening":
@@ -1019,12 +1264,27 @@ def rhel_network_connections(
         try:
             safe_port = _validate_port(port)
         except ValueError as e:
+            _audit_log(
+                "rhel_network_connections",
+                f"port={port!r}",
+                target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+                status="BLOCKED",
+                detail=str(e),
+            )
             return _redact_and_truncate(f"[ERROR] {e}")
         filter_expr = f" sport = :{safe_port} or dport = :{safe_port}"
 
     safe_lines = max(5, min(int(max_lines or 60), 150))
     cmd = f"{base_cmd}{filter_expr} | sed -n '1,{safe_lines}p'"
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(
+        cmd,
+        ssh_host,
+        ssh_port,
+        ssh_user,
+        ssh_password,
+        ssh_key_path,
+        tool_name="rhel_network_connections",
+    )
 
 
 @mcp.tool()
@@ -1041,6 +1301,13 @@ def rhel_package_info(
     try:
         safe_pkg = _validate_identifier(package_name, "package_name")
     except ValueError as e:
+        _audit_log(
+            "rhel_package_info",
+            f"package_name={package_name!r}",
+            target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+            status="BLOCKED",
+            detail=str(e),
+        )
         return _redact_and_truncate(f"[ERROR] {e}")
 
     quoted = shlex.quote(safe_pkg)
@@ -1061,7 +1328,7 @@ def rhel_package_info(
             "echo '=== Changelog Summary (recent) ===' && "
             f"rpm -q --changelog {quoted} 2>/dev/null | sed -n '1,20p'"
         )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_package_info")
 
 
 @mcp.tool()
@@ -1073,6 +1340,13 @@ def rhel_container_status(
     ssh_key_path: str = "",
 ) -> str:
     """探查 RHEL 容器執行環境；在未證明無副作用前暫停提供。"""
+    _audit_log(
+        "rhel_container_status",
+        "container_status",
+        target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+        status="BLOCKED",
+        detail="Container status disabled in safe summary mode",
+    )
     return "[ERROR] [UNSUPPORTED] 安全摘要模式下暫停提供容器狀態探查（尚未證明命令無副作用）。"
 
 
@@ -1094,7 +1368,7 @@ def rhel_cron_and_timers(
         "/^[[:space:]]*[A-Za-z_][A-Za-z_0-9]*[[:space:]]*=/ {next} "
         '{n++} END {print "system_crontab_entries=" n+0}\' /etc/crontab'
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_cron_and_timers")
 
 
 @mcp.tool()
@@ -1115,7 +1389,7 @@ def rhel_hardware_info(
         "echo '=== Memory & Swap Details ===' && "
         "(free -h && grep -E '^(MemTotal|MemFree|MemAvailable|SwapTotal|SwapFree)' /proc/meminfo)"
     )
-    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+    return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_hardware_info")
 
 
 if __name__ == "__main__":

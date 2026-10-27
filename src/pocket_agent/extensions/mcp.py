@@ -307,9 +307,12 @@ class MCPManager:
         raw_env = spec.get("env")
         env_dict: dict[str, str] | None = None
         if raw_env or is_py_cmd:
+            from pocket_agent.system.paths import log_dir
+
             env_dict = dict(os.environ)
             env_dict.setdefault("PYTHONUTF8", "1")
             env_dict.setdefault("PYTHONIOENCODING", "utf-8")
+            env_dict.setdefault("POCKET_AGENT_LOG_FILE", str(log_dir() / "agent.log"))
             if isinstance(raw_env, dict):
                 for k, v in raw_env.items():
                     if v is not None:

@@ -13,8 +13,9 @@ from pocket_agent.extensions.mcp import MCPManager
 
 
 @pytest.fixture(autouse=True)
-def _clean_rhel_env_and_cache(monkeypatch):
+def _clean_rhel_env_and_cache(monkeypatch, tmp_path):
     rhel_mcp._RUNTIME_CREDS.clear()
+    monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     for key in (
         "RHEL_HOST",
         "RHEL_SSH_PORT",
@@ -590,3 +591,22 @@ def test_mcp_logs_metadata_without_arguments_or_results(caplog):
     assert "synthetic-result-value" not in caplog.text
     assert "synthetic-argument-value" not in caplog.text
     assert "rhel_summary" in caplog.text
+
+
+def test_rhel_audit_log_records_commands_and_blocks_without_leaking_password(monkeypatch, tmp_path):
+    """驗證 rhel_mcp.py 將執行的遠端指令與攔截事件寫入集中化 agent.log，且絕不洩漏密碼。"""
+    _set_full_creds(monkeypatch)
+    log_file = tmp_path / "agent.log"
+    fake_proc = SimpleNamespace(returncode=0, stdout="Linux 5.14", stderr="")
+
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc):
+        rhel_mcp.rhel_system_overview()
+        rhel_mcp.rhel_read_config("/etc/shadow")
+
+    content = log_file.read_text(encoding="utf-8")
+    assert "[AUDIT] [MCP:rhel-ops] tool=rhel_system_overview status=OK" in content
+    assert "target=mcp-inspector@192.168.1.10:22" in content
+    assert "uname -srm" in content
+    assert "[AUDIT] [MCP:rhel-ops] tool=rhel_read_config status=BLOCKED" in content
+    assert "/etc/shadow" in content
+    assert "SecretPass!123" not in content

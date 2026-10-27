@@ -20,6 +20,7 @@ import re
 import sys
 import time
 import warnings
+from pathlib import Path
 from typing import Any
 
 try:
@@ -48,6 +49,10 @@ _REDACT_SECRET_RE = re.compile(
     r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
     r"|authorization|private_key|preshared_key|connectionstring)\b[^\r\n\x00]*"
 )
+_REDACT_KV_RE = re.compile(
+    r"(?i)(\b(?:password|passwd|secret|token|api_key|apikey|client_secret|passphrase|connectionstring)\b"
+    r"\s*[:=]\s*)([^\s#;\"',)]+|\"[^\"]*\"|'[^']*')"
+)
 _SENSITIVE_COL_RE = re.compile(
     r"(?i)(?:password|passwd|secret|token|passphrase|api[_-]?key"
     r"|private[_-]?key|preshared[_-]?key|credential|connectionstring)"
@@ -64,6 +69,68 @@ _FORBIDDEN_MYSQL_RE = re.compile(
 
 class _ConnAuthError(Exception):
     """表示連線參數驗證失敗、網路無法連線或資料庫帳號密碼認證失敗。"""
+
+
+def _get_audit_log_path() -> Path:
+    """解析集中化稽核日誌 (agent.log) 路徑。"""
+    env_log = (os.getenv("POCKET_AGENT_LOG_FILE") or "").strip()
+    if env_log:
+        return Path(env_log).expanduser().resolve()
+    try:
+        from pocket_agent.system.paths import log_dir
+
+        return log_dir() / "agent.log"
+    except ImportError:
+        src_dir = Path(__file__).resolve().parent.parent / "src"
+        if src_dir.is_dir() and str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+            try:
+                from pocket_agent.system.paths import log_dir
+
+                return log_dir() / "agent.log"
+            except ImportError:
+                pass
+        return Path.home() / ".pocket-agent" / "logs" / "agent.log"
+
+
+def _format_audit_target(host: str = "", port: str = "", user: str = "", db: str = "") -> str:
+    h = host.strip() or _RUNTIME_CREDS.get("MYSQL_HOST", "") or _clean_param(os.getenv("MYSQL_HOST")) or "?"
+    p = port.strip() or _RUNTIME_CREDS.get("MYSQL_PORT", "") or _clean_param(os.getenv("MYSQL_PORT")) or "3306"
+    u = user.strip() or _RUNTIME_CREDS.get("MYSQL_USER", "") or _clean_param(os.getenv("MYSQL_USER")) or "?"
+    d = db.strip() or _RUNTIME_CREDS.get("MYSQL_DATABASE", "") or _clean_param(os.getenv("MYSQL_DATABASE")) or "*"
+    return f"{u}@{h}:{p}/{d}"
+
+
+def _audit_log(
+    tool_name: str,
+    command: str,
+    *,
+    target: str = "",
+    status: str = "OK",
+    detail: str = "",
+) -> None:
+    """將 MCP 工具執行的 SQL 指令與敏感操作寫入 Pocket Agent 集中化日誌 (agent.log) 供稽核使用。"""
+    try:
+        log_path = _get_audit_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        now_t = time.time()
+        lt = time.localtime(now_t)
+        ms = int((now_t - int(now_t)) * 1000)
+        ts = f"{time.strftime('%Y-%m-%d %H:%M:%S', lt)},{ms:03d}"
+        safe_cmd = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", command).splitlines()).strip()
+        safe_target = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", target).splitlines()).strip()
+        safe_detail = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", detail).splitlines()).strip()
+        parts = [f"{ts} [AUDIT] [MCP:mysql] tool={tool_name} status={status}"]
+        if safe_target:
+            parts.append(f"target={safe_target}")
+        if safe_cmd:
+            parts.append(f"command={safe_cmd!r}")
+        if safe_detail:
+            parts.append(f"detail={safe_detail!r}")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(" ".join(parts) + "\n")
+    except Exception:
+        pass
 
 
 def _check_creds_ttl() -> None:
@@ -380,19 +447,38 @@ def mysql_list_databases(
 ) -> str:
     """列出遠端 MySQL/MariaDB 伺服器上目前帳號可存取的所有資料庫 (Databases/Schemas) 清單"""
     conn = None
+    sql = "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME;"
     try:
         conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
+        target = _format_audit_target(mysql_host, mysql_port, mysql_user, mysql_database)
         cursor = conn.cursor()
         try:
-            cursor.execute("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME;")
+            cursor.execute(sql)
             dbs = cursor.fetchall()
         finally:
             cursor.close()
 
+        _audit_log("mysql_list_databases", sql, target=target, status="OK", detail=f"databases={len(dbs)}")
         if not dbs:
             return "查無可見的資料庫。"
         return "\n".join(str(row[0]) for row in dbs)
+    except _ConnAuthError as e:
+        _audit_log(
+            "mysql_list_databases",
+            sql,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, mysql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
+        return f"[ERROR] {e}"
     except Exception as e:
+        _audit_log(
+            "mysql_list_databases",
+            sql,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, mysql_database),
+            status="ERROR",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
     finally:
         _close_safely(conn)
@@ -409,42 +495,85 @@ def mysql_list_tables(
 ) -> str:
     """列出遠端 MySQL/MariaDB 目標資料庫中的所有非系統資料表（未指定 database 時自動列出所有使用者資料庫之資料表）"""
     conn = None
+    sql_executed = "SELECT ... FROM INFORMATION_SCHEMA.TABLES"
     try:
         explicit_db = _clean_param(database)
         if explicit_db:
-            explicit_db = _validate_identifier(explicit_db, "database")
+            try:
+                explicit_db = _validate_identifier(explicit_db, "database")
+            except ValueError as e:
+                _audit_log(
+                    "mysql_list_tables",
+                    f"database={database!r}",
+                    target=_format_audit_target(mysql_host, mysql_port, mysql_user, database),
+                    status="BLOCKED",
+                    detail=str(e),
+                )
+                return f"[ERROR] {e}"
 
         conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
         target_db = explicit_db or _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
+        target = _format_audit_target(mysql_host, mysql_port, mysql_user, target_db)
 
         cursor = conn.cursor()
         try:
             if target_db:
-                cursor.execute(
+                sql_executed = (
                     "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
                     "WHERE TABLE_SCHEMA = %s AND TABLE_TYPE = 'BASE TABLE' "
-                    "ORDER BY TABLE_NAME;",
-                    (target_db,),
+                    "ORDER BY TABLE_NAME;"
                 )
+                cursor.execute(sql_executed, (target_db,))
                 tables = cursor.fetchall()
+                _audit_log(
+                    "mysql_list_tables",
+                    f"{sql_executed} [database={target_db!r}]",
+                    target=target,
+                    status="OK",
+                    detail=f"tables={len(tables)}",
+                )
                 if not tables:
                     return "資料庫中沒有資料表。"
                 return "\n".join(str(t[0]) for t in tables)
 
-            cursor.execute(
+            sql_executed = (
                 "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
                 "WHERE TABLE_TYPE = 'BASE TABLE' "
                 "AND TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys') "
                 "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
             )
+            cursor.execute(sql_executed)
             tables = cursor.fetchall()
+            _audit_log(
+                "mysql_list_tables",
+                sql_executed,
+                target=target,
+                status="OK",
+                detail=f"tables={len(tables)}",
+            )
         finally:
             cursor.close()
 
         if not tables:
             return "資料庫中沒有資料表。"
         return "\n".join(f"{t[0]}.{t[1]}" if len(t) >= 2 else str(t[0]) for t in tables)
+    except _ConnAuthError as e:
+        _audit_log(
+            "mysql_list_tables",
+            sql_executed,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
+        return f"[ERROR] {e}"
     except Exception as e:
+        _audit_log(
+            "mysql_list_tables",
+            sql_executed,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+            status="ERROR",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
     finally:
         _close_safely(conn)
@@ -462,49 +591,82 @@ def mysql_describe_schema(
 ) -> str:
     """顯示指定 MySQL/MariaDB 資料表的 Schema (欄位、型別、主鍵與 NOT NULL 約束)"""
     conn = None
+    sql_executed = f"DESCRIBE {table_name}"
     try:
         clean_name = table_name.strip().strip("'\"`")
         if not clean_name:
+            _audit_log(
+                "mysql_describe_schema",
+                "table_name=''",
+                target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+                status="BLOCKED",
+                detail="缺少 table_name 參數",
+            )
             return "[ERROR] 缺少 table_name 參數。"
 
         explicit_db = _clean_param(database)
-        if "." in clean_name:
-            schema_part, tbl_part = clean_name.split(".", 1)
-            explicit_schema = _validate_identifier(schema_part.strip("`'\""), "schema_name")
-            target_table = _validate_identifier(tbl_part.strip("`'\""), "table_name")
-        else:
-            explicit_schema = _validate_identifier(explicit_db, "database") if explicit_db else ""
-            target_table = _validate_identifier(clean_name, "table_name")
+        try:
+            if "." in clean_name:
+                schema_part, tbl_part = clean_name.split(".", 1)
+                explicit_schema = _validate_identifier(schema_part.strip("`'\""), "schema_name")
+                target_table = _validate_identifier(tbl_part.strip("`'\""), "table_name")
+            else:
+                explicit_schema = _validate_identifier(explicit_db, "database") if explicit_db else ""
+                target_table = _validate_identifier(clean_name, "table_name")
+        except ValueError as e:
+            _audit_log(
+                "mysql_describe_schema",
+                f"table_name={table_name!r} database={database!r}",
+                target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+                status="BLOCKED",
+                detail=str(e),
+            )
+            return f"[ERROR] {e}"
 
         conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
         target_schema = explicit_schema or _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
+        target = _format_audit_target(mysql_host, mysql_port, mysql_user, target_schema)
 
         cursor = conn.cursor()
         try:
             if target_schema:
-                cursor.execute(
+                sql_executed = (
                     "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY "
                     "FROM INFORMATION_SCHEMA.COLUMNS "
                     "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s "
-                    "ORDER BY ORDINAL_POSITION;",
-                    (target_schema, target_table),
+                    "ORDER BY ORDINAL_POSITION;"
                 )
+                cursor.execute(sql_executed, (target_schema, target_table))
             else:
-                cursor.execute(
+                sql_executed = (
                     "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY "
                     "FROM INFORMATION_SCHEMA.COLUMNS "
                     "WHERE TABLE_NAME = %s "
                     "AND TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys') "
-                    "ORDER BY TABLE_SCHEMA, ORDINAL_POSITION;",
-                    (target_table,),
+                    "ORDER BY TABLE_SCHEMA, ORDINAL_POSITION;"
                 )
+                cursor.execute(sql_executed, (target_table,))
             columns = cursor.fetchall()
         finally:
             cursor.close()
 
         if not columns:
+            _audit_log(
+                "mysql_describe_schema",
+                f"{sql_executed} [table={target_table!r}]",
+                target=target,
+                status="NOT_FOUND",
+                detail=f"找不到資料表 {clean_name}",
+            )
             return f"找不到資料表 {clean_name}。"
 
+        _audit_log(
+            "mysql_describe_schema",
+            f"{sql_executed} [table={target_table!r}]",
+            target=target,
+            status="OK",
+            detail=f"columns={len(columns)}",
+        )
         lines = []
         for c in columns:
             col_name = str(c[0])
@@ -515,7 +677,23 @@ def mysql_describe_schema(
             null_tag = " NOT NULL" if is_nullable == "NO" else ""
             lines.append(f"{col_name} ({col_type}{pk_tag}{null_tag})")
         return "\n".join(lines)
+    except _ConnAuthError as e:
+        _audit_log(
+            "mysql_describe_schema",
+            sql_executed,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
+        return f"[ERROR] {e}"
     except Exception as e:
+        _audit_log(
+            "mysql_describe_schema",
+            sql_executed,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+            status="ERROR",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
     finally:
         _close_safely(conn)
@@ -534,15 +712,24 @@ def mysql_run_select_query(
     try:
         clean_query = _validate_select_query(query)
     except ValueError as e:
+        _audit_log(
+            "mysql_run_select_query",
+            query,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, mysql_database),
+            status="BLOCKED",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
 
     conn = None
     try:
         conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
+        target = _format_audit_target(mysql_host, mysql_port, mysql_user, mysql_database)
         cursor = conn.cursor()
         try:
             cursor.execute(clean_query)
             if not cursor.description:
+                _audit_log("mysql_run_select_query", clean_query, target=target, status="OK", detail="rows=0")
                 return "查詢未產生欄位結果。"
 
             col_names = [str(description[0]) for description in cursor.description]
@@ -576,19 +763,42 @@ def mysql_run_select_query(
             cursor.close()
 
         if total_rows == 0:
+            _audit_log("mysql_run_select_query", clean_query, target=target, status="OK", detail="rows=0")
             return "查詢結果為空。"
 
+        shown_rows = len(result) - 1
+        _audit_log(
+            "mysql_run_select_query",
+            clean_query,
+            target=target,
+            status="TRUNCATED" if truncated else "OK",
+            detail=f"rows={shown_rows}",
+        )
         output = "\n".join(result)
         if truncated:
             output += (
                 f"\n\n... (查詢結果已截斷，達單次上限 {MAX_OUTPUT_CHARS} 字元，"
-                f"已呈現前 {len(result) - 1} 筆紀錄)\n"
+                f"已呈現前 {shown_rows} 筆紀錄)\n"
                 "[提示：若需檢視特定區段資料，請在 SQL 中加入 WHERE 條件或 LIMIT/OFFSET 分頁]"
             )
         return output
     except _ConnAuthError as e:
+        _audit_log(
+            "mysql_run_select_query",
+            clean_query,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, mysql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
     except Exception as e:
+        _audit_log(
+            "mysql_run_select_query",
+            clean_query,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, mysql_database),
+            status="ERROR",
+            detail=str(e),
+        )
         return f"[ERROR] 查詢失敗: {e}"
     finally:
         _close_safely(conn)

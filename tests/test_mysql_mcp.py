@@ -11,9 +11,10 @@ from pocket_agent.extensions.mcp import MCPManager
 
 
 @pytest.fixture(autouse=True)
-def _clean_mysql_env_and_cache(monkeypatch):
-    """每次測試前清空 MySQL MCP 執行期記憶體快取與環境變數。"""
+def _clean_mysql_env_and_cache(monkeypatch, tmp_path):
+    """每次測試前清空 MySQL MCP 執行期記憶體快取、環境變數並隔離測試用 agent.log。"""
     mysql_mcp._clear_creds_cache()
+    monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     for key in (
         "MYSQL_HOST",
         "MYSQL_PORT",
@@ -372,3 +373,22 @@ def test_mcp_manager_strips_mysql_params_and_clears_cache_on_conn_auth():
     fake_session.call_tool = AsyncMock(return_value=MagicMock(content=[MagicMock(text="id\n1")]))
     asyncio.run(manager.call("mysql_run_select_query", {"query": "SELECT 1"}))
     assert len(prompt_calls) == 2
+
+
+def test_mysql_audit_log_records_queries_and_blocks_without_leaking_password(monkeypatch, tmp_path):
+    """驗證 mysql_mcp.py 將執行的 SQL 指令與攔截事件寫入集中化 agent.log，且絕不洩漏密碼。"""
+    _set_full_mysql_env(monkeypatch)
+    log_file = tmp_path / "agent.log"
+    conn, _ = _make_fake_conn(rows=[(1, "alice")], description=[("id",), ("username",)])
+
+    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn):
+        mysql_mcp.mysql_run_select_query("SELECT id, username FROM users WHERE id = 1;")
+        mysql_mcp.mysql_run_select_query("DELETE FROM users;")
+
+    content = log_file.read_text(encoding="utf-8")
+    assert "[AUDIT] [MCP:mysql] tool=mysql_run_select_query status=OK" in content
+    assert "target=readonly_user@192.168.10.20:3306/app_db" in content
+    assert "SELECT id, username FROM users WHERE id = 1" in content
+    assert "[AUDIT] [MCP:mysql] tool=mysql_run_select_query status=BLOCKED" in content
+    assert "DELETE FROM users;" in content
+    assert "MySecretPass!123" not in content

@@ -11,9 +11,10 @@ from pocket_agent.extensions.mcp import MCPManager
 
 
 @pytest.fixture(autouse=True)
-def _clean_mssql_env_and_cache(monkeypatch):
-    """每次測試前清空 MSSQL MCP 執行期記憶體快取與環境變數。"""
+def _clean_mssql_env_and_cache(monkeypatch, tmp_path):
+    """每次測試前清空 MSSQL MCP 執行期記憶體快取、環境變數並隔離測試用 agent.log。"""
     mssql_mcp._clear_creds_cache()
+    monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     for key in (
         "MSSQL_HOST",
         "MSSQL_PORT",
@@ -341,3 +342,22 @@ def test_mcp_manager_strips_mssql_params_and_prompts_only_missing():
         "mssql_password": "MssqlPw!123",
         "mssql_database": "erp_db",
     }
+
+
+def test_mssql_audit_log_records_queries_and_blocks_without_leaking_password(monkeypatch, tmp_path):
+    """驗證 mssql_mcp.py 將執行的 T-SQL 指令與攔截事件寫入集中化 agent.log，且絕不洩漏密碼。"""
+    _set_full_mssql_env(monkeypatch)
+    log_file = tmp_path / "agent.log"
+    conn, _ = _make_fake_conn(rows=[(1, "cust_a")], description=[("id",), ("name",)])
+
+    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+        mssql_mcp.mssql_run_select_query("SELECT TOP 1 id, name FROM customers;")
+        mssql_mcp.mssql_run_select_query("EXEC xp_cmdshell 'whoami';")
+
+    content = log_file.read_text(encoding="utf-8")
+    assert "[AUDIT] [MCP:mssql] tool=mssql_run_select_query status=OK" in content
+    assert r"target=CORP\sql_reader@10.20.30.50:1433/erp_db" in content
+    assert "SELECT TOP 1 id, name FROM customers" in content
+    assert "[AUDIT] [MCP:mssql] tool=mssql_run_select_query status=BLOCKED" in content
+    assert "EXEC xp_cmdshell 'whoami';" in content
+    assert "SqlSecret#2026" not in content

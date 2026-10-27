@@ -12,9 +12,10 @@ from mcp_servers import sqlite_mcp
 
 
 @pytest.fixture(autouse=True)
-def _clean_sqlite_cache():
-    """每次測試前自動清空 SQLite MCP 執行期記憶體快取。"""
+def _clean_sqlite_cache(monkeypatch, tmp_path):
+    """每次測試前自動清空 SQLite MCP 執行期記憶體快取並隔離測試用 agent.log。"""
     sqlite_mcp._RUNTIME_CREDS.clear()
+    monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     yield
     sqlite_mcp._RUNTIME_CREDS.clear()
 
@@ -216,3 +217,20 @@ def test_sqlite_custom_path_direct_override(temp_db):
     """驗證 get_db_path 支援傳入 custom_path 覆寫。"""
     resolved = sqlite_mcp.get_db_path(str(temp_db))
     assert resolved == temp_db.resolve()
+
+
+def test_sqlite_audit_log_records_queries_and_security_blocks(temp_db, tmp_path):
+    """驗證 sqlite_mcp.py 將執行的 SQL 指令與攔截事件寫入集中化 agent.log。"""
+    log_file = tmp_path / "agent.log"
+    sqlite_mcp.sqlite_list_tables()
+    sqlite_mcp.sqlite_run_select_query("SELECT id, username FROM users WHERE id = 1;")
+    sqlite_mcp.sqlite_run_select_query("DROP TABLE users;")
+    sqlite_mcp.sqlite_run_select_query("SELECT * FROM pragma_database_list;")
+
+    content = log_file.read_text(encoding="utf-8")
+    assert "[AUDIT] [MCP:sqlite] tool=sqlite_list_tables status=OK" in content
+    assert "[AUDIT] [MCP:sqlite] tool=sqlite_run_select_query status=OK" in content
+    assert "SELECT id, username FROM users WHERE id = 1;" in content
+    assert "[AUDIT] [MCP:sqlite] tool=sqlite_run_select_query status=BLOCKED" in content
+    assert "DROP TABLE users;" in content
+    assert "[AUDIT] [MCP:sqlite] tool=sqlite_run_select_query status=SECURITY_BLOCK" in content

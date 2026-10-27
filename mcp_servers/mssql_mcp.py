@@ -20,6 +20,7 @@ import re
 import sys
 import time
 import warnings
+from pathlib import Path
 from typing import Any
 
 try:
@@ -50,6 +51,10 @@ _REDACT_SECRET_RE = re.compile(
     r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
     r"|authorization|private_key|preshared_key|connectionstring)\b[^\r\n\x00]*"
 )
+_REDACT_KV_RE = re.compile(
+    r"(?i)(\b(?:password|passwd|secret|token|api_key|apikey|client_secret|passphrase|connectionstring)\b"
+    r"\s*[:=]\s*)([^\s#;\"',)]+|\"[^\"]*\"|'[^']*')"
+)
 _SENSITIVE_COL_RE = re.compile(
     r"(?i)(?:password|passwd|secret|token|passphrase|api[_-]?key"
     r"|private[_-]?key|preshared[_-]?key|credential|connectionstring)"
@@ -66,6 +71,68 @@ _FORBIDDEN_MSSQL_RE = re.compile(
 
 class _ConnAuthError(Exception):
     """表示連線參數驗證失敗、網路無法連線或資料庫帳號密碼認證失敗。"""
+
+
+def _get_audit_log_path() -> Path:
+    """解析集中化稽核日誌 (agent.log) 路徑。"""
+    env_log = (os.getenv("POCKET_AGENT_LOG_FILE") or "").strip()
+    if env_log:
+        return Path(env_log).expanduser().resolve()
+    try:
+        from pocket_agent.system.paths import log_dir
+
+        return log_dir() / "agent.log"
+    except ImportError:
+        src_dir = Path(__file__).resolve().parent.parent / "src"
+        if src_dir.is_dir() and str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+            try:
+                from pocket_agent.system.paths import log_dir
+
+                return log_dir() / "agent.log"
+            except ImportError:
+                pass
+        return Path.home() / ".pocket-agent" / "logs" / "agent.log"
+
+
+def _format_audit_target(host: str = "", port: str = "", user: str = "", db: str = "") -> str:
+    h = host.strip() or _RUNTIME_CREDS.get("MSSQL_HOST", "") or _clean_param(os.getenv("MSSQL_HOST")) or "?"
+    p = port.strip() or _RUNTIME_CREDS.get("MSSQL_PORT", "") or _clean_param(os.getenv("MSSQL_PORT")) or "1433"
+    u = user.strip() or _RUNTIME_CREDS.get("MSSQL_USER", "") or _clean_param(os.getenv("MSSQL_USER")) or "?"
+    d = db.strip() or _RUNTIME_CREDS.get("MSSQL_DATABASE", "") or _clean_param(os.getenv("MSSQL_DATABASE")) or "*"
+    return f"{u}@{h}:{p}/{d}"
+
+
+def _audit_log(
+    tool_name: str,
+    command: str,
+    *,
+    target: str = "",
+    status: str = "OK",
+    detail: str = "",
+) -> None:
+    """將 MCP 工具執行的 T-SQL 指令與敏感操作寫入 Pocket Agent 集中化日誌 (agent.log) 供稽核使用。"""
+    try:
+        log_path = _get_audit_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        now_t = time.time()
+        lt = time.localtime(now_t)
+        ms = int((now_t - int(now_t)) * 1000)
+        ts = f"{time.strftime('%Y-%m-%d %H:%M:%S', lt)},{ms:03d}"
+        safe_cmd = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", command).splitlines()).strip()
+        safe_target = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", target).splitlines()).strip()
+        safe_detail = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", detail).splitlines()).strip()
+        parts = [f"{ts} [AUDIT] [MCP:mssql] tool={tool_name} status={status}"]
+        if safe_target:
+            parts.append(f"target={safe_target}")
+        if safe_cmd:
+            parts.append(f"command={safe_cmd!r}")
+        if safe_detail:
+            parts.append(f"detail={safe_detail!r}")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(" ".join(parts) + "\n")
+    except Exception:
+        pass
 
 
 def _check_creds_ttl() -> None:
@@ -425,19 +492,38 @@ def mssql_list_databases(
 ) -> str:
     """列出遠端 Microsoft SQL Server 伺服器上所有狀態為 ONLINE 的資料庫清單"""
     conn = None
+    sql = "SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name;"
     try:
         conn = _get_readonly_connection(mssql_host, mssql_port, mssql_user, mssql_password, mssql_database)
+        target = _format_audit_target(mssql_host, mssql_port, mssql_user, mssql_database)
         cursor = conn.cursor()
         try:
-            cursor.execute("SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name;")
+            cursor.execute(sql)
             dbs = cursor.fetchall()
         finally:
             cursor.close()
 
+        _audit_log("mssql_list_databases", sql, target=target, status="OK", detail=f"databases={len(dbs)}")
         if not dbs:
             return "查無可見的資料庫。"
         return "\n".join(str(row[0]) for row in dbs)
+    except _ConnAuthError as e:
+        _audit_log(
+            "mssql_list_databases",
+            sql,
+            target=_format_audit_target(mssql_host, mssql_port, mssql_user, mssql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
+        return f"[ERROR] {e}"
     except Exception as e:
+        _audit_log(
+            "mssql_list_databases",
+            sql,
+            target=_format_audit_target(mssql_host, mssql_port, mssql_user, mssql_database),
+            status="ERROR",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
     finally:
         _close_safely(conn)
@@ -454,30 +540,45 @@ def mssql_list_tables(
 ) -> str:
     """列出遠端 Microsoft SQL Server 目標資料庫中的所有非系統資料表"""
     conn = None
+    sql_executed = "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES"
     try:
         explicit_db = _clean_param(database)
         if explicit_db:
-            explicit_db = _validate_identifier(explicit_db, "database")
+            try:
+                explicit_db = _validate_identifier(explicit_db, "database")
+            except ValueError as e:
+                _audit_log(
+                    "mssql_list_tables",
+                    f"database={database!r}",
+                    target=_format_audit_target(mssql_host, mssql_port, mssql_user, database),
+                    status="BLOCKED",
+                    detail=str(e),
+                )
+                return f"[ERROR] {e}"
 
         conn = _get_readonly_connection(mssql_host, mssql_port, mssql_user, mssql_password, mssql_database)
+        target_db = explicit_db or _RUNTIME_CREDS.get("MSSQL_DATABASE", "")
+        target = _format_audit_target(mssql_host, mssql_port, mssql_user, target_db)
         cursor = conn.cursor()
         try:
             if explicit_db:
-                cursor.execute(
+                sql_executed = (
                     f"SELECT TABLE_SCHEMA, TABLE_NAME FROM [{explicit_db}].INFORMATION_SCHEMA.TABLES "
                     "WHERE TABLE_TYPE = 'BASE TABLE' "
                     "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
                 )
             else:
-                cursor.execute(
+                sql_executed = (
                     "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
                     "WHERE TABLE_TYPE = 'BASE TABLE' "
                     "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
                 )
+            cursor.execute(sql_executed)
             tables = cursor.fetchall()
         finally:
             cursor.close()
 
+        _audit_log("mssql_list_tables", sql_executed, target=target, status="OK", detail=f"tables={len(tables)}")
         if not tables:
             return "資料庫中沒有資料表。"
         lines = []
@@ -488,7 +589,23 @@ def mssql_list_tables(
             else:
                 lines.append(str(row[0]))
         return "\n".join(lines)
+    except _ConnAuthError as e:
+        _audit_log(
+            "mssql_list_tables",
+            sql_executed,
+            target=_format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
+        return f"[ERROR] {e}"
     except Exception as e:
+        _audit_log(
+            "mssql_list_tables",
+            sql_executed,
+            target=_format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
+            status="ERROR",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
     finally:
         _close_safely(conn)
@@ -506,30 +623,57 @@ def mssql_describe_schema(
 ) -> str:
     """顯示指定 Microsoft SQL Server 資料表的 Schema (欄位、型別、主鍵與 NOT NULL 約束)"""
     conn = None
+    sql_executed = f"DESCRIBE {table_name}"
     try:
         clean_name = table_name.strip().strip("'\"`[]")
         if not clean_name:
+            _audit_log(
+                "mssql_describe_schema",
+                "table_name=''",
+                target=_format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
+                status="BLOCKED",
+                detail="缺少 table_name 參數",
+            )
             return "[ERROR] 缺少 table_name 參數。"
 
         explicit_db = _clean_param(database)
-        if explicit_db:
-            explicit_db = _validate_identifier(explicit_db, "database")
+        try:
+            if explicit_db:
+                explicit_db = _validate_identifier(explicit_db, "database")
 
-        parts = [p.strip("[]'\"") for p in clean_name.split(".")]
-        if len(parts) == 3:
-            explicit_db = _validate_identifier(parts[0], "database")
-            target_schema = _validate_identifier(parts[1], "schema_name")
-            target_table = _validate_identifier(parts[2], "table_name")
-        elif len(parts) == 2:
-            target_schema = _validate_identifier(parts[0], "schema_name")
-            target_table = _validate_identifier(parts[1], "table_name")
-        elif len(parts) == 1:
-            target_schema = "dbo"
-            target_table = _validate_identifier(parts[0], "table_name")
-        else:
-            return f"[ERROR] 非法的 table_name 格式：{table_name!r}"
+            parts = [p.strip("[]'\"") for p in clean_name.split(".")]
+            if len(parts) == 3:
+                explicit_db = _validate_identifier(parts[0], "database")
+                target_schema = _validate_identifier(parts[1], "schema_name")
+                target_table = _validate_identifier(parts[2], "table_name")
+            elif len(parts) == 2:
+                target_schema = _validate_identifier(parts[0], "schema_name")
+                target_table = _validate_identifier(parts[1], "table_name")
+            elif len(parts) == 1:
+                target_schema = "dbo"
+                target_table = _validate_identifier(parts[0], "table_name")
+            else:
+                _audit_log(
+                    "mssql_describe_schema",
+                    f"table_name={table_name!r}",
+                    target=_format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
+                    status="BLOCKED",
+                    detail=f"非法的 table_name 格式：{table_name!r}",
+                )
+                return f"[ERROR] 非法的 table_name 格式：{table_name!r}"
+        except ValueError as e:
+            _audit_log(
+                "mssql_describe_schema",
+                f"table_name={table_name!r} database={database!r}",
+                target=_format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
+                status="BLOCKED",
+                detail=str(e),
+            )
+            return f"[ERROR] {e}"
 
         conn = _get_readonly_connection(mssql_host, mssql_port, mssql_user, mssql_password, mssql_database)
+        target_db = explicit_db or _RUNTIME_CREDS.get("MSSQL_DATABASE", "")
+        target = _format_audit_target(mssql_host, mssql_port, mssql_user, target_db)
         db_prefix = f"[{explicit_db}]." if explicit_db else ""
         raw_sql = (
             "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, "
@@ -551,6 +695,7 @@ def mssql_describe_schema(
             "ORDER BY c.ORDINAL_POSITION;"
         )
         sql = _adapt_placeholders(raw_sql, conn)
+        sql_executed = f"{sql} [schema={target_schema!r}, table={target_table!r}]"
         cursor = conn.cursor()
         try:
             cursor.execute(sql, (target_schema, target_table))
@@ -559,8 +704,22 @@ def mssql_describe_schema(
             cursor.close()
 
         if not columns:
+            _audit_log(
+                "mssql_describe_schema",
+                sql_executed,
+                target=target,
+                status="NOT_FOUND",
+                detail=f"找不到資料表 {clean_name}",
+            )
             return f"找不到資料表 {clean_name}。"
 
+        _audit_log(
+            "mssql_describe_schema",
+            sql_executed,
+            target=target,
+            status="OK",
+            detail=f"columns={len(columns)}",
+        )
         lines = []
         for c in columns:
             col_name = str(c[0])
@@ -571,7 +730,23 @@ def mssql_describe_schema(
             null_tag = " NOT NULL" if is_nullable == "NO" else ""
             lines.append(f"{col_name} ({col_type}{pk_tag}{null_tag})")
         return "\n".join(lines)
+    except _ConnAuthError as e:
+        _audit_log(
+            "mssql_describe_schema",
+            sql_executed,
+            target=_format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
+        return f"[ERROR] {e}"
     except Exception as e:
+        _audit_log(
+            "mssql_describe_schema",
+            sql_executed,
+            target=_format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
+            status="ERROR",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
     finally:
         _close_safely(conn)
@@ -590,15 +765,24 @@ def mssql_run_select_query(
     try:
         clean_query = _validate_select_query(query)
     except ValueError as e:
+        _audit_log(
+            "mssql_run_select_query",
+            query,
+            target=_format_audit_target(mssql_host, mssql_port, mssql_user, mssql_database),
+            status="BLOCKED",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
 
     conn = None
     try:
         conn = _get_readonly_connection(mssql_host, mssql_port, mssql_user, mssql_password, mssql_database)
+        target = _format_audit_target(mssql_host, mssql_port, mssql_user, mssql_database)
         cursor = conn.cursor()
         try:
             cursor.execute(clean_query)
             if not cursor.description:
+                _audit_log("mssql_run_select_query", clean_query, target=target, status="OK", detail="rows=0")
                 return "查詢未產生欄位結果。"
 
             col_names = [str(description[0]) for description in cursor.description]
@@ -632,19 +816,42 @@ def mssql_run_select_query(
             cursor.close()
 
         if total_rows == 0:
+            _audit_log("mssql_run_select_query", clean_query, target=target, status="OK", detail="rows=0")
             return "查詢結果為空。"
 
+        shown_rows = len(result) - 1
+        _audit_log(
+            "mssql_run_select_query",
+            clean_query,
+            target=target,
+            status="TRUNCATED" if truncated else "OK",
+            detail=f"rows={shown_rows}",
+        )
         output = "\n".join(result)
         if truncated:
             output += (
                 f"\n\n... (查詢結果已截斷，達單次上限 {MAX_OUTPUT_CHARS} 字元，"
-                f"已呈現前 {len(result) - 1} 筆紀錄)\n"
+                f"已呈現前 {shown_rows} 筆紀錄)\n"
                 "[提示：若需檢視特定區段資料，請在 SQL 中加入 WHERE 條件或 TOP / OFFSET-FETCH 分頁]"
             )
         return output
     except _ConnAuthError as e:
+        _audit_log(
+            "mssql_run_select_query",
+            clean_query,
+            target=_format_audit_target(mssql_host, mssql_port, mssql_user, mssql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
         return f"[ERROR] {e}"
     except Exception as e:
+        _audit_log(
+            "mssql_run_select_query",
+            clean_query,
+            target=_format_audit_target(mssql_host, mssql_port, mssql_user, mssql_database),
+            status="ERROR",
+            detail=str(e),
+        )
         return f"[ERROR] 查詢失敗: {e}"
     finally:
         _close_safely(conn)
