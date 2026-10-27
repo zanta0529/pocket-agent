@@ -117,7 +117,7 @@ def call_indexed_search(args: dict[str, Any], workspace_dirs: list[str] | None =
         if not words:
             return "[ERROR] 搜尋字串不包含有效的關鍵字"
 
-        fts_query = " OR ".join(words)
+        fts_query = " OR ".join(f'"{w}"' for w in words)
         try:
             # 使用 snippet 擷取最相關的片段
             cursor = conn.execute(

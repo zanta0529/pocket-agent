@@ -263,7 +263,7 @@ def search_skills(query: str, workspace_dirs: list[str] | None = None, top_k: in
         if not words:
             return list_skills(workspace_dirs)[:top_k]
 
-        fts_query = " OR ".join(words)
+        fts_query = " OR ".join(f'"{w}"' for w in words)
         try:
             cursor = conn.execute(
                 "SELECT name, description FROM skills_fts WHERE skills_fts MATCH ? ORDER BY rank LIMIT ?",
