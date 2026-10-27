@@ -63,6 +63,7 @@ servers:
   #   command: python
   #   args: ["mcp_servers/mysql_mcp.py"]
   #   safe_read_tools:
+  #     - mysql_list_databases
   #     - mysql_list_tables
   #     - mysql_describe_schema
   #     - mysql_run_select_query
@@ -71,7 +72,7 @@ servers:
   #     MYSQL_PORT: "3306"        # 選填：連接埠，預設 3306（留空、null 或省略時將於執行時詢問）
   #     MYSQL_USER: ""            # 選填：登入帳號（留空、null 或省略時將於執行時詢問）
   #     MYSQL_PASSWORD: ""        # 選填：登入密碼（建議留空或省略，於執行時安全輸入）
-  #     MYSQL_DATABASE: ""        # 選填：目標資料庫名稱（留空、null 或省略時將於執行時詢問）
+  #     MYSQL_DATABASE: ""        # 選填：預設資料庫名稱（留空時可直接查詢伺服器上所有資料庫清單或跨庫查詢）
   #     MYSQL_CONNECT_TIMEOUT: "10"
 
   # 遠端 Microsoft SQL Server (MSSQL) 資料庫唯讀檢索（需安裝 pymssql 或 pyodbc；未設定項將於執行時動態詢問）
@@ -80,6 +81,7 @@ servers:
   #   command: python
   #   args: ["mcp_servers/mssql_mcp.py"]
   #   safe_read_tools:
+  #     - mssql_list_databases
   #     - mssql_list_tables
   #     - mssql_describe_schema
   #     - mssql_run_select_query
@@ -88,7 +90,7 @@ servers:
   #     MSSQL_PORT: "1433"        # 選填：連接埠，預設 1433（留空、null 或省略時將於執行時詢問）
   #     MSSQL_USER: ""            # 選填：登入帳號（留空、null 或省略時將於執行時詢問）
   #     MSSQL_PASSWORD: ""        # 選填：登入密碼（建議留空或省略，於執行時安全輸入）
-  #     MSSQL_DATABASE: ""        # 選填：目標資料庫名稱（留空、null 或省略時將於執行時詢問）
+  #     MSSQL_DATABASE: ""        # 選填：預設資料庫名稱（留空時預設連線登入帳號之預設資料庫並支援列出所有資料庫）
   #     MSSQL_CONNECT_TIMEOUT: "10"
 
   # 長期記憶與上下文管理 (預設存於 ~/.pocket-agent/memory.json)

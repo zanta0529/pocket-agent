@@ -191,11 +191,13 @@ Pocket Agent 的解決方案：
 
 | 伺服器 | 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
 | :--- | :--- | :--- | :--- | :--- |
-| `mysql` | `mysql_list_tables` | 是 | 列出目標 MySQL／MariaDB 資料庫中的所有基底資料表 | 無 |
-| `mysql` | `mysql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA.COLUMNS` 顯示欄位、型別、主鍵與 NOT NULL 約束 | `table_name`（必填） |
+| `mysql` | `mysql_list_databases` | 是 | 列出遠端 MySQL／MariaDB 主機上目前帳號可見的所有資料庫清單 | 無 |
+| `mysql` | `mysql_list_tables` | 是 | 列出目標資料庫（或所有非系統資料庫）中的所有基底資料表 | `database`（選填） |
+| `mysql` | `mysql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA.COLUMNS` 顯示欄位、型別、主鍵與 NOT NULL 約束 | `table_name`（必填）、`database`（選填） |
 | `mysql` | `mysql_run_select_query` | 是 | 執行唯讀的單一 `SELECT` 或 `WITH` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
-| `mssql` | `mssql_list_tables` | 是 | 列出目標 SQL Server 資料庫中的所有基底資料表 | 無 |
-| `mssql` | `mssql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA` 顯示欄位、型別、主鍵與 NOT NULL 約束 | `table_name`（必填，支援 `table` 或 `schema.table`） |
+| `mssql` | `mssql_list_databases` | 是 | 列出遠端 SQL Server 主機上所有線上（ONLINE）資料庫清單 | 無 |
+| `mssql` | `mssql_list_tables` | 是 | 列出目標 SQL Server 資料庫中的所有基底資料表 | `database`（選填） |
+| `mssql` | `mssql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA` 顯示欄位、型別、主鍵與 NOT NULL 約束 | `table_name`（必填，支援 `table` 或 `schema.table`）、`database`（選填） |
 | `mssql` | `mssql_run_select_query` | 是 | 執行唯讀的單一 `SELECT` 或 `WITH` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
 
 ### 2. 安全防禦邊界

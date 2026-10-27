@@ -162,8 +162,13 @@ class MCPManager:
         for env_key in entry.conn_params.values():
             if env_key in resolved:
                 continue
-            # 金鑰路徑與 Passphrase 均為選填，絕不主動視為 missing 攔截詢問
-            if env_key in ("RHEL_SSH_KEY_PATH", "RHEL_SSH_KEY_PASSPHRASE"):
+            # 金鑰路徑、Passphrase 與選填資料庫名稱均為選填，絕不主動視為 missing 攔截詢問
+            if env_key in (
+                "RHEL_SSH_KEY_PATH",
+                "RHEL_SSH_KEY_PASSPHRASE",
+                "MYSQL_DATABASE",
+                "MSSQL_DATABASE",
+            ):
                 continue
             # 若已提供金鑰路徑，密碼（作為 Passphrase）亦為選填，不強制詢問
             if has_key and env_key == "RHEL_SSH_PASSWORD":

@@ -59,6 +59,23 @@ def _make_fake_conn(rows=None, description=None):
     return conn, cursor
 
 
+def test_mssql_list_databases(monkeypatch):
+    """驗證資料庫清單檢索（無須預設指定 MSSQL_DATABASE）。"""
+    monkeypatch.setenv("MSSQL_HOST", "10.20.30.50")
+    monkeypatch.setenv("MSSQL_PORT", "1433")
+    monkeypatch.setenv("MSSQL_USER", r"CORP\sql_reader")
+    monkeypatch.setenv("MSSQL_PASSWORD", "SqlSecret#2026")
+    conn, _ = _make_fake_conn(rows=[("erp_db",), ("hr_db",)])
+    fake_driver = SimpleNamespace(connect=MagicMock(return_value=conn))
+
+    with patch("mcp_servers.mssql_mcp._load_mssql_driver", return_value=("pymssql", fake_driver)):
+        out = mssql_mcp.mssql_list_databases()
+
+    assert out == "erp_db\nhr_db"
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+
+
 def test_mssql_list_tables(monkeypatch):
     """驗證資料表清單檢索（含 dbo 簡化顯示與自訂 Schema 顯示）及唯讀交易隔離設定。"""
     _set_full_mssql_env(monkeypatch)
@@ -193,19 +210,30 @@ def test_mssql_streaming_truncation_anti_oom(monkeypatch):
 
 @pytest.mark.parametrize("empty_val", ["", "   ", "null", "NULL", "None", "none", "~"])
 def test_mssql_empty_or_null_env_prompts_and_caches(monkeypatch, empty_val):
-    """驗證未設定或為空值/null 時透過 _tty_prompt 互動詢問並快取於記憶體。"""
+    """驗證未設定或為空值/null 時透過 _tty_prompt 互動詢問（Database 為選填不詢問）並快取於記憶體。"""
     monkeypatch.setenv("MSSQL_HOST", empty_val)
-    prompts = iter(["sql.corp.local", "", r"CORP\dbuser", "warehouse_db", "PromptedSqlPass!1"])
+    monkeypatch.setenv("MSSQL_DATABASE", empty_val)
+    prompts = iter(["sql.corp.local", "", r"CORP\dbuser", "PromptedSqlPass!1"])
 
     with patch("mcp_servers.mssql_mcp._tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
         resolved = mssql_mcp._resolve_connection_params()
-        assert resolved == ("sql.corp.local", "1433", r"CORP\dbuser", "PromptedSqlPass!1", "warehouse_db")
-        assert mock_prompt.call_count == 5
+        assert resolved == ("sql.corp.local", "1433", r"CORP\dbuser", "PromptedSqlPass!1", "")
+        assert mock_prompt.call_count == 4
 
         # 第二次呼叫直接命中快取，不再詢問
         resolved2 = mssql_mcp._resolve_connection_params()
         assert resolved2 == resolved
-        assert mock_prompt.call_count == 5
+        assert mock_prompt.call_count == 4
+
+
+def test_mssql_missing_driver_preserves_cached_creds(monkeypatch):
+    """驗證當 pymssql 與 pyodbc 均未安裝時，回傳清楚錯誤且不清除已快取的連線憑證。"""
+    _set_full_mssql_env(monkeypatch)
+    with patch("importlib.import_module", side_effect=ImportError("no mssql driver")):
+        out = mssql_mcp.mssql_list_databases()
+        assert "[CONN_AUTH]" not in out
+        assert "pip install pymssql" in out
+        assert mssql_mcp._RUNTIME_CREDS.get("MSSQL_HOST") == "10.20.30.50"
 
 
 def test_mssql_pyodbc_fallback_and_placeholder_adaptation(monkeypatch):

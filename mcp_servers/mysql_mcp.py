@@ -9,7 +9,7 @@
 4. 連線資源於 finally 區塊確保關閉釋放，避免佔用遠端資料庫連線池。
 5. 內建敏感欄位名稱與內容正則遮罩，防止密碼、Token、金鑰外洩至 LLM 上下文。
 6. 支援彈性設定：MYSQL_HOST、MYSQL_PORT、MYSQL_USER、MYSQL_PASSWORD、MYSQL_DATABASE
-   可於 mcp_config.yaml 預填、留空、設為 null 或省略；未設定時於執行期互動詢問並快取於記憶體。
+   可於 mcp_config.yaml 預填、留空、設為 null 或省略；MYSQL_DATABASE 為選填，未設定時可直接探查所有資料庫清單。
 """
 
 import getpass
@@ -207,7 +207,7 @@ def _resolve_connection_params(
     mysql_password: str = "",
     mysql_database: str = "",
 ) -> tuple[str, str, str, str, str]:
-    """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得 MySQL 連線五要素。"""
+    """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得 MySQL 連線參數（MYSQL_DATABASE 為選填）。"""
     _check_creds_ttl()
     cached_host = _RUNTIME_CREDS.get("MYSQL_HOST", "")
     cached_port = _RUNTIME_CREDS.get("MYSQL_PORT", "")
@@ -230,32 +230,28 @@ def _resolve_connection_params(
         port = _clean_param(_tty_prompt("請輸入 MySQL 連接埠 (MYSQL_PORT) [預設 3306]: ")) or "3306"
     if not user:
         user = _clean_param(_tty_prompt(f"請輸入 {host} 的 MySQL 登入帳號 (MYSQL_USER): "))
-    if not database:
-        database = _clean_param(_tty_prompt(f"請輸入 {host} 的目標資料庫名稱 (MYSQL_DATABASE): "))
 
     if not host:
         raise ValueError("未提供 MySQL 主機位址 (MYSQL_HOST)。")
     if not user:
         raise ValueError("未提供 MySQL 登入帳號 (MYSQL_USER)。")
-    if not database:
-        raise ValueError("未提供 MySQL 資料庫名稱 (MYSQL_DATABASE)。")
 
     host = _validate_host(host)
     port = _validate_port(port)
     user = _validate_identifier(user, "MYSQL_USER")
-    database = _validate_identifier(database, "MYSQL_DATABASE")
+    if database:
+        database = _validate_identifier(database, "MYSQL_DATABASE")
 
-    target = (host, port, user, database)
-    cached_target = (cached_host, cached_port, cached_user, cached_db)
+    target_auth = (host, port, user)
+    cached_auth = (cached_host, cached_port, cached_user)
     env_matches = (
         (not env_host or env_host == host)
         and (not env_port or _validate_port(env_port) == port)
         and (not env_user or env_user == user)
-        and (not env_db or env_db == database)
     )
 
     password = mysql_password if not _is_empty_or_null(mysql_password) else ""
-    if not password and target == cached_target:
+    if not password and target_auth == cached_auth:
         password = _RUNTIME_CREDS.get("MYSQL_PASSWORD", "")
     if not password and env_matches:
         env_pw = os.getenv("MYSQL_PASSWORD")
@@ -306,6 +302,7 @@ def _get_readonly_connection(
         _clear_creds_cache()
         raise _ConnAuthError(f"[CONN_AUTH] {exc}") from exc
 
+    # 驅動載入置於連線區塊外，避免未安裝驅動套件時誤清除已快取的連線帳密
     driver_type, driver_mod = _load_mysql_driver()
 
     try:
@@ -314,6 +311,7 @@ def _get_readonly_connection(
         timeout = 10
 
     charset = _clean_param(os.getenv("MYSQL_CHARSET")) or "utf8mb4"
+    db_kwarg = {"database": database} if database else {}
 
     conn = None
     try:
@@ -323,12 +321,12 @@ def _get_readonly_connection(
                 port=int(port),
                 user=user,
                 password=password,
-                database=database,
                 charset=charset,
                 connect_timeout=timeout,
                 read_timeout=timeout,
                 write_timeout=timeout,
                 autocommit=False,
+                **db_kwarg,
             )
         else:
             conn = driver_mod.connect(
@@ -336,10 +334,10 @@ def _get_readonly_connection(
                 port=int(port),
                 user=user,
                 password=password,
-                database=database,
                 charset=charset,
                 connection_timeout=timeout,
                 autocommit=False,
+                **db_kwarg,
             )
 
         cursor = conn.cursor()
@@ -373,25 +371,71 @@ def _close_safely(conn: Any) -> None:
 
 
 @mcp.tool()
-def mysql_list_tables(
+def mysql_list_databases(
     mysql_host: str = "",
     mysql_port: str = "",
     mysql_user: str = "",
     mysql_password: str = "",
     mysql_database: str = "",
 ) -> str:
-    """列出遠端 MySQL/MariaDB 目標資料庫中的所有非系統資料表"""
+    """列出遠端 MySQL/MariaDB 伺服器上目前帳號可存取的所有資料庫 (Databases/Schemas) 清單"""
     conn = None
     try:
         conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
-        target_db = _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
         cursor = conn.cursor()
         try:
+            cursor.execute("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME;")
+            dbs = cursor.fetchall()
+        finally:
+            cursor.close()
+
+        if not dbs:
+            return "查無可見的資料庫。"
+        return "\n".join(str(row[0]) for row in dbs)
+    except Exception as e:
+        return f"[ERROR] {e}"
+    finally:
+        _close_safely(conn)
+
+
+@mcp.tool()
+def mysql_list_tables(
+    database: str = "",
+    mysql_host: str = "",
+    mysql_port: str = "",
+    mysql_user: str = "",
+    mysql_password: str = "",
+    mysql_database: str = "",
+) -> str:
+    """列出遠端 MySQL/MariaDB 目標資料庫中的所有非系統資料表（未指定 database 時自動列出所有使用者資料庫之資料表）"""
+    conn = None
+    try:
+        explicit_db = _clean_param(database)
+        if explicit_db:
+            explicit_db = _validate_identifier(explicit_db, "database")
+
+        conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
+        target_db = explicit_db or _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
+
+        cursor = conn.cursor()
+        try:
+            if target_db:
+                cursor.execute(
+                    "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_SCHEMA = %s AND TABLE_TYPE = 'BASE TABLE' "
+                    "ORDER BY TABLE_NAME;",
+                    (target_db,),
+                )
+                tables = cursor.fetchall()
+                if not tables:
+                    return "資料庫中沒有資料表。"
+                return "\n".join(str(t[0]) for t in tables)
+
             cursor.execute(
-                "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-                "WHERE TABLE_SCHEMA = %s AND TABLE_TYPE = 'BASE TABLE' "
-                "ORDER BY TABLE_NAME;",
-                (target_db,),
+                "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_TYPE = 'BASE TABLE' "
+                "AND TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys') "
+                "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
             )
             tables = cursor.fetchall()
         finally:
@@ -399,7 +443,7 @@ def mysql_list_tables(
 
         if not tables:
             return "資料庫中沒有資料表。"
-        return "\n".join(str(t[0]) for t in tables)
+        return "\n".join(f"{t[0]}.{t[1]}" if len(t) >= 2 else str(t[0]) for t in tables)
     except Exception as e:
         return f"[ERROR] {e}"
     finally:
@@ -409,6 +453,7 @@ def mysql_list_tables(
 @mcp.tool()
 def mysql_describe_schema(
     table_name: str,
+    database: str = "",
     mysql_host: str = "",
     mysql_port: str = "",
     mysql_user: str = "",
@@ -422,12 +467,13 @@ def mysql_describe_schema(
         if not clean_name:
             return "[ERROR] 缺少 table_name 參數。"
 
+        explicit_db = _clean_param(database)
         if "." in clean_name:
             schema_part, tbl_part = clean_name.split(".", 1)
             explicit_schema = _validate_identifier(schema_part.strip("`'\""), "schema_name")
             target_table = _validate_identifier(tbl_part.strip("`'\""), "table_name")
         else:
-            explicit_schema = ""
+            explicit_schema = _validate_identifier(explicit_db, "database") if explicit_db else ""
             target_table = _validate_identifier(clean_name, "table_name")
 
         conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
@@ -435,13 +481,23 @@ def mysql_describe_schema(
 
         cursor = conn.cursor()
         try:
-            cursor.execute(
-                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY "
-                "FROM INFORMATION_SCHEMA.COLUMNS "
-                "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s "
-                "ORDER BY ORDINAL_POSITION;",
-                (target_schema, target_table),
-            )
+            if target_schema:
+                cursor.execute(
+                    "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY "
+                    "FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s "
+                    "ORDER BY ORDINAL_POSITION;",
+                    (target_schema, target_table),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY "
+                    "FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_NAME = %s "
+                    "AND TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys') "
+                    "ORDER BY TABLE_SCHEMA, ORDINAL_POSITION;",
+                    (target_table,),
+                )
             columns = cursor.fetchall()
         finally:
             cursor.close()

@@ -57,8 +57,25 @@ def _make_fake_conn(rows=None, description=None):
     return conn, cursor
 
 
+def test_mysql_list_databases(monkeypatch):
+    """驗證資料庫清單檢索（無須預設指定 MYSQL_DATABASE）。"""
+    monkeypatch.setenv("MYSQL_HOST", "192.168.10.20")
+    monkeypatch.setenv("MYSQL_PORT", "3306")
+    monkeypatch.setenv("MYSQL_USER", "readonly_user")
+    monkeypatch.setenv("MYSQL_PASSWORD", "MySecretPass!123")
+    conn, _ = _make_fake_conn(rows=[("app_db",), ("analytics_db",)])
+    fake_driver = SimpleNamespace(connect=MagicMock(return_value=conn))
+
+    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("pymysql", fake_driver)):
+        out = mysql_mcp.mysql_list_databases()
+
+    assert out == "app_db\nanalytics_db"
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+
+
 def test_mysql_list_tables(monkeypatch):
-    """驗證資料表清單檢索與連線唯讀初始化。"""
+    """驗證資料表清單檢索與連線唯讀初始化（含未指定預設資料庫時的跨庫列表）。"""
     _set_full_mysql_env(monkeypatch)
     conn, cursor = _make_fake_conn(rows=[("orders",), ("users",)])
     fake_driver = SimpleNamespace(connect=MagicMock(return_value=conn))
@@ -73,6 +90,15 @@ def test_mysql_list_tables(monkeypatch):
     assert "START TRANSACTION READ ONLY;" in executed_sqls
     conn.rollback.assert_called_once()
     conn.close.assert_called_once()
+
+    # 未設定預設資料庫時，應列出 database.table 格式
+    monkeypatch.delenv("MYSQL_DATABASE", raising=False)
+    mysql_mcp._clear_creds_cache()
+    conn_all, _ = _make_fake_conn(rows=[("app_db", "orders"), ("sales_db", "invoices")])
+    fake_driver_all = SimpleNamespace(connect=MagicMock(return_value=conn_all))
+    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("pymysql", fake_driver_all)):
+        out_all = mysql_mcp.mysql_list_tables()
+    assert out_all == "app_db.orders\nsales_db.invoices"
 
 
 def test_mysql_describe_schema(monkeypatch):
@@ -206,19 +232,20 @@ def test_mysql_connection_closing_guaranteed_on_error(monkeypatch):
 
 @pytest.mark.parametrize("empty_val", ["", "   ", "null", "NULL", "None", "none", "~"])
 def test_mysql_empty_or_null_env_prompts_and_caches(monkeypatch, empty_val):
-    """驗證未設定或為空值/null 時透過 _tty_prompt 互動詢問並快取於記憶體。"""
+    """驗證未設定或為空值/null 時透過 _tty_prompt 互動詢問（Database 為選填不詢問）並快取於記憶體。"""
     monkeypatch.setenv("MYSQL_HOST", empty_val)
-    prompts = iter(["db.internal.local", "3307", "dbuser", "prod_db", "PromptedPass!99"])
+    monkeypatch.setenv("MYSQL_DATABASE", empty_val)
+    prompts = iter(["db.internal.local", "3307", "dbuser", "PromptedPass!99"])
 
     with patch("mcp_servers.mysql_mcp._tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
         resolved = mysql_mcp._resolve_connection_params()
-        assert resolved == ("db.internal.local", "3307", "dbuser", "PromptedPass!99", "prod_db")
-        assert mock_prompt.call_count == 5
+        assert resolved == ("db.internal.local", "3307", "dbuser", "PromptedPass!99", "")
+        assert mock_prompt.call_count == 4
 
         # 第二次呼叫直接命中快取，不再詢問
         resolved2 = mysql_mcp._resolve_connection_params()
         assert resolved2 == resolved
-        assert mock_prompt.call_count == 5
+        assert mock_prompt.call_count == 4
 
 
 def test_mysql_cross_host_does_not_leak_cached_password():
@@ -242,7 +269,8 @@ def test_mysql_cross_host_does_not_leak_cached_password():
 
 
 def test_mysql_driver_fallback_and_missing_driver_error(monkeypatch):
-    """驗證 pymysql 與 mysql.connector 延遲載入降級，以及無驅動時的明確錯誤訊息。"""
+    """驗證 pymysql 與 mysql.connector 延遲載入降級，以及無驅動時的明確錯誤訊息且不清除快取。"""
+    _set_full_mysql_env(monkeypatch)
     fake_connector = SimpleNamespace(connect=MagicMock())
 
     def fake_import(name):
@@ -261,14 +289,20 @@ def test_mysql_driver_fallback_and_missing_driver_error(monkeypatch):
         with pytest.raises(RuntimeError, match="pip install pymysql"):
             mysql_mcp._load_mysql_driver()
 
+        # 缺少驅動不應觸發 [CONN_AUTH]，亦不應清除已快取的連線憑證
+        out = mysql_mcp.mysql_list_databases()
+        assert "[CONN_AUTH]" not in out
+        assert "pip install pymysql" in out
+        assert mysql_mcp._RUNTIME_CREDS.get("MYSQL_HOST") == "192.168.10.20"
+
 
 def test_mcp_manager_strips_mysql_params_and_clears_cache_on_conn_auth():
-    """驗證 MCPManager 自動隱藏 mysql_* 連線參數、僅詢問缺漏項，並在 [CONN_AUTH] 時清除快取。"""
+    """驗證 MCPManager 自動隱藏 mysql_* 連線參數、MYSQL_DATABASE 為選填不強制詢問，並在 [CONN_AUTH] 時清除快取。"""
     manager = MCPManager()
     manager._server_envs["mysql"] = {
         "MYSQL_HOST": "10.10.1.5",
         "MYSQL_PORT": "3306",
-        "MYSQL_DATABASE": "sales_db",
+        "MYSQL_DATABASE": "null",
     }
     fake_tools = [
         SimpleNamespace(
@@ -318,6 +352,7 @@ def test_mcp_manager_strips_mysql_params_and_clears_cache_on_conn_auth():
     manager.on_prompt_conn = fake_prompt
     asyncio.run(manager.call("mysql_run_select_query", {"query": "SELECT 1"}))
 
+    # MYSQL_DATABASE 為選填，不應出現在 missing_keys 中
     assert prompt_calls == [("mysql", ["MYSQL_USER", "MYSQL_PASSWORD"])]
     _, sent_args = fake_session.call_tool.call_args.args
     assert sent_args == {
@@ -326,7 +361,7 @@ def test_mcp_manager_strips_mysql_params_and_clears_cache_on_conn_auth():
         "mysql_port": "3306",
         "mysql_user": "analyst",
         "mysql_password": "SecretDbPw!",
-        "mysql_database": "sales_db",
+        "mysql_database": "",
     }
 
     # 認證失敗 ([CONN_AUTH]) 應觸發快取清除並在下次重新詢問

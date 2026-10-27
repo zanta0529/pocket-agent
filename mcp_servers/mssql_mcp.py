@@ -9,7 +9,7 @@
 4. 連線資源於 finally 區塊確保關閉釋放，避免佔用遠端資料庫連線池。
 5. 內建敏感欄位名稱與內容正則遮罩，防止密碼、Token、金鑰外洩至 LLM 上下文。
 6. 支援彈性設定：MSSQL_HOST、MSSQL_PORT、MSSQL_USER、MSSQL_PASSWORD、MSSQL_DATABASE
-   可於 mcp_config.yaml 預填、留空、設為 null 或省略；未設定時於執行期互動詢問並快取於記憶體。
+   可於 mcp_config.yaml 預填、留空、設為 null 或省略；MSSQL_DATABASE 為選填，未設定時可探查所有資料庫清單。
 """
 
 import getpass
@@ -216,7 +216,7 @@ def _resolve_connection_params(
     mssql_password: str = "",
     mssql_database: str = "",
 ) -> tuple[str, str, str, str, str]:
-    """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得 SQL Server 連線五要素。"""
+    """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得 SQL Server 連線參數（MSSQL_DATABASE 為選填）。"""
     _check_creds_ttl()
     cached_host = _RUNTIME_CREDS.get("MSSQL_HOST", "")
     cached_port = _RUNTIME_CREDS.get("MSSQL_PORT", "")
@@ -239,32 +239,28 @@ def _resolve_connection_params(
         port = _clean_param(_tty_prompt("請輸入 SQL Server 連接埠 (MSSQL_PORT) [預設 1433]: ")) or "1433"
     if not user:
         user = _clean_param(_tty_prompt(f"請輸入 {host} 的 SQL Server 登入帳號 (MSSQL_USER): "))
-    if not database:
-        database = _clean_param(_tty_prompt(f"請輸入 {host} 的目標資料庫名稱 (MSSQL_DATABASE): "))
 
     if not host:
         raise ValueError("未提供 SQL Server 主機位址 (MSSQL_HOST)。")
     if not user:
         raise ValueError("未提供 SQL Server 登入帳號 (MSSQL_USER)。")
-    if not database:
-        raise ValueError("未提供 SQL Server 資料庫名稱 (MSSQL_DATABASE)。")
 
     host = _validate_host(host)
     port = _validate_port(port)
     user = _validate_user(user)
-    database = _validate_identifier(database, "MSSQL_DATABASE")
+    if database:
+        database = _validate_identifier(database, "MSSQL_DATABASE")
 
-    target = (host, port, user, database)
-    cached_target = (cached_host, cached_port, cached_user, cached_db)
+    target_auth = (host, port, user)
+    cached_auth = (cached_host, cached_port, cached_user)
     env_matches = (
         (not env_host or env_host == host)
         and (not env_port or _validate_port(env_port) == port)
         and (not env_user or env_user == user)
-        and (not env_db or env_db == database)
     )
 
     password = mssql_password if not _is_empty_or_null(mssql_password) else ""
-    if not password and target == cached_target:
+    if not password and target_auth == cached_auth:
         password = _RUNTIME_CREDS.get("MSSQL_PASSWORD", "")
     if not password and env_matches:
         env_pw = os.getenv("MSSQL_PASSWORD")
@@ -340,12 +336,15 @@ def _get_readonly_connection(
         _clear_creds_cache()
         raise _ConnAuthError(f"[CONN_AUTH] {exc}") from exc
 
+    # 驅動載入置於連線區塊外，避免未安裝驅動套件時誤清除已快取的連線帳密
     driver_type, driver_mod = _load_mssql_driver()
 
     try:
         timeout = max(3, min(int(os.getenv("MSSQL_CONNECT_TIMEOUT") or "10"), 60))
     except ValueError:
         timeout = 10
+
+    db_kwarg = {"database": database} if database else {}
 
     conn = None
     try:
@@ -355,10 +354,10 @@ def _get_readonly_connection(
                 port=int(port),
                 user=user,
                 password=password,
-                database=database,
                 login_timeout=timeout,
                 timeout=timeout,
                 autocommit=False,
+                **db_kwarg,
             )
         else:
             odbc_driver = _resolve_odbc_driver(driver_mod)
@@ -366,10 +365,11 @@ def _get_readonly_connection(
             encrypt_val = "no" if encrypt_env in ("no", "false", "0") else "yes"
             trust_env = (_clean_param(os.getenv("MSSQL_TRUST_SERVER_CERTIFICATE")) or "yes").lower()
             trust_val = "no" if trust_env in ("no", "false", "0") else "yes"
+            db_part = f"DATABASE={_escape_odbc_value(database)};" if database else ""
             conn_str = (
                 f"DRIVER={_escape_odbc_value(odbc_driver)};"
                 f"SERVER=tcp:{host},{port};"
-                f"DATABASE={_escape_odbc_value(database)};"
+                f"{db_part}"
                 f"UID={_escape_odbc_value(user)};"
                 f"PWD={_escape_odbc_value(password)};"
                 "ApplicationIntent=ReadOnly;"
@@ -416,7 +416,36 @@ def _close_safely(conn: Any) -> None:
 
 
 @mcp.tool()
+def mssql_list_databases(
+    mssql_host: str = "",
+    mssql_port: str = "",
+    mssql_user: str = "",
+    mssql_password: str = "",
+    mssql_database: str = "",
+) -> str:
+    """列出遠端 Microsoft SQL Server 伺服器上所有狀態為 ONLINE 的資料庫清單"""
+    conn = None
+    try:
+        conn = _get_readonly_connection(mssql_host, mssql_port, mssql_user, mssql_password, mssql_database)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name;")
+            dbs = cursor.fetchall()
+        finally:
+            cursor.close()
+
+        if not dbs:
+            return "查無可見的資料庫。"
+        return "\n".join(str(row[0]) for row in dbs)
+    except Exception as e:
+        return f"[ERROR] {e}"
+    finally:
+        _close_safely(conn)
+
+
+@mcp.tool()
 def mssql_list_tables(
+    database: str = "",
     mssql_host: str = "",
     mssql_port: str = "",
     mssql_user: str = "",
@@ -426,14 +455,25 @@ def mssql_list_tables(
     """列出遠端 Microsoft SQL Server 目標資料庫中的所有非系統資料表"""
     conn = None
     try:
+        explicit_db = _clean_param(database)
+        if explicit_db:
+            explicit_db = _validate_identifier(explicit_db, "database")
+
         conn = _get_readonly_connection(mssql_host, mssql_port, mssql_user, mssql_password, mssql_database)
         cursor = conn.cursor()
         try:
-            cursor.execute(
-                "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-                "WHERE TABLE_TYPE = 'BASE TABLE' "
-                "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
-            )
+            if explicit_db:
+                cursor.execute(
+                    f"SELECT TABLE_SCHEMA, TABLE_NAME FROM [{explicit_db}].INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_TYPE = 'BASE TABLE' "
+                    "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
+                )
+            else:
+                cursor.execute(
+                    "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_TYPE = 'BASE TABLE' "
+                    "ORDER BY TABLE_SCHEMA, TABLE_NAME;"
+                )
             tables = cursor.fetchall()
         finally:
             cursor.close()
@@ -457,6 +497,7 @@ def mssql_list_tables(
 @mcp.tool()
 def mssql_describe_schema(
     table_name: str,
+    database: str = "",
     mssql_host: str = "",
     mssql_port: str = "",
     mssql_user: str = "",
@@ -470,23 +511,34 @@ def mssql_describe_schema(
         if not clean_name:
             return "[ERROR] 缺少 table_name 參數。"
 
-        if "." in clean_name:
-            schema_part, tbl_part = clean_name.split(".", 1)
-            target_schema = _validate_identifier(schema_part.strip("[]'\""), "schema_name")
-            target_table = _validate_identifier(tbl_part.strip("[]'\""), "table_name")
-        else:
+        explicit_db = _clean_param(database)
+        if explicit_db:
+            explicit_db = _validate_identifier(explicit_db, "database")
+
+        parts = [p.strip("[]'\"") for p in clean_name.split(".")]
+        if len(parts) == 3:
+            explicit_db = _validate_identifier(parts[0], "database")
+            target_schema = _validate_identifier(parts[1], "schema_name")
+            target_table = _validate_identifier(parts[2], "table_name")
+        elif len(parts) == 2:
+            target_schema = _validate_identifier(parts[0], "schema_name")
+            target_table = _validate_identifier(parts[1], "table_name")
+        elif len(parts) == 1:
             target_schema = "dbo"
-            target_table = _validate_identifier(clean_name, "table_name")
+            target_table = _validate_identifier(parts[0], "table_name")
+        else:
+            return f"[ERROR] 非法的 table_name 格式：{table_name!r}"
 
         conn = _get_readonly_connection(mssql_host, mssql_port, mssql_user, mssql_password, mssql_database)
+        db_prefix = f"[{explicit_db}]." if explicit_db else ""
         raw_sql = (
             "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, "
             "CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS IS_PK "
-            "FROM INFORMATION_SCHEMA.COLUMNS c "
+            f"FROM {db_prefix}INFORMATION_SCHEMA.COLUMNS c "
             "LEFT JOIN ("
             "  SELECT ku.TABLE_SCHEMA, ku.TABLE_NAME, ku.COLUMN_NAME "
-            "  FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc "
-            "  JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku "
+            f"  FROM {db_prefix}INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc "
+            f"  JOIN {db_prefix}INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku "
             "    ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME "
             "    AND tc.TABLE_SCHEMA = ku.TABLE_SCHEMA "
             "    AND tc.TABLE_NAME = ku.TABLE_NAME "
