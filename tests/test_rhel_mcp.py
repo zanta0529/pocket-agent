@@ -110,6 +110,15 @@ def test_query_journal_validation_and_clamping(monkeypatch):
         assert "-p warning" in remote_cmd
         assert "-n 200" in remote_cmd
 
+    # 驗證超過 MAX_OUTPUT_CHARS 截斷以及含無 PRIORITY / list PRIORITY 的 journalctl JSON 容錯
+    long_line = '{"__CURSOR":"' + ("a" * 220) + '","PRIORITY":"4"}\n'
+    mixed_lines = '{"__CURSOR":"c1","PRIORITY":["3"]}\n{"__CURSOR":"c2","_BOOT_ID":"b1"}\n' + (long_line * 60)
+    fake_long_proc = SimpleNamespace(returncode=0, stdout=mixed_lines, stderr="")
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_long_proc):
+        out_long = rhel_mcp.rhel_query_journal(unit="insights-client.service", priority="warning", lines=100)
+        assert not out_long.startswith("[ERROR]")
+        assert '"3": 1' in out_long
+
 
 @pytest.mark.parametrize(
     "blocked_path",

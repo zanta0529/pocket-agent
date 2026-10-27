@@ -1044,12 +1044,25 @@ def rhel_query_journal(
     if result.startswith("[ERROR]"):
         return "[ERROR] 日誌摘要查詢失敗；可能缺少權限或不支援指定的 journalctl 選項。"
     counts = {str(level): 0 for level in range(8)}
+    was_truncated = "\n... (輸出過長已截斷" in result
+    clean_result = result.split("\n... (輸出過長已截斷", 1)[0] if was_truncated else result
+    raw_lines = [] if clean_result == "(沒有輸出)" else clean_result.splitlines()
+    if was_truncated and raw_lines and not raw_lines[-1].strip().endswith("}"):
+        raw_lines = raw_lines[:-1]
     try:
-        for line in [] if result == "(沒有輸出)" else result.splitlines():
+        for line in raw_lines:
             if not line.strip():
                 continue
             record = json.loads(line)
+            if not isinstance(record, dict):
+                return "[ERROR] 日誌摘要格式不符，已捨棄。"
             level = record.get("PRIORITY")
+            if isinstance(level, list) and level:
+                level = level[0]
+            if isinstance(level, int):
+                level = str(level)
+            if level is None and any(k in record for k in ("__CURSOR", "_BOOT_ID", "__REALTIME_TIMESTAMP")):
+                continue
             if not isinstance(level, str) or level not in counts:
                 return "[ERROR] 日誌摘要格式不符，已捨棄。"
             counts[level] += 1
