@@ -610,3 +610,118 @@ def test_rhel_audit_log_records_commands_and_blocks_without_leaking_password(mon
     assert "[AUDIT] [MCP:rhel-ops] tool=rhel_read_config status=BLOCKED" in content
     assert "/etc/shadow" in content
     assert "SecretPass!123" not in content
+
+
+def test_run_remote_preserves_capture_ssh_quota_and_decode_errors(monkeypatch, tmp_path):
+    """驗證 _capture_ssh 的位元組超限與解碼失敗訊息能完整傳遞至回傳值與稽核日誌。"""
+    _set_full_creds(monkeypatch)
+    log_file = tmp_path / "agent.log"
+
+    quota_proc = subprocess.CompletedProcess(["ssh"], 1, "", "輸出超過安全位元組上限，已中止並捨棄內容。")
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=quota_proc):
+        res_quota = rhel_mcp.rhel_system_overview()
+    assert res_quota == "[ERROR] 輸出超過安全位元組上限，已中止並捨棄內容。"
+
+    decode_proc = subprocess.CompletedProcess(["ssh"], 1, "", "輸出無法安全解碼，已捨棄內容。")
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=decode_proc):
+        res_decode = rhel_mcp.rhel_network_status()
+    assert res_decode == "[ERROR] 輸出無法安全解碼，已捨棄內容。"
+
+    log_content = log_file.read_text(encoding="utf-8")
+    assert "輸出超過安全位元組上限" in log_content
+    assert "輸出無法安全解碼" in log_content
+
+
+def test_service_status_structured_list_and_multi_service_batch(monkeypatch):
+    """驗證 rhel_service_status 結構化清單（遮罩 @instance、不含 DESCRIPTION）與多服務批次查詢。"""
+    _set_full_creds(monkeypatch)
+    fake_out = "kdump.service loaded failed failed\nmatching_units=1"
+    fake_proc = SimpleNamespace(returncode=0, stdout=fake_out, stderr="")
+
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
+        out_failed = rhel_mcp.rhel_service_status(failed_only=True)
+        assert "kdump.service" in out_failed
+        assert "matching_units=1" in out_failed
+        called_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "--state=failed" in called_cmd
+        assert 'sub(/@[^.]+/, "@*", u)' in called_cmd
+        assert "print u, $2, $3, $4" in called_cmd
+
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
+        rhel_mcp.rhel_service_status(service_name="sshd, chronyd auditd")
+        called_multi = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "systemctl show sshd chronyd auditd --no-pager" in called_multi
+        assert "Id,LoadState,ActiveState" in called_multi
+
+    with patch("mcp_servers.rhel_mcp._capture_ssh") as mock_run:
+        res_bad = rhel_mcp.rhel_service_status(service_name="sshd, nginx;id")
+        assert res_bad.startswith("[ERROR]")
+        too_many = ",".join(f"svc{i}" for i in range(11))
+        res_many = rhel_mcp.rhel_service_status(service_name=too_many)
+        assert res_many.startswith("[ERROR]")
+        assert "10" in res_many
+        mock_run.assert_not_called()
+
+
+def test_diagnostic_commands_enriched_sections(monkeypatch):
+    """驗證巡檢工具新增之時間同步、掛載安全選項、監聽埠行程關聯、防火牆區域與無結果容錯。"""
+    _set_full_creds(monkeypatch)
+    fake_proc = SimpleNamespace(returncode=0, stdout="OK", stderr="")
+
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
+        rhel_mcp.rhel_system_overview()
+        cmd_overview = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "timedatectl show --property=NTPSynchronized,NTP,Timezone" in cmd_overview
+
+        rhel_mcp.rhel_storage_and_fs()
+        cmd_storage = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS" in cmd_storage
+
+        rhel_mcp.rhel_network_status()
+        cmd_net = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "ss -tulnp" in cmd_net
+
+        rhel_mcp.rhel_security_status()
+        cmd_sec = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "firewall-cmd --get-default-zone" in cmd_sec
+        assert "firewall-cmd --get-active-zones" in cmd_sec
+
+        rhel_mcp.rhel_process_inspect(search="nginx")
+        cmd_proc = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "|| echo '查無符合條件的行程'" in cmd_proc
+
+
+def test_ipv6_env_host_matches_password_and_known_hosts_prefix_safety(monkeypatch, tmp_path):
+    """驗證 IPv6 環境變數正規化比對，以及 known_hosts 前綴重疊時仍能精確同步且不黏行。"""
+    monkeypatch.setenv("RHEL_HOST", "fe80::1")
+    monkeypatch.setenv("RHEL_SSH_PORT", "22")
+    monkeypatch.setenv("RHEL_SSH_USER", "opsuser")
+    monkeypatch.setenv("RHEL_SSH_PASSWORD", "Ipv6Secret!99")
+
+    with patch("mcp_servers.rhel_mcp._tty_prompt") as mock_prompt:
+        host, port, user, pw, _ = rhel_mcp._resolve_connection_params()
+        assert host == "[fe80::1]"
+        assert pw == "Ipv6Secret!99"
+        mock_prompt.assert_not_called()
+
+    rhel_mcp._RUNTIME_CREDS.clear()
+    _set_full_creds(monkeypatch)
+    monkeypatch.setenv("RHEL_HOST", "172.17.3.57")
+
+    fake_home = tmp_path / "home"
+    ssh_dir = fake_home / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "known_hosts").write_text("172.17.3.57 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5\n", encoding="utf-8")
+
+    custom_kh = tmp_path / "rhel_known_hosts"
+    custom_kh.write_text("172.17.3.570 ssh-ed25519 EXISTINGKEY", encoding="utf-8")
+    monkeypatch.setenv("RHEL_KNOWN_HOSTS_FILE", str(custom_kh))
+
+    with patch.object(rhel_mcp.Path, "home", return_value=fake_home):
+        rhel_mcp._build_ssh_args("uptime")
+
+    kh_lines = custom_kh.read_text(encoding="utf-8").splitlines()
+    assert kh_lines == [
+        "172.17.3.570 ssh-ed25519 EXISTINGKEY",
+        "172.17.3.57 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+    ]

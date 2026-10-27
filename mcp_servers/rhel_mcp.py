@@ -306,7 +306,7 @@ def _redact_and_truncate(text: str) -> str:
     if len(redacted) > MAX_OUTPUT_CHARS:
         return (
             redacted[:MAX_OUTPUT_CHARS] + f"\n... (輸出過長已截斷，已達 {MAX_OUTPUT_CHARS} 字元上限)\n"
-            "[提示：若需檢視後續內容或關鍵錯誤，請使用 grep 參數過濾關鍵字、縮短 since 時間範圍，或調整 max_lines 行數]"
+            "[提示：若需檢視後續內容或縮小範圍，請指定更精確的查詢條件、縮短 since 時間範圍，或調整行數上限]"
         )
     return redacted
 
@@ -388,8 +388,13 @@ def _resolve_connection_params(
     env_key = (os.getenv("RHEL_SSH_KEY_PATH") or "").strip()
     if env_key:
         env_key = str(Path(env_key).expanduser().resolve())
+    raw_env_host = (os.getenv("RHEL_HOST") or "").strip()
+    try:
+        norm_env_host = _validate_host(raw_env_host) if raw_env_host else ""
+    except ValueError:
+        norm_env_host = raw_env_host
     env_target = (
-        (os.getenv("RHEL_HOST") or "").strip(),
+        norm_env_host,
         (os.getenv("RHEL_SSH_PORT") or "22").strip(),
         (os.getenv("RHEL_SSH_USER") or "").strip(),
         env_key,
@@ -406,12 +411,7 @@ def _resolve_connection_params(
         if not password:
             password = _tty_prompt(f"請輸入 {user}@{host} 的 SSH 登入密碼: ", is_password=True)
         if not password:
-            raise ValueError("未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；本工具僅允許帳號密碼驗證。")
-
-    _validate_host(host)
-    _validate_identifier(user, "RHEL_SSH_USER")
-    if not port.isdigit() or not (1 <= int(port) <= 65535):
-        raise ValueError("非法的 RHEL_SSH_PORT 數值（必須為 1~65535 之間的整數）")
+            raise ValueError("未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；未指定私鑰時必須提供密碼驗證。")
 
     _RUNTIME_CREDS["RHEL_HOST"] = host
     _RUNTIME_CREDS["RHEL_SSH_PORT"] = port
@@ -451,21 +451,22 @@ def _build_ssh_args(
         try:
             content = Path(known_hosts_file).read_text(encoding="utf-8", errors="ignore")
             clean_host = host.strip("[]")
-            if clean_host not in content:
+            host_prefixes = (f"{clean_host} ", f"[{clean_host}]:", f"{host} ")
+            existing_lines = [line.strip() for line in content.splitlines() if line.strip()]
+            has_entry = any(line.startswith(host_prefixes) for line in existing_lines)
+            if not has_entry:
                 user_known_hosts = Path.home() / ".ssh" / "known_hosts"
                 if user_known_hosts.exists():
                     user_lines = [
                         line
                         for line in user_known_hosts.read_text(encoding="utf-8", errors="ignore").splitlines()
-                        if line.strip()
-                        and (
-                            line.startswith(f"{clean_host} ")
-                            or line.startswith(f"[{clean_host}]:")
-                            or line.startswith(f"{host} ")
-                        )
+                        if line.strip() and line.strip().startswith(host_prefixes)
                     ]
                     if user_lines:
+                        prefix_nl = "\n" if content and not content.endswith("\n") else ""
                         with open(known_hosts_file, "a", encoding="utf-8") as f:
+                            if prefix_nl:
+                                f.write(prefix_nl)
                             for entry in user_lines:
                                 f.write(f"{entry}\n")
         except Exception:
@@ -764,6 +765,19 @@ def _run_remote(
         combined = (proc.stdout or "").strip()
 
         if proc.returncode != 0 and not combined:
+            stderr_msg = (proc.stderr or "").strip()
+            if stderr_msg in (
+                "輸出超過安全位元組上限，已中止並捨棄內容。",
+                "輸出無法安全解碼，已捨棄內容。",
+            ):
+                _audit_log(
+                    tool_name,
+                    remote_cmd,
+                    target=target_str,
+                    status="ERROR",
+                    detail=stderr_msg,
+                )
+                return f"[ERROR] {stderr_msg}"
             _audit_log(
                 tool_name,
                 remote_cmd,
@@ -824,10 +838,11 @@ def rhel_system_overview(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 主機系統概況：OS 版本、Kernel、Uptime、CPU/記憶體使用量與前 10 大高負載行程"""
+    """探查 RHEL 主機系統概況：OS 版本、Kernel、Uptime、時間同步、記憶體與高負載行程"""
     cmd = (
         "echo '=== OS Release ===' && cat /etc/redhat-release /etc/os-release 2>/dev/null | sed -n '1,15p'; "
-        "echo '=== Kernel & Uptime ===' && uname -srm && uptime; "
+        "echo '=== Kernel & Uptime ===' && uname -srm && uptime && "
+        "(timedatectl show --property=NTPSynchronized,NTP,Timezone 2>/dev/null || true); "
         "echo '=== Memory (MB) ===' && free -m; "
         "echo '=== Top Processes (by CPU) ===' && "
         "ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu | sed -n '1,11p'"
@@ -843,11 +858,13 @@ def rhel_storage_and_fs(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 儲存與檔案系統狀態：掛載點空間使用率 (df -hT)、Inode 使用率 (df -i) 與區塊裝置 (lsblk)"""
+    """探查 RHEL 儲存與檔案系統：掛載空間 (df -hT)、Inode、區塊裝置與掛載選項 (findmnt)"""
     cmd = (
         "echo '=== Filesystem Usage ===' && df -hT -x tmpfs -x devtmpfs; "
         "echo '=== Inode Usage ===' && df -i -x tmpfs -x devtmpfs; "
-        "echo '=== Block Devices ===' && lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,UUID"
+        "echo '=== Block Devices ===' && lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,UUID; "
+        "echo '=== Mount Options ===' && "
+        "(findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS -t notmpfs,nodevtmpfs,nosquashfs 2>/dev/null || true)"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_storage_and_fs")
 
@@ -860,12 +877,12 @@ def rhel_network_status(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 網路狀態：網路介面與 IP、路由表、DNS 設定與目前監聽的 TCP/UDP 連接埠"""
+    """探查 RHEL 網路狀態：網路介面、路由表、DNS 與監聽的 TCP/UDP 連接埠及行程"""
     cmd = (
         "echo '=== Network Interfaces ===' && ip -br addr; "
         "echo '=== Routing Table ===' && ip route; "
         "echo '=== DNS Resolver ===' && cat /etc/resolv.conf 2>/dev/null; "
-        "echo '=== Listening Ports ===' && ss -tuln"
+        "echo '=== Listening Ports ===' && ss -tulnp"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_network_status")
 
@@ -880,12 +897,13 @@ def rhel_service_status(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """查詢 systemd 狀態；未指定服務時回傳數量，指定時只回傳狀態屬性，不含日誌或命令列。"""
+    """查詢 systemd 狀態；未指定服務時回傳結構化單元狀態與總數，指定時回傳服務屬性。"""
     if failed_only or not service_name.strip():
         state_flag = "--state=failed" if failed_only else "--type=service --state=running,failed"
         cmd = (
             f"systemctl list-units {state_flag} --no-pager --no-legend --plain "
-            "| awk 'END {print \"matching_units=\" NR}'"
+            '| awk \'NR<=50 {u=$1; sub(/@[^.]+/, "@*", u); print u, $2, $3, $4} '
+            'END {print "matching_units=" NR}\''
         )
         return _run_remote(
             cmd,
@@ -897,22 +915,36 @@ def rhel_service_status(
             tool_name="rhel_service_status",
         )
 
-    try:
-        safe_unit = _validate_identifier(service_name, "service_name")
-    except ValueError as e:
+    raw_units = [u for u in re.split(r"[\s,]+", service_name.strip()) if u]
+    if len(raw_units) > 10:
         _audit_log(
             "rhel_service_status",
             f"service_name={service_name!r}",
             target=_format_audit_target(ssh_host, ssh_port, ssh_user),
             status="BLOCKED",
-            detail=str(e),
+            detail="Too many service names (max 10)",
         )
-        return _redact_and_truncate(f"[ERROR] {e}")
+        return "[ERROR] 單次查詢的服務數量不得超過 10 個。"
 
-    quoted = shlex.quote(safe_unit)
+    quoted_units: list[str] = []
+    for unit_item in raw_units:
+        try:
+            safe_unit = _validate_identifier(unit_item, "service_name")
+        except ValueError as e:
+            _audit_log(
+                "rhel_service_status",
+                f"service_name={service_name!r}",
+                target=_format_audit_target(ssh_host, ssh_port, ssh_user),
+                status="BLOCKED",
+                detail=str(e),
+            )
+            return _redact_and_truncate(f"[ERROR] {e}")
+        quoted_units.append(shlex.quote(safe_unit))
+
+    joined_units = " ".join(quoted_units)
     cmd = (
-        f"systemctl show {quoted} --no-pager "
-        "--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus,Result"
+        f"systemctl show {joined_units} --no-pager "
+        "--property=Id,LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus,Result"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_service_status")
 
@@ -1019,13 +1051,15 @@ def rhel_security_status(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 安全性子系統狀態：SELinux 模式與狀態、firewalld 防火牆規則摘要，以及待安裝的安全性更新"""
+    """探查 RHEL 安全性狀態：SELinux 模式與 firewalld 預設／作用中區域及規則摘要"""
     cmd = (
         "echo '=== SELinux Status ===' && (sestatus || getenforce) 2>/dev/null; "
         "echo '=== Recent SELinux AVC Denials ==='; "
         "echo '[提示] 不回傳 AVC 原文；請使用 rhel_query_journal 取得有界等級摘要'; "
         "echo '=== Firewalld State ===' && "
-        "(firewall-cmd --state && firewall-cmd --list-all) 2>/dev/null || echo 'firewalld 未執行或需要權限'; "
+        "(firewall-cmd --state && firewall-cmd --get-default-zone && "
+        "firewall-cmd --get-active-zones && firewall-cmd --list-all) 2>/dev/null "
+        "|| echo 'firewalld 未執行或需要權限'; "
         "echo '=== Security Updates (dnf) ===' && "
         "echo '[UNSUPPORTED] 安全更新查詢已停用（DNF 快取存取存在潛在副作用）'"
     )
@@ -1182,7 +1216,8 @@ def rhel_process_inspect(
         quoted_search = shlex.quote(safe_search)
         cmd = (
             f"echo '=== Search Processes matching {quoted_search} ===' && "
-            f"ps -eo {cols} | grep -i -- {quoted_search} | grep -v grep | sed -n '1,{safe_lines}p'"
+            f"(ps -eo {cols} | grep -i -- {quoted_search} | grep -v grep | sed -n '1,{safe_lines}p' "
+            "|| echo '查無符合條件的行程')"
         )
         return _run_remote(
             cmd,
@@ -1297,7 +1332,7 @@ def rhel_package_info(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """查詢 RHEL RPM/DNF 套件資訊、版本與檔案完整性驗證 (rpm -qi, rpm -V, dnf info)"""
+    """查詢已安裝之 RHEL RPM 套件資訊、Changelog 摘要與完整性驗證 (rpm -qi, rpm -V)"""
     try:
         safe_pkg = _validate_identifier(package_name, "package_name")
     except ValueError as e:

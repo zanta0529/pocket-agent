@@ -81,34 +81,41 @@ Pocket Agent 的解決方案：
 
 所有工具均為唯讀操作，不會在遠端主機執行任何狀態修改，建議於 `mcp_config.yaml` 中加入 `safe_read_tools`：
 
-| 工具名稱               | 用途說明                                                                 | 工具參數（供 LLM 呼叫）                                                                  |
-| :--------------------- | :----------------------------------------------------------------------- | :--------------------------------------------------------------------------------------- |
-| `rhel_system_overview` | 取得發行版資訊 (`/etc/os-release`)、Kernel、Uptime、CPU/Load、記憶體與失敗的 systemd 單元 | 無                                                                                       |
-| `rhel_storage_and_fs`  | 檢查區塊裝置 (`lsblk`)、檔案系統空間 (`df -hT`)、Inodes (`df -i`) 與掛載配置 | 無                                                                                       |
-| `rhel_network_status`  | 檢查網路介面 (`ip -br addr`)、路由表 (`ip route`)、監聽埠 (`ss -tulnp`) 與 DNS | 無                                                                                       |
-| `rhel_service_status`  | 查詢指定 systemd 服務的狀態 (`systemctl status`) 與單元設定               | `service_name`（必填，嚴格限制為合法單元名稱 `[a-zA-Z0-9_.@-]+`）                         |
-| `rhel_query_journal`   | 查詢 `journalctl` 系統或特定服務日誌                                     | `unit`（選填）、`priority`（預設 `err`）、`since`（預設 `1 hour ago`）、`lines`（1~200） |
-| `rhel_security_status` | 檢查 SELinux 狀態 (`getenforce`/`sestatus`)、Firewalld 與近期失敗登入紀錄 | 無                                                                                       |
-| `rhel_read_config`     | 唯讀檢視白名單目錄下的設定檔內容（最多 200 行，自動遮罩機密欄位）         | `file_path`（必填，僅限 `/etc/`、`/proc/`、`/srv/`、`/sys/`、`/usr/lib/systemd/`、`/usr/local/etc/`、`/usr/share/` 下的檔案） |
+| 工具名稱                   | 用途說明                                                                                                                                                                                             | 工具參數（供 LLM 呼叫）                                                                                                          |
+| :------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
+| `rhel_system_overview`     | 取得發行版資訊 (`/etc/os-release`)、Kernel、Uptime、時間同步狀態 (`timedatectl show`)、記憶體與前 10 大高負載行程                                                                                    | 無                                                                                                                               |
+| `rhel_storage_and_fs`      | 檢查檔案系統空間 (`df -hT`)、Inodes (`df -i`)、區塊裝置 (`lsblk`) 與實體分割區掛載安全選項 (`findmnt`)                                                                                               | 無                                                                                                                               |
+| `rhel_network_status`      | 檢查網路介面 (`ip -br addr`)、路由表 (`ip route`)、DNS (`/etc/resolv.conf`) 與監聽埠及對應行程 (`ss -tulnp`)                                                                                         | 無                                                                                                                               |
+| `rhel_service_status`      | 查詢 systemd 服務狀態：未指定服務或 `failed_only=True` 時回傳前 50 筆結構化狀態（`UNIT LOAD ACTIVE SUB`，將 `@instance` 遮罩為 `@*`，不含 `DESCRIPTION`）與 `matching_units=<NR>`；指定時回傳結構化屬性 | `service_name`（選填，支援單一服務或以逗號／空白分隔最多 10 個合法單元名稱 `[a-zA-Z0-9_.@-]+`）、`failed_only`（選填，預設 `False`） |
+| `rhel_query_journal`       | 查詢 `journalctl` 系統或特定服務日誌之有界等級計數摘要（不回傳訊息原文）                                                                                                                             | `unit`（選填）、`priority`（預設 `err`）、`since`（預設 `1 hour ago`）、`lines`（1~200）                                         |
+| `rhel_security_status`     | 檢查 SELinux 狀態 (`sestatus`/`getenforce`) 與 Firewalld 狀態（含預設區域 `--get-default-zone`、作用中區域 `--get-active-zones` 與規則摘要）                                                         | 無                                                                                                                               |
+| `rhel_read_config`         | 安全摘要模式僅回傳 `/etc/selinux/config` 的批准 `SELINUX` 列舉值（`enforcing`／`permissive`／`disabled`），不提供任意設定檔原文                                                                      | `file_path`（必填，僅允許 `/etc/selinux/config`）                                                                                |
+| `rhel_selinux_context`     | 查詢白名單目錄下指定路徑的目前 SELinux 安全標籤 (`ls -dZ`) 與政策預期標籤 (`matchpathcon`)                                                                                                           | `target_path`（必填）                                                                                                            |
+| `rhel_process_inspect`     | 深度探查行程資訊：指定 PID 檢視狀態摘要、以關鍵字搜尋行程（含無結果容錯保護），或依 CPU／Memory 排序（支援 SELinux 標籤）                                                                            | `pid`（選填）、`search`（選填）、`sort_by`（`cpu`/`mem`）、`show_selinux`、`max_lines`                                           |
+| `rhel_network_connections` | 利用 `ss` 結構化探查網路連線狀態（支援 TCP/UDP 協定、連線狀態過濾、特定連接埠與行程關聯）                                                                                                            | `protocol`、`state`、`port`、`show_process`、`max_lines`                                                                         |
+| `rhel_package_info`        | 查詢已安裝 RPM 套件資訊 (`rpm -qi`)、近期 Changelog 摘要與檔案完整性驗證 (`rpm -V --noscripts`)                                                                                                      | `package_name`（必填）、`verify_integrity`（預設 `False`）                                                                       |
+| `rhel_cron_and_timers`     | 提供已載入 systemd timer 與 `/etc/crontab` 項目計數，不回傳名稱、帳號或執行命令                                                                                                                      | 無                                                                                                                               |
+| `rhel_hardware_info`       | 探查硬體規格與虛擬化環境：虛擬化平台 (`systemd-detect-virt`)、CPU 架構 (`lscpu`) 與記憶體／Swap 明細                                                                                                 | 無                                                                                                                               |
 
 ### 2. 安全防禦邊界
 
-- **強制純帳號密碼驗證（無金鑰／Agent 後門）**：底層透過系統 `ssh`（搭配 `SSH_ASKPASS_REQUIRE=force` 暫存腳本）或 Windows PuTTY `plink -pw -noagent` 連線，並強制附加 `-o PubkeyAuthentication=no`、`-o GSSAPIAuthentication=no`、`-o IdentitiesOnly=yes`、`-o IdentityAgent=none` 與 `-o PreferredAuthentications=keyboard-interactive,password`，徹底停用公私鑰、SSH Agent 與 Kerberos 驗證管道。
-- **零任意 Shell 執行與參數防注入**：不提供通用 `run_command` 工具；所有遠端指令皆為固定模板，且外部參數皆經過嚴格正規表示式驗證與 `shlex.quote` 轉義。
-- **設定檔路徑白名單與黑名單**：`rhel_read_config` 透過 `realpath -e` 解析真實路徑，僅允許讀取 `/etc/`、`/proc/`、`/srv/`、`/sys/`、`/usr/lib/systemd/`、`/usr/local/etc/`、`/usr/share/`，並強制攔截 `/etc/shadow`、`/etc/gshadow`、`/etc/sudoers`、`*.key`、`*.pem`、`id_rsa` 等敏感檔案。
-- **敏感資訊遮罩與輸出截斷**：回傳結果自動將 `password`、`secret`、`token`、`api_key` 等賦值或設定行替換為 `[REDACTED]`，並限制單次輸出上限為 `6,000` 字元。
+- **雙軌制連線認證（無全域金鑰／Agent 後門）**：底層透過系統 OpenSSH `ssh`（搭配零明文落盤之 `SSH_ASKPASS_REQUIRE=force` 暫存腳本與子行程環境變數）支援「指定私鑰驗證（含 Passphrase）」與「加固帳密驗證」智慧切換，並強制附加 `-o GSSAPIAuthentication=no`、`-o IdentitiesOnly=yes`、`-o IdentityAgent=none`，徹底停用本機全域 `~/.ssh/` 金鑰、SSH Agent 與 Kerberos 驗證管道。
+- **零任意 Shell 執行與參數防注入**：不提供通用 `run_command` 工具；所有遠端指令皆為固定模板（包覆於 `set -E -o pipefail` 診斷腳本），且外部參數皆經過嚴格正規表示式驗證與 `shlex.quote` 轉義。
+- **路徑真實性驗證與安全摘要隔離**：透過 `realpath -e` 解析真實路徑並阻擋敏感關鍵字；`rhel_read_config` 僅回傳批准的 `SELINUX` 列舉值，`rhel_query_journal` 僅回傳等級計數，`rhel_service_status` 列舉清單時自動遮罩 `@instance` 參數並捨棄 `DESCRIPTION` 與命令列。
+- **敏感資訊遮罩、串流防爆與集中稽核**：單次擷取硬性限制 `1 MB` 位元組上限（`MAX_CAPTURE_BYTES`）與 UTF-8 嚴格解碼，回傳結果自動將敏感鍵值與私鑰遮罩為 `[REDACTED]` 並限制輸出上限為 `12,000` 字元；所有遠端執行與安全攔截事件均自動寫入集中化 `agent.log` 的 `[AUDIT] [MCP:rhel-ops]` 紀錄。
 
 ### 3. 環境變數與配置參數表 (`servers.rhel_ops.env`)
 
-| 參數名稱               | 必填 / 選填 | 預設值   | 空白或省略時的行為                                             | 說明                                                                                     |
-| :--------------------- | :---------- | :------- | :------------------------------------------------------------- | :--------------------------------------------------------------------------------------- |
-| `RHEL_HOST`            | 彈性        | `""`     | 首次呼叫工具時於終端機互動詢問目標主機 IP 或 Hostname          | 目標 RHEL 主機的 IP 位址或網域名稱。                                                     |
-| `RHEL_SSH_PORT`        | 彈性        | `"22"`   | 若省略或留空，首次呼叫工具時於終端機互動詢問（預設帶入 `22`）   | 目標 RHEL 主機的 SSH 連接埠（`1` ~ `65535`）。                                           |
-| `RHEL_SSH_USER`        | 彈性        | `""`     | 首次呼叫工具時於終端機互動詢問登入帳號                         | 登入遠端主機的 SSH 使用者帳號。                                                          |
-| `RHEL_SSH_PASSWORD`    | 彈性        | `""`     | 首次呼叫工具時於終端機以隱藏輸入（不回顯）方式詢問登入密碼     | 登入遠端主機的 SSH 密碼。建議留空或省略，於對話執行期動態輸入以確保設定檔不落盤明文密碼。 |
-| `RHEL_CONNECT_TIMEOUT` | 選填        | `"10"`   | 套用預設值 `10` 秒                                             | SSH 連線逾時秒數。                                                                       |
-| `RHEL_STRICT_HOST_KEY` | 選填        | `"no"`   | 套用預設值 `"no"`（自動接受新主機金鑰，避免首次連線中斷）      | 設為 `"yes"` 或 `"accept-new"` 時啟用對應的 `StrictHostKeyChecking` 檢查。               |
-| `RHEL_PLINK_PATH`      | 選填        | 自動偵測 | 自動搜尋 `PATH` 與常見 PuTTY 安裝路徑                          | 選用的 PuTTY `plink.exe` 執行檔路徑（作為系統 OpenSSH 的備援連線工具）。                 |
+| 參數名稱                  | 必填 / 選填 | 預設值         | 空白或省略時的行為                                             | 說明                                                                                     |
+| :------------------------ | :---------- | :------------- | :------------------------------------------------------------- | :--------------------------------------------------------------------------------------- |
+| `RHEL_HOST`               | 彈性        | `""`           | 首次呼叫工具時於終端機互動詢問目標主機 IP 或 Hostname          | 目標 RHEL 主機的 IP 位址（支援 IPv4／IPv6）或網域名稱。                                  |
+| `RHEL_SSH_PORT`           | 彈性        | `"22"`         | 若省略或留空，首次呼叫工具時於終端機互動詢問（預設帶入 `22`）   | 目標 RHEL 主機的 SSH 連接埠（`1` ~ `65535`）。                                           |
+| `RHEL_SSH_USER`           | 彈性        | `""`           | 首次呼叫工具時於終端機互動詢問登入帳號                         | 登入遠端主機的 SSH 使用者帳號。                                                          |
+| `RHEL_SSH_PASSWORD`       | 彈性        | `""`           | 未指定私鑰時，首次呼叫工具於終端機以隱藏輸入方式詢問登入密碼   | 登入遠端主機的 SSH 密碼（或私鑰 Passphrase）。建議留空，於執行期動態輸入以確保不落盤。   |
+| `RHEL_SSH_KEY_PATH`       | 選填        | `""`           | 留空時採用加固帳密驗證；有指定時切換為指定私鑰驗證模式         | 指定用於認證的 SSH 私鑰檔案路徑（搭配 `IdentitiesOnly=yes`）。                           |
+| `RHEL_SSH_KEY_PASSPHRASE` | 選填        | `""`           | 金鑰模式若設有環境變數則自動經由 `SSH_ASKPASS` 解鎖加密私鑰    | 加密 SSH 私鑰的通行碼（Passphrase）。                                                    |
+| `RHEL_CONNECT_TIMEOUT`    | 選填        | `"10"`         | 套用預設值 `10` 秒（範圍 `3` ~ `60` 秒）                       | SSH 連線逾時秒數。                                                                       |
+| `RHEL_STRICT_HOST_KEY`    | 選填        | `"accept-new"` | 套用預設值 `"accept-new"`（搭配專屬 `rhel_known_hosts` 檔案）  | 設為 `"yes"`／`"strict"`／`"true"`／`"1"` 時強制啟用嚴格主機金鑰檢查（`StrictHostKeyChecking=yes`）。 |
 
 ---
 
