@@ -231,7 +231,7 @@ class McpCommand(CliCommand):
         if not grouped and ctx.tools:
             for tool_name in ctx.tools:
                 server_key = "mcp"
-                for prefix in ("rhel_", "win_rdp_", "browser_", "sqlite_"):
+                for prefix in ("rhel_", "win_rdp_", "browser_", "sqlite_", "mysql_", "mssql_"):
                     if tool_name.startswith(prefix):
                         server_key = prefix.rstrip("_").replace("_", "-")
                         break
@@ -280,7 +280,8 @@ class McpCommand(CliCommand):
         ctx.renderer.console.print(header)
         ctx.renderer.console.print()
 
-        width = getattr(ctx.renderer.console, "width", 80) or 80
+        raw_width = getattr(ctx.renderer.console, "width", 80)
+        width = raw_width if isinstance(raw_width, int) and raw_width > 0 else 80
         num_cols = max(1, min(3, (width - 4) // 32))
         col_width = max(24, (width - 6) // num_cols)
 

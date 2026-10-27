@@ -38,6 +38,16 @@ _CONN_PARAM_MAP = {
     "rdp_port": "WIN_RDP_PORT",
     "rdp_user": "WIN_RDP_USER",
     "rdp_password": "WIN_RDP_PASSWORD",
+    "mysql_host": "MYSQL_HOST",
+    "mysql_port": "MYSQL_PORT",
+    "mysql_user": "MYSQL_USER",
+    "mysql_password": "MYSQL_PASSWORD",
+    "mysql_database": "MYSQL_DATABASE",
+    "mssql_host": "MSSQL_HOST",
+    "mssql_port": "MSSQL_PORT",
+    "mssql_user": "MSSQL_USER",
+    "mssql_password": "MSSQL_PASSWORD",
+    "mssql_database": "MSSQL_DATABASE",
 }
 
 
@@ -97,9 +107,13 @@ class MCPManager:
                 cmd_str = str(spec.get("command", "")).lower()
                 args_str = " ".join(str(a).lower() for a in (spec.get("args") or []))
                 if (
-                    name.lower() in ("rhel-ops", "rhel", "win-rdp", "win_rdp")
+                    name.lower() in ("rhel-ops", "rhel", "win-rdp", "win_rdp", "mysql", "mssql")
                     or "rhel_mcp" in cmd_str
                     or "rhel_mcp" in args_str
+                    or "mysql_mcp" in cmd_str
+                    or "mysql_mcp" in args_str
+                    or "mssql_mcp" in cmd_str
+                    or "mssql_mcp" in args_str
                 ):
                     is_sensitive = True
                 await self._register_tools(name, session, inject, safe_read, is_sensitive=is_sensitive)
@@ -138,7 +152,7 @@ class MCPManager:
             if val is None or val == "":
                 val = os.getenv(env_key) or ""
             clean = str(val) if "PASSWORD" in env_key or "PASSPHRASE" in env_key else str(val).strip()
-            if clean:
+            if clean and clean.lower() not in ("null", "none", "~"):
                 resolved[env_key] = clean
 
         # 判斷是否已配置金鑰路徑
@@ -235,7 +249,12 @@ class MCPManager:
         entry = self._tools.get(tool_name)
         if entry is not None:
             return bool(entry.is_sensitive)
-        return tool_name.startswith("rhel_") or tool_name.startswith("win_rdp_")
+        return (
+            tool_name.startswith("rhel_")
+            or tool_name.startswith("win_rdp_")
+            or tool_name.startswith("mysql_")
+            or tool_name.startswith("mssql_")
+        )
 
     # ── Internal ──────────────────────────────────
 

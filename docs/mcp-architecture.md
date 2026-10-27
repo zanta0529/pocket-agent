@@ -180,3 +180,26 @@ Pocket Agent 的解決方案：
 | 參數名稱 | 必填 / 選填 | 預設值 | 說明 |
 | :--- | :--- | :--- | :--- |
 | `DB_PATH` | 必填 | 無 | 目標 SQLite 資料庫檔案的絕對或相對路徑（例如 `dev.db`）。 |
+
+---
+
+## 內建遠端關聯式資料庫唯讀檢索伺服器 (`mcp_servers/mysql_mcp.py` 與 `mcp_servers/mssql_mcp.py`)
+
+`mysql_mcp.py` 與 `mssql_mcp.py` 分別支援遠端 MySQL／MariaDB 與 Microsoft SQL Server 之結構探查與唯讀查詢。採用延遲載入（`importlib.import_module`）機制，MySQL 優先使用 `pymysql`（次選 `mysql-connector-python`），SQL Server 優先使用 `pymssql`（次選 `pyodbc`）。
+
+### 1. 提供的結構化工具清單
+
+| 伺服器 | 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
+| :--- | :--- | :--- | :--- | :--- |
+| `mysql` | `mysql_list_tables` | 是 | 列出目標 MySQL／MariaDB 資料庫中的所有基底資料表 | 無 |
+| `mysql` | `mysql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA.COLUMNS` 顯示欄位、型別、主鍵與 NOT NULL 約束 | `table_name`（必填） |
+| `mysql` | `mysql_run_select_query` | 是 | 執行唯讀的單一 `SELECT` 或 `WITH` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
+| `mssql` | `mssql_list_tables` | 是 | 列出目標 SQL Server 資料庫中的所有基底資料表 | 無 |
+| `mssql` | `mssql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA` 顯示欄位、型別、主鍵與 NOT NULL 約束 | `table_name`（必填，支援 `table` 或 `schema.table`） |
+| `mssql` | `mssql_run_select_query` | 是 | 執行唯讀的單一 `SELECT` 或 `WITH` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
+
+### 2. 安全防禦邊界
+
+- **連線與交易層級強制唯讀**：`mysql_mcp.py` 連線後立即執行 `SET SESSION TRANSACTION READ ONLY` 與 `START TRANSACTION READ ONLY`；`mssql_mcp.py` 啟用 `ApplicationIntent=ReadOnly` 與 `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED`，且兩者皆設為 `autocommit=False`，並於 `finally` 區塊強制 `rollback()` 與 `close()`。
+- **單一查詢與危險關鍵字封鎖**：清除開頭註解後僅允許 `SELECT` 或 `WITH` 開頭，嚴格禁止多重語句（分號注入）以及 `INTO`、`FOR UPDATE`、`EXEC`、`EXECUTE`、`xp_cmdshell`、`OPENROWSET`、`BULK` 等具寫入或系統副作用之語法。
+- **彈性憑證配置與機密遮罩**：`MYSQL_HOST`／`MYSQL_PORT`／`MYSQL_USER`／`MYSQL_PASSWORD`／`MYSQL_DATABASE` 與 `MSSQL_HOST`／`MSSQL_PORT`／`MSSQL_USER`／`MSSQL_PASSWORD`／`MSSQL_DATABASE` 皆支援設定檔預填、留空或省略並於執行期互動詢問（快取於記憶體，認證失敗自動清除）；查詢結果自動針對敏感欄位名稱與機密字串遮罩為 `[REDACTED]`。

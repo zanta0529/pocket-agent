@@ -540,6 +540,16 @@ class CliFrontend(FrontendStrategy):
                     "WIN_RDP_PORT": ("RDP 遠端桌面連接埠 (Port)", "3389", False),
                     "WIN_RDP_USER": ("Windows 登入帳號 (Username / Domain\\User)", None, False),
                     "WIN_RDP_PASSWORD": ("Windows 登入密碼 (Password)", None, True),
+                    "MYSQL_HOST": ("MySQL/MariaDB 主機位址 (IP / Host)", None, False),
+                    "MYSQL_PORT": ("MySQL 連接埠 (Port)", "3306", False),
+                    "MYSQL_USER": ("MySQL 登入帳號 (Username)", None, False),
+                    "MYSQL_PASSWORD": ("MySQL 登入密碼 (Password)", None, True),
+                    "MYSQL_DATABASE": ("MySQL 資料庫名稱 (Database)", None, False),
+                    "MSSQL_HOST": ("SQL Server 主機位址 (IP / Host)", None, False),
+                    "MSSQL_PORT": ("SQL Server 連接埠 (Port)", "1433", False),
+                    "MSSQL_USER": ("SQL Server 登入帳號 (Username)", None, False),
+                    "MSSQL_PASSWORD": ("SQL Server 登入密碼 (Password)", None, True),
+                    "MSSQL_DATABASE": ("SQL Server 資料庫名稱 (Database)", None, False),
                 }
                 try:
                     for key in missing_keys:

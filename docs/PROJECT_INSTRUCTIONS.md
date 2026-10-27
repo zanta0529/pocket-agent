@@ -9,7 +9,7 @@
 - 入口為 `main.py`，使用 Click；CLI 使用 Rich／prompt_toolkit。
 - 引擎包含 OpenAI API 與標準 Chat Completions (如 Gemini, Groq 等)；非同步流程使用 asyncio。
 - 認證包含 OAuth PKCE；依賴包含 OpenAI SDK、httpx、FastAPI、uvicorn、keyring。
-- MCP 提供外部工具整合；`browser_mcp.py` 為瀏覽器整合入口 (依賴 Playwright)，`sqlite_mcp.py` 為本機 SQLite 資料庫結構探查與唯讀檢索入口，`rhel_mcp.py` 為遠端 RHEL 主機結構化唯讀巡檢入口 (透過系統 OpenSSH 支援指定私鑰與加固帳密雙軌驗證)，`win_rdp_mcp.py` 為遠端 Windows 主機 RDP (Port 3389) 視覺控制與結構化唯讀巡檢入口。
+- MCP 提供外部工具整合；`browser_mcp.py` 為瀏覽器整合入口 (依賴 Playwright)，`sqlite_mcp.py` 為本機 SQLite 資料庫結構探查與唯讀檢索入口，`mysql_mcp.py` 為遠端 MySQL/MariaDB 資料庫唯讀檢索入口，`mssql_mcp.py` 為遠端 Microsoft SQL Server 資料庫唯讀檢索入口，`rhel_mcp.py` 為遠端 RHEL 主機結構化唯讀巡檢入口 (透過系統 OpenSSH 支援指定私鑰與加固帳密雙軌驗證)，`win_rdp_mcp.py` 為遠端 Windows 主機 RDP (Port 3389) 視覺控制與結構化唯讀巡檢入口。
 - 輸出支援 python-docx、python-pptx、ReportLab；PDF 讀取使用 pypdf。
 - session 持久化使用 JSON，設定使用環境變數／YAML；本地索引與快取（RAG FTS5、Skill 檢索、Repo Map AST 快取）使用標準庫 `sqlite3`，禁止自行引入第三方資料庫或 ORM。
 
@@ -24,7 +24,7 @@
 | `src/pocket_agent/system/`     | 系統基礎設施：認證 (auth)、路徑解析 (paths)、設定 (config) 與精靈 (wizard)。                         |
 | `src/pocket_agent/extensions/` | 擴充功能：MCP (Model Context Protocol) 伺服器生命週期、白名單授權與動態連線參數注入管理。            |
 | `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行、原生檔案操作 (fs)、網路請求 (web)、圖片生成 (image)、文件產出 (document)。 |
-| `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器腳本（如 `browser_mcp.py`、`sqlite_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`）。 |
+| `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器腳本（如 `browser_mcp.py`、`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`）。 |
 
 _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，`docs/` 為工程規範。_
 
