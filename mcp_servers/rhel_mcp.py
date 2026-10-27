@@ -838,11 +838,16 @@ def rhel_system_overview(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 主機系統概況：OS 版本、Kernel、Uptime、時間同步、記憶體與高負載行程"""
+    """探查 RHEL 主機系統概況：OS 版本、Kernel、Uptime、時間同步、PSI 壓力、記憶體與高負載行程"""
     cmd = (
         "echo '=== OS Release ===' && cat /etc/redhat-release /etc/os-release 2>/dev/null | sed -n '1,15p'; "
         "echo '=== Kernel & Uptime ===' && uname -srm && uptime && "
-        "(timedatectl show --property=NTPSynchronized,NTP,Timezone 2>/dev/null || true); "
+        "(rpm -q kernel --last 2>/dev/null | sed -n '1,5p' || true) && "
+        "(timedatectl show --property=NTPSynchronized,NTP,Timezone 2>/dev/null || true) && "
+        "(chronyc tracking 2>/dev/null || true) && "
+        "(tuned-adm active 2>/dev/null || true); "
+        "echo '=== Pressure Stall Information (PSI) ===' && "
+        "(head -n 2 /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io 2>/dev/null || true); "
         "echo '=== Memory (MB) ===' && free -m; "
         "echo '=== Top Processes (by CPU) ===' && "
         "ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu | sed -n '1,11p'"
@@ -864,7 +869,8 @@ def rhel_storage_and_fs(
         "echo '=== Inode Usage ===' && df -i -x tmpfs -x devtmpfs; "
         "echo '=== Block Devices ===' && lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,UUID; "
         "echo '=== Mount Options ===' && "
-        "(findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS -t notmpfs,nodevtmpfs,nosquashfs 2>/dev/null || true)"
+        "(findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS --list -t nodevtmpfs,nosquashfs 2>/dev/null "
+        "| grep -E '^(/|/boot|/home|/tmp|/var|/dev/shm|/opt|/srv)([[:space:]]|/|$)' || true)"
     )
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_storage_and_fs")
 
@@ -897,7 +903,11 @@ def rhel_service_status(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """查詢 systemd 狀態；未指定服務時回傳結構化單元狀態與總數，指定時回傳服務屬性。"""
+    """查詢 systemd 服務狀態；未指定服務或 failed_only 時回傳前 50 筆結構化單元狀態與總數。
+
+    指定 service_name 時回傳結構化屬性；支援以逗號或空白分隔一次傳入多個服務名稱（最多 10 個，
+    例如 'sshd,chronyd,tuned,auditd'），請優先合併呼叫以減少 SSH 連線次數。
+    """
     if failed_only or not service_name.strip():
         state_flag = "--state=failed" if failed_only else "--type=service --state=running,failed"
         cmd = (
@@ -942,10 +952,12 @@ def rhel_service_status(
         quoted_units.append(shlex.quote(safe_unit))
 
     joined_units = " ".join(quoted_units)
-    cmd = (
-        f"systemctl show {joined_units} --no-pager "
-        "--property=Id,LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus,Result"
+    props = (
+        "Id,LoadState,ActiveState,SubState,UnitFileState,TriggeredBy,"
+        "MainPID,ExecMainCode,ExecMainStatus,Result,NRestarts,"
+        "ActiveEnterTimestamp,InactiveEnterTimestamp"
     )
+    cmd = f"systemctl show {joined_units} --no-pager --property={props}"
     return _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_service_status")
 
 
@@ -1051,15 +1063,17 @@ def rhel_security_status(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 安全性狀態：SELinux 模式與 firewalld 預設／作用中區域及規則摘要"""
+    """探查 RHEL 安全性狀態：SELinux 模式與 firewalld 預設／作用中區域、執行期與永久規則摘要"""
     cmd = (
         "echo '=== SELinux Status ===' && (sestatus || getenforce) 2>/dev/null; "
         "echo '=== Recent SELinux AVC Denials ==='; "
         "echo '[提示] 不回傳 AVC 原文；請使用 rhel_query_journal 取得有界等級摘要'; "
-        "echo '=== Firewalld State ===' && "
+        "echo '=== Firewalld State (Runtime) ===' && "
         "(firewall-cmd --state && firewall-cmd --get-default-zone && "
         "firewall-cmd --get-active-zones && firewall-cmd --list-all) 2>/dev/null "
         "|| echo 'firewalld 未執行或需要權限'; "
+        "echo '=== Firewalld State (Permanent) ===' && "
+        "(firewall-cmd --permanent --list-all 2>/dev/null || echo '無法讀取 permanent 規則'); "
         "echo '=== Security Updates (dnf) ===' && "
         "echo '[UNSUPPORTED] 安全更新查詢已停用（DNF 快取存取存在潛在副作用）'"
     )

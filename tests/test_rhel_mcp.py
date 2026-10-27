@@ -651,7 +651,9 @@ def test_service_status_structured_list_and_multi_service_batch(monkeypatch):
         rhel_mcp.rhel_service_status(service_name="sshd, chronyd auditd")
         called_multi = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "systemctl show sshd chronyd auditd --no-pager" in called_multi
-        assert "Id,LoadState,ActiveState" in called_multi
+        assert "Id,LoadState,ActiveState,SubState,UnitFileState,TriggeredBy" in called_multi
+        assert "ActiveEnterTimestamp,InactiveEnterTimestamp" in called_multi
+    assert "支援以逗號或空白分隔" in (rhel_mcp.rhel_service_status.__doc__ or "")
 
     with patch("mcp_servers.rhel_mcp._capture_ssh") as mock_run:
         res_bad = rhel_mcp.rhel_service_status(service_name="sshd, nginx;id")
@@ -671,11 +673,16 @@ def test_diagnostic_commands_enriched_sections(monkeypatch):
     with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
         rhel_mcp.rhel_system_overview()
         cmd_overview = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "rpm -q kernel --last" in cmd_overview
         assert "timedatectl show --property=NTPSynchronized,NTP,Timezone" in cmd_overview
+        assert "chronyc tracking" in cmd_overview
+        assert "tuned-adm active" in cmd_overview
+        assert "/proc/pressure/cpu" in cmd_overview
 
         rhel_mcp.rhel_storage_and_fs()
         cmd_storage = shlex.split(mock_run.call_args.args[0][-1])[2]
-        assert "findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS" in cmd_storage
+        assert "findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS --list" in cmd_storage
+        assert "/dev/shm" in cmd_storage
 
         rhel_mcp.rhel_network_status()
         cmd_net = shlex.split(mock_run.call_args.args[0][-1])[2]
@@ -685,6 +692,7 @@ def test_diagnostic_commands_enriched_sections(monkeypatch):
         cmd_sec = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "firewall-cmd --get-default-zone" in cmd_sec
         assert "firewall-cmd --get-active-zones" in cmd_sec
+        assert "firewall-cmd --permanent --list-all" in cmd_sec
 
         rhel_mcp.rhel_process_inspect(search="nginx")
         cmd_proc = shlex.split(mock_run.call_args.args[0][-1])[2]
