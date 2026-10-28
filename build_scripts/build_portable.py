@@ -32,7 +32,7 @@ OUT = ROOT / "dist" / "PocketAgent"
 BASE_PYTHON = Path(sys.base_prefix)
 VENV_SITE_PACKAGES = ROOT / "venv" / "Lib" / "site-packages"
 
-# 執行期用不到的 CPython 內部模組或大型目錄
+# 執行期用不到的 CPython 內部模組或大型目錄（含全域 site-packages，避免混入非 venv 套件）
 PYTHON_EXCLUDES = {
     "Doc",
     "Tools",
@@ -48,15 +48,21 @@ PYTHON_EXCLUDES = {
     "unittest",
     "ensurepip",
     "pydoc_data",
+    "site-packages",
 }
 
-# 開發、測試與打包專用套件（不應流入終端發布包）
+# 開發、測試、打包工具與已排除之大型選用套件（不流入終端發布包）
+# 註：排除 pymupdf_layout / onnxruntime / numpy / networkx 後，pymupdf4llm 會自動降級使用純 pymupdf。
 DEV_PACKAGES = {
     "pytest",
     "_pytest",
     "ruff",
     "coverage",
     "pip",
+    "piptools",
+    "pip_tools",
+    "build",
+    "pyproject_hooks",
     "setuptools",
     "wheel",
     "iniconfig",
@@ -64,9 +70,24 @@ DEV_PACKAGES = {
     "pytest_cov",
     "flit_core",
     "pyinstaller",
+    "_pyinstaller_hooks_contrib",
+    "pyinstaller_hooks_contrib",
+    "altgraph",
+    "pefile",
+    "playwright",
+    "greenlet",
+    "pyee",
+    "pymupdf_layout",
+    "onnxruntime",
+    "numpy",
+    "numpy.libs",
+    "networkx",
+    "flatbuffers",
+    "protobuf",
+    "google",
 }
 
-# 應過濾的非執行期資料夾（例如套件內建的測試與範例）
+# 應過濾的非執行期資料夾（例如套件內建的測試、範例與 C++ 開發標頭檔）
 UNWANTED_DIR_NAMES = {
     "__pycache__",
     "tests",
@@ -76,9 +97,19 @@ UNWANTED_DIR_NAMES = {
     "demos",
     "benchmarks",
     "docs",
+    "mupdf-devel",
 }
 
-# 應過濾的檔案後綴（除錯符號、靜態庫、C 標頭檔）
+# pymupdf 目錄下屬於 pymupdf-layout 的子目錄與擴充檔（排除後自動使用純 pymupdf）
+PYMUPDF_LAYOUT_ITEMS = {
+    "layout",
+    "_features.pyd",
+    "_tgif.pyd",
+    "features.py",
+    "tgif.py",
+}
+
+# 應過濾的檔案後綴（除錯符號、靜態庫、C/C++/Cython 原始碼與標頭檔、型別標記檔）
 UNWANTED_EXTENSIONS = {
     ".pdb",
     ".lib",
@@ -86,16 +117,19 @@ UNWANTED_EXTENSIONS = {
     ".chm",
     ".h",
     ".c",
+    ".cpp",
+    ".cxx",
     ".pyc",
     ".pyo",
+    ".pyi",
+    ".pxd",
+    ".pyx",
 }
 
 # 要帶進 app/ 的原始碼與資源
 APP_ITEMS = [
     "src",
     "mcp_servers",
-    "skills",
-    "commands",
     "subagents",
     "mcp_config.example.yaml",
     ".env.example",
@@ -130,8 +164,11 @@ endlocal
 def _ignore(path, names):
     """複製時略過不需要的目錄、__pycache__、測試目錄與除錯符號。"""
     skip = set()
+    is_pymupdf_root = Path(path).name.lower() == "pymupdf"
     for n in names:
         if n in PYTHON_EXCLUDES or n in UNWANTED_DIR_NAMES:
+            skip.add(n)
+        elif is_pymupdf_root and n in PYMUPDF_LAYOUT_ITEMS:
             skip.add(n)
         elif Path(n).suffix.lower() in UNWANTED_EXTENSIONS:
             skip.add(n)
@@ -224,11 +261,11 @@ def main() -> int:
     except Exception as e:
         print(f"      ! 產生說明書失敗：{e}")
 
-    # 6. 打包
+    # 6. 打包（compresslevel=6 兼顧壓縮率與建置速度，較 level 9 快約 2.5~3 倍）
     print("[6/6] 壓縮 ...")
     zip_path = ROOT / "dist" / "PocketAgent-portable.zip"
     zip_path.unlink(missing_ok=True)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for f in OUT.rglob("*"):
             if f.is_file():
                 zf.write(f, Path("PocketAgent") / f.relative_to(OUT))

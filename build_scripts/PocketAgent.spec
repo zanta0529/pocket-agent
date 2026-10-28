@@ -24,12 +24,11 @@ datas = [
     (str(ROOT / "mcp_servers" / "*.py"), "mcp_servers"),
 ]
 
-# mcp 用動態 import 選 transport，openai 也有不少延遲載入的子模組。
+# mcp 用動態 import 選 transport。
 # mcp.cli 需要 typer（requirements 沒有它，也用不到），掃到會直接讓 build 掛掉。
 # mysql_mcp / mssql_mcp 透過 runpy 與 importlib 動態載入 pymysql / pymssql（含 Cython 內部依賴 decimal、uuid）。
 hiddenimports = (
     collect_submodules("mcp", filter=lambda n: not n.startswith("mcp.cli"))
-    + collect_submodules("openai")
     + collect_submodules("pymysql")
     + collect_submodules("pymssql")
     + ["keyring.backends.Windows", "win32timezone", "decimal", "uuid"]
@@ -45,7 +44,27 @@ a = Analysis(
     runtime_hooks=[],
     # playwright 只在使用者啟用瀏覽器工具時才需要，且它會拖進整包
     # driver 二進位（數百 MB）。排除後瀏覽器 MCP 走外部 python 執行。
-    excludes=["playwright", "pytest", "IPython", "customtkinter", "tkinterdnd2"],
+    # 排除 pymupdf.layout / onnxruntime / numpy / networkx 後，pymupdf4llm 自動降級使用純 pymupdf。
+    excludes=[
+        "playwright",
+        "greenlet",
+        "pyee",
+        "pymupdf.layout",
+        "pymupdf_layout",
+        "onnxruntime",
+        "numpy",
+        "networkx",
+        "flatbuffers",
+        "google.protobuf",
+        "openai.cli",
+        "pytest",
+        "IPython",
+        "tkinter",
+        "unittest",
+        "pydoc",
+        "customtkinter",
+        "tkinterdnd2",
+    ],
     noarchive=False,
 )
 
