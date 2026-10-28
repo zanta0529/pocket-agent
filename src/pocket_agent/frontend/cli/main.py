@@ -16,14 +16,15 @@ if TYPE_CHECKING:
     from pocket_agent.frontend.cli.state import CliState
 
 
-def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer") -> None:
-    """對話結束時自動存檔（失敗不中斷退出）。"""
+def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer", silent: bool = False) -> None:
+    """對話結束或每輪完成時自動存檔（失敗不中斷流程）。"""
     from pocket_agent.core.sessions import save_session
 
-    if not agent.history:
+    if not getattr(agent, "history", None):
         return
     if getattr(agent, "is_sensitive_session", False) is True:
-        renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
+        if not silent:
+            renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
         return
     try:
         save_session(state.session_id, agent.history)
@@ -132,10 +133,12 @@ async def send_turn(
         renderer.console.print()
         renderer.console.print(panel)
         renderer.message("待送附件保留；本輪可能部分完成，重送前請檢查結果。未自動重試。", "yellow")
+        _autosave_session(agent, state, renderer, silent=True)
         return
 
     # Normal return is the boundary; the core may return error text normally.
     state.consume(snapshot)
+    _autosave_session(agent, state, renderer, silent=True)
     if result.action == "image":
         renderer.message(f"已存檔：{reply}", "green")
     else:

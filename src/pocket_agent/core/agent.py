@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import random
 import sys
 from pathlib import Path
 
@@ -27,13 +28,18 @@ from pocket_agent.extensions.skills import (
     skills_index_prompt,
 )
 from pocket_agent.system.config import config
-from pocket_agent.system.constants import DEFAULT_MAX_TOOL_ROUNDS
+from pocket_agent.system.constants import (
+    DEFAULT_MAX_STREAM_RETRIES,
+    DEFAULT_MAX_TOOL_ROUNDS,
+    DEFAULT_STREAM_RETRY_BASE_SEC,
+    WEB_RESEARCH_CHECKPOINT_INTERVAL,
+)
 from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool, is_doc_tool
 from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool, is_document_tool
 from pocket_agent.tools.fs import FS_TOOLS, call_fs_tool, is_fs_tool
 from pocket_agent.tools.image import image_tool, save_image_b64
 from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool
-from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_web_tool
+from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_soft_web_error, is_web_tool
 
 _logging_setup_done = False
 
@@ -165,6 +171,8 @@ class Agent:
         self.history: list[dict] = []
         self.web_research_soft_limit: int | None = None
         self.web_research_hard_limit: int | None = None
+        self.max_stream_retries: int = DEFAULT_MAX_STREAM_RETRIES
+        self.stream_retry_base_sec: float = DEFAULT_STREAM_RETRY_BASE_SEC
         self.context_usage: ContextUsage | None = None  # 最近一輪的上下文使用快照（/usage 顯示用）
         self._budget = ContextBudget(DEFAULT_CONTEXT_WINDOW)
         self.cancel_requested = False  # 使用者按「停止」時設為 True（跨執行緒安全）
@@ -245,6 +253,7 @@ class Agent:
             await asyncio.to_thread(run_hooks, "before_send", {"user_input": user_input})
 
         content = await self._build_content(user_input, attachments or [])
+        hist_len_before = len(self.history)
         self.history.append({"role": "user", "content": content})
 
         self.last_images = []
@@ -256,7 +265,12 @@ class Agent:
             engine = self.engine
             if engine.is_context_overflow(e):
                 log.info("Context exceeded intercepted.")
-                self.history.pop()  # Remove the failed user input from history
+                from pocket_agent.core.compaction import ensure_paired_tool_calls
+
+                if len(self.history) == hist_len_before + 1:
+                    self.history.pop()  # Remove the failed user input from history
+                else:
+                    self.history = ensure_paired_tool_calls(self.history)
                 notice = {
                     "role": "system",
                     "content": (
@@ -276,9 +290,17 @@ class Agent:
 
             if engine.is_non_retryable_error(e):
                 log.info(f"API Error {getattr(e, 'status_code', None)} intercepted.")
-                self.history.pop()
+                from pocket_agent.core.compaction import ensure_paired_tool_calls
+
+                if len(self.history) == hist_len_before + 1:
+                    self.history.pop()
+                else:
+                    self.history = ensure_paired_tool_calls(self.history)
                 raise RuntimeError(engine.format_api_error(e)) from e
 
+            from pocket_agent.core.compaction import ensure_paired_tool_calls
+
+            self.history = ensure_paired_tool_calls(self.history)
             hint = engine.connection_error_hint(e)
             if hint:
                 raise RuntimeError(f"{e}{hint}") from e
@@ -612,7 +634,9 @@ class Agent:
 
         notes_path = scratch_dir() / "notes.md"
         base += (
-            "\n\n[資源管理] 在處理需閱讀大量原始碼的大型任務時："
+            "\n\n[資源管理] 在處理需閱讀大量原始碼或進行深度網路研究的大型任務時："
+            "\n1. 請優先使用 `search_web` 取得真實存在的網址後再呼叫 `read_url_content`，"
+            "切勿憑記憶猜測深層文件 URL 以免頻繁觸發 HTTP 404。"
             "\n1. 請優先使用 `search_files` 或帶有 `start_line`/`end_line` 的 `read_file` "
             "進行精準檢索，避免一次性讀取過大檔案或目錄。"
             "\n2. 若檢索與分析過程冗長，請務必善用 `write_to_file` 工具，將關鍵資訊、變數名稱與待辦事項 (TODO) "
@@ -756,7 +780,62 @@ class Agent:
             }
         )
 
+        if len(input_items) >= 2:
+            self.history.append(dict(input_items[-2]))
+            self.history.append(dict(input_items[-1]))
+
+    async def _sleep_with_cancel(self, seconds: float) -> None:
+        """支援中途取消的指數退避等待。"""
+        if seconds <= 0 or self.cancel_requested:
+            return
+        await asyncio.sleep(seconds)
+
+    def _build_interrupted_checkpoint_notice(self, initial_hist_len: int, error_reason: str) -> str:
+        """當串流連線重試耗盡中斷時，將本輪已完成的工具檢索寫入檢查點檔案並回傳續跑提示。"""
+        new_items = self.history[initial_hist_len:]
+        tool_calls = [m for m in new_items if isinstance(m, dict) and m.get("type") == "function_call"]
+        if not tool_calls:
+            return ""
+        outputs_by_id = {
+            m.get("call_id"): str(m.get("output", ""))
+            for m in new_items
+            if isinstance(m, dict) and m.get("type") == "function_call_output"
+        }
+        ckpt_path_str = ""
+        if not self.is_sensitive_session:
+            try:
+                from pocket_agent.system.paths import scratch_dir
+
+                ckpt_path = scratch_dir() / "research_checkpoint.md"
+                lines = [
+                    "# 研究中斷自動檢查點 (Research Checkpoint)",
+                    "",
+                    f"- 中斷原因：{error_reason}",
+                    f"- 已完成工具呼叫數：{len(tool_calls)}",
+                    "",
+                    "## 已完成之檢索與工具紀錄",
+                    "",
+                ]
+                for idx, tc in enumerate(tool_calls, 1):
+                    t_name = tc.get("name", "unknown")
+                    t_args = " ".join(str(tc.get("arguments", "")).split())[:160]
+                    t_out = outputs_by_id.get(tc.get("call_id"), "")
+                    snippet = " ".join(t_out.split())[:400]
+                    lines.append(f"### {idx}. `{t_name}` ({t_args})")
+                    lines.append(f"{snippet}")
+                    lines.append("")
+                ckpt_path.write_text("\n".join(lines), encoding="utf-8")
+                ckpt_path_str = f"，並已寫入階段性檢查點 `{ckpt_path}`"
+            except Exception as ckpt_err:
+                log.debug("寫入 research_checkpoint.md 失敗：%s", ckpt_err)
+        return (
+            f"\n\n💾 **研究進度已自動保護**：本輪已完成的 {len(tool_calls)} 次工具檢索結果"
+            f"已完整保留於對話歷史中{ckpt_path_str}。"
+            "請待網路穩定後直接輸入「繼續」即可接續產出報告，無須重新搜尋。"
+        )
+
     async def _run_loop(self) -> tuple[str, str]:
+        initial_hist_len = len(self.history)
         tools = self._build_tools()
         budget = self._resolve_budget()
 
@@ -979,21 +1058,59 @@ class Agent:
                 if engine.is_non_retryable_error(e) or engine.is_context_overflow(e):
                     raise
                 stream_consecutive_errors += 1
-                if stream_consecutive_errors >= 3:
+                max_stream_retries = max(1, int(getattr(self, "max_stream_retries", DEFAULT_MAX_STREAM_RETRIES)))
+                if stream_consecutive_errors > max_stream_retries:
                     log.error("連續錯誤過多，中斷代理執行：%s", e, exc_info=True)
                     reason = " ".join(str(e).split())
                     if len(reason) > 200:
                         reason = reason[:200] + "…"
                     return "", self._stopped_reply(
-                        f"連續發生太多次執行錯誤，為保護系統穩定已自動中斷。\n\n最後一次錯誤：{type(e).__name__}：{reason}"
+                        "連續發生太多次執行錯誤，為保護系統穩定已自動中斷。\n\n"
+                        f"最後一次錯誤：{type(e).__name__}：{reason}"
+                        f"{self._build_interrupted_checkpoint_notice(initial_hist_len, reason)}"
                     )
-                log.warning("串流連線遭遇異常，進行第 %d 次重試（最多 3 次）：%s", stream_consecutive_errors, e)
+                log.warning(
+                    "串流連線遭遇異常，進行第 %d 次重試（最多 %d 次）：%s",
+                    stream_consecutive_errors,
+                    max_stream_retries,
+                    e,
+                )
+                if engine.is_invalid_tool_call_error(e):
+                    from pocket_agent.core.compaction import ensure_paired_tool_calls
+
+                    input_items = ensure_paired_tool_calls(input_items)
+                    self.history = ensure_paired_tool_calls(self.history)
+                input_items = [
+                    m
+                    for m in input_items
+                    if not (
+                        isinstance(m, dict)
+                        and m.get("role") == "system"
+                        and "[System Error]" in str(m.get("content", ""))
+                    )
+                ]
                 err_msg = {"role": "system", "content": f"[System Error] 串流執行時發生例外：{e}。請換個方式重試。"}
-                self.history.append(err_msg)
                 input_items.append(err_msg)
+                base_sec = float(getattr(self, "stream_retry_base_sec", DEFAULT_STREAM_RETRY_BASE_SEC))
+                backoff_sec = (
+                    min(base_sec * (2 ** (stream_consecutive_errors - 1)) + random.uniform(0.0, 0.25), 10.0)
+                    if base_sec > 0
+                    else 0.0
+                )
+                await self._sleep_with_cancel(backoff_sec)
+                round_idx -= 1
                 continue
             else:
                 stream_consecutive_errors = 0
+                input_items = [
+                    m
+                    for m in input_items
+                    if not (
+                        isinstance(m, dict)
+                        and m.get("role") == "system"
+                        and "[System Error]" in str(m.get("content", ""))
+                    )
+                ]
 
             thinking = "".join(thinking_chunks)
             text = "".join(text_chunks)
@@ -1198,6 +1315,25 @@ class Agent:
                     },
                 )
 
+                if not ok_status and is_web_tool(fc["name"]) and is_soft_web_error(result):
+                    all_errors = False
+                elif (
+                    ok_status
+                    and is_web_tool(fc["name"])
+                    and web_tool_call_count < web_soft_limit
+                    and web_tool_call_count > 0
+                    and web_tool_call_count % WEB_RESEARCH_CHECKPOINT_INTERVAL == 0
+                    and not self.is_sensitive_session
+                ):
+                    from pocket_agent.system.paths import scratch_dir
+
+                    notes_path = scratch_dir() / "notes.md"
+                    result += (
+                        f"\n\n[系統提醒：階段性筆記] 已完成 {web_tool_call_count} 次網路檢索。"
+                        "若研究仍需多步探索，建議適時使用 `write_to_file` "
+                        f"將已確認的重點與有效網址記錄至 `{notes_path}`，"
+                        "以防範長對話壓縮或網路瞬斷造成資訊遺失。"
+                    )
                 self._append_tool_pair(input_items, fc, result)
 
             # 連續兩輪全部都是錯誤 → 強制讓模型直接回報給使用者

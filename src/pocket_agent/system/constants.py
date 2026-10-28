@@ -55,6 +55,7 @@ TIME_MACHINE_BACKUP_MAX_BYTES = 20 * 1024 * 1024  # 20 MB: 檔案修改前時光
 DEFAULT_NETWORK_TIMEOUT_SEC = 15.0  # HTTP 請求逾時秒數
 DEFAULT_MAX_REDIRECTS = 5  # 防範重新導向循環 (Redirect Loop) 的跳轉次數上限
 DEFAULT_WEB_CONTENT_MAX_CHARS = 15000  # read_url_content 抽取純文字後回傳模型的字元上限
+DEFAULT_STREAM_READ_TIMEOUT_SEC = 120.0  # LLM SSE 串流單區塊最大閒置讀取逾時秒數
 
 
 # ==============================================================================
@@ -86,8 +87,11 @@ MAX_RAG_TOP_K = 10  # 本機 FTS5 檢索最大片段數
 # 控制工具呼叫輪次、調研防發散限制以及本機日誌自動輪轉大小。
 # ==============================================================================
 DEFAULT_MAX_TOOL_ROUNDS = 20  # 單次回合允許工具自主呼叫之最大輪次
+DEFAULT_MAX_STREAM_RETRIES = 3  # 串流連線異常時允許之最大重試次數
+DEFAULT_STREAM_RETRY_BASE_SEC = 1.5  # 串流重試之指數退避基礎秒數
 DEFAULT_CLI_TIMEOUT_SEC = 60  # 本機 run_command 指令預設超時秒數
 MAX_CLI_TIMEOUT_SEC = 600  # 本機 run_command 最長允許超時秒數 (10 分鐘)
+WEB_RESEARCH_CHECKPOINT_INTERVAL = 3  # 網路檢索觸發 Scratchpad 階段性筆記提醒之間隔次數
 WEB_RESEARCH_SOFT_LIMIT = 5  # 網路檢索軟性收斂提醒閾值 (累計次數)
 WEB_RESEARCH_HARD_LIMIT = 10  # 網路檢索硬性攔截上限 (累計次數)
 LOG_FILE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB: agent.log 滾動備份上限

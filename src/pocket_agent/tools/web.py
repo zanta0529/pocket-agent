@@ -49,6 +49,103 @@ def is_web_tool(name: str) -> bool:
     return any(t["name"] == name for t in WEB_TOOLS)
 
 
+def is_soft_web_error(result: object) -> bool:
+    """判斷是否為外部網站回傳的軟性狀態錯誤（如 HTTP 404/403/410），避免觸發工具系統連續崩潰熔斷。"""
+    if not isinstance(result, str):
+        return False
+    return any(code in result for code in ("HTTP 404", "HTTP 403", "HTTP 410"))
+
+
+def _build_404_fallback_query(url: str) -> str:
+    """從 404 網址萃取網域與路徑關鍵字，供自動退避搜尋使用。"""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return ""
+    ignore_tokens = {"html", "htm", "php", "asp", "aspx", "jsp", "md", "txt", "xml", "json", "index", "docs", "doc"}
+    raw_tokens = re.split(r"[/\-_.]+", parsed.path or "")
+    keywords: list[str] = []
+    for tok in raw_tokens:
+        clean = tok.strip().lower()
+        if len(clean) < 2 or clean.isdigit() or clean in ignore_tokens:
+            continue
+        if clean not in keywords:
+            keywords.append(clean)
+    if keywords:
+        return f"site:{host} {' '.join(keywords[:6])}"
+    return f"site:{host}"
+
+
+def _search_ddg_snippets(query: str, headers: dict, max_results: int = 5) -> tuple[list[str], str | None]:
+    """向 DuckDuckGo HTML 介面查詢並解析前 max_results 筆結果。回傳 (結果列表, 錯誤訊息或 None)。"""
+    url = "https://html.duckduckgo.com/html/"
+    try:
+        from curl_cffi import requests as c_requests
+
+        resp = c_requests.post(
+            url,
+            data={"q": query},
+            headers=headers,
+            impersonate="chrome",
+            timeout=DEFAULT_NETWORK_TIMEOUT_SEC,
+        )
+        resp.raise_for_status()
+    except Exception as curl_e:
+        log.debug("search_web: curl_cffi 失敗，降級 httpx: %s", curl_e)
+        try:
+            resp = httpx.post(
+                url,
+                data={"q": query},
+                headers=headers,
+                follow_redirects=True,
+                timeout=DEFAULT_NETWORK_TIMEOUT_SEC,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as httpx_e:
+            err = (
+                f"[ERROR] 網路操作失敗 (curl_cffi: {curl_e} | httpx: {httpx_e})\n\n"
+                "(提示：如果您頻繁被擋，可以嘗試使用 Browser 等其他工具)"
+            )
+            return [], err
+
+    html = resp.text
+    results: list[str] = []
+    snippets = re.findall(r'<a class="result__snippet[^>]*>(.*?)</a>', html, re.DOTALL)
+    urls = re.findall(r'<a class="result__url" href="([^"]+)">', html)
+
+    for i in range(min(len(snippets), max_results, len(urls))):
+        text = _strip_html(snippets[i]).strip()
+        link = urls[i].strip()
+        if link.startswith("//duckduckgo.com/l/?"):
+            import urllib.parse
+
+            parsed = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
+            if "uddg" in parsed:
+                link = parsed["uddg"][0]
+        results.append(f"{i + 1}. {text}\n   URL: {link}")
+
+    return results, None
+
+
+def _format_404_fallback(url: str, headers: dict) -> str:
+    """當讀取網址遭遇 HTTP 404 時，自動以網址關鍵字檢索相近頁面並回傳導航建議。"""
+    fallback_query = _build_404_fallback_query(url)
+    hint = (
+        "\n\n[提示] 目標網頁不存在或路徑已改版。請優先使用 `search_web` 取得真實存在的網址，"
+        "切勿憑記憶猜測深層文件路徑。"
+    )
+    if not fallback_query:
+        return hint
+    try:
+        results, err = _search_ddg_snippets(fallback_query, headers, max_results=3)
+        if not err and results:
+            joined = "\n\n".join(results)
+            return f"\n\n[404 自動退避檢索] 系統已自動以「{fallback_query}」搜尋該站點相近頁面：\n\n{joined}{hint}"
+    except Exception as e:
+        log.debug("404 fallback search failed: %s", e)
+    return hint
+
+
 def _strip_html(html_str: str) -> str:
     """簡易移除 HTML 標籤並抽取純文字 (避免 bs4 依賴)"""
     from html.parser import HTMLParser
@@ -270,6 +367,10 @@ def _read_url(url: str, headers: dict) -> str:
             current_url = urljoin(current_url, location)
             continue
 
+        if status == 404:
+            fallback_block = _format_404_fallback(current_url, headers)
+            return f"[ERROR] 網路操作失敗: HTTP 404{fallback_block}{warning_msg}"
+
         if status >= 400:
             return f"[ERROR] 網路操作失敗: HTTP {status}{warning_msg}"
         break
@@ -321,56 +422,9 @@ def call_web_tool(name: str, args: dict) -> str:
             if not query:
                 return "[ERROR] 缺少必填參數 'query'"
 
-            # DuckDuckGo HTML 介面
-            url = "https://html.duckduckgo.com/html/"
-            try:
-                from curl_cffi import requests as c_requests
-
-                resp = c_requests.post(
-                    url,
-                    data={"q": query},
-                    headers=headers,
-                    impersonate="chrome",
-                    timeout=DEFAULT_NETWORK_TIMEOUT_SEC,
-                )
-                resp.raise_for_status()
-            except Exception as curl_e:
-                # 若 curl_cffi 失敗 (缺套件、SSL 憑證、403等)，降級使用 httpx
-                log.debug("search_web: curl_cffi 失敗，降級 httpx: %s", curl_e)
-                try:
-                    resp = httpx.post(
-                        url,
-                        data={"q": query},
-                        headers=headers,
-                        follow_redirects=True,
-                        timeout=DEFAULT_NETWORK_TIMEOUT_SEC,
-                    )
-                    resp.raise_for_status()
-                except httpx.HTTPError as httpx_e:
-                    return (
-                        f"[ERROR] 網路操作失敗 (curl_cffi: {curl_e} | httpx: {httpx_e})\n\n"
-                        "(提示：如果您頻繁被擋，可以嘗試使用 Browser 等其他工具)"
-                    )
-
-            # 手動解析 DuckDuckGo 結果 (提取 .result__snippet 和 .result__url)
-            html = resp.text
-            results = []
-
-            # 使用 Regex 解析基本內容 (因無法依賴 bs4)
-            snippets = re.findall(r'<a class="result__snippet[^>]*>(.*?)</a>', html, re.DOTALL)
-            urls = re.findall(r'<a class="result__url" href="([^"]+)">', html)
-
-            for i in range(min(len(snippets), 5, len(urls))):
-                text = _strip_html(snippets[i]).strip()
-                link = urls[i].strip()
-                # 處理 DDG 的跳轉連結
-                if link.startswith("//duckduckgo.com/l/?"):
-                    import urllib.parse
-
-                    parsed = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
-                    if "uddg" in parsed:
-                        link = parsed["uddg"][0]
-                results.append(f"{i + 1}. {text}\n   URL: {link}")
+            results, err = _search_ddg_snippets(query, headers, max_results=5)
+            if err:
+                return err
 
             if not results:
                 return "搜尋無結果，或遭到搜尋引擎阻擋（亦可能是搜尋頁面結構已改版，導致解析失敗）。"

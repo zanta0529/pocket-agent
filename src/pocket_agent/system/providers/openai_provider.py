@@ -5,6 +5,7 @@ import httpx
 from openai import AsyncOpenAI
 
 from pocket_agent.system.config import config
+from pocket_agent.system.constants import DEFAULT_STREAM_READ_TIMEOUT_SEC
 from pocket_agent.system.providers.base import BaseProvider
 
 log = logging.getLogger("pocket-agent")
@@ -55,7 +56,7 @@ class OpenAIProvider(BaseProvider):
             base_url=base_url,
             default_headers=extra_headers,
             http_client=None,
-            timeout=httpx.Timeout(timeout=1800.0, connect=10.0),
+            timeout=httpx.Timeout(timeout=1800.0, connect=15.0, read=DEFAULT_STREAM_READ_TIMEOUT_SEC),
         )
 
     def fetch_models(self) -> List[str]:
@@ -127,7 +128,7 @@ class OpenAIApiProvider(BaseProvider):
         return AsyncOpenAI(
             api_key=api_key,
             http_client=None,
-            timeout=httpx.Timeout(timeout=180.0, connect=10.0),
+            timeout=httpx.Timeout(timeout=180.0, connect=15.0, read=DEFAULT_STREAM_READ_TIMEOUT_SEC),
         )
 
     def fetch_models(self) -> List[str]:
