@@ -26,10 +26,13 @@ datas = [
 
 # mcp 用動態 import 選 transport，openai 也有不少延遲載入的子模組。
 # mcp.cli 需要 typer（requirements 沒有它，也用不到），掃到會直接讓 build 掛掉。
+# mysql_mcp / mssql_mcp 透過 runpy 與 importlib 動態載入 pymysql / pymssql（含 Cython 內部依賴 decimal、uuid）。
 hiddenimports = (
     collect_submodules("mcp", filter=lambda n: not n.startswith("mcp.cli"))
     + collect_submodules("openai")
-    + ["keyring.backends.Windows", "win32timezone"]
+    + collect_submodules("pymysql")
+    + collect_submodules("pymssql")
+    + ["keyring.backends.Windows", "win32timezone", "decimal", "uuid"]
 )
 
 a = Analysis(
