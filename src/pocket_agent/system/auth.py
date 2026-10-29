@@ -33,10 +33,18 @@ except ImportError:
 from pocket_agent.system.config import config
 
 # ── OAuth 設定 ────────────────────────────────────
+from pocket_agent.system.constants import (
+    DEFAULT_GEMINI_AUTH_URL,
+    DEFAULT_GEMINI_TOKEN_URL,
+    DEFAULT_OPENAI_AUTH_URL,
+    DEFAULT_OPENAI_TOKEN_URL,
+    OAUTH_TOKEN_URLS,
+)
+
 DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-OPENAI_AUTH_URL = config.get("providers.openai.auth_url", "https://auth.openai.com/oauth/authorize")
-OPENAI_TOKEN_URL = config.get("providers.openai.token_url", "https://auth.openai.com/oauth/token")
+OPENAI_AUTH_URL = config.get("providers.openai.auth_url", DEFAULT_OPENAI_AUTH_URL)
+OPENAI_TOKEN_URL = config.get("providers.openai.token_url", DEFAULT_OPENAI_TOKEN_URL)
 REDIRECT_URI = config.get("providers.openai.redirect_uri", "http://localhost:1455/auth/callback")
 OPENAI_SCOPE = config.get("providers.openai.scope", "openid profile email offline_access")
 
@@ -187,9 +195,7 @@ def _try_refresh(provider: str, token: dict, client_id: str, client_secret: str 
     if not refresh:
         return None
 
-    from pocket_agent.system.constants import OAUTH_TOKEN_URLS
-
-    token_url = OAUTH_TOKEN_URLS.get(provider, OPENAI_TOKEN_URL)
+    token_url = OPENAI_TOKEN_URL if provider == "openai" else OAUTH_TOKEN_URLS.get(provider, OPENAI_TOKEN_URL)
 
     data = {
         "grant_type": "refresh_token",
@@ -215,9 +221,9 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
     verifier, challenge = _pkce_pair()
     expected_state = secrets.token_urlsafe(16)
 
-    if provider == "gemini-oauth":
-        auth_url_base = "https://accounts.google.com/o/oauth2/v2/auth"
-        token_url = "https://oauth2.googleapis.com/token"
+    if provider in ("gemini-oauth", "gemini_oauth"):
+        auth_url_base = config.get("providers.gemini.auth_url", DEFAULT_GEMINI_AUTH_URL)
+        token_url = config.get("providers.gemini.token_url", DEFAULT_GEMINI_TOKEN_URL)
         scope = config.get("providers.gemini.scope", "https://www.googleapis.com/auth/generative-language")
     else:
         auth_url_base = OPENAI_AUTH_URL
@@ -234,7 +240,7 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
         "code_challenge_method": "S256",
     }
 
-    if provider != "gemini-oauth":
+    if provider not in ("gemini-oauth", "gemini_oauth"):
         params["originator"] = ORIGINATOR
         if ADD_ORGANIZATIONS:
             params["id_token_add_organizations"] = "true"
@@ -356,7 +362,7 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
 
 
 def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=None) -> str:
-    if provider == "gemini-oauth":
+    if provider in ("gemini-oauth", "gemini_oauth"):
         client_id = config.get("providers.gemini.client_id")
         client_secret = config.get("providers.gemini.client_secret", "")
         if not client_id:

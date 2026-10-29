@@ -117,6 +117,30 @@ PROVIDER_OPENROUTER = "openrouter"
 PROVIDER_SAMBANOVA = "sambanova"
 
 
+# ==============================================================================
+# 8. OAuth 端點與 URL 常數 (OAuth Endpoints & URLs)
+# ==============================================================================
+# 設計意圖：
+# 集中管理各 OAuth 供應商之授權與 Token 換發/重新整理端點 URL。
+# ==============================================================================
+DEFAULT_OPENAI_AUTH_URL = "https://auth.openai.com/oauth/authorize"
+DEFAULT_OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
+DEFAULT_GEMINI_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+DEFAULT_GEMINI_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+OAUTH_TOKEN_URLS: dict[str, str] = {
+    PROVIDER_OPENAI: DEFAULT_OPENAI_TOKEN_URL,
+    PROVIDER_GEMINI_OAUTH: DEFAULT_GEMINI_TOKEN_URL,
+    "gemini-oauth": DEFAULT_GEMINI_TOKEN_URL,
+}
+
+OAUTH_AUTH_URLS: dict[str, str] = {
+    PROVIDER_OPENAI: DEFAULT_OPENAI_AUTH_URL,
+    PROVIDER_GEMINI_OAUTH: DEFAULT_GEMINI_AUTH_URL,
+    "gemini-oauth": DEFAULT_GEMINI_AUTH_URL,
+}
+
+
 @dataclass(frozen=True)
 class SystemConstants:
     """系統常數集中存取容器 (唯讀結構)"""
