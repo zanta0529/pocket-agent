@@ -174,8 +174,14 @@ def test_win_rdp_rejects_command_injection_characters():
     assert _validate_win_config_path(r"C:\Windows\win.ini") == r"C:\Windows\win.ini"
 
     # 包含單引號等注入字元
-    with pytest.raises(ValueError, match="非法的 Shell 或命令注入特殊字元"):
+    with pytest.raises(ValueError, match="非法的 Shell、引號或命令注入特殊字元"):
         _validate_win_config_path(r"C:\inetpub\wwwroot\test'; whoami; #")
+
+    # 包含 Unicode Smart Quotes (彎引號) 注入字元
+    with pytest.raises(ValueError, match="非法的 Shell、引號或命令注入特殊字元"):
+        _validate_win_config_path("C:\\inetpub\\wwwroot\\test\u2018; whoami; #")
+    with pytest.raises(ValueError, match="非法的 Shell、引號或命令注入特殊字元"):
+        _validate_win_config_path("C:\\inetpub\\wwwroot\\test\u201c; whoami; #")
 
 
 def test_mssql_forbidden_rejects_sequence():
@@ -186,6 +192,44 @@ def test_mssql_forbidden_rejects_sequence():
     # 允許正常 SELECT
     assert _validate_select_query("SELECT 1") == "SELECT 1"
 
-    # 阻擋 NEXT VALUE FOR
+    # 阻擋標準 NEXT VALUE FOR
     with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
         _validate_select_query("SELECT NEXT VALUE FOR dbo.seq_counter")
+
+    # 阻擋註解混淆的 NEXT/**/VALUE/**/FOR 穿透
+    with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
+        _validate_select_query("SELECT NEXT/**/VALUE/**/FOR dbo.seq_counter")
+
+    # 阻擋單行註解換行混淆
+    with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
+        _validate_select_query("SELECT NEXT -- comment\nVALUE FOR dbo.seq_counter")
+
+
+def test_parallel_subagents_handles_cancelled_error():
+    agent = Agent(client=MagicMock(), mcp=MagicMock(), model="gpt-test")
+    tasks = [{"name": "sub1", "task": "task1"}, {"name": "sub2", "task": "task2"}]
+
+    async def _test():
+        with patch.object(agent, "_run_subagent") as mock_sub:
+            mock_sub.side_effect = [asyncio.CancelledError(), "子代理 2 成功完成"]
+            res = await agent._execute_core_tool("run_subagents_parallel", {"tasks": tasks}, "call-1")
+            assert "【子代理 sub1 已取消】" in res
+            assert "子代理 2 成功完成" in res
+
+    asyncio.run(_test())
+
+
+def test_interrupt_active_shell_processes():
+    from pocket_agent.tools.shell import (
+        _active_shell_procs,
+        _shell_proc_lock,
+        interrupt_active_shell_processes,
+    )
+
+    mock_proc = MagicMock()
+    with _shell_proc_lock:
+        _active_shell_procs.add(mock_proc)
+
+    count = interrupt_active_shell_processes()
+    assert count == 1
+    assert len(_active_shell_procs) == 0

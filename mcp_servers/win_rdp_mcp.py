@@ -143,8 +143,36 @@ def _validate_win_config_path(file_path: str) -> str:
         raise ValueError("Windows 設定檔路徑必須為完整磁碟機絕對路徑（例如 C:\\Windows\\win.ini）。")
     if ".." in raw.split("\\"):
         raise ValueError("拒絕存取：路徑不得包含 '..' 跳躍符號。")
-    if any(ch in raw for ch in ("'", '"', ";", "$", "&", "|", "`", "\r", "\n", "%", "^", "<", ">")):
-        raise ValueError("拒絕存取：路徑包含非法的 Shell 或命令注入特殊字元。")
+
+    forbidden_chars = (
+        "'",
+        '"',
+        "`",
+        ";",
+        "$",
+        "&",
+        "|",
+        "\r",
+        "\n",
+        "%",
+        "^",
+        "<",
+        ">",
+        "{",
+        "}",
+        "\u2018",
+        "\u2019",
+        "\u201a",
+        "\u201b",  # Unicode smart single quotes
+        "\u201c",
+        "\u201d",
+        "\u201e",
+        "\u201f",  # Unicode smart double quotes
+        "\u00ab",
+        "\u00bb",  # Guillemets
+    )
+    if any(ch in raw for ch in forbidden_chars):
+        raise ValueError("拒絕存取：路徑包含非法的 Shell、引號或命令注入特殊字元。")
 
     norm = ntpath.normpath(raw)
     lower_path = norm.lower()
@@ -622,16 +650,21 @@ def _send_vk_combo(hwnd: int, combo_str: str) -> None:
         raise RuntimeError("遠端桌面視窗失去前景焦點，已中止按鍵發送以保護本機視窗。")
 
     KEYEVENTF_KEYUP = 0x0002
-    for vk in vks:
-        if int(user32.GetForegroundWindow()) != int(hwnd):
-            raise RuntimeError("偵測到前景視窗焦點轉移，已緊急中止按鍵發送以杜絕注入本機視窗。")
-        user32.keybd_event(vk, 0, 0, 0)
-        time.sleep(0.03)
-    for vk in reversed(vks):
-        if int(user32.GetForegroundWindow()) != int(hwnd):
-            raise RuntimeError("偵測到前景視窗焦點轉移，已緊急中止按鍵釋放以杜絕注入本機視窗。")
-        user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
-        time.sleep(0.03)
+    pressed_vks: list[int] = []
+    try:
+        for vk in vks:
+            if int(user32.GetForegroundWindow()) != int(hwnd):
+                raise RuntimeError("偵測到前景視窗焦點轉移，已緊急中止按鍵發送以杜絕注入本機視窗。")
+            user32.keybd_event(vk, 0, 0, 0)
+            pressed_vks.append(vk)
+            time.sleep(0.03)
+    finally:
+        for vk in reversed(pressed_vks):
+            try:
+                user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+            except Exception:
+                pass
+            time.sleep(0.03)
 
 
 def _send_unicode_text(hwnd: int, text: str) -> None:
@@ -1037,10 +1070,13 @@ def win_read_config(
         return f"[ERROR] {e}"
 
     safe_lines = max(1, min(int(max_lines), 500))
-    safe_path = clean_path.replace("'", "''")
+    import base64
+
+    b64_path = base64.b64encode(clean_path.encode("utf-16le")).decode("ascii")
     cmd = (
         "powershell -NoProfile -NonInteractive -Command "
-        f"\"Get-Content -LiteralPath '{safe_path}' -TotalCount {safe_lines}\""
+        f"\"$p = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('{b64_path}')); "
+        f'Get-Content -LiteralPath $p -TotalCount {safe_lines}"'
     )
     return _run_rdp_clip_command(cmd, rdp_host, rdp_port, rdp_user, rdp_password)
 

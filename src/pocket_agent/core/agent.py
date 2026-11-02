@@ -1282,10 +1282,10 @@ class Agent:
                                 continue
                             elif not ok:
                                 raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
-                        result = await self.mcp.call(fc["name"], args)
                         if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
                             if self.mcp.is_sensitive_tool(fc["name"]):
                                 self.is_sensitive_session = True
+                        result = await self.mcp.call(fc["name"], args)
                     log.debug("TOOL result name=%s chars=%d", fc["name"], len(result) if isinstance(result, str) else 0)
 
                     if not self._is_subagent:
@@ -1313,7 +1313,10 @@ class Agent:
                             )
                 except asyncio.CancelledError:
                     log.warning("TOOL cancelled during execution: name=%s", fc["name"])
-                    result = "[操作已由使用者取消中斷]"
+                    from pocket_agent.tools.shell import interrupt_active_shell_processes
+
+                    interrupt_active_shell_processes()
+                    result = "[操作已由使用者取消中斷，進行中之背景進程已強制終止]"
                     self._emit(
                         "tool_done",
                         {
@@ -1418,10 +1421,12 @@ class Agent:
                 if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
                     require_save_prompt = True
 
-                if isinstance(res, Exception):
+                if isinstance(res, asyncio.CancelledError):
+                    combined.append(f"【子代理 {t_name} 已取消】")
+                elif isinstance(res, BaseException):
                     combined.append(f"【子代理 {t_name} 錯誤】\n{res}")
                 else:
-                    combined.append(res)
+                    combined.append(str(res))
 
             result = wrap_external_content("\n\n".join(combined))
             if require_save_prompt:

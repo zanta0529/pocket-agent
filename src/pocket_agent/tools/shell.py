@@ -140,6 +140,26 @@ def _kill_proc_tree(proc: subprocess.Popen) -> None:
             proc.terminate()
 
 
+_active_shell_procs: set[subprocess.Popen] = set()
+_shell_proc_lock = threading.Lock()
+
+
+def interrupt_active_shell_processes() -> int:
+    """強制終止所有目前執行中的 Shell 子進程樹，防止取消後背景繼續執行。"""
+    count = 0
+    with _shell_proc_lock:
+        for p in list(_active_shell_procs):
+            try:
+                _kill_proc_tree(p)
+                count += 1
+            except Exception:
+                pass
+        _active_shell_procs.clear()
+    if count:
+        log.warning("已強制終止 %d 個進行中的 Shell 子進程樹", count)
+    return count
+
+
 def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     """執行指令並回傳結果字串。confirm(command) 回傳 False 時拒絕執行。
 
@@ -248,6 +268,8 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
             kwargs["start_new_session"] = True
 
         proc = subprocess.Popen(cmd_args, **kwargs)
+        with _shell_proc_lock:
+            _active_shell_procs.add(proc)
 
         # 累積原始位元組，結束後一次解碼，避免多位元組字元被分段切斷而誤判編碼
         output_buf = bytearray()
@@ -297,6 +319,8 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
                 message += f"\n已收集的輸出：\n{partial}"
             return message
         finally:
+            with _shell_proc_lock:
+                _active_shell_procs.discard(proc)
             # 讀取執行緒仍在阻塞讀取時關閉管道可能卡住，故僅在其結束後才關閉，避免檔案描述元外洩
             if not t.is_alive():
                 try:

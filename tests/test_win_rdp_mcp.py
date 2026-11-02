@@ -271,9 +271,32 @@ def test_run_rdp_clip_command_preserves_and_restores_user_clipboard():
 
 
 def test_focus_loss_aborts_key_sending():
-    """驗證當前景視窗焦點轉移時，立即中止按鍵發送以杜絕注入本機視窗。"""
-    with patch("mcp_servers.win_rdp_mcp._focus_rdp_window", return_value=True):
-        # 模擬呼叫時視窗為前景，但在發送過程中焦點轉移為其他視窗 (如 Teams)
-        with patch("ctypes.windll.user32.GetForegroundWindow", side_effect=[999, 999, 888]):
-            with pytest.raises(RuntimeError, match="焦點轉移"):
-                win_rdp_mcp._send_vk_combo(999, "win+r")
+    """驗證當前景視窗焦點轉移時，立即中止按鍵發送以杜絕注入本機視窗，且確保已按下的按鍵在 finally 中釋放。"""
+    with (
+        patch("mcp_servers.win_rdp_mcp._focus_rdp_window", return_value=True),
+        patch("ctypes.windll.user32.keybd_event") as mock_keybd,
+        patch("ctypes.windll.user32.GetForegroundWindow", side_effect=[999, 999, 888]),
+    ):
+        with pytest.raises(RuntimeError, match="焦點轉移"):
+            win_rdp_mcp._send_vk_combo(999, "win+r")
+
+        # 驗證即使中途焦點轉移拋出例外，已按下的按鍵（Win 鍵 0x5B）依然有在 finally 中被釋放 (KEYEVENTF_KEYUP)
+        assert mock_keybd.call_count == 2
+        # 第一次為 KeyDown (0x5B, 0, 0, 0)
+        assert mock_keybd.call_args_list[0].args == (0x5B, 0, 0, 0)
+        # 第二次為 KeyUp (0x5B, 0, 2, 0)
+        assert mock_keybd.call_args_list[1].args == (0x5B, 0, 0x0002, 0)
+
+
+def test_send_vk_combo_normal_flow_presses_and_releases():
+    """驗證正常發送組合鍵時依序按下並反向釋放所有虛擬按鍵。"""
+    with (
+        patch("mcp_servers.win_rdp_mcp._focus_rdp_window", return_value=True),
+        patch("ctypes.windll.user32.keybd_event") as mock_keybd,
+        patch("ctypes.windll.user32.GetForegroundWindow", return_value=999),
+    ):
+        win_rdp_mcp._send_vk_combo(999, "ctrl+shift+esc")
+        # 依序按下 ctrl(0x11)、shift(0x10)、esc(0x1B)，再反向依序釋放
+        assert mock_keybd.call_count == 6
+        assert [call.args[0] for call in mock_keybd.call_args_list] == [0x11, 0x10, 0x1B, 0x1B, 0x10, 0x11]
+        assert [call.args[2] for call in mock_keybd.call_args_list] == [0, 0, 0, 2, 2, 2]

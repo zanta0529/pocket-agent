@@ -97,6 +97,21 @@ async def _ensure_page():
         _page = await _browser.new_page()
 
     _page.set_default_timeout(15000)
+    allowed = os.getenv("BROWSER_ALLOWED_DOMAINS")
+    if allowed:
+
+        async def _intercept_request(route):
+            req_url = route.request.url
+            if req_url.startswith(("data:", "about:", "javascript:")):
+                await route.continue_()
+                return
+            try:
+                check_url_allowed(req_url)
+                await route.continue_()
+            except ValueError:
+                await route.abort("blockedbyclient")
+
+        await _page.route("**/*", _intercept_request)
     return _page
 
 
@@ -196,8 +211,15 @@ async def browser_click(ref: int) -> str:
 async def browser_fill(ref: int, text: str) -> str:
     """在指定編號的輸入框填入文字（會先清空）。"""
     page = await _ensure_page()
-    await _ref_locator(page, ref).first.fill(text)
-    return f"已在 [{ref}] 填入：{text}"
+    locator = _ref_locator(page, ref).first
+    el_type = ""
+    try:
+        el_type = (await locator.get_attribute("type") or "").lower()
+    except Exception:
+        pass
+    await locator.fill(text)
+    display_text = "********" if el_type == "password" else text
+    return f"已在 [{ref}] 填入：{display_text}"
 
 
 @mcp.tool()

@@ -243,6 +243,13 @@ def _strip_leading_sql_comments(sql: str) -> str:
     return s
 
 
+def _normalize_sql_for_validation(query: str) -> str:
+    """在進行關鍵字安全檢查前，將所有註解正規化替換為空格並壓縮連續空白，防範混淆繞過。"""
+    no_block = re.sub(r"/\*.*?\*/", " ", query, flags=re.DOTALL)
+    no_line = re.sub(r"--[^\r\n]*", " ", no_block)
+    return re.sub(r"\s+", " ", no_line).strip()
+
+
 def _validate_select_query(query: str) -> str:
     """驗證 T-SQL 查詢是否為純唯讀單一 SELECT / WITH 語句。"""
     stripped = _strip_leading_sql_comments(query).strip()
@@ -254,10 +261,12 @@ def _validate_select_query(query: str) -> str:
     if ";" in without_trailing_semi:
         raise ValueError("基於安全考量，禁止執行包含分號之多重 SQL 語句。")
 
-    if not re.match(r"(?i)^(?:SELECT|WITH)\b", without_trailing_semi):
+    normalized = _normalize_sql_for_validation(without_trailing_semi)
+
+    if not re.match(r"(?i)^(?:SELECT|WITH)\b", normalized):
         raise ValueError("基於安全考量，僅允許執行以 SELECT 或 WITH 開頭之唯讀查詢。")
 
-    if _FORBIDDEN_MSSQL_RE.search(without_trailing_semi):
+    if _FORBIDDEN_MSSQL_RE.search(normalized):
         raise ValueError("基於安全考量，查詢包含禁止執行的寫入、預存程序或系統變更關鍵字。")
 
     return without_trailing_semi
