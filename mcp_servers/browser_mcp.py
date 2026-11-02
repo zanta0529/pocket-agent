@@ -51,11 +51,17 @@ _SNAPSHOT_JS = """
     if (st.visibility === 'hidden' || st.display === 'none') continue;
     i += 1;
     el.setAttribute('data-mcp-ref', String(i));
-    const label = (el.innerText || el.value || el.placeholder ||
-      el.getAttribute('aria-label') || el.title || '')
-      .trim().replace(/\\s+/g, ' ').slice(0, 80);
     const tag = el.tagName.toLowerCase();
-    const type = el.getAttribute('type');
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    let rawLabel = '';
+    if (tag === 'input' && type === 'password') {
+      rawLabel = '[PROTECTED PASSWORD FIELD]';
+    } else {
+      rawLabel = (el.innerText || el.value || el.placeholder ||
+        el.getAttribute('aria-label') || el.title || '');
+    }
+    const label = rawLabel
+      .trim().replace(/\\s+/g, ' ').slice(0, 80);
     out.push(`[${i}] <${tag}${type ? ' type=' + type : ''}> ${label}`);
   }
   return out.join('\\n');
@@ -99,6 +105,13 @@ def _ref_locator(page, ref: int):
 
 
 async def _page_state(page) -> str:
+    curr_url = page.url
+    if curr_url and curr_url != "about:blank":
+        try:
+            check_url_allowed(curr_url)
+        except ValueError:
+            await page.goto("about:blank")
+            raise
     return f"目前頁面：{await page.title()}\nURL：{page.url}"
 
 
@@ -108,10 +121,22 @@ def check_url_allowed(url: str):
         return
     import urllib.parse
 
-    domain = urllib.parse.urlparse(url).netloc.split(":")[0].lower()
-    allowed_list = [d.strip().lower() for d in allowed.split(",")]
-    if domain not in allowed_list:
-        raise ValueError(f"拒絕存取：網域 {domain} 不在 BROWSER_ALLOWED_DOMAINS 內")
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.username or parsed.password:
+        raise ValueError("拒絕存取：URL 不得包含使用者資訊 (Userinfo) 以防範混淆攻擊。")
+
+    hostname = (parsed.hostname or "").lower().strip()
+    if not hostname:
+        raise ValueError(f"拒絕存取：無法自 URL 解析有效網域：{url}")
+
+    allowed_list = [d.strip().lower() for d in allowed.split(",") if d.strip()]
+    matched = False
+    for allowed_domain in allowed_list:
+        if hostname == allowed_domain or hostname.endswith("." + allowed_domain):
+            matched = True
+            break
+    if not matched:
+        raise ValueError(f"拒絕存取：網域 {hostname} 不在 BROWSER_ALLOWED_DOMAINS 白名單內")
 
 
 @mcp.tool()

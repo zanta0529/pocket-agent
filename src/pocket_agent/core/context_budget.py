@@ -182,7 +182,13 @@ class ContextBudget:
     def max_tool_output_chars(self) -> int:
         return max(500, int(self.effective_input_budget * TOOL_OUTPUT_RATIO * CHARS_PER_TOKEN))
 
-    def truncate_tool_output(self, text: Any, tool_name: str = "", call_id: str = "") -> Any:
+    def truncate_tool_output(
+        self,
+        text: Any,
+        tool_name: str = "",
+        call_id: str = "",
+        is_sensitive: bool = False,
+    ) -> Any:
         """工具輸出寫入 history 前進行動態檢查；超限時啟動落盤虛擬化與雙端切片。"""
         if not isinstance(text, str):
             return text
@@ -192,7 +198,13 @@ class ContextBudget:
         log.warning("Tool output truncated on append (from %d to %d chars).", len(text), limit)
         from pocket_agent.core.spillover import default_spillover
 
-        return default_spillover.spill_or_pass(text, tool_name=tool_name, call_id=call_id, max_chars=limit)
+        return default_spillover.spill_or_pass(
+            text,
+            tool_name=tool_name,
+            call_id=call_id,
+            max_chars=limit,
+            is_sensitive=is_sensitive,
+        )
 
     def estimate_items(self, items: list, instructions: str = "", tools: list | None = None) -> int:
         """估算送出內容（含 instructions 與 tools schema）的 token 數。"""

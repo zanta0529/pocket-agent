@@ -103,6 +103,16 @@ class OpenAIResponsesEngine(BaseEngine):
                         if b64:
                             yield EventImageGenerationDone(b64)
 
+                elif etype in ("response.failed", "error"):
+                    err = getattr(event, "error", None) or getattr(event, "response", None)
+                    err_msg = getattr(err, "message", None) or str(err or etype)
+                    raise RuntimeError(f"OpenAI 串流回應失敗 ({etype}): {err_msg}")
+
+                elif etype == "response.incomplete":
+                    resp_obj = getattr(event, "response", None)
+                    reason = getattr(resp_obj, "incomplete_details", None) or "incomplete"
+                    raise RuntimeError(f"OpenAI 串流回應未完成 (incomplete): {reason}")
+
                 elif etype == "response.done":
                     usage = getattr(getattr(event, "response", None), "usage", None)
                     if usage:

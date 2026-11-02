@@ -90,16 +90,14 @@ async def send_turn(
                         else:
                             raise
                 _, reply, _ = chat_task.result()
-            except asyncio.CancelledError:
+            except asyncio.CancelledError, KeyboardInterrupt:
                 agent.request_stop()
                 chat_task.cancel()
-                renderer._stop_status()
-                renderer.message("⏹ 已停止主代理", "yellow")
-                state.last_failed_input = raw
-                return
-            except KeyboardInterrupt:
-                agent.request_stop()
-                chat_task.cancel()
+                try:
+                    # 給予至多 1 秒協調正在進行之工具中斷與狀態寫入
+                    await asyncio.wait_for(asyncio.shield(chat_task), timeout=1.0)
+                except asyncio.TimeoutError, asyncio.CancelledError, Exception:
+                    pass
                 renderer._stop_status()
                 renderer.message("⏹ 已停止主代理", "yellow")
                 state.last_failed_input = raw

@@ -53,10 +53,11 @@ class SpilloverManager:
         tool_name: str = "",
         call_id: str = "",
         max_chars: int | None = None,
+        is_sensitive: bool = False,
     ) -> Any:
         """若文字超過動態閾值則落盤並回傳雙端預覽，否則原樣回傳。
 
-        所有字元參數皆支援動態計算或由設定覆寫。
+        所有字元參數皆支援動態計算或由設定覆寫。敏感輸出超限時僅在記憶體雙端截斷，嚴禁落盤。
         """
         if not isinstance(text, str):
             return text
@@ -78,6 +79,24 @@ class SpilloverManager:
         head_limit = min(raw_head, max_preview)
         tail_limit = min(raw_tail, max_preview)
 
+        # 雙端切片組裝
+        head_part = text[:head_limit]
+        tail_part = text[-tail_limit:] if total_len > tail_limit else ""
+        omitted_chars = max(0, total_len - head_limit - tail_limit)
+
+        if is_sensitive:
+            log.info(
+                "敏感工具輸出超限，依資安政策僅於記憶體中雙端截斷，不予落盤: %s (%d 字元)",
+                tool_name,
+                total_len,
+            )
+            return (
+                f"{head_part}\n\n"
+                f"... [【安全防護】已省略中間 {omitted_chars:,} 字元；"
+                "基於資安政策，敏感主機診斷資訊禁止落盤保存] ...\n\n"
+                f"{tail_part}"
+            )
+
         # 產生安全檔名並寫入全量檔案
         safe_tool = re.sub(r"[^\w\-]", "_", tool_name) or "tool"
         safe_cid = re.sub(r"[^\w\-]", "_", call_id)[:8] or "output"
@@ -93,10 +112,6 @@ class SpilloverManager:
         except OSError as e:
             log.warning("工具輸出落盤失敗，將退回純截斷模式: %s", e)
             return text[:threshold] + f"\n\n... (落盤失敗，已截斷至 {threshold} 字元) ...\n"
-
-        # 雙端切片組裝
-        head_part = text[:head_limit]
-        tail_part = text[-tail_limit:] if total_len > tail_limit else ""
 
         total_lines = text.count("\n") + 1
         omitted_chars = max(0, total_len - head_limit - tail_limit)

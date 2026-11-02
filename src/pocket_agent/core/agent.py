@@ -734,6 +734,8 @@ class Agent:
             log.debug("子代理「%s」執行失敗：%s", name, e, exc_info=True)
             raise  # Let the caller handle the exception for proper CLI rendering
         finally:
+            if getattr(sub, "is_sensitive_session", False):
+                self.is_sensitive_session = True
             if sub in self.active_subagents:
                 self.active_subagents.remove(sub)
 
@@ -760,6 +762,12 @@ class Agent:
 
     def _append_tool_pair(self, input_items: list, fc: dict, result) -> None:
         """附加 function_call 與其 output；輸出在此只截斷一次，避免事後反覆原地修改。"""
+        is_sensitive = getattr(self, "is_sensitive_session", False)
+        tool_name = fc.get("name", "")
+        if not is_sensitive and hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
+            if self.mcp.is_sensitive_tool(tool_name):
+                is_sensitive = True
+
         input_items.append(
             {
                 "type": "function_call",
@@ -774,8 +782,9 @@ class Agent:
                 "call_id": fc["call_id"],
                 "output": self._budget.truncate_tool_output(
                     result,
-                    tool_name=fc.get("name", ""),
+                    tool_name=tool_name,
                     call_id=fc.get("call_id", ""),
+                    is_sensitive=is_sensitive,
                 ),
             }
         )
@@ -1026,6 +1035,7 @@ class Agent:
                                 "call_id": event.call_id,
                                 "name": event.name,
                                 "arguments": "",
+                                "completed": False,
                             }
                             log.debug("TOOL item.added call_id=%s name=%s", event.call_id, event.name)
                             self._emit("tool_stream_start", event.name)
@@ -1038,6 +1048,7 @@ class Agent:
                         elif isinstance(event, EventToolCallDone):
                             if event.call_id in func_calls:
                                 func_calls[event.call_id]["arguments"] = event.full_args
+                                func_calls[event.call_id]["completed"] = True
                             log.debug("TOOL item.done call_id=%s chars=%d", event.call_id, len(event.full_args))
 
                         elif isinstance(event, EventImageGenerationDone):
@@ -1114,7 +1125,17 @@ class Agent:
 
             thinking = "".join(thinking_chunks)
             text = "".join(text_chunks)
-            fc_list = list(func_calls.values())
+            raw_fc_list = list(func_calls.values())
+            fc_list = []
+            for fc in raw_fc_list:
+                if not fc.get("completed", False):
+                    log.warning(
+                        "TOOL %s (call_id=%s) 串流未完整接收 Done 事件，已安全阻斷執行",
+                        fc.get("name"),
+                        fc.get("call_id"),
+                    )
+                else:
+                    fc_list.append(fc)
 
             if self.cancel_requested:
                 return thinking, self._stopped_reply(text)
@@ -1290,6 +1311,20 @@ class Agent:
                                 f"\n\n[系統提醒：調研收斂] 你已執行多次網路檢索（累計 {web_tool_call_count} 次）。"
                                 "請檢視現有資訊是否充足，優先開始產出解答或建立檔案，避免無休止調研。"
                             )
+                except asyncio.CancelledError:
+                    log.warning("TOOL cancelled during execution: name=%s", fc["name"])
+                    result = "[操作已由使用者取消中斷]"
+                    self._emit(
+                        "tool_done",
+                        {
+                            "call_id": fc["call_id"],
+                            "name": fc["name"],
+                            "result": result,
+                            "ok": False,
+                        },
+                    )
+                    self._append_tool_pair(input_items, fc, result)
+                    raise
                 except Exception as e:
                     is_sensitive = False
                     if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):

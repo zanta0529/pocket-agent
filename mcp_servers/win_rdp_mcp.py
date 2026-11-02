@@ -143,6 +143,8 @@ def _validate_win_config_path(file_path: str) -> str:
         raise ValueError("Windows 設定檔路徑必須為完整磁碟機絕對路徑（例如 C:\\Windows\\win.ini）。")
     if ".." in raw.split("\\"):
         raise ValueError("拒絕存取：路徑不得包含 '..' 跳躍符號。")
+    if any(ch in raw for ch in ("'", '"', ";", "$", "&", "|", "`", "\r", "\n", "%", "^", "<", ">")):
+        raise ValueError("拒絕存取：路徑包含非法的 Shell 或命令注入特殊字元。")
 
     norm = ntpath.normpath(raw)
     lower_path = norm.lower()
@@ -1035,9 +1037,10 @@ def win_read_config(
         return f"[ERROR] {e}"
 
     safe_lines = max(1, min(int(max_lines), 500))
+    safe_path = clean_path.replace("'", "''")
     cmd = (
         "powershell -NoProfile -NonInteractive -Command "
-        f"\"Get-Content -LiteralPath '{clean_path}' -TotalCount {safe_lines}\""
+        f"\"Get-Content -LiteralPath '{safe_path}' -TotalCount {safe_lines}\""
     )
     return _run_rdp_clip_command(cmd, rdp_host, rdp_port, rdp_user, rdp_password)
 
