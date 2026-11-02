@@ -142,12 +142,15 @@ def _kill_proc_tree(proc: subprocess.Popen) -> None:
 
 _active_shell_procs: set[subprocess.Popen] = set()
 _shell_proc_lock = threading.Lock()
+_shell_cancel_generation: int = 0
 
 
 def interrupt_active_shell_processes() -> int:
     """強制終止所有目前執行中的 Shell 子進程樹，防止取消後背景繼續執行。"""
+    global _shell_cancel_generation
     count = 0
     with _shell_proc_lock:
+        _shell_cancel_generation += 1
         for p in list(_active_shell_procs):
             try:
                 _kill_proc_tree(p)
@@ -193,6 +196,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     if cwd and not os.path.isdir(cwd):
         return f"[ERROR] 工作目錄不存在或不是目錄：{cwd}"
 
+    start_generation = _shell_cancel_generation
     if confirm is not None:
         try:
             allowed = confirm(command)
@@ -201,6 +205,9 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
             allowed = False
     else:
         allowed = False
+
+    if _shell_cancel_generation != start_generation:
+        return "[操作已由使用者取消中斷，指令未建立與執行]"
 
     if allowed is True:
         pass
@@ -267,8 +274,10 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         else:
             kwargs["start_new_session"] = True
 
-        proc = subprocess.Popen(cmd_args, **kwargs)
         with _shell_proc_lock:
+            if _shell_cancel_generation != start_generation:
+                return "[操作已由使用者取消中斷，指令未建立與執行]"
+            proc = subprocess.Popen(cmd_args, **kwargs)
             _active_shell_procs.add(proc)
 
         # 累積原始位元組，結束後一次解碼，避免多位元組字元被分段切斷而誤判編碼

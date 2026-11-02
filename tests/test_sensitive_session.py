@@ -204,6 +204,23 @@ def test_mssql_forbidden_rejects_sequence():
     with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
         _validate_select_query("SELECT NEXT -- comment\nVALUE FOR dbo.seq_counter")
 
+    # 阻擋字串常值內含 '--' 混淆註解消除並執行 NEXT VALUE FOR 繞過
+    with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
+        _validate_select_query("SELECT '--' AS marker, NEXT VALUE FOR dbo.counter")
+
+    # 阻擋字串常值內含 '/*' 混淆區塊註解並執行 NEXT VALUE FOR 繞過
+    with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
+        _validate_select_query("SELECT '/* harmless */' AS marker, NEXT VALUE FOR dbo.counter")
+
+    # 阻擋未閉合字串常值
+    with pytest.raises(ValueError, match="未閉合的字串常值"):
+        _validate_select_query("SELECT 'unclosed string")
+
+    # 允許字串常值包含註解符號之純唯讀查詢
+    assert _validate_select_query("SELECT '-- not comment' AS c") == "SELECT '-- not comment' AS c"
+    assert _validate_select_query("SELECT '/* block */' AS c") == "SELECT '/* block */' AS c"
+    assert _validate_select_query("SELECT N'-- unicode' AS c") == "SELECT N'-- unicode' AS c"
+
 
 def test_parallel_subagents_handles_cancelled_error():
     agent = Agent(client=MagicMock(), mcp=MagicMock(), model="gpt-test")
@@ -233,3 +250,37 @@ def test_interrupt_active_shell_processes():
     count = interrupt_active_shell_processes()
     assert count == 1
     assert len(_active_shell_procs) == 0
+
+
+def test_browser_fill_exception_fail_secure():
+    """驗證讀取 DOM 元素屬性發生非預期例外時，防禦性視為密碼進行遮罩，杜絕 Fail-Open 明文洩漏。"""
+    from mcp_servers import browser_mcp
+
+    mock_page = MagicMock()
+    mock_locator = AsyncMock()
+    mock_locator.get_attribute.side_effect = RuntimeError("DOM detached")
+    mock_locator.fill = AsyncMock()
+    mock_page.locator.return_value.first = mock_locator
+
+    with patch.object(browser_mcp, "_ensure_page", return_value=mock_page):
+        res = asyncio.run(browser_mcp.browser_fill(1, "SuperSecretPassword123!"))
+        assert "********" in res
+        assert "SuperSecretPassword123!" not in res
+
+
+def test_shell_interrupt_during_confirm_prevents_spawn():
+    """驗證在確認對話框等待期間若觸發中斷，確認返回後指令亦絕不啟動執行。"""
+    from pocket_agent.tools.shell import (
+        call_shell_tool,
+        interrupt_active_shell_processes,
+    )
+
+    def fake_confirm(_cmd):
+        # 模擬在使用者思考確認期間，外部觸發了中斷
+        interrupt_active_shell_processes()
+        return True
+
+    with patch("subprocess.Popen") as mock_popen:
+        res = call_shell_tool("run_command", {"command": "echo test"}, confirm=fake_confirm)
+        assert "指令未建立與執行" in res
+        mock_popen.assert_not_called()

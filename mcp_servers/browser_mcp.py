@@ -111,7 +111,12 @@ async def _ensure_page():
             except ValueError:
                 await route.abort("blockedbyclient")
 
-        await _page.route("**/*", _intercept_request)
+        # 於 Context 層級安裝攔截器，使所有現存頁面、新開分頁與 Popup 均受網域白名單約束
+        ctx = _page.context
+        if not getattr(ctx, "_pocket_route_installed", False):
+            await ctx.route("**/*", _intercept_request)
+            ctx._pocket_route_installed = True
+            ctx.on("page", lambda p: p.set_default_timeout(15000))
     return _page
 
 
@@ -212,13 +217,15 @@ async def browser_fill(ref: int, text: str) -> str:
     """在指定編號的輸入框填入文字（會先清空）。"""
     page = await _ensure_page()
     locator = _ref_locator(page, ref).first
-    el_type = ""
+    is_password = False
     try:
         el_type = (await locator.get_attribute("type") or "").lower()
+        is_password = el_type == "password"
     except Exception:
-        pass
+        # 讀取型別失敗時防禦性視為密碼進行遮罩，杜絕 Fail-Open 明文洩漏
+        is_password = True
     await locator.fill(text)
-    display_text = "********" if el_type == "password" else text
+    display_text = "********" if is_password else text
     return f"已在 [{ref}] 填入：{display_text}"
 
 

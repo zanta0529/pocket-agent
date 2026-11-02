@@ -1313,10 +1313,16 @@ class Agent:
                             )
                 except asyncio.CancelledError:
                     log.warning("TOOL cancelled during execution: name=%s", fc["name"])
-                    from pocket_agent.tools.shell import interrupt_active_shell_processes
+                    if is_shell_tool(fc["name"]):
+                        from pocket_agent.tools.shell import interrupt_active_shell_processes
 
-                    interrupt_active_shell_processes()
-                    result = "[操作已由使用者取消中斷，進行中之背景進程已強制終止]"
+                        killed = interrupt_active_shell_processes()
+                        if killed > 0:
+                            result = f"[操作已由使用者取消中斷，進行中之 {killed} 個 Shell 子進程樹已嘗試強制終止]"
+                        else:
+                            result = "[操作已由使用者取消中斷，Shell 指令未執行或已終止]"
+                    else:
+                        result = "[操作已由使用者取消中斷，工作可能仍在非同步執行緒中收尾，未產出後續回應]"
                     self._emit(
                         "tool_done",
                         {

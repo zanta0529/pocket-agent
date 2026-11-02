@@ -244,10 +244,91 @@ def _strip_leading_sql_comments(sql: str) -> str:
 
 
 def _normalize_sql_for_validation(query: str) -> str:
-    """在進行關鍵字安全檢查前，將所有註解正規化替換為空格並壓縮連續空白，防範混淆繞過。"""
-    no_block = re.sub(r"/\*.*?\*/", " ", query, flags=re.DOTALL)
-    no_line = re.sub(r"--[^\r\n]*", " ", no_block)
-    return re.sub(r"\s+", " ", no_line).strip()
+    """在進行關鍵字安全檢查前，正規化移除註解並保留字串常值邊界，防範混淆繞過。
+
+    語法狀態機解析規則：
+    1. 支援 T-SQL 單行註解 (-- ...)，替換為單一空格。
+    2. 支援 T-SQL 區塊註解 (/* ... */) 與巢狀區塊註解，替換為單一空格。
+    3. 嚴格區分字串常值 ('...' 或 N'...')：在字串常值內部之 '--' 或 '/*' 視為字串內容，
+       不作為註解消除，避免將後續查詢代碼誤殺；字串內部以空格填補以遮罩潛在干擾。
+    4. 支援方括號識別字 ([...]) 完整保留。
+    5. 未閉合之字串常值或括號識別字直接拋出 ValueError。
+    """
+    chars: list[str] = []
+    i = 0
+    n = len(query)
+    while i < n:
+        # 1. 區塊註解 /* ... */ (支援 T-SQL 巢狀區塊註解)
+        if query[i : i + 2] == "/*":
+            nesting = 1
+            i += 2
+            while i < n and nesting > 0:
+                if query[i : i + 2] == "/*":
+                    nesting += 1
+                    i += 2
+                elif query[i : i + 2] == "*/":
+                    nesting -= 1
+                    i += 2
+                else:
+                    i += 1
+            chars.append(" ")
+            continue
+
+        # 2. 單行註解 -- ...
+        if query[i : i + 2] == "--":
+            i += 2
+            while i < n and query[i] not in "\r\n":
+                i += 1
+            chars.append(" ")
+            continue
+
+        # 3. 字串常值 '...' 或 N'...'
+        if query[i] == "'" or (query[i] in "nN" and i + 1 < n and query[i + 1] == "'"):
+            if query[i] in "nN":
+                chars.append("N")
+                i += 1
+            chars.append("'")
+            i += 1
+            closed = False
+            while i < n:
+                if query[i] == "'":
+                    if i + 1 < n and query[i + 1] == "'":
+                        # '' 轉義單引號
+                        chars.append("''")
+                        i += 2
+                    else:
+                        chars.append("'")
+                        i += 1
+                        closed = True
+                        break
+                else:
+                    # 將字串內容以空格遮罩，保留常值邊界而不洩漏內部關鍵字或誤傷外部代碼
+                    chars.append(" ")
+                    i += 1
+            if not closed:
+                raise ValueError("基於安全考量，查詢包含未閉合的字串常值。")
+            continue
+
+        # 4. 方括號識別字 [column]
+        if query[i] == "[":
+            chars.append("[")
+            i += 1
+            while i < n and query[i] != "]":
+                chars.append(query[i])
+                i += 1
+            if i < n:
+                chars.append("]")
+                i += 1
+            else:
+                raise ValueError("基於安全考量，查詢包含未閉合的括號識別字。")
+            continue
+
+        # 5. 一般字元
+        chars.append(query[i])
+        i += 1
+
+    normalized = "".join(chars)
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _validate_select_query(query: str) -> str:
