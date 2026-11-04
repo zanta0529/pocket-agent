@@ -2,14 +2,14 @@
 """Browser MCP server（純 Python，不需要 Node.js）
 
 用 Python playwright 驅動電腦上已安裝的 Edge / Chrome，
-不需要 `playwright install` 下載瀏覽器（公司網路常擋這個）。
+不需要 `playwright install` 下載瀏覽器（適合離線或受限網路環境）。
 
 掛載方式（mcp_config.yaml）：
     servers:
       browser:
         transport: stdio
         command: python
-        args: ["D:\\pocket-agent\\browser_mcp.py"]
+        args: ["mcp_servers/browser_mcp.py"]
 
 環境變數（可選）：
     BROWSER_HEADLESS=1        無頭模式（預設開視窗）
@@ -20,8 +20,15 @@
 
 import os
 
-from mcp.server.mcpserver import MCPServer
-from playwright.async_api import async_playwright
+try:
+    from mcp.server.mcpserver import MCPServer
+except ImportError:
+    from mcp.server.fastmcp import FastMCP as MCPServer
+
+try:
+    from playwright.async_api import async_playwright  # pyright: ignore[reportMissingImports]
+except ImportError:
+    async_playwright = None  # type: ignore
 
 mcp = MCPServer("browser")
 
@@ -74,6 +81,9 @@ async def _ensure_page():
     global _pw, _browser, _page
     if _page is not None and not _page.is_closed():
         return _page
+
+    if async_playwright is None:
+        raise RuntimeError("尚未安裝 playwright 套件。請在終端機執行：pip install playwright")
 
     if _pw is None:
         _pw = await async_playwright().start()

@@ -74,8 +74,12 @@ def build_manual():
     readme_config = extract_section(r"## ⚙️ 進階設定", r"## 📦 發布與建置")
     readme_config = re.sub(r"^## ⚙️ 進階設定.*?\n", "", readme_config)
 
-    readme_build = extract_section(r"## 📦 發布與建置", r"## 📜 授權條款")
+    readme_build = extract_section(r"## 📦 發布與建置", r"## ⚠️ 免責聲明")
     readme_build = re.sub(r"^## 📦 發布與建置.*?\n", "", readme_build)
+
+    readme_disclaimer = extract_section(r"## ⚠️ 免責聲明", r"## 📜 授權條款")
+    readme_disclaimer = re.sub(r"^## ⚠️ 免責聲明.*?\n", "", readme_disclaimer)
+    readme_disclaimer = re.sub(r"\n---\s*$", "", readme_disclaimer).strip()
 
     manual = []
     manual.append("<!--")
@@ -115,7 +119,8 @@ def build_manual():
     manual.append("  - [4.7 子代理權限與工作區隔離機制](#47-子代理權限與工作區隔離機制)")
     manual.append("  - [4.8 三層式路由架構](#48-三層式路由架構)")
     manual.append("- [五、疑難排解 (Troubleshooting)](#五疑難排解-troubleshooting)")
-    manual.append("  - [5.1 CLI 操作與限制說明](#51-cli-操作與限制說明)\n")
+    manual.append("  - [5.1 CLI 操作與限制說明](#51-cli-操作與限制說明)")
+    manual.append("- [六、免責聲明 (Disclaimer)](#六免責聲明-disclaimer)\n")
 
     manual.append("---\n")
     manual.append(readme_intro + "\n")
@@ -175,6 +180,10 @@ def build_manual():
     manual.append("## 五、疑難排解 (Troubleshooting)\n")
     manual.append("### 5.1 CLI 操作與限制說明\n")
     manual.append(demote_headers(strip_title(files["cli_limits"]), 2) + "\n")
+
+    if readme_disclaimer:
+        manual.append("## 六、免責聲明 (Disclaimer)\n")
+        manual.append(readme_disclaimer + "\n")
 
     dist_dir = os.path.join(base_dir, "dist")
     os.makedirs(dist_dir, exist_ok=True)

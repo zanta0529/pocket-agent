@@ -30,6 +30,9 @@ from pocket_agent.system.paths import build_info_path, bundle_dir, is_portable, 
 
 log = logging.getLogger("pocket-agent")
 
+VERSION_FILE = "BUILD_INFO.json"
+_SKIP_NAMES = {"__pycache__", ".git", "venv", ".venv"}
+
 APP_SYNC_ITEMS = (
     "src",
     "mcp_servers",
@@ -167,10 +170,14 @@ def is_same_commit(local_sha: str, remote_sha: str) -> bool:
     return False
 
 
+def _python_xy() -> str:
+    return f"{sys.version_info[0]}.{sys.version_info[1]}"
+
+
 def get_current_build_info() -> BuildInfo:
     """讀取隨包發佈的 BUILD_INFO.json；若不存在則回傳執行期推導之保底資訊。"""
     info_file = build_info_path()
-    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    py_ver = _python_xy()
     req_file = bundle_dir() / "requirements.txt"
     fallback_deps = hashlib.sha256(req_file.read_bytes()).hexdigest() if req_file.is_file() else ""
 
@@ -204,8 +211,28 @@ def _safe_extract_zip(zip_path: Path, dest_dir: Path) -> None:
         zf.extractall(dest_resolved)
 
 
-def _copy_ignore(_path: str, names: list[str]) -> set[str]:
-    return {n for n in names if n == "__pycache__" or n.endswith((".pyc", ".pyo"))}
+def _merge_copy(
+    source: Path,
+    dest: Path,
+    report: Callable[[str], None] | None = None,
+) -> list[tuple[str, str]]:
+    """遞迴複製目錄內容並收集失敗項目，供上層阻斷不完整更新。"""
+    failed: list[tuple[str, str]] = []
+    dest.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        if item.name in _SKIP_NAMES or item.suffix.lower() in (".pyc", ".pyo"):
+            continue
+        target = dest / item.name
+        if item.is_dir():
+            failed.extend(_merge_copy(item, target, report))
+        else:
+            try:
+                shutil.copy2(item, target)
+            except Exception as exc:
+                if report is not None:
+                    report(f"複製失敗 {item.name}：{exc}")
+                failed.append((item.name, str(exc)))
+    return failed
 
 
 def _read_source_version(source_root: Path, fallback: str) -> str:
@@ -334,15 +361,23 @@ class UpdateManager:
         payload_app = payload_dir / "app"
         payload_app.mkdir(parents=True, exist_ok=True)
 
+        failed_files: list[tuple[str, str]] = []
         for item_name in APP_SYNC_ITEMS:
             src_item = source_root / item_name
             if not src_item.exists():
                 continue
             dest_item = payload_app / item_name
             if src_item.is_dir():
-                shutil.copytree(src_item, dest_item, ignore=_copy_ignore)
+                failed_files.extend(_merge_copy(src_item, dest_item))
             else:
-                shutil.copy2(src_item, dest_item)
+                try:
+                    shutil.copy2(src_item, dest_item)
+                except Exception as exc:
+                    failed_files.append((src_item.name, str(exc)))
+
+        if failed_files:
+            failed_summary = ", ".join(f"{name} ({err})" for name, err in failed_files[:5])
+            raise RuntimeError(f"檔案更新未完整套用，為避免版本混合損壞已中止更新。失敗檔案：{failed_summary}")
 
         existing_portable = bundle_dir() / "PORTABLE"
         if existing_portable.is_file():
@@ -359,10 +394,10 @@ class UpdateManager:
             "commit": remote.sha,
             "repo": repo,
             "branch": branch,
-            "python_version": current.python_version or f"{sys.version_info.major}.{sys.version_info.minor}",
+            "python_version": current.python_version or _python_xy(),
             "deps_sha256": new_deps_sha,
         }
-        (payload_app / "BUILD_INFO.json").write_text(
+        (payload_app / VERSION_FILE).write_text(
             json.dumps(new_build_info, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )

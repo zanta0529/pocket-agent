@@ -10,6 +10,8 @@
 
 本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API**、**Gemini (Google AI Studio)**（支援 API Key 與 Google OAuth 雙軌登入），並廣泛支援各大具備免費開發者額度的雲端推理平台（包含 **Groq Cloud**、**SambaNova Cloud** 與 **Mistral AI**）。此外，內建強大的本地端大語言模型 (Ollama) 與 **Ollama Cloud** API Key 串接支援，滿足對資料隱私具高度要求的離線開發及雲端混合場景。
 
+> ⚠️ **重要免責提醒（Important Disclaimer）**：本工具（含核心代理與所有內建／外掛 MCP 伺服器）具備執行本機指令、讀寫檔案及操作遠端主機與瀏覽器之能力，且 AI 模型輸出具非確定性。使用者須自行審查操作並承擔一切風險，任何非預期行為或衍生損害皆與原作者無關。使用前請務必詳閱文末完整的「免責聲明（Disclaimer）」章節。
+
 ---
 
 ## ✨ 核心架構與特色 (Architecture & Features)
@@ -294,8 +296,8 @@ servers:
 ```bash
 python scripts/convert_to_md.py <輸入檔案路徑> [-o <輸出檔案路徑>]
 
-# 範例 (自動在同目錄產生 N3A_1_DM.md)：
-python scripts/convert_to_md.py D:\_Personal\Downloads\insurance\N3A_1_DM.pdf
+# 範例 (自動在同目錄產生 sample_document.md)：
+python scripts/convert_to_md.py docs/sample_document.pdf
 ```
 
 ### 依賴套件檢查工具 (`check_imports.py`)
@@ -340,6 +342,24 @@ build.bat
 
 1. **舊版 PyInstaller (Legacy)**：將專案編譯為單一二進位執行檔。請注意，此方案產出的 `.exe` 無官方數位簽章，極易觸發企業級防毒軟體（如 Symantec）的信譽隔離。
 2. **新版 Portable (Modern)**：【推薦】免安裝的可攜式發佈包。將官方 Python 執行環境與所有相依套件完整複製並打包至 `dist/PocketAgent-portable.zip`，完美避開防毒軟體的誤判，適合在嚴格的內網環境快速部署。使用者解壓縮後雙擊 `start.bat` 即可執行；後續只要將程式碼推送至公開 GitHub `main` 分支，可攜版即會透過 Commit SHA 自動於背景預備更新（或由 `/update` 手動無縫更新重啟，若 `requirements.txt` 有異動亦會自動補裝新套件），無須每次手動建立 GitHub Release（透過 `run.bat` 執行的開發環境則自動停用此機制）。
+
+---
+
+## ⚠️ 免責聲明 (Disclaimer)
+
+### 繁體中文
+
+1. **按「現狀」提供且無任何擔保**：本專案及其隨附之所有元件（包含但不限於核心代理引擎、子代理、自動化腳本，以及所有內建與外掛之 MCP 伺服器，例如網頁自動化 `browser_mcp`、遠端 Linux 巡檢 `rhel_mcp`、遠端 Windows 桌面控制 `win_rdp_mcp`、資料庫工具與本機終端機執行工具）均依「現狀（AS IS）」提供，不附帶任何明示或默示之保證（包含但不限於適售性、特定用途適用性、正確性或無侵權保證）。
+2. **AI 非確定性與操作風險自負**：大型語言模型（LLM）本質上具有非確定性，可能產生幻覺（Hallucination）、誤判上下文或執行非預期之操作（包含但不限於修改或刪除本機／遠端檔案、變更系統組態、執行系統命令、操控遠端桌面或瀏覽器工作階段、讀寫資料庫，以及產生第三方 API 額度或費用消耗）。使用者應於受控環境中審慎使用、親自核對每一次權限確認提示，並完全自行承擔所有操作風險與資料備份責任。
+3. **第三方服務條款與合規責任**：使用者透過本工具串接任何第三方服務或驗證機制（如 OpenAI、Google、OpenRouter 或其他模型供應商）時，應自行確認並遵守各該平台之服務條款（Terms of Service）、使用政策、企業資安規範及所在地法令。若因使用本工具導致第三方帳號受限、停權或違反相關規定，概由使用者自行負責。
+4. **責任限制**：在適用法律允許之最大範圍內，無論基於契約、侵權行為或其他法律理論，原作者與貢獻者對於使用者或任何第三方因使用、誤用、依賴或無法使用本軟體及其內建／外掛 MCP 工具所生之任何直接、間接、附帶、特別、衍生性或懲罰性損害（包含但不限於資料遺失或毀損、系統故障、業務中斷、資安事件、帳號處分、金錢損失或第三方索賠），縱使事前已被告知該等損害發生之可能性，**均不負任何法律責任或賠償義務，一切後果皆與原作者無關**。一旦下載、安裝、執行或以任何方式使用本專案，即表示您已完整閱讀、理解並同意上述所有條款。
+
+### English
+
+1. **Provided "AS IS" Without Warranty**: This software and all bundled or associated components (including, without limitation, the core agent engine, subagents, automation scripts, and all built-in or external MCP servers such as `browser_mcp`, `rhel_mcp`, `win_rdp_mcp`, database connectors, and local shell execution tools) are provided **"AS IS"** and **"AS AVAILABLE"**, without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, reliability, accuracy, or non-infringement.
+2. **AI Non-Determinism & Assumption of Risk**: Large Language Models (LLMs) are inherently non-deterministic and may hallucinate, misinterpret instructions, or trigger unintended actions (including, without limitation, modifying or deleting local or remote files, altering system configurations, executing shell commands, interacting with browser sessions or remote desktops, mutating databases, or incurring third-party API usage charges). Users assume full responsibility for reviewing every permission prompt, maintaining proper backups, and running this tool solely within authorized and controlled environments.
+3. **Third-Party Terms & Legal Compliance**: Users are solely responsible for ensuring that their use of this tool—including any OAuth flows, API integrations, remote host connections, or automated interactions—complies with all applicable laws, organizational security policies, and third-party Terms of Service (such as OpenAI, Google, OpenRouter, or other providers). Any account restrictions, suspensions, or policy violations resulting from the use of this software are strictly the user's own responsibility.
+4. **Limitation of Liability**: To the maximum extent permitted by applicable law, in no event shall the original author(s) or contributors be liable for any direct, indirect, incidental, special, exemplary, or consequential damages (including, without limitation, data loss or corruption, system downtime, security incidents, unauthorized operations, financial loss, or third-party claims) arising out of or in connection with the use, misuse, or inability to use this software or any of its built-in/external MCP tools, even if advised of the possibility of such damages. **All unintended behaviors and consequences rest solely with the user and have no relation to the original author(s).** By downloading, installing, running, or otherwise using this software, you acknowledge that you have read, understood, and agreed to this Disclaimer.
 
 ---
 
