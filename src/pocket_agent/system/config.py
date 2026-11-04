@@ -68,6 +68,9 @@ DEFAULT_CONFIG = {
         "housekeeping_ttl_days": 7,
         "housekeeping_max_files": 100,
         "housekeeping_max_size_mb": 50,
+        "auto_update": True,
+        "update_repo": "",
+        "update_branch": "main",
     },
     "providers": {
         "openai": {
@@ -146,6 +149,9 @@ class EnvConfigProvider(ConfigProvider):
         "system.housekeeping_ttl_days": "POCKET_AGENT_HOUSEKEEPING_TTL_DAYS",
         "system.housekeeping_max_files": "POCKET_AGENT_HOUSEKEEPING_MAX_FILES",
         "system.housekeeping_max_size_mb": "POCKET_AGENT_HOUSEKEEPING_MAX_SIZE_MB",
+        "system.auto_update": "POCKET_AGENT_AUTO_UPDATE",
+        "system.update_repo": "POCKET_AGENT_UPDATE_REPO",
+        "system.update_branch": "POCKET_AGENT_UPDATE_BRANCH",
     }
 
     def get(self, key: str) -> Optional[Any]:

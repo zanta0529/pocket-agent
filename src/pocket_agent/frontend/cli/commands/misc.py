@@ -90,6 +90,37 @@ class CleanCommand(CliCommand):
         return CommandResult()
 
 
+class UpdateCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if args.strip():
+            raise ValueError("/update 不接受參數")
+        from pocket_agent.system.updater import get_current_build_info, update_manager
+
+        if not update_manager.is_supported():
+            ctx.renderer.message(
+                "線上更新僅支援 Modern Portable 打包版；開發環境請直接使用 git pull 更新。",
+                "yellow",
+            )
+            return CommandResult()
+
+        staged = await update_manager.download_and_stage(
+            on_status=lambda msg: ctx.renderer.message(msg, "cyan"),
+        )
+        if staged is None:
+            curr = get_current_build_info()
+            label = curr.commit[:7] or curr.version
+            ctx.renderer.message(f"✓ 目前已是最新版本 ({label})。", "green")
+            return CommandResult()
+
+        ctx.state.staged_update_version = staged.short_sha
+        ctx.state.pending_update_restart = True
+        ctx.renderer.message(
+            f"✓ 最新更新 ({staged.short_sha}) 已準備就緒，正在自動儲存對話並重啟套用…",
+            "green",
+        )
+        return CommandResult("quit")
+
+
 class FileCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         from pathlib import Path
@@ -403,6 +434,10 @@ class HelpCommand(CliCommand):
             ctx.renderer.message(f"/{command}  {description}")
         if ctx.state.provider == "openai":
             ctx.renderer.message("/image <描述>  生圖，待送附件作參考圖")
+        from pocket_agent.system.paths import is_portable
+
+        if is_portable():
+            ctx.renderer.message("/update  檢查並套用 GitHub 最新更新（自動儲存並重啟）")
         ctx.renderer.message("/attachments remove <編號> · /attachments clear")
         ctx.renderer.message("Enter 送出 · Esc 後 Enter 換行 · Ctrl+C 清空輸入 · 空輸入 Ctrl+D 離開")
         for command in list_commands():

@@ -45,6 +45,18 @@ def bundle_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent.parent
 
 
+def portable_root() -> Path | None:
+    """可攜式發佈版的安裝根目錄（包含 start.bat、python/ 與 app/）。"""
+    if not is_portable():
+        return None
+    return bundle_dir().parent
+
+
+def build_info_path() -> Path:
+    """隨包發佈的建置中繼資訊檔路徑（app/BUILD_INFO.json）。"""
+    return bundle_dir() / "BUILD_INFO.json"
+
+
 def user_dir() -> Path:
     """使用者資料根目錄，不存在時建立。"""
     d = Path.home() / ".pocket-agent"

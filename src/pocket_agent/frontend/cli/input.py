@@ -119,10 +119,13 @@ class SlashCommandCompleter(Completer):
             return
         from pocket_agent.extensions.skills import list_skills
         from pocket_agent.system.commands import list_commands
+        from pocket_agent.system.paths import is_portable
 
         commands = dict(BUILTINS)
         if self.state.provider == "openai":
             commands["image"] = "產生圖片（待送附件作參考圖）"
+        if is_portable():
+            commands["update"] = "檢查並套用最新發佈版更新（自動儲存並重啟）"
         for command in list_commands():
             commands.setdefault(command["name"], command["description"])
 

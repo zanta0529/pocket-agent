@@ -24,6 +24,8 @@ class CliState:
     quota_limit: float | None = None
     quota_remaining: float | None = None
     context_window: int = 128000
+    staged_update_version: str | None = None
+    pending_update_restart: bool = False
 
     def add_files(self, paths: list[str]) -> list[str]:
         # Validate the whole batch before committing, including readability.

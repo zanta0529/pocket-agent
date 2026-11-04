@@ -1,325 +1,485 @@
-"""GitHub 自動更新：檢查 main 分支是否有新版，下載並套用。
+"""Modern Portable 版線上自動更新管理模組（追蹤 GitHub 分支最新 Commit SHA）。
 
-開發模式（bundle_dir() 底下有 .git）直接用 git pull。
-發佈給一般使用者的可攜版／打包版（沒有 .git）改抓 GitHub 該分支的
-zip 快照解壓覆蓋，不需要使用者自己裝 git。
-
-只覆蓋 bundle_dir()（隨程式發佈的唯讀資源：程式碼、內建 skills/
-commands/agents、GUI 圖檔）。user_dir()（~/.pocket-agent，使用者自己
-裝的 plugin/skill、對話紀錄、mcp_config.yaml、.env）完全不會被動到
-——這些本來就不在 bundle_dir() 底下。採「有就蓋、沒有就跳過」的
-合併式複製，絕不刪除本機獨有的檔案（PORTABLE 標記、venv、
-產生的圖片/文件等），把「更新出錯」的風險降到最低。
+僅於 `is_portable()` 為 True 的可攜式打包環境啟用；開發人員使用 `run.bat`
+執行原始碼時完全停用，避免覆寫 Git 工作目錄。當推送程式碼至 GitHub 主分支後，
+可攜版會自動比對最新 Commit SHA 並下載對應快照更新 `app/`，無須手動建立 Release。
 """
 
+import asyncio
+import hashlib
+import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import zipfile
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
+import certifi
 import httpx
 
-from pocket_agent.system.paths import bundle_dir, is_frozen, is_packaged, is_portable
+from pocket_agent.system.config import config
+from pocket_agent.system.constants import DEFAULT_MAX_REDIRECTS, DEFAULT_NETWORK_TIMEOUT_SEC
+from pocket_agent.system.paths import build_info_path, bundle_dir, is_portable, portable_root
 
 log = logging.getLogger("pocket-agent")
 
-GITHUB_OWNER = "GarfieldHuang"
-GITHUB_REPO = "pocket-agent"
-GITHUB_BRANCH = "main"
+APP_SYNC_ITEMS = (
+    "src",
+    "mcp_servers",
+    "subagents",
+    "mcp_config.example.yaml",
+    ".env.example",
+    "requirements.txt",
+)
 
-VERSION_FILE = "VERSION"  # 存在 bundle_dir() 底下，記錄目前對應的 commit sha
+_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9_./-]+$")
+_COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+_DOWNLOAD_READ_TIMEOUT_SEC = 120.0
 
-# 更新時完全不覆蓋的名稱（防禦性保留；這些原本就不會出現在下載的 zip 裡）
-_PRESERVE_NAMES = {
-    "venv",
-    ".venv",
-    "PORTABLE",
-    "mcp_config.yaml",
-    ".env",
-    "agent.log",
-    "generated_images",
-    "generated_files",
-    "__pycache__",
-    ".git",
-}
+_PORTABLE_MARKER_TEXT = (
+    "可攜式發佈版標記。pocket_agent/system/paths.py 靠這個檔判斷要把設定與 log\n"
+    "寫到 ~/.pocket-agent 而非程式目錄。請勿刪除。\n"
+)
+
+_APPLY_BAT = r"""@echo off
+setlocal
+if "%PA_RESTART%"=="1" echo [Pocket Agent] Applying update (%PA_VERSION%) ...
+
+set /a RETRIES=0
+:WAIT_LOOP
+tasklist /FI "PID eq %PA_PID%" 2>nul | find "%PA_PID%" >nul
+if errorlevel 1 goto DO_SWAP
+set /a RETRIES+=1
+if %RETRIES% GEQ 15 goto ABORT
+ping -n 2 127.0.0.1 >nul
+goto WAIT_LOOP
+
+:DO_SWAP
+if exist "%PA_ROOT%\app.bak" rmdir /s /q "%PA_ROOT%\app.bak" >nul 2>&1
+move "%PA_ROOT%\app" "%PA_ROOT%\app.bak" >nul 2>&1
+if errorlevel 1 goto ABORT
+move "%PA_PAYLOAD%\app" "%PA_ROOT%\app" >nul 2>&1
+if errorlevel 1 (
+    move "%PA_ROOT%\app.bak" "%PA_ROOT%\app" >nul 2>&1
+    goto ABORT
+)
+
+if "%PA_INSTALL_DEPS%"=="1" (
+    if "%PA_RESTART%"=="1" echo [Pocket Agent] Updating Python packages ...
+    set PYTHONNOUSERSITE=1
+    set PIP_DISABLE_PIP_VERSION_CHECK=1
+    set PYTHONPATH=
+    set PYTHONHOME=
+    "%PA_ROOT%\python\python.exe" -m pip install --no-warn-script-location -q -r "%PA_ROOT%\app\requirements.txt"
+    if errorlevel 1 (
+        rmdir /s /q "%PA_ROOT%\app" >nul 2>&1
+        move "%PA_ROOT%\app.bak" "%PA_ROOT%\app" >nul 2>&1
+        goto ABORT
+    )
+)
+
+if exist "%PA_ROOT%\app.bak" rmdir /s /q "%PA_ROOT%\app.bak" >nul 2>&1
+if exist "%PA_STAGING%" rmdir /s /q "%PA_STAGING%" >nul 2>&1
+
+if "%PA_RESTART%"=="1" (
+    cd /d "%PA_CWD%"
+    set PYTHONNOUSERSITE=1
+    set PYTHONPATH=%PA_ROOT%\app\src
+    set PYTHONHOME=
+    "%PA_ROOT%\python\python.exe" -m pocket_agent --resume
+)
+endlocal
+exit /b 0
+
+:ABORT
+if "%PA_RESTART%"=="1" (
+    echo [ERROR] Update failed or files are locked by another running instance.
+    pause
+)
+endlocal
+exit /b 1
+"""
 
 
-def _ssl_verify():
-    """沿用 agent.auth 已經注入好的 truststore 設定（支援公司 proxy CA）。"""
-    from pocket_agent.system.auth import _SSL_VERIFY
+@dataclass(frozen=True)
+class BuildInfo:
+    version: str
+    commit: str = ""
+    repo: str = ""
+    branch: str = "main"
+    python_version: str = ""
+    deps_sha256: str = ""
 
-    return _SSL_VERIFY
+
+@dataclass(frozen=True)
+class CommitUpdateInfo:
+    sha: str
+    short_sha: str
+    message: str
+    zip_url: str
 
 
-def _is_dev_repo() -> bool:
-    return (bundle_dir() / ".git").exists()
+@dataclass(frozen=True)
+class StagedUpdate:
+    commit: str
+    short_sha: str
+    message: str
+    install_deps: bool
+    payload_dir: Path
 
 
-def current_version() -> str | None:
-    """目前版本識別：dev 模式讀 git HEAD；套件/可攜版讀 VERSION 檔。"""
-    if _is_dev_repo():
+def _ssl_verify() -> bool | str:
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+        return True
+    except ImportError:
+        return certifi.where()
+
+
+def _is_truthy(val: object, default: bool = True) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def is_same_commit(local_sha: str, remote_sha: str) -> bool:
+    """比對本機與遠端 Commit SHA 是否一致（相容完整 40 碼與至少 7 碼之短雜湊）。"""
+    local_norm = local_sha.strip().lower()
+    remote_norm = remote_sha.strip().lower()
+    if not local_norm or not remote_norm:
+        return False
+    if len(local_norm) == len(remote_norm):
+        return local_norm == remote_norm
+    if 7 <= len(local_norm) < len(remote_norm):
+        return remote_norm.startswith(local_norm)
+    return False
+
+
+def get_current_build_info() -> BuildInfo:
+    """讀取隨包發佈的 BUILD_INFO.json；若不存在則回傳執行期推導之保底資訊。"""
+    info_file = build_info_path()
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    req_file = bundle_dir() / "requirements.txt"
+    fallback_deps = hashlib.sha256(req_file.read_bytes()).hexdigest() if req_file.is_file() else ""
+
+    if info_file.is_file():
         try:
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=bundle_dir(),
-                capture_output=True,
-                text=True,
-                timeout=10,
+            raw = json.loads(info_file.read_text(encoding="utf-8"))
+            return BuildInfo(
+                version=str(raw.get("version") or "0.1.0"),
+                commit=str(raw.get("commit") or "").strip().lower(),
+                repo=str(raw.get("repo") or "").strip(),
+                branch=str(raw.get("branch") or "main").strip(),
+                python_version=str(raw.get("python_version") or py_ver),
+                deps_sha256=str(raw.get("deps_sha256") or fallback_deps),
             )
-            if result.returncode == 0:
-                return result.stdout.strip()
-        except Exception:
-            log.exception("讀取 git HEAD 失敗")
-        return None
+        except Exception as exc:
+            log.debug("讀取 BUILD_INFO.json 失敗：%s", exc)
+    return BuildInfo(version="0.1.0", python_version=py_ver, deps_sha256=fallback_deps)
 
-    vfile = bundle_dir() / VERSION_FILE
-    if vfile.exists():
+
+def _safe_extract_zip(zip_path: Path, dest_dir: Path) -> None:
+    """解壓縮並逐一驗證目標路徑，防範 Zip-Slip 目錄穿越攻擊。"""
+    dest_resolved = dest_dir.resolve()
+    dest_resolved.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            target = (dest_resolved / member.filename).resolve()
+            try:
+                target.relative_to(dest_resolved)
+            except ValueError as exc:
+                raise ValueError(f"偵測到不安全的壓縮檔路徑：{member.filename}") from exc
+        zf.extractall(dest_resolved)
+
+
+def _copy_ignore(_path: str, names: list[str]) -> set[str]:
+    return {n for n in names if n == "__pycache__" or n.endswith((".pyc", ".pyo"))}
+
+
+def _read_source_version(source_root: Path, fallback: str) -> str:
+    pyproject = source_root / "pyproject.toml"
+    if pyproject.is_file():
         try:
-            return vfile.read_text(encoding="utf-8").strip() or None
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            ver = str(data.get("project", {}).get("version") or "").strip()
+            if ver:
+                return ver
+        except Exception:
+            pass
+    return fallback
+
+
+class UpdateManager:
+    """負責檢查 GitHub 最新 Commit、下載組裝 `app/` 預備包，以及產生外部交接腳本。"""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+
+    def is_supported(self) -> bool:
+        return sys.platform == "win32" and is_portable()
+
+    def is_auto_update_enabled(self) -> bool:
+        return self.is_supported() and _is_truthy(config.get("system.auto_update", True), default=True)
+
+    def _resolve_repo(self, current: BuildInfo) -> str:
+        configured = str(config.get("system.update_repo", "") or "").strip()
+        repo = configured or current.repo.strip()
+        if not repo:
+            raise ValueError("尚未設定更新儲存庫（請設定 system.update_repo）")
+        if not _REPO_PATTERN.match(repo):
+            raise ValueError(f"更新儲存庫格式無效：{repo}")
+        return repo
+
+    def _resolve_branch(self, current: BuildInfo) -> str:
+        configured = str(config.get("system.update_branch", "") or "").strip()
+        branch = configured or current.branch.strip() or "main"
+        if not _BRANCH_PATTERN.match(branch) or ".." in branch:
+            raise ValueError(f"更新分支名稱格式無效：{branch}")
+        return branch
+
+    def get_staged_update(self) -> StagedUpdate | None:
+        root = portable_root()
+        if root is None:
+            return None
+        ready_file = root / ".update_staging" / "READY.json"
+        if not ready_file.is_file():
+            return None
+        try:
+            data = json.loads(ready_file.read_text(encoding="utf-8"))
+            commit = str(data["commit"]).strip().lower()
+            payload_dir = Path(str(data["payload_dir"]))
+            if not _COMMIT_SHA_PATTERN.match(commit) or not (payload_dir / "app").is_dir():
+                return None
+            return StagedUpdate(
+                commit=commit,
+                short_sha=str(data.get("short_sha") or commit[:7]),
+                message=str(data.get("message") or ""),
+                install_deps=bool(data.get("install_deps", False)),
+                payload_dir=payload_dir,
+            )
         except Exception:
             return None
-    return None
 
+    async def check_for_update(self) -> CommitUpdateInfo | None:
+        if not self.is_supported():
+            return None
+        current = get_current_build_info()
+        repo = self._resolve_repo(current)
+        branch = self._resolve_branch(current)
+        api_url = f"https://api.github.com/repos/{repo}/commits/{branch}"
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "PocketAgent-Updater"}
 
-def check_for_update() -> dict:
-    """查詢 GitHub 上最新 commit，回傳版本比對結果。
-
-    {'current': str|None, 'latest': str, 'latest_message': str,
-     'update_available': bool}
-    current 為 None 代表無法判斷目前版本（例如舊版留下的安裝，
-    還沒有 VERSION 檔）——一律視為需要更新，更新後就會建立版本記錄。
-    """
-    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/{GITHUB_BRANCH}"
-    resp = httpx.get(
-        url,
-        timeout=15,
-        verify=_ssl_verify(),
-        headers={"Accept": "application/vnd.github+json"},
-    )
-    resp.raise_for_status()
-    data = resp.json()
-
-    latest_sha = data["sha"]
-    latest_message = (data.get("commit", {}).get("message") or "").splitlines()[0]
-    current = current_version()
-
-    return {
-        "current": current,
-        "latest": latest_sha,
-        "latest_message": latest_message,
-        "update_available": current != latest_sha,
-    }
-
-
-def apply_update(progress=None) -> dict:
-    """套用更新。progress(str) 為選填的進度回呼（背景執行緒呼叫）。"""
-
-    def report(msg: str):
-        log.info("[Update] %s", msg)
-        if progress is not None:
-            try:
-                progress(msg)
-            except Exception:
-                pass
-
-    import click
-
-    info = check_for_update()
-    if info.get("update_available"):
-        print(f"\n[系統提示] 發現新版本！最新提交：{info.get('latest_message')}")
-    print("⚠ 警告：即將從 GitHub 下載並套用更新。這可能會改變系統行為或包含未知的第三方變更。")
-    if not click.confirm("確定要繼續更新嗎？"):
-        raise RuntimeError("使用者取消更新")
-
-    if _is_dev_repo():
-        return _update_via_git(report)
-    return _update_via_zip(report)
-
-
-def _update_via_git(report) -> dict:
-    report("執行 git pull…")
-    result = subprocess.run(
-        ["git", "pull", "--ff-only"],
-        cwd=bundle_dir(),
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"git pull 失敗：{result.stderr.strip() or result.stdout.strip()}")
-
-    message = result.stdout.strip() or "已是最新版本"
-    report(message)
-
-    if "Already up to date" not in result.stdout and "已經是最新" not in result.stdout:
-        _maybe_update_deps(report)
-
-    return {"message": message}
-
-
-def _update_via_zip(report) -> dict:
-    report("下載最新版本…")
-    zip_url = f"https://codeload.github.com/{GITHUB_OWNER}/{GITHUB_REPO}/zip/refs/heads/{GITHUB_BRANCH}"
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        zip_path = tmp / "update.zip"
-
-        with httpx.stream("GET", zip_url, timeout=60, verify=_ssl_verify(), follow_redirects=True) as resp:
+        timeout = httpx.Timeout(DEFAULT_NETWORK_TIMEOUT_SEC)
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            max_redirects=DEFAULT_MAX_REDIRECTS,
+            follow_redirects=True,
+            verify=_ssl_verify(),
+        ) as client:
+            resp = await client.get(api_url, headers=headers)
+            if resp.status_code == 404:
+                return None
             resp.raise_for_status()
-            with open(zip_path, "wb") as f:
-                for chunk in resp.iter_bytes():
-                    f.write(chunk)
+            data = resp.json()
 
-        report("解壓縮…")
-        extract_dir = tmp / "extracted"
-        with zipfile.ZipFile(zip_path) as zf:
-            for member in zf.namelist():
-                if Path(member).is_absolute() or ".." in Path(member).parts:
-                    raise ValueError(f"更新包內含不安全路徑：{member}")
-            zf.extractall(extract_dir)
+        remote_sha = str(data.get("sha") or "").strip().lower()
+        if not _COMMIT_SHA_PATTERN.match(remote_sha):
+            raise ValueError("GitHub API 回傳的 Commit SHA 格式無效")
+        if is_same_commit(current.commit, remote_sha):
+            return None
 
-        # GitHub 的 zip 快照內只有一個頂層資料夾，例如 pocket-agent-main/
-        roots = [d for d in extract_dir.iterdir() if d.is_dir()]
+        raw_msg = str((data.get("commit") or {}).get("message") or "")
+        first_line = raw_msg.splitlines()[0].strip() if raw_msg else ""
+        zip_url = f"https://codeload.github.com/{repo}/zip/{remote_sha}"
+        return CommitUpdateInfo(
+            sha=remote_sha,
+            short_sha=remote_sha[:7],
+            message=first_line,
+            zip_url=zip_url,
+        )
+
+    def _assemble_payload_sync(
+        self,
+        zip_path: Path,
+        staging_dir: Path,
+        current: BuildInfo,
+        remote: CommitUpdateInfo,
+        repo: str,
+        branch: str,
+    ) -> tuple[Path, bool]:
+        raw_dir = staging_dir / "raw"
+        _safe_extract_zip(zip_path, raw_dir)
+        zip_path.unlink(missing_ok=True)
+
+        roots = [d for d in raw_dir.iterdir() if d.is_dir()]
         if len(roots) != 1:
-            raise RuntimeError("更新包結構不符預期，已中止（未變更任何檔案）。")
+            raise ValueError("更新快照壓縮包結構不符預期（頂層目錄數量異常）")
         source_root = roots[0]
+        if not (source_root / "src" / "pocket_agent").is_dir():
+            raise ValueError("更新快照壓縮包缺少 src/pocket_agent 核心程式碼目錄")
 
-        # 這次抓到的內容對應哪個 commit，留給下次比對用
-        info = check_for_update()
-        new_sha = info["latest"]
+        payload_dir = staging_dir / "payload"
+        payload_app = payload_dir / "app"
+        payload_app.mkdir(parents=True, exist_ok=True)
 
-        report("套用檔案更新…")
-        failed = _merge_copy(source_root, bundle_dir(), report)
-        if failed:
-            failed_summary = ", ".join(f"{name} ({err})" for name, err in failed[:5])
-            if len(failed) > 5:
-                failed_summary += f" 等共 {len(failed)} 個檔案"
-            raise RuntimeError(f"檔案更新未完整套用，為避免版本混合損壞已中止更新。失敗檔案：{failed_summary}")
+        for item_name in APP_SYNC_ITEMS:
+            src_item = source_root / item_name
+            if not src_item.exists():
+                continue
+            dest_item = payload_app / item_name
+            if src_item.is_dir():
+                shutil.copytree(src_item, dest_item, ignore=_copy_ignore)
+            else:
+                shutil.copy2(src_item, dest_item)
 
-        (bundle_dir() / VERSION_FILE).write_text(new_sha, encoding="utf-8")
-
-    _maybe_update_deps(report)
-    report("更新完成")
-    return {"message": "更新完成"}
-
-
-def _merge_copy(
-    source: Path,
-    dest: Path,
-    report,
-    failed_files: list[tuple[str, str]] | None = None,
-) -> list[tuple[str, str]]:
-    """把 source 疊到 dest：只新增/覆蓋，絕不刪除 dest 既有但 source 沒有的東西。"""
-    if failed_files is None:
-        failed_files = []
-    for item in source.iterdir():
-        if item.name in _PRESERVE_NAMES:
-            continue
-
-        target = dest / item.name
-        if item.is_dir():
-            target.mkdir(parents=True, exist_ok=True)
-            _merge_copy(item, target, report, failed_files)
+        existing_portable = bundle_dir() / "PORTABLE"
+        if existing_portable.is_file():
+            shutil.copy2(existing_portable, payload_app / "PORTABLE")
         else:
-            try:
-                shutil.copy2(item, target)
-            except Exception as e:
-                failed_files.append((item.name, str(e)))
-                report(f"略過 {item.name}（{e}）")
-    return failed_files
+            (payload_app / "PORTABLE").write_text(_PORTABLE_MARKER_TEXT, encoding="utf-8")
 
+        req_file = payload_app / "requirements.txt"
+        new_deps_sha = hashlib.sha256(req_file.read_bytes()).hexdigest() if req_file.is_file() else ""
+        install_deps = bool(new_deps_sha and new_deps_sha != current.deps_sha256)
 
-def _maybe_update_deps(report) -> None:
-    """requirements.txt 有變動時，自動補裝新的相依套件。失敗不中止整個更新。"""
-    req = bundle_dir() / "requirements.txt"
-    if not req.exists():
-        return
-
-    report("更新相依套件…")
-    python = sys.executable
-    if is_packaged():
-        venv_python = bundle_dir().parent / "venv" / "Scripts" / "python.exe"
-        if venv_python.exists():
-            python = str(venv_python)
-
-    try:
-        subprocess.run(
-            [python, "-m", "pip", "install", "-q", "-r", str(req)],
-            timeout=300,
-            capture_output=True,
-            text=True,
+        new_build_info = {
+            "version": _read_source_version(source_root, current.version),
+            "commit": remote.sha,
+            "repo": repo,
+            "branch": branch,
+            "python_version": current.python_version or f"{sys.version_info.major}.{sys.version_info.minor}",
+            "deps_sha256": new_deps_sha,
+        }
+        (payload_app / "BUILD_INFO.json").write_text(
+            json.dumps(new_build_info, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
         )
-    except Exception as e:
-        report(f"相依套件安裝失敗（可稍後手動執行 pip install -r requirements.txt）：{e}")
+        shutil.rmtree(raw_dir, ignore_errors=True)
+        return payload_dir.resolve(), install_deps
+
+    async def download_and_stage(self, on_status: Callable[[str], None] | None = None) -> StagedUpdate | None:
+        """檢查、下載並組裝最新 Commit 程式碼至預備區（若已是最新版則回傳 None）。"""
+        if not self.is_supported():
+            return None
+
+        async with self._lock:
+            current = get_current_build_info()
+            existing = self.get_staged_update()
+            remote = await self.check_for_update()
+            if remote is None:
+                if existing and not is_same_commit(current.commit, existing.commit):
+                    return existing
+                return None
+            if existing and existing.commit == remote.sha:
+                return existing
+
+            root = portable_root()
+            if root is None:
+                return None
+
+            repo = self._resolve_repo(current)
+            branch = self._resolve_branch(current)
+
+            staging_dir = root / ".update_staging"
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            probe = staging_dir / ".write_probe"
+            probe.write_text("ok", encoding="ascii")
+            probe.unlink(missing_ok=True)
+
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            staging_dir.mkdir(parents=True, exist_ok=True)
+
+            if on_status:
+                summary = f" - {remote.message}" if remote.message else ""
+                on_status(f"正在下載最新更新 ({remote.short_sha}{summary})…")
+
+            part_path = staging_dir / "source.zip.part"
+            zip_path = staging_dir / "source.zip"
+            timeout = httpx.Timeout(DEFAULT_NETWORK_TIMEOUT_SEC, read=_DOWNLOAD_READ_TIMEOUT_SEC)
+
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                max_redirects=DEFAULT_MAX_REDIRECTS,
+                follow_redirects=True,
+                verify=_ssl_verify(),
+            ) as client:
+                async with client.stream("GET", remote.zip_url, headers={"User-Agent": "PocketAgent-Updater"}) as resp:
+                    resp.raise_for_status()
+                    with part_path.open("wb") as fh:
+                        async for chunk in resp.aiter_bytes(chunk_size=65536):
+                            fh.write(chunk)
+
+            part_path.replace(zip_path)
+            if on_status:
+                on_status(f"正在解壓並組裝 ({remote.short_sha}) 更新內容…")
+
+            payload_dir, install_deps = await asyncio.to_thread(
+                self._assemble_payload_sync,
+                zip_path,
+                staging_dir,
+                current,
+                remote,
+                repo,
+                branch,
+            )
+
+            ready_data = {
+                "commit": remote.sha,
+                "short_sha": remote.short_sha,
+                "message": remote.message,
+                "install_deps": install_deps,
+                "payload_dir": str(payload_dir),
+            }
+            (staging_dir / "READY.json").write_text(json.dumps(ready_data, ensure_ascii=False), encoding="utf-8")
+            return StagedUpdate(
+                commit=remote.sha,
+                short_sha=remote.short_sha,
+                message=remote.message,
+                install_deps=install_deps,
+                payload_dir=payload_dir,
+            )
+
+    def apply_staged_update(self, restart: bool = False, cwd: Path | None = None) -> bool:
+        """啟動外部批次檔於當前行程結束後原子套用已預備之更新（必要時同步補裝套件）。"""
+        if not self.is_supported():
+            return False
+        staged = self.get_staged_update()
+        root = portable_root()
+        if staged is None or root is None:
+            return False
+
+        bat_path = Path(tempfile.gettempdir()) / "pocket_agent_apply_update.bat"
+        bat_path.write_text(_APPLY_BAT, encoding="ascii")
+
+        env = dict(os.environ)
+        env["PA_ROOT"] = str(root.resolve())
+        env["PA_PAYLOAD"] = str(staged.payload_dir.resolve())
+        env["PA_STAGING"] = str((root / ".update_staging").resolve())
+        env["PA_CWD"] = str((cwd or Path.cwd()).resolve())
+        env["PA_PID"] = str(os.getpid())
+        env["PA_INSTALL_DEPS"] = "1" if staged.install_deps else "0"
+        env["PA_VERSION"] = staged.short_sha
+        env["PA_RESTART"] = "1" if restart else "0"
+
+        if restart:
+            flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        else:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+        subprocess.Popen(["cmd.exe", "/c", str(bat_path)], env=env, creationflags=flags, close_fds=True)
+        return True
 
 
-def relaunch_and_exit() -> None:
-    """啟動新的程式行程、結束目前行程，讓更新後的檔案生效。"""
-    creationflags = 0
-    if sys.platform == "win32":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-
-    if is_frozen():
-        subprocess.Popen([sys.executable], creationflags=creationflags)
-    elif is_portable():
-        _relaunch_portable(creationflags)
-    else:
-        _relaunch_dev(creationflags)
-
-    sys.exit(0)
-
-
-def _relaunch_portable(creationflags: int) -> None:
-    """直接呼叫 pythonw.exe，不透過 cmd /c start 那層。
-
-    `start.bat` 本身就是設計給人「雙擊」用的：它最後一行也是呼叫
-    pythonw.exe（沒有主控台），但若改成程式呼叫 `cmd /c start "" start.bat`，
-    `start` 這個指令的語意就是「開一個新視窗執行」——不管有沒有加
-    DETACHED_PROCESS 都一樣，因為那個視窗是 cmd 內部另外跟 Windows
-    要的，不吃我們這個 subprocess 呼叫的旗標。所以會跳出一個空的
-    主控台視窗，這正是使用者回報的症狀。
-    直接照 start.bat 的邏輯自己呼叫 pythonw.exe，就完全不會經過
-    cmd.exe，也就不會有任何視窗閃現。
-    """
-    root = bundle_dir().parent  # 可攜版根目錄（python/、app/、start.bat 所在）
-    pythonw = root / "python" / "pythonw.exe"
-    main_py = bundle_dir() / "main.py"
-
-    if pythonw.exists():
-        env = os.environ.copy()
-        env["PYTHONNOUSERSITE"] = "1"
-        env.pop("PYTHONPATH", None)
-        env.pop("PYTHONHOME", None)
-        subprocess.Popen(
-            [str(pythonw), str(main_py)],
-            cwd=str(root),
-            env=env,
-            creationflags=creationflags,
-        )
-    else:
-        # 找不到內附的 pythonw.exe 才退回雙擊 start.bat 的行為（可能閃一下主控台）
-        start_bat = root / "start.bat"
-        subprocess.Popen(
-            ["cmd", "/c", "start", "", str(start_bat)],
-            cwd=str(root),
-            creationflags=creationflags,
-        )
-
-
-def _relaunch_dev(creationflags: int) -> None:
-    """開發模式：優先用同目錄的 pythonw.exe，避免多跳出一個主控台視窗。"""
-    python = sys.executable
-    pythonw = Path(python).with_name("pythonw.exe")
-    if sys.platform == "win32" and pythonw.exists():
-        python = str(pythonw)
-
-    subprocess.Popen(
-        [python, str(bundle_dir() / "main.py")],
-        cwd=str(bundle_dir()),
-        creationflags=creationflags,
-    )
+update_manager = UpdateManager()

@@ -61,6 +61,38 @@ def logout():
 
 
 @main.command()
+def update():
+    """檢查並套用 GitHub 最新更新（僅限 Modern Portable 版）"""
+    from rich.console import Console
+
+    from pocket_agent.system.updater import get_current_build_info, update_manager
+
+    console = Console()
+    if not update_manager.is_supported():
+        console.print("[yellow]線上更新僅支援 Modern Portable 打包版；開發環境請直接使用 git pull 更新。[/yellow]")
+        return
+
+    try:
+        staged = asyncio.run(
+            update_manager.download_and_stage(
+                on_status=lambda msg: console.print(f"[cyan]{msg}[/cyan]"),
+            )
+        )
+    except Exception as exc:
+        console.print(f"[red]✗ 更新失敗：{exc}[/red]")
+        raise SystemExit(1) from exc
+
+    if staged is None:
+        curr = get_current_build_info()
+        label = curr.commit[:7] or curr.version
+        console.print(f"[green]✓ 目前已是最新版本 ({label})。[/green]")
+        return
+
+    if update_manager.apply_staged_update(restart=False, cwd=Path.cwd()):
+        console.print(f"[green]✓ 最新更新 ({staged.short_sha}) 已準備完成，正在背景完成檔案替換。[/green]")
+
+
+@main.command()
 @click.argument("prompt")
 @click.option("-o", "--output", default="image.png", help="輸出檔名（存在時自動加 -v2）")
 @click.option("-i", "--input", "inputs", multiple=True, help="參考圖（可多個，圖生圖/編輯用）")

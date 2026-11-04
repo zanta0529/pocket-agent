@@ -162,6 +162,7 @@ python -m pocket_agent
 - `/clear`：清除當前記憶體的對話歷史。
 - `/logout`：清除本機端的 OAuth Token 憑證。
 - `/usage` (或 `/quota`)：顯示當前對話累計的 Token 用量。
+- `/update`：檢查並立即套用 GitHub 最新 Commit 更新，自動儲存當前對話並重啟（僅限 Modern Portable 打包版顯示與啟用）。
 - `/exit` (或 `/quit`)：關閉應用程式。
 
 若想在啟動時自動載入前一次未完成的對話，可附加 `--resume` 參數：
@@ -202,6 +203,7 @@ python -m pocket_agent --resume
 | /attachments remove <編號>      | 移除單一待送附件，不刪除檔案                                   |
 | /attachments clear              | 清空待送佇列，不刪除檔案                                       |
 | /rm-file                        | 移除單一待送附件 (支援無參數互動選單)，不刪除檔案              |
+| /update                         | 檢查並立即套用更新、自動儲存並重啟（僅限 Modern Portable 版）  |
 
 > 💡 關於 CLI 介面的附件處理、路徑解析、影像生成細節，以及系統錯誤與中斷時的邊界行為，請詳閱：[CLI 操作與限制說明](docs/cli-usage-limitations.md)。
 
@@ -337,7 +339,7 @@ build.bat
 執行後，將出現互動式選單讓您選擇打包模式：
 
 1. **舊版 PyInstaller (Legacy)**：將專案編譯為單一二進位執行檔。請注意，此方案產出的 `.exe` 無官方數位簽章，極易觸發企業級防毒軟體（如 Symantec）的信譽隔離。
-2. **新版 Portable (Modern)**：【推薦】免安裝的可攜式發佈包。將官方 Python 執行環境與所有相依套件完整複製並打包至 `dist/PocketAgent-portable.zip`，完美避開防毒軟體的誤判，適合在嚴格的內網環境快速部署。使用者解壓縮後雙擊 `start.bat` 即可執行。
+2. **新版 Portable (Modern)**：【推薦】免安裝的可攜式發佈包。將官方 Python 執行環境與所有相依套件完整複製並打包至 `dist/PocketAgent-portable.zip`，完美避開防毒軟體的誤判，適合在嚴格的內網環境快速部署。使用者解壓縮後雙擊 `start.bat` 即可執行；後續只要將程式碼推送至公開 GitHub `main` 分支，可攜版即會透過 Commit SHA 自動於背景預備更新（或由 `/update` 手動無縫更新重啟，若 `requirements.txt` 有異動亦會自動補裝新套件），無須每次手動建立 GitHub Release（透過 `run.bat` 執行的開發環境則自動停用此機制）。
 
 ---
 

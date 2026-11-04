@@ -339,6 +339,8 @@ class CliFrontend(FrontendStrategy):
         client = None
         mcp = None
         agent = None
+        state = None
+        update_task: asyncio.Task | None = None
         try:
             renderer.banner()
 
@@ -600,8 +602,23 @@ class CliFrontend(FrontendStrategy):
 
             # 啟動時背景執行自動 Housekeeping (具備 24 小時冷卻期，無感執行)
             from pocket_agent.system.housekeeping import default_housekeeper
+            from pocket_agent.system.updater import update_manager
 
             asyncio.create_task(asyncio.to_thread(default_housekeeper.run_cleanup, force=False))
+
+            if update_manager.is_auto_update_enabled():
+
+                async def _bg_auto_update() -> None:
+                    try:
+                        staged = await update_manager.download_and_stage()
+                        if staged is not None and state is not None:
+                            state.staged_update_version = staged.short_sha
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as bg_exc:
+                        log.debug("背景自動更新略過：%s", bg_exc)
+
+                update_task = asyncio.create_task(_bg_auto_update())
 
             # F6：Ctrl+L 清屏後重印 banner
             await conversation(
@@ -610,6 +627,13 @@ class CliFrontend(FrontendStrategy):
         except Exception as exc:
             renderer.message(f"CLI 執行失敗：{exc}", "red")
         finally:
+            if update_task is not None and not update_task.done():
+                update_task.cancel()
+                try:
+                    await update_task
+                except asyncio.CancelledError, Exception:
+                    pass
+
             # MCP shutdown failure must not skip closing the active model client.
             try:
                 if mcp is not None:
@@ -621,3 +645,12 @@ class CliFrontend(FrontendStrategy):
                         await active.close()
                     except Exception:
                         renderer.message("模型連線清理失敗。", "yellow")
+
+            from pocket_agent.system.updater import update_manager as _updater
+
+            restart_after_update = bool(state and state.pending_update_restart)
+            if _updater.is_supported() and (restart_after_update or _updater.is_auto_update_enabled()):
+                try:
+                    _updater.apply_staged_update(restart=restart_after_update, cwd=pathlib.Path.cwd())
+                except Exception as apply_exc:
+                    log.warning("啟動更新套用腳本失敗：%s", apply_exc)

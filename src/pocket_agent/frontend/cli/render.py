@@ -109,6 +109,9 @@ def toolbar(state: CliState, width: int) -> FormattedText:
         used = state.quota_limit - state.quota_remaining
         tokens_str += f" · 額度 ${used:.3f}/${state.quota_limit:.3f}"
 
+    if getattr(state, "staged_update_version", None):
+        tokens_str += f" · ✨ 新版 ({state.staged_update_version}) 就緒"
+
     model = f"[ {state.provider} ] {state.model}"
     budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
     line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
@@ -205,9 +208,21 @@ class CliRenderer:
         self.console.print(Text(plain(value), style=style))
 
     def banner(self) -> None:
+        from pocket_agent.system.paths import is_portable
+
+        title_text = "Pocket Agent"
+        if is_portable():
+            from pocket_agent.system.updater import get_current_build_info
+
+            info = get_current_build_info()
+            if info.commit:
+                title_text = f"Pocket Agent ({info.commit[:7]})"
+            elif info.version:
+                title_text = f"Pocket Agent {info.version}"
+
         width = self.console.width
         if width < 40:
-            self.message("Pocket Agent", "bold #B8860B")
+            self.message(title_text, "bold #B8860B")
         else:
             # Pocket Agent 標誌與口號
             self.message("─" * min(width, 80), "")
@@ -215,7 +230,7 @@ class CliRenderer:
                 Text.assemble(
                     ("╭──────╮\n", ""),
                     ("│ >_   │  ", ""),
-                    ("Pocket Agent\n", "bold #B8860B"),
+                    (f"{title_text}\n", "bold #B8860B"),
                     ("│      │  ", ""),
                     ("你的終端 AI 工作夥伴\n", ""),
                     ("╰───╲──╯", ""),

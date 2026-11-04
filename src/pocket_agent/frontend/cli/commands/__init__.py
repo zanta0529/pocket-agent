@@ -15,6 +15,7 @@ from pocket_agent.frontend.cli.commands.misc import (
     QuitCommand,
     RmFileCommand,
     SkillsCommand,
+    UpdateCommand,
     UsageCommand,
 )
 from pocket_agent.frontend.cli.commands.session import (
@@ -62,6 +63,7 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("mcp", mcp_cmd)
     registry.register("tools", mcp_cmd)
     registry.register("skills", SkillsCommand())
+    registry.register("update", UpdateCommand())
     registry.register("help", HelpCommand())
     registry.register("goal", GoalCommand())
 

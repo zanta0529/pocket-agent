@@ -49,7 +49,9 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
     "housekeeping_enabled": true,
     "housekeeping_ttl_days": 7,
     "housekeeping_max_files": 100,
-    "housekeeping_max_size_mb": 50
+    "housekeeping_max_size_mb": 50,
+    "auto_update": true,
+    "update_repo": ""
   }
 }
 ```
@@ -95,6 +97,16 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 | `system.housekeeping_ttl_days`    | `integer` | `7`    | `POCKET_AGENT_HOUSEKEEPING_TTL_DAYS`    | 暫存落盤與舊備份日誌的保存天數（TTL），過期檔案自動淘汰。     |
 | `system.housekeeping_max_files`   | `integer` | `100`  | `POCKET_AGENT_HOUSEKEEPING_MAX_FILES`   | 單一暫存目錄下的最大檔案數量上限，超出時由舊到新刪除。        |
 | `system.housekeeping_max_size_mb` | `integer` | `50`   | `POCKET_AGENT_HOUSEKEEPING_MAX_SIZE_MB` | 暫存落盤目錄的容量配額上限（MB），超出時清理至 80% 安全水位。 |
+
+#### 線上自動更新（僅限 Modern Portable 打包版）
+
+> 💡 **環境隔離保護**：線上更新僅於 Modern Portable 打包版（含 `app/PORTABLE` 標記）生效，直接追蹤公開 GitHub 主分支最新 Commit SHA 並自動下載快照套用，無須手動建立 Release；開發人員使用 `run.bat` 執行原始碼時完全停用。
+
+| 鍵值 (Key)             | 型別      | 預設值   | 環境變數                     | 說明                                                                                |
+| :--------------------- | :-------- | :------- | :--------------------------- | :---------------------------------------------------------------------------------- |
+| `system.auto_update`   | `boolean` | `true`   | `POCKET_AGENT_AUTO_UPDATE`   | 啟動時是否於背景自動檢查並預備最新 Commit 程式碼，並於關閉視窗時自動套用更新。      |
+| `system.update_repo`   | `string`  | `""`     | `POCKET_AGENT_UPDATE_REPO`   | 公開 GitHub 儲存庫（格式 `owner/repo`）。留空時自動採用 `BUILD_INFO.json` 記錄值。  |
+| `system.update_branch` | `string`  | `"main"` | `POCKET_AGENT_UPDATE_BRANCH` | 線上更新追蹤的 GitHub 分支名稱（預設為 `"main"`）。                                 |
 
 ---
 

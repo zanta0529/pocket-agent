@@ -16,11 +16,15 @@ Unproven.LowPrevalence 直接隔離。改用這個做法後，實際被執行的
 用法： venv\Scripts\python.exe build_scripts\build_portable.py
 """
 
+import hashlib
+import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -52,19 +56,17 @@ PYTHON_EXCLUDES = {
 }
 
 # 開發、測試、打包工具與已排除之大型選用套件（不流入終端發布包）
-# 註：排除 pymupdf_layout / onnxruntime / numpy / networkx 後，pymupdf4llm 會自動降級使用純 pymupdf。
+# 註 1：pip / setuptools / wheel 刻意保留，讓線上更新在 requirements.txt 變動時能原地補裝新套件。
+# 註 2：排除 pymupdf_layout / onnxruntime / numpy / networkx 後，pymupdf4llm 會自動降級使用純 pymupdf。
 DEV_PACKAGES = {
     "pytest",
     "_pytest",
     "ruff",
     "coverage",
-    "pip",
     "piptools",
     "pip_tools",
     "build",
     "pyproject_hooks",
-    "setuptools",
-    "wheel",
     "iniconfig",
     "pluggy",
     "pytest_cov",
@@ -180,6 +182,72 @@ def _remove_readonly(func, path, _):
     func(path)
 
 
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _git_output(args: list[str]) -> str:
+    try:
+        res = subprocess.run(
+            ["git", *args],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=True,
+        )
+        return res.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _detect_repo() -> str:
+    gh_repo = os.getenv("GITHUB_REPOSITORY", "").strip()
+    if gh_repo:
+        return gh_repo
+    remote = _git_output(["remote", "get-url", "origin"])
+    m = re.search(r"github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?$", remote)
+    return m.group(1) if m else ""
+
+
+def _detect_version() -> str:
+    ref_name = os.getenv("GITHUB_REF_NAME", "").strip()
+    if os.getenv("GITHUB_REF_TYPE") == "tag" or ref_name.startswith("v"):
+        if ref_name:
+            return ref_name
+    tag = _git_output(["describe", "--tags", "--exact-match"])
+    if tag:
+        return tag
+    pyproject = ROOT / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            ver = str(data.get("project", {}).get("version") or "").strip()
+            if ver:
+                return ver
+        except Exception:
+            pass
+    return "0.1.0"
+
+
+def _collect_build_info() -> dict[str, str]:
+    req_path = ROOT / "requirements.txt"
+    deps_sha = _sha256_file(req_path) if req_path.is_file() else ""
+    commit = (os.getenv("GITHUB_SHA", "").strip() or _git_output(["rev-parse", "HEAD"])).lower()
+    return {
+        "version": _detect_version(),
+        "commit": commit,
+        "repo": _detect_repo(),
+        "branch": "main",
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "deps_sha256": deps_sha,
+    }
+
+
 def main() -> int:
     if not VENV_SITE_PACKAGES.is_dir():
         print(f"[錯誤] 找不到 {VENV_SITE_PACKAGES}")
@@ -243,11 +311,16 @@ def main() -> int:
             shutil.copy2(src, app / name)
 
     # 4. 啟動器與標記檔
-    print("[4/6] 產生啟動器 ...")
+    print("[4/6] 產生啟動器與建置資訊 ...")
+    build_info = _collect_build_info()
     (OUT / "start.bat").write_text(START_BAT, encoding="ascii")
     (app / "PORTABLE").write_text(
         "可攜式發佈版標記。pocket_agent/system/paths.py 靠這個檔判斷要把設定與 log\n"
         "寫到 ~/.pocket-agent 而非程式目錄。請勿刪除。\n",
+        encoding="utf-8",
+    )
+    (app / "BUILD_INFO.json").write_text(
+        json.dumps(build_info, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 
@@ -261,10 +334,11 @@ def main() -> int:
     except Exception as e:
         print(f"      ! 產生說明書失敗：{e}")
 
-    # 6. 打包（compresslevel=6 兼顧壓縮率與建置速度，較 level 9 快約 2.5~3 倍）
-    print("[6/6] 壓縮 ...")
+    # 6. 打包
+    print("[6/6] 壓縮可攜式發佈包 ...")
     zip_path = ROOT / "dist" / "PocketAgent-portable.zip"
     zip_path.unlink(missing_ok=True)
+
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for f in OUT.rglob("*"):
             if f.is_file():
@@ -273,6 +347,7 @@ def main() -> int:
     size_mb = zip_path.stat().st_size / 1024 / 1024
     print()
     print(f"完成： {zip_path}  （{size_mb:.0f} MB）")
+    print("使用者解壓縮後雙擊 PocketAgent\\start.bat 即可執行。")
     return 0
 
 
