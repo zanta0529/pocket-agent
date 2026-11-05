@@ -217,6 +217,42 @@ class BaseEngine:
         """
         raise NotImplementedError
 
+    @staticmethod
+    def format_reset_time_hint(
+        resets_at: float | int | None = None,
+        resets_in_seconds: float | int | None = None,
+    ) -> str | None:
+        """將重置時間戳記或倒數秒數格式化為 human-readable 的提示字串。供各 Adapter 共用。"""
+        import time
+        from datetime import datetime, timezone
+
+        now_ts = time.time()
+        if resets_at is None and resets_in_seconds is not None:
+            resets_at = now_ts + resets_in_seconds
+        elif resets_in_seconds is None and resets_at is not None:
+            resets_in_seconds = max(0.0, resets_at - now_ts)
+
+        if resets_at is None:
+            return None
+
+        reset_dt = datetime.fromtimestamp(resets_at, tz=timezone.utc).astimezone()
+        reset_time_str = reset_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        secs = int(max(0.0, resets_in_seconds if resets_in_seconds is not None else (resets_at - now_ts)))
+        hours, remainder = divmod(secs, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        if hours:
+            countdown_str = f"{hours} 小時 {minutes} 分 {seconds} 秒"
+        elif minutes:
+            countdown_str = f"{minutes} 分 {seconds} 秒"
+        else:
+            countdown_str = f"{seconds} 秒"
+
+        if resets_at > now_ts:
+            return f"\n\n⏳ **重置時間**：{reset_time_str} (距今約 {countdown_str})"
+        return f"\n\n⏳ **重置時間**：應已於 {reset_dt.strftime('%Y-%m-%d %H:%M:%S')} 重置"
+
     def parse_api_error(self, exc: Exception) -> str | None:
         """
         Parse API exception and return a human-readable hint string (e.g. reset time, remedy).

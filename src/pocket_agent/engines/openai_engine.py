@@ -130,23 +130,53 @@ class OpenAIResponsesEngine(BaseEngine):
                     pass
 
     def parse_api_error(self, exc: Exception) -> str | None:
-        """Parse OpenAI APIStatusError (or usage_limit_reached) for reset time."""
+        """Parse OpenAI APIStatusError (including OpenAI Codex usage limit and headers) for reset time."""
         import ast
         import re
-        from datetime import datetime, timezone
 
         try:
-            error = None
+            err_text = str(exc)
+            resets_at: float | int | None = None
+            resets_in_seconds: float | int | None = None
+            plan_type: str | None = None
 
-            # Path 1: Check standard body attribute
+            # 1. 優先檢查 HTTP Response Headers (OpenAI SDK 的 APIStatusError.response.headers)
+            response = getattr(exc, "response", None)
+            headers = getattr(response, "headers", None) or {}
+            header_map = {str(k).lower(): str(v) for k, v in headers.items()} if hasattr(headers, "items") else {}
+
+            retry_after = header_map.get("retry-after")
+            reset_ts_raw = (
+                header_map.get("x-ratelimit-reset")
+                or header_map.get("x-codex-resets-at")
+                or header_map.get("x-ratelimit-reset-requests")
+                or header_map.get("x-ratelimit-reset-tokens")
+            )
+
+            if retry_after:
+                try:
+                    resets_in_seconds = float(retry_after)
+                except ValueError:
+                    pass
+
+            if reset_ts_raw:
+                try:
+                    val = float(reset_ts_raw)
+                    if val > 1_000_000_000:
+                        resets_at = val
+                    else:
+                        resets_in_seconds = val
+                except ValueError:
+                    pass
+
+            # 2. 檢查 JSON Body 或錯誤字串中的 payload
+            error = None
             body = getattr(exc, "body", None)
             if isinstance(body, dict):
                 error = body.get("error")
 
-            # Path 2: Fallback to parsing string if body is missing
             if not isinstance(error, dict):
-                text = str(exc)
-                match = re.search(r"\{.*\}", text, re.DOTALL)
+                match = re.search(r"\{.*\}", err_text, re.DOTALL)
                 if match:
                     try:
                         parsed = ast.literal_eval(match.group())
@@ -155,44 +185,36 @@ class OpenAIResponsesEngine(BaseEngine):
                     except ValueError, SyntaxError:
                         pass
 
-            if not isinstance(error, dict):
-                return None
+            is_usage_limit = False
+            if isinstance(error, dict):
+                err_type = str(error.get("type", "")).lower()
+                err_code = str(error.get("code", "")).lower()
+                msg = str(error.get("message", "")).lower()
 
-            if error.get("type") != "usage_limit_reached":
-                return None
+                if "usage_limit" in err_type or "usage_limit" in err_code or "usage limit" in msg:
+                    is_usage_limit = True
 
-            plan_type: str = error.get("plan_type") or "未知"
-            resets_at: object = error.get("resets_at")
-            resets_in_seconds: object = error.get("resets_in_seconds")
+                plan_type = error.get("plan_type")
+                if resets_at is None and isinstance(error.get("resets_at"), (int, float)):
+                    resets_at = float(error["resets_at"])
+                if resets_in_seconds is None and isinstance(error.get("resets_in_seconds"), (int, float)):
+                    resets_in_seconds = float(error["resets_in_seconds"])
+            else:
+                if "usage limit has been reached" in err_text.lower():
+                    is_usage_limit = True
 
-            lines: list[str] = [f"\n\n💳 **API 用量已達上限** (方案：{plan_type})"]
+            # 3. 呼叫 BaseEngine 的共用時間格式化工具
+            hint = self.format_reset_time_hint(resets_at=resets_at, resets_in_seconds=resets_in_seconds)
 
-            reset_time_str = ""
-            countdown_str = ""
+            lines: list[str] = []
+            if is_usage_limit:
+                plan_suffix = f" (方案：{plan_type})" if plan_type else ""
+                lines.append(f"\n\n💳 **API 用量已達上限**{plan_suffix}")
 
-            if isinstance(resets_at, (int, float)) and resets_at > 0:
-                reset_dt = datetime.fromtimestamp(resets_at, tz=timezone.utc).astimezone()
-                reset_time_str = reset_dt.strftime("%Y-%m-%d %H:%M:%S")
+            if hint:
+                lines.append(hint.strip())
 
-            if isinstance(resets_in_seconds, (int, float)) and resets_in_seconds > 0:
-                secs = int(resets_in_seconds)
-                hours, remainder = divmod(secs, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                if hours:
-                    countdown_str = f"{hours} 小時 {minutes} 分 {seconds} 秒"
-                elif minutes:
-                    countdown_str = f"{minutes} 分 {seconds} 秒"
-                else:
-                    countdown_str = f"{seconds} 秒"
-
-            if reset_time_str and countdown_str:
-                lines.append(f"⏳ **重置時間**：{reset_time_str} (距今約 {countdown_str})")
-            elif reset_time_str:
-                lines.append(f"⏳ **重置時間**：{reset_time_str}")
-            elif countdown_str:
-                lines.append(f"⏳ **距今約**：{countdown_str}")
-
-            if len(lines) > 1:
+            if lines:
                 return "\n\n".join(lines)
             return None
         except Exception:
