@@ -76,6 +76,67 @@ def plain(value: object) -> str:
     return "".join(c if c.isprintable() else " " for c in str(value))
 
 
+def format_display_path(path_str: str, base_dir: Path | None = None) -> str:
+    """將檔案路徑轉為相對於工作目錄的簡短路徑，無法相對化時安全保留原路徑。"""
+    if not path_str or not isinstance(path_str, str):
+        return ""
+    raw = Path(path_str.strip())
+    base = (base_dir or Path.cwd()).resolve()
+    try:
+        if raw.is_absolute():
+            rel = raw.resolve().relative_to(base)
+            return rel.as_posix()
+    except ValueError, RuntimeError:
+        pass
+
+    try:
+        home = Path.home().resolve()
+        if raw.is_absolute():
+            rel_home = raw.resolve().relative_to(home)
+            return f"~/{rel_home.as_posix()}"
+    except ValueError, RuntimeError:
+        pass
+
+    return raw.as_posix() if hasattr(raw, "as_posix") else str(path_str)
+
+
+def middle_truncate(value: str, max_width: int) -> str:
+    """中段智慧截斷：保留開頭與結尾關鍵資訊，中間以 ... 省略，保證末端檔名/副檔名不遺失。"""
+    if max_width <= 0:
+        return ""
+    s = plain(value).strip()
+    if cell_len(s) <= max_width:
+        return s
+    if max_width <= 5:
+        return clip(s, max_width)
+
+    target_len = max_width - 3
+    # 路徑或指令的尾端通常更重要（如檔名、指令參數），預留 40% 給開頭，60% 給結尾
+    head_budget = max(1, int(target_len * 0.4))
+    tail_budget = max(1, target_len - head_budget)
+
+    head_chars: list[str] = []
+    cur = 0
+    for ch in s:
+        w = cell_len(ch)
+        if cur + w > head_budget:
+            break
+        head_chars.append(ch)
+        cur += w
+
+    tail_chars: list[str] = []
+    cur = 0
+    for ch in reversed(s):
+        w = cell_len(ch)
+        if cur + w > tail_budget:
+            break
+        tail_chars.append(ch)
+        cur += w
+    tail_chars.reverse()
+
+    return "".join(head_chars) + "..." + "".join(tail_chars)
+
+
 def clip(value: str, width: int) -> str:
     if width <= 0:
         return ""
@@ -156,27 +217,24 @@ class CliRenderer:
             self.console.print()
             self._stream_has_content = False
 
-    def _summarise_args(self, name: str, args_raw: str) -> str:
-        """從工具的 JSON arguments 字串萃取最有意義的單一摘要欄位。
+    def _extract_tool_target(self, name: str, args_raw: str, max_width: int | None = None) -> str:
+        """從工具的 JSON arguments 字串萃取核心目標，並進行路徑相對化與中段智慧截斷。"""
+        if max_width is None:
+            term_w = getattr(self.console, "width", 80) or 80
+            max_width = max(70, min(140, term_w - 10))
 
-        依工具名稱特徵選擇最具代表性的欄位（如 run_command 取 command、
-        read_file 取 file_path），讓使用者不必解讀完整 JSON 即可判斷意圖。
-        JSON 解析失敗時回退到純字串截短，確保不 crash。
-        """
-        MAX = 70
         name_lower = name.lower()
-
         parsed: dict | None = None
         if args_raw:
             try:
                 parsed = json.loads(args_raw)
-            except json.JSONDecodeError:
-                parsed = None
-            except ValueError:
+            except json.JSONDecodeError, ValueError, TypeError:
                 parsed = None
 
+        val = ""
+        is_path = False
+
         if parsed and isinstance(parsed, dict):
-            # 依工具名稱萃取最具代表性的欄位
             if parsed.get("owner") and parsed.get("repo"):
                 issue_no = parsed.get("issue_number")
                 if issue_no is not None and str(issue_no).strip() != "":
@@ -185,30 +243,51 @@ class CliRenderer:
                     val = f"{parsed['owner']}/{parsed['repo']}"
             elif any(k in name_lower for k in ("run_command", "bash", "shell", "python", "powershell", "node", "cmd")):
                 val = parsed.get("command") or parsed.get("cmd") or ""
+                val = " ".join(val.splitlines()).strip()
             elif any(k in name_lower for k in ("replace", "edit", "patch", "write", "create")):
                 val = parsed.get("target_file") or parsed.get("file_path") or parsed.get("path") or ""
+                is_path = True
             elif any(k in name_lower for k in ("read", "view", "list", "find", "grep", "search")):
-                val = (
-                    parsed.get("file_path")
-                    or parsed.get("path")
-                    or parsed.get("query")
-                    or parsed.get("pattern")
-                    or parsed.get("directory")
-                    or ""
-                )
+                path_val = parsed.get("file_path") or parsed.get("path") or parsed.get("directory") or ""
+                if path_val:
+                    val = path_val
+                    is_path = True
+                    start_l = parsed.get("start_line") or parsed.get("offset")
+                    end_l = parsed.get("end_line") or parsed.get("limit")
+                    if start_l is not None and end_l is not None:
+                        val = f"{val}#L{start_l}-L{end_l}"
+                    elif start_l is not None:
+                        val = f"{val}#L{start_l}"
+                else:
+                    val = parsed.get("query") or parsed.get("pattern") or ""
+            elif any(k in name_lower for k in ("web", "fetch", "curl", "url", "browser")):
+                val = parsed.get("url") or parsed.get("endpoint") or ""
             elif "subagent" in name_lower:
                 if "tasks" in parsed and isinstance(parsed["tasks"], list) and parsed["tasks"]:
                     val = parsed["tasks"][0].get("task", "")
                 else:
                     val = parsed.get("task", "")
             else:
-                # 通用 fallback：取第一個非空的 value
                 val = next((str(v) for v in parsed.values() if v), "")
-            if val:
-                return clip(str(val), MAX)
 
-        # JSON 解析失敗或無可用欄位：回退截短原始字串
-        return clip(args_raw, MAX) if args_raw else ""
+        if not val and args_raw:
+            val = args_raw
+
+        if not val:
+            return ""
+
+        if is_path:
+            if "#" in val:
+                p_part, line_part = val.split("#", 1)
+                val = f"{format_display_path(p_part)}#{line_part}"
+            else:
+                val = format_display_path(val)
+
+        return middle_truncate(val, max_width)
+
+    def _summarise_args(self, name: str, args_raw: str) -> str:
+        """向後相容：從工具的 JSON arguments 字串萃取最有意義的單一摘要欄位。"""
+        return self._extract_tool_target(name, args_raw, max_width=70)
 
     def message(self, value: object, style: str = "dim") -> None:
         self.console.print(Text(plain(value), style=style))
@@ -402,7 +481,7 @@ class CliRenderer:
 
             action_color = "bold yellow"
             name_color = "bold green" if is_safe_read else "bold cyan"
-            summary = self._summarise_args(name, args_raw)
+            target = self._extract_tool_target(name, args_raw)
 
             # 暫存供 tool_done 使用
             self._pending_tools[call_id] = {
@@ -411,7 +490,8 @@ class CliRenderer:
                 "action": action,
                 "action_color": action_color,
                 "name_color": name_color,
-                "summary": plain(summary) if summary else "",
+                "target": plain(target) if target else "",
+                "summary": plain(target) if target else "",
                 "sa_name": name.split("::", 1)[0] if "::" in name else None,
             }
 
@@ -433,17 +513,26 @@ class CliRenderer:
                     else:
                         parts.extend([(" (", ""), (real_name, name_color), (")", "")])
 
-                    if info["summary"]:
-                        if info["summary"].startswith("【安全警告】"):
-                            parts.extend([(" 【安全警告】", "bold red"), (info["summary"][6:], "")])
-                        else:
-                            parts.append((f" {info['summary']}", ""))
+                    tool_header = Text.assemble(*parts)
+                    group_items = [tool_header]
 
-                    tool_text = Text.assemble(*parts)
+                    target_text = info.get("target") or info.get("summary")
+                    if target_text:
+                        if target_text.startswith("【安全警告】"):
+                            sub_parts = [
+                                ("  └─ ", "dim"),
+                                ("【安全警告】", "bold red"),
+                                (f" {target_text[6:]}", "dim"),
+                            ]
+                        else:
+                            sub_parts = [("  └─ ", "dim"), (target_text, "dim")]
+                        group_items.append(Text.assemble(*sub_parts))
+
                     spinner = Spinner("dots", text=Text("執行工具中…", style="default"))
+                    group_items.append(spinner)
 
                     self._active_status = Live(
-                        Group(tool_text, spinner), console=self.console, refresh_per_second=12, transient=True
+                        Group(*group_items), console=self.console, refresh_per_second=12, transient=True
                     )
                     self._active_status.start()
 
@@ -522,13 +611,19 @@ class CliRenderer:
                     else:
                         parts.extend([(" (", ""), (info["real_name"], info["name_color"]), (")", "")])
 
-                    if info["summary"]:
-                        if info["summary"].startswith("【安全警告】"):
-                            parts.extend([(" 【安全警告】", "bold red"), (info["summary"][6:], "")])
-                        else:
-                            parts.append((f" {info['summary']}", ""))
-
                     self.console.print(Text.assemble(*parts))
+
+                    target_text = info.get("target") or info.get("summary")
+                    if target_text:
+                        if target_text.startswith("【安全警告】"):
+                            sub_parts = [
+                                ("  └─ ", "dim"),
+                                ("【安全警告】", "bold red"),
+                                (f" {target_text[6:]}", "dim"),
+                            ]
+                        else:
+                            sub_parts = [("  └─ ", "dim"), (target_text, "dim")]
+                        self.console.print(Text.assemble(*sub_parts))
 
                 if not ok:
                     if "::" in name:
