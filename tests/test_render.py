@@ -82,9 +82,10 @@ def test_extract_tool_target(tmp_path):
     assert res_cmd == "echo hello echo world"
 
     # 3. URL 目標
-    args_web = json.dumps({"url": "https://api.github.com/repos/openai/gym/issues"})
+    sample_url = "https://example.com/api/v1/resources"
+    args_web = json.dumps({"url": sample_url})
     res_web = renderer._extract_tool_target("web_fetch", args_web)
-    assert "api.github.com" in res_web
+    assert res_web == sample_url
 
     # 4. 向後相容 _summarise_args
     assert renderer._summarise_args("run_command", args_cmd) == "echo hello echo world"
