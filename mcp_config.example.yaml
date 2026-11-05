@@ -1,0 +1,160 @@
+# MCP Servers 設定範本
+# 複製此檔為 mcp_config.yaml 並填入你的設定：
+#   cp mcp_config.example.yaml mcp_config.yaml
+#
+# mcp_config.yaml 已加入 .gitignore，不會被 commit（保護你的 server 位址和 key）
+#
+# inject：自動注入到工具呼叫的參數，模型看不到也不需要填寫。
+# 適合用於 api_key、auth_token 等認證參數。
+
+servers:
+  # 範例：本機檔案系統（stdio transport）
+  # filesystem:
+  #   transport: stdio
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+  # 範例：需要認證的 MCP server（inject 自動帶入 api_key）
+  # mssql:
+  #   transport: stdio
+  #   command: python
+  #   args: ["C:\\path\\to\\server.py"]
+  #   inject:
+  #     api_key: your-secret-key-here
+
+  # 範例：遠端 SSE server
+  # my-remote:
+  #   transport: sse
+  #   url: http://localhost:3001/sse
+
+  # 瀏覽器操作（純 Python，用系統已裝的 Edge/Chrome，不需要 Node.js）
+  # 進階：設 BROWSER_CDP_URL 可連既有瀏覽器保留登入狀態，見 browser_mcp.py 註解
+  # browser:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/browser_mcp.py"]
+  #    env:
+  #      BROWSER_CDP_URL: 'http://localhost:9222'  # 告訴 MCP 直接連接已經在背景跑著的瀏覽器
+  #      BROWSER_HEADLESS: "0"                     # 1：強制無頭模式
+
+  # GitHub 整合（提供 PR 與 Issue 查詢、留言新增；GITHUB_TOKEN 留空或省略時將於執行時隱藏詢問）
+  # github:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/github_mcp.py"]
+  #   # is_sensitive: true                  # 選填：存取機密私有儲存庫時可設為 true，強制對話紀錄零落盤
+  #   safe_read_tools:
+  #     - github_list_prs
+  #     - github_read_issue
+  #   env:
+  #     GITHUB_TOKEN: ""                    # 選填：Personal Access Token（建議留空，於對話執行時安全輸入）
+  #     GITHUB_ALLOWED_REPOS: ""            # 選填：允許存取之 owner/repo 白名單（逗號分隔，如 "org/repo1,org/repo2"）
+
+  # 本機 SQLite 資料庫檢索 (唯讀 SELECT 查詢)
+  # sqlite:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/sqlite_mcp.py"]
+  #   safe_read_tools:
+  #     - sqlite_list_tables
+  #     - sqlite_describe_schema
+  #     - sqlite_run_select_query
+  #   env:
+  #     DB_PATH: "dev.db" # 選填：SQLite 資料庫完整路徑與檔名（留空、null 或省略時將於執行時詢問）
+
+  # 遠端 MySQL / MariaDB 資料庫唯讀檢索（需安裝 pymysql 或 mysql-connector-python；未設定項將於執行時動態詢問）
+  # mysql:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/mysql_mcp.py"]
+  #   safe_read_tools:
+  #     - mysql_list_databases
+  #     - mysql_list_tables
+  #     - mysql_describe_schema
+  #     - mysql_run_select_query
+  #   env:
+  #     MYSQL_HOST: ""            # 選填：MySQL/MariaDB 主機 IP 或位址（留空、null 或省略時將於執行時詢問）
+  #     MYSQL_PORT: "3306"        # 選填：連接埠，預設 3306（留空、null 或省略時將於執行時詢問）
+  #     MYSQL_USER: ""            # 選填：登入帳號（留空、null 或省略時將於執行時詢問）
+  #     MYSQL_PASSWORD: ""        # 選填：登入密碼（建議留空或省略，於執行時安全輸入）
+  #     MYSQL_DATABASE: ""        # 選填：預設資料庫名稱（留空時可直接查詢伺服器上所有資料庫清單或跨庫查詢）
+  #     MYSQL_CONNECT_TIMEOUT: "10"
+
+  # 遠端 Microsoft SQL Server (MSSQL) 資料庫唯讀檢索（需安裝 pymssql 或 pyodbc；未設定項將於執行時動態詢問）
+  # mssql:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/mssql_mcp.py"]
+  #   safe_read_tools:
+  #     - mssql_list_databases
+  #     - mssql_list_tables
+  #     - mssql_describe_schema
+  #     - mssql_run_select_query
+  #   env:
+  #     MSSQL_HOST: ""            # 選填：SQL Server 主機 IP 或位址（留空、null 或省略時將於執行時詢問）
+  #     MSSQL_PORT: "1433"        # 選填：連接埠，預設 1433（留空、null 或省略時將於執行時詢問）
+  #     MSSQL_USER: ""            # 選填：登入帳號（留空、null 或省略時將於執行時詢問）
+  #     MSSQL_PASSWORD: ""        # 選填：登入密碼（建議留空或省略，於執行時安全輸入）
+  #     MSSQL_DATABASE: ""        # 選填：預設資料庫名稱（留空時預設連線登入帳號之預設資料庫並支援列出所有資料庫）
+  #     MSSQL_CONNECT_TIMEOUT: "10"
+
+  # 長期記憶與上下文管理 (預設存於 ~/.pocket-agent/memory.json)
+  # memory:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/memory_mcp.py"]
+
+  # 遠端 RHEL 主機唯讀探查與維運診斷（支援 SSH 金鑰與帳密雙軌驗證；env 內各項皆可預填、留空或省略，未設定項將於執行時在終端機動態詢問）
+  # rhel_ops:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/rhel_mcp.py"]
+  #   safe_read_tools:
+  #     - rhel_system_overview
+  #     - rhel_storage_and_fs
+  #     - rhel_network_status
+  #     - rhel_service_status
+  #     - rhel_query_journal
+  #     - rhel_security_status
+  #     - rhel_read_config
+  #     - rhel_list_directory
+  #     - rhel_selinux_context
+  #     - rhel_process_inspect
+  #     - rhel_network_connections
+  #     - rhel_package_info
+  #     - rhel_container_status
+  #     - rhel_cron_and_timers
+  #     - rhel_hardware_info
+  #   env:
+  #     RHEL_HOST: ""                        # 選填：主機 IP 或位址（留空或省略時將於執行時詢問）
+  #     RHEL_SSH_PORT: ""                    # 選填：SSH 連接埠（留空或省略時將於執行時詢問）
+  #     RHEL_SSH_USER: ""                    # 選填：SSH 登入帳號（留空或省略時將於執行時詢問）
+  #     RHEL_SSH_KEY_PATH: ""                # 選填：SSH 私鑰檔案路徑（設定時優先啟用金鑰認證；留空則自動使用帳密模式）
+  #     RHEL_SSH_KEY_PASSPHRASE: ""          # 選填：私鑰解鎖密碼（若私鑰有設 Passphrase，建議留空於執行時安全輸入）
+  #     RHEL_SSH_PASSWORD: ""                # 選填：SSH 登入密碼（使用帳密模式時建議留空或省略，於執行時安全輸入）
+  #     RHEL_STRICT_HOST_KEY: "accept-new"   # 選填：主機金鑰策略（預設 accept-new 兼顧首次連線便利與防金鑰竄改；可設 yes 採最高嚴格清單核驗）
+  #     RHEL_CONNECT_TIMEOUT: "10"
+
+  # 遠端 Windows 主機 RDP (Port 3389) 視覺控制與結構化唯讀巡檢
+  # (僅限帳號密碼驗證；win_rdp_mouse_action 與 win_rdp_keyboard_action 不列入 safe_read_tools 以強制互動確認)
+  # win_rdp:
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/win_rdp_mcp.py"]
+  #   safe_read_tools:
+  #     - win_rdp_screenshot
+  #     - win_rdp_disconnect
+  #     - win_system_overview
+  #     - win_storage_and_fs
+  #     - win_network_status
+  #     - win_service_status
+  #     - win_query_eventlog
+  #     - win_security_status
+  #     - win_read_config
+  #   env:
+  #     WIN_HOST: ""                         # 選填：Windows 主機 IP 或位址（留空或省略時將於執行時詢問）
+  #     WIN_RDP_PORT: ""                     # 選填：RDP 連接埠，預設 3389（留空或省略時將於執行時詢問）
+  #     WIN_RDP_USER: ""                     # 選填：Windows 登入帳號（支援 User、Domain\User 或 User@Domain）
+  #     WIN_RDP_PASSWORD: ""                 # 選填：Windows 登入密碼（建議留空或省略，於執行時安全輸入）
+  #     WIN_RDP_TIMEOUT: "15"
+  #     WIN_RDP_RESOLUTION: "1280x800"

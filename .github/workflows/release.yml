@@ -1,0 +1,42 @@
+name: Release Portable App
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: 1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+
+      - name: Create venv and install dependencies
+        run: |
+          python -m venv venv
+          venv\Scripts\python.exe -m pip install --upgrade pip
+          venv\Scripts\python.exe -m pip install -r requirements.txt
+
+      - name: Build Portable Version
+        run: |
+          venv\Scripts\python.exe build_scripts/build_portable.py
+
+      - name: Create Release and Upload Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$env:TAG_NAME" "dist/PocketAgent-portable.zip" --title "$env:TAG_NAME" --generate-notes

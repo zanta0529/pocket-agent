@@ -1,0 +1,45 @@
+name: Python CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['main', 'dev']
+  pull_request:
+    branches: ['main', 'dev']
+
+jobs:
+  build-and-lint:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: 1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Check formatting with Ruff
+        run: ruff format --check .
+
+      - name: Lint with Ruff
+        run: ruff check --output-format=github .
+
+      - name: Run Pytest (Smoke Tests)
+        run: pytest tests/
+
+      - name: Check Missing Imports (Production)
+        run: python scripts/check_imports.py src scripts --req requirements.in --ignore tiktoken
+
+      - name: Check Missing Imports (Development)
+        run: python scripts/check_imports.py tests --req requirements.in --req requirements-dev.in

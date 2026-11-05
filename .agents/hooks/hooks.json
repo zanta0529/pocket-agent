@@ -1,0 +1,26 @@
+{
+  "hooks": [
+    {
+      "name": "block-sensitive-files",
+      "event": "before_write",
+      "description": "阻止修改 sensitive 檔案",
+      "condition": {
+        "file_pattern": "(\\.env|\\.key|\\.pem|secrets\\.json|.*\\.env|.*\\.env\\..*)"
+      },
+      "action": "block",
+      "message": "⛔ 已阻止：嘗試修改 sensitive 檔案 {file}。"
+    },
+    {
+      "name": "auto-typecheck-after-ts-edit",
+      "event": "after_write",
+      "description": "修改 TypeScript 檔案後自動執行 typecheck 與 lint",
+      "condition": {
+        "file_pattern": "\\.(ts|tsx)$",
+        "exclude_pattern": "(\\.test\\.|spec\\.)"
+      },
+      "action": "run_command",
+      "command": "npm run typecheck && npm run lint",
+      "on_failure": "warn"
+    }
+  ]
+}

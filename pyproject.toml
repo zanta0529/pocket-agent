@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pocket-agent"
+version = "0.1.0"
+description = "A portable AI agent"
+readme = "README.md"
+requires-python = ">=3.14"
+dynamic = ["dependencies"]
+
+[project.scripts]
+pocket-agent = "pocket_agent.main:main"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.ruff]
+# 與您的 .editorconfig 和 .prettierrc 保持一致
+line-length = 120
+indent-width = 4
+
+# 假設您的目標 Python 版本，您可視需求修改
+target-version = "py314"
+
+[tool.ruff.lint]
+# 預設啟用的檢查規則
+# E: pycodestyle (基礎風格檢查)
+# F: Pyflakes (語法與未使用的變數/模組檢查)
+# I: isort (負責您存檔時的自動 Import 排序)
+select = ["E", "F", "I"]
+
+[tool.ruff.format]
+# Python 業界與 Ruff 預設偏好使用雙引號
+quote-style = "double"
+# 使用空白縮排
+indent-style = "space"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
