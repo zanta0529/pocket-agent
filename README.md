@@ -67,7 +67,7 @@
 
 ```bash
 # 1. 複製儲存庫
-git clone https://github.com/<your-org>/pocket-agent.git
+git clone https://github.com/zanta0529/pocket-agent.git
 cd pocket-agent
 ```
 
@@ -96,7 +96,7 @@ cd pocket-agent
 
 ```bash
 # 1. 複製儲存庫並進入目錄
-git clone https://github.com/<your-org>/pocket-agent.git
+git clone https://github.com/zanta0529/pocket-agent.git
 cd pocket-agent
 
 # 2. 建立並啟用 Python 3.14+ 虛擬環境
