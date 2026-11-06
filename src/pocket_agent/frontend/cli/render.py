@@ -289,6 +289,49 @@ class CliRenderer:
         """向後相容：從工具的 JSON arguments 字串萃取最有意義的單一摘要欄位。"""
         return self._extract_tool_target(name, args_raw, max_width=70)
 
+    def _format_tool_lines(self, prefix: tuple[str, str], info: dict) -> list[Text]:
+        """格式化工具行：未超過終端寬度時單行接續，超過時改為樹狀結構兩行。"""
+        parts = [prefix, (info["action"], info["action_color"])]
+        if info.get("sa_name"):
+            parts.extend(
+                [
+                    (f" [{info['sa_name']}]", "bold magenta"),
+                    (" (", ""),
+                    (info["real_name"], info["name_color"]),
+                    (")", ""),
+                ]
+            )
+        else:
+            parts.extend([(" (", ""), (info["real_name"], info["name_color"]), (")", "")])
+
+        target_text = info.get("target") or info.get("summary") or ""
+        if not target_text:
+            return [Text.assemble(*parts)]
+
+        term_w = getattr(self.console, "width", 80) or 80
+        header_text = Text.assemble(*parts)
+        header_w = cell_len(header_text.plain)
+        target_w = cell_len(target_text)
+
+        # 預留 1 格空白與 1 格終端右側緩衝
+        if header_w + 1 + target_w <= max(20, term_w - 1):
+            if target_text.startswith("【安全警告】"):
+                parts.extend([(" ", ""), ("【安全警告】", "bold red"), (f" {target_text[6:]}", "dim")])
+            else:
+                parts.extend([(" ", ""), (target_text, "dim")])
+            return [Text.assemble(*parts)]
+
+        # 超過寬度時降級為樹狀結構兩行
+        if target_text.startswith("【安全警告】"):
+            sub_parts = [
+                ("  └─ ", "dim"),
+                ("【安全警告】", "bold red"),
+                (f" {target_text[6:]}", "dim"),
+            ]
+        else:
+            sub_parts = [("  └─ ", "dim"), (target_text, "dim")]
+        return [header_text, Text.assemble(*sub_parts)]
+
     def message(self, value: object, style: str = "dim") -> None:
         self.console.print(Text(plain(value), style=style))
 
@@ -503,31 +546,7 @@ class CliRenderer:
                     from rich.live import Live
                     from rich.spinner import Spinner
 
-                    parts = [("  ", "")]  # 佔位符代替小圓點
-                    parts.append((action, action_color))
-                    info = self._pending_tools[call_id]
-                    if info["sa_name"]:
-                        parts.extend(
-                            [(f" [{info['sa_name']}]", "bold magenta"), (" (", ""), (real_name, name_color), (")", "")]
-                        )
-                    else:
-                        parts.extend([(" (", ""), (real_name, name_color), (")", "")])
-
-                    tool_header = Text.assemble(*parts)
-                    group_items = [tool_header]
-
-                    target_text = info.get("target") or info.get("summary")
-                    if target_text:
-                        if target_text.startswith("【安全警告】"):
-                            sub_parts = [
-                                ("  └─ ", "dim"),
-                                ("【安全警告】", "bold red"),
-                                (f" {target_text[6:]}", "dim"),
-                            ]
-                        else:
-                            sub_parts = [("  └─ ", "dim"), (target_text, "dim")]
-                        group_items.append(Text.assemble(*sub_parts))
-
+                    group_items = list(self._format_tool_lines(("  ", ""), self._pending_tools[call_id]))
                     spinner = Spinner("dots", text=Text("執行工具中…", style="default"))
                     group_items.append(spinner)
 
@@ -598,32 +617,9 @@ class CliRenderer:
                 info = self._pending_tools.pop(call_id, None)
                 if info:
                     bullet_color = "bold green" if ok else "bold red"
-                    parts = [("● ", bullet_color), (info["action"], info["action_color"])]
-                    if info["sa_name"]:
-                        parts.extend(
-                            [
-                                (f" [{info['sa_name']}]", "bold magenta"),
-                                (" (", ""),
-                                (info["real_name"], info["name_color"]),
-                                (")", ""),
-                            ]
-                        )
-                    else:
-                        parts.extend([(" (", ""), (info["real_name"], info["name_color"]), (")", "")])
-
-                    self.console.print(Text.assemble(*parts))
-
-                    target_text = info.get("target") or info.get("summary")
-                    if target_text:
-                        if target_text.startswith("【安全警告】"):
-                            sub_parts = [
-                                ("  └─ ", "dim"),
-                                ("【安全警告】", "bold red"),
-                                (f" {target_text[6:]}", "dim"),
-                            ]
-                        else:
-                            sub_parts = [("  └─ ", "dim"), (target_text, "dim")]
-                        self.console.print(Text.assemble(*sub_parts))
+                    lines = self._format_tool_lines(("● ", bullet_color), info)
+                    for line in lines:
+                        self.console.print(line)
 
                 if not ok:
                     if "::" in name:

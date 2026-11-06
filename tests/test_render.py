@@ -91,12 +91,11 @@ def test_extract_tool_target(tmp_path):
     assert renderer._summarise_args("run_command", args_cmd) == "echo hello echo world"
 
 
-def test_cli_renderer_two_tier_tool_done_output(tmp_path):
+def test_cli_renderer_tool_done_single_line_when_width_sufficient(tmp_path):
     output = StringIO()
     console = Console(file=output, force_terminal=False, width=120)
     renderer = CliRenderer(console)
 
-    # 模擬 tool_start 與 tool_done
     target_file = tmp_path / "agent_test.py"
     target_file.write_text("x = 1")
     args = json.dumps({"file_path": str(target_file)})
@@ -122,38 +121,100 @@ def test_cli_renderer_two_tier_tool_done_output(tmp_path):
     rendered_output = output.getvalue()
     lines = [line.strip() for line in rendered_output.splitlines() if line.strip()]
 
-    # 驗證雙行輸出
-    # 第一行：● Read (read_file)
-    assert any("Read" in line and "read_file" in line for line in lines)
-    # 第二行：└─ 目標檔案路徑
-    assert any("└─" in line and "agent_test.py" in line for line in lines)
+    # 寬度充足時：單行直接串接，不使用 └─ 樹狀結構
+    assert any("Read" in line and "read_file" in line and "agent_test.py" in line for line in lines)
+    assert not any("└─" in line for line in lines)
 
 
-def test_cli_renderer_security_warning_in_sub_tier():
+def test_cli_renderer_tool_done_tree_fallback_when_width_exceeded():
     output = StringIO()
-    console = Console(file=output, force_terminal=False, width=120)
+    # 限制終端機寬度為 40，使單行超過寬度（18 + 1 + 28 = 47 > 39），但第二行樹狀（5 + 28 = 33 <= 40）不被自動折行
+    console = Console(file=output, force_terminal=False, width=40)
     renderer = CliRenderer(console)
 
-    args = json.dumps({"command": "【安全警告】 rm -rf /"})
+    args = json.dumps({"file_path": "modules/scanner/agent_test.py"})
+
     renderer.event(
         "tool_start",
         {
-            "name": "run_command",
+            "name": "read_file",
             "arguments": args,
-            "call_id": "call_danger",
-            "is_safe_read": False,
+            "call_id": "call_1",
+            "is_safe_read": True,
         },
     )
     renderer.event(
         "tool_done",
         {
-            "name": "run_command",
-            "call_id": "call_danger",
+            "name": "read_file",
+            "call_id": "call_1",
             "ok": True,
         },
     )
 
     rendered_output = output.getvalue()
     lines = [line.strip() for line in rendered_output.splitlines() if line.strip()]
-    assert any("Action" in line and "run_command" in line for line in lines)
-    assert any("└─" in line and "【安全警告】" in line and "rm -rf /" in line for line in lines)
+
+    # 寬度不足時：降級為樹狀結構兩行
+    assert any("Read" in line and "read_file" in line for line in lines)
+    assert any("└─" in line and "agent_test.py" in line for line in lines)
+
+
+def test_cli_renderer_security_warning_dynamic_width():
+    # 1. 寬度充足時：單行呈現
+    out_wide = StringIO()
+    console_wide = Console(file=out_wide, force_terminal=False, width=120)
+    renderer_wide = CliRenderer(console_wide)
+
+    args = json.dumps({"command": "【安全警告】 rm -rf /"})
+    renderer_wide.event(
+        "tool_start",
+        {
+            "name": "run_command",
+            "arguments": args,
+            "call_id": "call_danger_1",
+            "is_safe_read": False,
+        },
+    )
+    renderer_wide.event(
+        "tool_done",
+        {
+            "name": "run_command",
+            "call_id": "call_danger_1",
+            "ok": True,
+        },
+    )
+
+    lines_wide = [line.strip() for line in out_wide.getvalue().splitlines() if line.strip()]
+    assert any(
+        "Action" in line and "run_command" in line and "【安全警告】" in line and "rm -rf /" in line
+        for line in lines_wide
+    )
+    assert not any("└─" in line for line in lines_wide)
+
+    # 2. 寬度狹窄時：降級為兩行樹狀呈現
+    out_narrow = StringIO()
+    console_narrow = Console(file=out_narrow, force_terminal=False, width=30)
+    renderer_narrow = CliRenderer(console_narrow)
+
+    renderer_narrow.event(
+        "tool_start",
+        {
+            "name": "run_command",
+            "arguments": args,
+            "call_id": "call_danger_2",
+            "is_safe_read": False,
+        },
+    )
+    renderer_narrow.event(
+        "tool_done",
+        {
+            "name": "run_command",
+            "call_id": "call_danger_2",
+            "ok": True,
+        },
+    )
+
+    lines_narrow = [line.strip() for line in out_narrow.getvalue().splitlines() if line.strip()]
+    assert any("Action" in line and "run_command" in line for line in lines_narrow)
+    assert any("└─" in line and "【安全警告】" in line and "rm -rf /" in line for line in lines_narrow)
