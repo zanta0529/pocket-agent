@@ -179,16 +179,23 @@ async def conversation(
 
     handler = CommandHandler(agent, state, reader, renderer, tools)
     agent.on_stream = renderer.event
+    last_sigint_time = 0.0
     while True:
         try:
             raw = await reader.read(default=state.last_failed_input)
         except EOFError:
             break
         except KeyboardInterrupt:
+            now = monotonic()
+            if now - last_sigint_time < 1.5:
+                renderer.message("收到中斷訊號，正在離開…", "yellow")
+                break
+            last_sigint_time = now
             state.last_failed_input = ""
-            renderer.message("輸入 /quit 或在空輸入按 Ctrl+D 離開；待送附件保留。")
+            renderer.message("再按一次 Ctrl+C 離開，或輸入 /exit（待送附件保留）。", "yellow")
             continue
         state.last_failed_input = ""
+        last_sigint_time = 0.0
         if not raw.strip():
             continue
         try:
@@ -224,7 +231,7 @@ class CliFrontend(FrontendStrategy):
 
         from pocket_agent.system.compat import setup_win_sigint_workaround
 
-        setup_win_sigint_workaround()
+        sigint_task = setup_win_sigint_workaround()
 
         from rich.console import Console
 
@@ -631,6 +638,13 @@ class CliFrontend(FrontendStrategy):
         except Exception as exc:
             renderer.message(f"CLI 執行失敗：{exc}", "red")
         finally:
+            if sigint_task is not None and not sigint_task.done():
+                sigint_task.cancel()
+                try:
+                    await sigint_task
+                except asyncio.CancelledError, Exception:
+                    pass
+
             if update_task is not None and not update_task.done():
                 update_task.cancel()
                 try:
@@ -641,12 +655,14 @@ class CliFrontend(FrontendStrategy):
             # MCP shutdown failure must not skip closing the active model client.
             try:
                 if mcp is not None:
-                    await mcp.stop()
+                    await asyncio.wait_for(mcp.stop(), timeout=3.0)
+            except (asyncio.TimeoutError, Exception) as mcp_err:
+                log.warning("MCP 服務停止逾時或失敗：%s", mcp_err)
             finally:
                 active = agent.client if agent is not None else client
                 if active is not None:
                     try:
-                        await active.close()
+                        await asyncio.wait_for(active.close(), timeout=2.0)
                     except Exception:
                         renderer.message("模型連線清理失敗。", "yellow")
 

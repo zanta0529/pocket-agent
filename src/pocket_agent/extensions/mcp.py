@@ -126,9 +126,11 @@ class MCPManager:
         return MCPStartupResult(len(servers), ready_servers, failed_servers, len(self._tools))
 
     async def stop(self) -> None:
+        import asyncio
+
         for closer in reversed(self._exit_stack_closers):
             try:
-                await closer(None, None, None)
+                await asyncio.wait_for(closer(None, None, None), timeout=1.5)
             except Exception as e:
                 import logging
 
