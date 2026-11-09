@@ -343,6 +343,8 @@ def key_bindings(
             state.accept_edits = new_mode
         if agent is not None:
             agent.accept_edits = new_mode
+            for sub in getattr(agent, "active_subagents", []):
+                sub.accept_edits = new_mode
         event.app.invalidate()
 
     @bindings.add("c-l")

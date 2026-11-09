@@ -289,9 +289,11 @@ def test_cli_confirm_with_custom_instruction(tmp_path, monkeypatch):
         assert direct_text in agent.user_instructions
 
     # 3. 測試在檔案編輯確認提示當下按下 Shift+Tab：直接啟用 Accept-edits 並放行當下與後續檔案
-    def fake_pt_prompt(prompt_msg, key_bindings=None, in_thread=False):
+    def fake_pt_prompt(prompt_msg, key_bindings=None, **kwargs):
         from prompt_toolkit.keys import Keys
 
+        assert "Shift+Tab: 自動編輯(Accept-edits)" in prompt_msg
+        assert "bottom_toolbar" in kwargs
         handler = key_bindings.get_bindings_for_keys((Keys.BackTab,))[-1].handler
         result_holder = {}
         event = SimpleNamespace(app=SimpleNamespace(exit=lambda result=None: result_holder.setdefault("res", result)))

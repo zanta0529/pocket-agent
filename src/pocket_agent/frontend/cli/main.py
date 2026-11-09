@@ -485,11 +485,21 @@ class CliFrontend(FrontendStrategy):
                 )
                 renderer.console.print(panel)
 
-                prompt_msg = "允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] "
+                if is_fs_edit:
+                    prompt_msg = (
+                        "允許？[y: 單次 | a: 本次對話 | Shift+Tab: 自動編輯(Accept-edits) | "
+                        "A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] "
+                    )
+                else:
+                    prompt_msg = "允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] "
                 try:
                     if is_fs_edit and not hasattr(builtins.input, "_mock_name") and sys.stdin.isatty():
+                        import shutil
+
                         from prompt_toolkit import prompt as pt_prompt
                         from prompt_toolkit.key_binding import KeyBindings
+
+                        from pocket_agent.frontend.cli.render import toolbar
 
                         kb = KeyBindings()
 
@@ -497,9 +507,16 @@ class CliFrontend(FrontendStrategy):
                         def _accept_edits_on_confirm(event) -> None:
                             state.accept_edits = True
                             agent.accept_edits = True
+                            for sub in getattr(agent, "active_subagents", []):
+                                sub.accept_edits = True
                             event.app.exit(result="__ACCEPT_EDITS__")
 
-                        ans = pt_prompt(prompt_msg, key_bindings=kb, in_thread=True).strip()
+                        ans = pt_prompt(
+                            prompt_msg,
+                            key_bindings=kb,
+                            bottom_toolbar=lambda: toolbar(state, shutil.get_terminal_size().columns),
+                            in_thread=True,
+                        ).strip()
                     else:
                         ans = input(prompt_msg).strip()
 
