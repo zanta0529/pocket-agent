@@ -438,6 +438,9 @@ class CliFrontend(FrontendStrategy):
 
             # F1：CLI 工具確認機制（三重授權）
             def _cli_confirm(*args_tuple) -> bool | str:
+                import builtins
+                import sys
+
                 from rich.panel import Panel
                 from rich.text import Text
 
@@ -451,6 +454,10 @@ class CliFrontend(FrontendStrategy):
                     command = " ".join(
                         json.dumps(a, ensure_ascii=False) if isinstance(a, (dict, list)) else str(a) for a in args_tuple
                     )
+
+                is_fs_edit = command.startswith(("建立新檔：", "修改檔案：", "附加內容至檔案：", "局部修改檔案："))
+                if is_fs_edit and getattr(state, "accept_edits", False):
+                    return True
 
                 # 1. 檢查白名單 (前綴比對包含內建唯讀清單與使用者自訂清單)
                 if is_command_allowed(command):
@@ -478,10 +485,30 @@ class CliFrontend(FrontendStrategy):
                 )
                 renderer.console.print(panel)
 
+                prompt_msg = "允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] "
                 try:
-                    ans = input("允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] ").strip()
+                    if is_fs_edit and not hasattr(builtins.input, "_mock_name") and sys.stdin.isatty():
+                        from prompt_toolkit import prompt as pt_prompt
+                        from prompt_toolkit.key_binding import KeyBindings
 
-                    if ans in ("y", "Y"):
+                        kb = KeyBindings()
+
+                        @kb.add("s-tab")
+                        def _accept_edits_on_confirm(event) -> None:
+                            state.accept_edits = True
+                            agent.accept_edits = True
+                            event.app.exit(result="__ACCEPT_EDITS__")
+
+                        ans = pt_prompt(prompt_msg, key_bindings=kb, in_thread=True).strip()
+                    else:
+                        ans = input(prompt_msg).strip()
+
+                    if ans == "__ACCEPT_EDITS__":
+                        renderer.message("✓ 已啟用 Accept-edits 模式：本次對話自動允許檔案編輯", "green")
+                        if status:
+                            status.start()
+                        return True
+                    elif ans in ("y", "Y"):
                         if status:
                             status.start()
                         return True

@@ -383,9 +383,7 @@ class CliInput:
             completer=self.completer,
             complete_while_typing=True,
             placeholder=lambda: (
-                FormattedText(
-                    [("fg:ansibrightblack", "Accept-edits mode: file edits auto-approved (shift+tab to cycle)")]
-                )
+                FormattedText([("fg:ansibrightblack", "Accept-edits 模式：自動允許檔案編輯（按 Shift+Tab 切換）")])
                 if not self.selecting and getattr(state, "accept_edits", False)
                 else ""
             ),

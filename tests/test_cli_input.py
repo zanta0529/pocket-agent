@@ -296,9 +296,7 @@ def test_shift_tab_toggles_accept_edits_and_placeholder():
         with patch("pocket_agent.frontend.cli.input.PromptSession") as mock_session_cls:
             CliInput(state, agent=agent)
             placeholder_fn = mock_session_cls.call_args.kwargs["placeholder"]
-            assert "Accept-edits mode: file edits auto-approved (shift+tab to cycle)" in fragment_list_to_text(
-                placeholder_fn()
-            )
+            assert "Accept-edits 模式：自動允許檔案編輯（按 Shift+Tab 切換）" in fragment_list_to_text(placeholder_fn())
             handler(event)
             assert state.accept_edits is False
             assert agent.accept_edits is False

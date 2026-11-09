@@ -288,6 +288,27 @@ def test_cli_confirm_with_custom_instruction(tmp_path, monkeypatch):
         assert res2 == direct_text
         assert direct_text in agent.user_instructions
 
+    # 3. 測試在檔案編輯確認提示當下按下 Shift+Tab：直接啟用 Accept-edits 並放行當下與後續檔案
+    def fake_pt_prompt(prompt_msg, key_bindings=None, in_thread=False):
+        from prompt_toolkit.keys import Keys
+
+        handler = key_bindings.get_bindings_for_keys((Keys.BackTab,))[-1].handler
+        result_holder = {}
+        event = SimpleNamespace(app=SimpleNamespace(exit=lambda result=None: result_holder.setdefault("res", result)))
+        handler(event)
+        return result_holder["res"]
+
+    with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch("prompt_toolkit.prompt", side_effect=fake_pt_prompt) as mock_pt,
+    ):
+        assert confirm_func("局部修改檔案：A.py") is True
+        assert getattr(agent, "accept_edits", False) is True
+        assert mock_pt.call_count == 1
+        # 後續檔案 B 不再彈出詢問，直接放行
+        assert confirm_func("建立新檔：B.py") is True
+        assert mock_pt.call_count == 1
+
 
 def test_agent_dynamic_instructions_with_user_instructions():
     """測試 Agent._instructions 會即時注入使用者指示"""
