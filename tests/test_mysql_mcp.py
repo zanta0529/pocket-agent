@@ -294,3 +294,85 @@ def test_mysql_run_select_query_mysql_connector_uses_unbuffered_cursor_and_norma
     cursor.close.assert_called_once()
     conn.rollback.assert_called_once()
     conn.close.assert_called_once()
+
+
+# ── Fail Closed: _open_streaming_cursor 測試 ──────────────────────────────
+
+
+def test_open_streaming_cursor_pymysql_returns_sscursor(monkeypatch):
+    """PyMySQL 環境下應回傳 SSCursor 實例。"""
+    import pymysql.cursors
+
+    conn = MagicMock()
+    cursor = MagicMock()
+    conn.cursor.return_value = cursor
+
+    fake_pymysql = SimpleNamespace(
+        cursors=SimpleNamespace(SSCursor=pymysql.cursors.SSCursor),
+        connect=MagicMock(return_value=conn),
+    )
+
+    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("pymysql", fake_pymysql)):
+        result = mysql_mcp._open_streaming_cursor(conn)
+
+    conn.cursor.assert_called_once_with(pymysql.cursors.SSCursor)
+    assert result is cursor
+
+
+def test_open_streaming_cursor_mysql_connector_returns_unbuffered(monkeypatch):
+    """mysql-connector-python 環境下應回傳 buffered=False 的游標。"""
+    conn = MagicMock()
+    cursor = MagicMock()
+    conn.cursor.return_value = cursor
+
+    fake_driver = SimpleNamespace()
+    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("mysql_connector", fake_driver)):
+        result = mysql_mcp._open_streaming_cursor(conn)
+
+    conn.cursor.assert_called_once_with(buffered=False)
+    assert result is cursor
+
+
+def test_open_streaming_cursor_pymysql_missing_sscursor_raises(monkeypatch):
+    """PyMySQL 缺少 SSCursor 時應拋出 RuntimeError，不降級。"""
+    conn = MagicMock()
+
+    # PyMySQL 模組但無 cursors.SSCursor
+    fake_pymysql = SimpleNamespace(
+        cursors=SimpleNamespace(),
+        connect=MagicMock(return_value=conn),
+    )
+
+    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("pymysql", fake_pymysql)):
+        with pytest.raises(RuntimeError, match="缺少 SSCursor"):
+            mysql_mcp._open_streaming_cursor(conn)
+
+    # 確保未呼叫 conn.cursor() 降級
+    conn.cursor.assert_not_called()
+
+
+def test_open_streaming_cursor_unsupported_driver_raises(monkeypatch):
+    """不支援的驅動類型應拋出 RuntimeError。"""
+    conn = MagicMock()
+    fake_driver = SimpleNamespace()
+
+    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("unknown_driver", fake_driver)):
+        with pytest.raises(RuntimeError, match="不支援的 MySQL 驅動類型"):
+            mysql_mcp._open_streaming_cursor(conn)
+
+
+def test_mysql_run_select_query_fail_closed_on_missing_sscursor(monkeypatch):
+    """整合測試：缺少 SSCursor 時查詢工具回傳錯誤而非靜默執行。"""
+    _set_full_mysql_env(monkeypatch)
+
+    # 模擬 PyMySQL 環境但無 SSCursor
+    fake_pymysql = SimpleNamespace(
+        cursors=SimpleNamespace(),
+        connect=MagicMock(),
+    )
+
+    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("pymysql", fake_pymysql)):
+        out = mysql_mcp.mysql_run_select_query("SELECT 1")
+
+    assert out.startswith("[ERROR]")
+    assert "缺少 SSCursor" in out

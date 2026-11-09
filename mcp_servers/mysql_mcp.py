@@ -536,29 +536,34 @@ def _close_safely(conn: Any) -> None:
 
 
 def _open_streaming_cursor(conn: Any) -> Any:
-    """為 SELECT 建立 Unbuffered 串流 Cursor，防止大型查詢預先載入全表。"""
-    driver_type = ""
-    driver_mod = None
-    try:
-        driver_type, driver_mod = _load_mysql_driver()
-    except Exception:
-        pass
+    """為 SELECT 建立 Unbuffered 串流 Cursor，防止大型查詢預先載入全表。
+
+    僅支援具備真正串流能力的驅動組合：
+    - PyMySQL + SSCursor (pymysql.cursors.SSCursor)
+    - mysql-connector-python + buffered=False
+
+    若環境不滿足上述條件，拋出 RuntimeError 而非靜默退回 buffered cursor。
+    """
+    driver_type, driver_mod = _load_mysql_driver()
 
     if driver_type == "pymysql":
         ss_cursor_cls = getattr(getattr(driver_mod, "cursors", None), "SSCursor", None)
         if ss_cursor_cls is None:
             ss_cursor_cls = getattr(driver_mod, "SSCursor", None)
-        if ss_cursor_cls is None:
-            try:
-                from pymysql.cursors import SSCursor as ss_cursor_cls
-            except ImportError:
-                ss_cursor_cls = None
         if ss_cursor_cls is not None:
             return conn.cursor(ss_cursor_cls)
+
+        raise RuntimeError(
+            "PyMySQL 環境缺少 SSCursor（需 pymysql.cursors.SSCursor），"
+            "無法建立串流游標。請確認 pymysql 版本 >= 1.0 或改用 mysql-connector-python。"
+        )
+
     elif driver_type == "mysql_connector":
+        # mysql-connector-python 官方支援 buffered=False
         return conn.cursor(buffered=False)
 
-    return conn.cursor()
+    # 理論上不會到達（_load_mysql_driver 只會回傳這兩種）
+    raise RuntimeError(f"不支援的 MySQL 驅動類型：{driver_type}")
 
 
 def _abort_unbuffered_connection(conn: Any, cursor: Any = None) -> None:
