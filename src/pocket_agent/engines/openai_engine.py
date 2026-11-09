@@ -463,6 +463,56 @@ class OpenAIResponsesEngine(BaseEngine):
                 self._quota_strategy = CodexOAuthQuotaStrategy(self.client, self.model)
         return self._quota_strategy
 
+    @staticmethod
+    def _has_image_tool_with_model(tools: list) -> bool:
+        if not isinstance(tools, list) or not tools:
+            return False
+        return any(isinstance(t, dict) and t.get("type") == "image_generation" and "model" in t for t in tools)
+
+    @classmethod
+    def _is_recoverable_image_tool_model_error(cls, exc: Exception, tools: list) -> bool:
+        """僅在當輪含 image_generation.model 且 API 回報該參數不支援時回傳 True。"""
+        if not cls._has_image_tool_with_model(tools):
+            return False
+
+        status_code = getattr(exc, "status_code", None)
+        if status_code is not None and status_code != 400:
+            return False
+
+        body = getattr(exc, "body", None)
+        err_obj = body.get("error", body) if isinstance(body, dict) else None
+        if not isinstance(err_obj, dict):
+            err_obj = {}
+
+        code = str(getattr(exc, "code", None) or err_obj.get("code") or "").strip().lower()
+        param = str(getattr(exc, "param", None) or err_obj.get("param") or "").strip().lower()
+        msg = str(err_obj.get("message") or exc or "").strip().lower()
+
+        if code == "model_not_found" or "does not exist" in msg:
+            return False
+
+        if "tools" in param and "model" in param:
+            return True
+
+        allowed_codes = {"", "unknown_parameter", "unsupported_parameter", "invalid_request_error"}
+        if code in allowed_codes and "model" in msg and ("image_generation" in msg or "tools" in msg):
+            return True
+
+        return False
+
+    @staticmethod
+    def _strip_image_tool_model_param(tools: list) -> list:
+        """回傳移除 image_generation 中 model 欄位後的淺拷貝清單，不改動原清單。"""
+        cleaned: list = []
+        for tool in tools:
+            if isinstance(tool, dict) and tool.get("type") == "image_generation" and "model" in tool:
+                cleaned.append({k: v for k, v in tool.items() if k != "model"})
+            elif isinstance(tool, dict):
+                cleaned.append(dict(tool))
+            else:
+                cleaned.append(tool)
+        return cleaned
+
     async def stream_chat(
         self,
         input_items: list,
@@ -487,15 +537,14 @@ class OpenAIResponsesEngine(BaseEngine):
                 reasoning=reasoning_param,
             )
         except Exception as e:
-            if "model" in str(e).lower() or "unknown" in str(e).lower():
-                if build_tools_callback:
-                    disable_model_param()
-                    tools = build_tools_callback()
+            if self._is_recoverable_image_tool_model_error(e, tools):
+                disable_model_param()
+                retry_tools = self._strip_image_tool_model_param(tools)
                 stream = await self.client.responses.create(
                     model=self.model,
                     input=input_items,
                     instructions=instructions,
-                    tools=tools,
+                    tools=retry_tools,
                     store=False,
                     stream=True,
                     reasoning=reasoning_param,

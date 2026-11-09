@@ -5,6 +5,8 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+
 from pocket_agent.engines.base import BaseEngine
 from pocket_agent.engines.factory import EngineFactory
 from pocket_agent.engines.openai_engine import (
@@ -235,3 +237,120 @@ def test_openai_strategy_selection_and_factory_mapping():
     assert isinstance(eng_codex.quota_strategy, CodexOAuthQuotaStrategy)
     assert isinstance(eng_api, OpenAIResponsesEngine)
     assert isinstance(eng_api.quota_strategy, OpenAIApiQuotaStrategy)
+
+
+def test_openai_engine_fallback_preserves_empty_tools_and_does_not_call_callback():
+    """驗證當輪 tools=[] 時，即使發生 model 相關錯誤也不重試、不呼叫 callback。"""
+
+    async def _run():
+        fake_exc = Exception("Unknown parameter: 'tools[0].model'")
+        fake_exc.status_code = 400
+        fake_exc.code = "unknown_parameter"
+        fake_exc.param = "tools[0].model"
+
+        mock_client = SimpleNamespace(responses=SimpleNamespace(create=AsyncMock(side_effect=fake_exc)))
+        engine = OpenAIResponsesEngine(client=mock_client, model="gpt-5-codex")
+        callback_spy = Mock(return_value=[{"type": "function", "name": "run_command"}])
+
+        with pytest.raises(Exception, match="Unknown parameter"):
+            async for _ in engine.stream_chat(
+                input_items=[{"role": "user", "content": "總結"}],
+                instructions="請總結",
+                tools=[],
+                reasoning_param=None,
+                build_tools_callback=callback_spy,
+            ):
+                pass
+
+        assert mock_client.responses.create.call_count == 1
+        callback_spy.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_openai_engine_fallback_strips_only_image_model_field_without_mutating_caller_tools(monkeypatch):
+    """驗證 image_generation model 參數錯誤僅移除該欄位，且無關錯誤不重試。"""
+    from pocket_agent.tools import image as image_mod
+
+    async def _run():
+        monkeypatch.setattr(image_mod, "_model_param_ok", True)
+
+        img_param_exc = Exception("Unknown parameter: 'tools[1].model'.")
+        img_param_exc.status_code = 400
+        img_param_exc.code = "unknown_parameter"
+        img_param_exc.param = "tools[1].model"
+
+        class _EmptyStream:
+            def __aiter__(self):
+                async def _g():
+                    if False:
+                        yield None
+
+                return _g()
+
+            async def close(self):
+                pass
+
+        mock_client = SimpleNamespace(
+            responses=SimpleNamespace(create=AsyncMock(side_effect=[img_param_exc, _EmptyStream()]))
+        )
+        engine = OpenAIResponsesEngine(client=mock_client, model="gpt-5-codex")
+
+        caller_tools = [
+            {"type": "function", "name": "read_file"},
+            {
+                "type": "image_generation",
+                "output_format": "png",
+                "size": "auto",
+                "quality": "auto",
+                "model": "gpt-image-2",
+            },
+        ]
+        callback_spy = Mock(
+            return_value=[
+                {"type": "function", "name": "read_file"},
+                {"type": "function", "name": "run_command"},
+            ]
+        )
+
+        async for _ in engine.stream_chat(
+            input_items=[{"role": "user", "content": "畫一張圖"}],
+            instructions="test",
+            tools=caller_tools,
+            reasoning_param=None,
+            build_tools_callback=callback_spy,
+        ):
+            pass
+
+        assert mock_client.responses.create.call_count == 2
+        callback_spy.assert_not_called()
+        assert image_mod._model_param_ok is False
+
+        # 驗證呼叫端原始清單未被就地修改
+        assert caller_tools[1].get("model") == "gpt-image-2"
+
+        # 驗證第二次請求僅移除 image_generation 的 model 欄位，未引入 run_command
+        second_call_tools = mock_client.responses.create.call_args_list[1].kwargs["tools"]
+        assert second_call_tools == [
+            {"type": "function", "name": "read_file"},
+            {"type": "image_generation", "output_format": "png", "size": "auto", "quality": "auto"},
+        ]
+
+        # 非相關錯誤（例如 model_not_found）即使帶有 image_generation 工具也不得重試
+        not_found_exc = Exception("The model 'gpt-99' does not exist")
+        not_found_exc.status_code = 400
+        not_found_exc.code = "model_not_found"
+        mock_client2 = SimpleNamespace(responses=SimpleNamespace(create=AsyncMock(side_effect=not_found_exc)))
+        engine2 = OpenAIResponsesEngine(client=mock_client2, model="gpt-99")
+
+        with pytest.raises(Exception, match="does not exist"):
+            async for _ in engine2.stream_chat(
+                input_items=[{"role": "user", "content": "hi"}],
+                instructions="test",
+                tools=caller_tools,
+                reasoning_param=None,
+            ):
+                pass
+        assert mock_client2.responses.create.call_count == 1
+
+    asyncio.run(_run())

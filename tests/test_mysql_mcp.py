@@ -223,3 +223,74 @@ def test_mcp_manager_strips_mysql_params():
     )
     schemas = {s["name"]: s for s in manager.openai_tools()}
     assert schemas["mysql_list_databases"]["parameters"]["properties"] == {}
+
+
+@pytest.mark.parametrize(
+    "comment_bypass_query",
+    [
+        "SELECT * FROM users INTO/**/OUTFILE '/tmp/pwn.txt'",
+        "SELECT * FROM users INTO/* comment */DUMPFILE '/tmp/pwn.bin'",
+        "SELECT * FROM users INTO # hash comment\nOUTFILE '/tmp/pwn.txt'",
+        "SELECT * FROM users INTO -- dash comment\nOUTFILE '/tmp/pwn.txt'",
+        "SELECT /*!50000 1, 2 */ FROM users",
+        "SELECT /*M!100000 1 */ FROM users",
+        "SELECT * FROM users WHERE name = 'unclosed",
+        "SELECT /* unclosed comment FROM users",
+        r"SELECT * FROM users WHERE name = 'bad\'escape'",
+        "SELECT 1; /* comment */ SELECT 2",
+    ],
+)
+def test_mysql_blocks_comment_split_outfile_and_executable_comments_before_connect(monkeypatch, comment_bypass_query):
+    _set_full_mysql_env(monkeypatch)
+    with patch("mcp_servers.mysql_mcp._get_readonly_connection") as mock_conn:
+        out = mysql_mcp.mysql_run_select_query(comment_bypass_query)
+        assert out.startswith("[ERROR]")
+        mock_conn.assert_not_called()
+
+
+def test_validate_select_query_preserves_comment_markers_inside_string_literals():
+    q = "SELECT '/* keep */ -- also keep # hash', `col_name` /* strip me */ FROM users WHERE a = '''';"
+    cleaned = mysql_mcp._validate_select_query(q)
+    assert "'/* keep */ -- also keep # hash'" in cleaned
+    assert "a = ''''" in cleaned
+    assert "strip me" not in cleaned
+
+
+def test_mysql_run_select_query_uses_streaming_cursor_and_aborts_on_truncation(monkeypatch):
+    import pymysql.cursors
+
+    _set_full_mysql_env(monkeypatch)
+    huge_rows = [(i, "x" * 200) for i in range(500)]
+    conn, cursor = _make_fake_conn(rows=huge_rows, description=[("id",), ("payload",)])
+
+    monkeypatch.setattr(mysql_mcp, "MAX_OUTPUT_CHARS", 600)
+    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn):
+        out = mysql_mcp.mysql_run_select_query("SELECT id, payload FROM big_table")
+
+    assert "查詢結果已截斷" in out
+    conn.cursor.assert_called_once_with(pymysql.cursors.SSCursor)
+    # 僅讀取第一批，不繼續 fetch，亦不呼叫會排空的 cursor.close() 或 rollback()
+    assert cursor.fetchmany.call_count == 1
+    cursor.close.assert_not_called()
+    conn.rollback.assert_not_called()
+    conn.close.assert_called_once()
+    assert cursor._result is None
+    assert cursor.connection is None
+
+
+def test_mysql_run_select_query_mysql_connector_uses_unbuffered_cursor_and_normal_close(monkeypatch):
+    _set_full_mysql_env(monkeypatch)
+    conn, cursor = _make_fake_conn(rows=[(1, "ok")], description=[("id",), ("status",)])
+    fake_driver = SimpleNamespace()
+
+    with (
+        patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("mysql_connector", fake_driver)),
+        patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn),
+    ):
+        out = mysql_mcp.mysql_run_select_query("SELECT id, status FROM items")
+
+    assert "1, ok" in out
+    conn.cursor.assert_called_once_with(buffered=False)
+    cursor.close.assert_called_once()
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()

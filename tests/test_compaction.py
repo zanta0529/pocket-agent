@@ -11,8 +11,10 @@ class MockSummaryEngine(BaseEngine):
         super().__init__(client=None, model="mock-model")
         self.summary_output = summary_output
         self.fail = fail
+        self.stream_called = False
 
     async def stream_chat(self, input_items, instructions, tools, reasoning_param=None, cancel_check=None):
+        self.stream_called = True
         if self.fail:
             raise RuntimeError("API 連線失敗")
         yield EventText(self.summary_output)
@@ -101,18 +103,21 @@ def test_compact_history_fails_gracefully():
 
 def test_compact_history_no_benefit_fallback():
     async def _test():
-        # 摘要長度與原內容相近，壓縮效益未達 20%
-        engine = MockSummaryEngine(summary_output="長篇摘要 " * 200)
+        # 摘要長度與原內容相近（760 vs 800 單位），壓縮效益未達 20%
+        engine = MockSummaryEngine(summary_output="長篇摘要 " * 760)
         compactor = HistoryCompactor(engine, keep_recent_messages=2)
 
         history = [
             {"role": "user", "content": "長篇大論 " * 200},
             {"role": "assistant", "content": "詳細解答 " * 200},
+            {"role": "user", "content": "更多資訊 " * 200},
+            {"role": "assistant", "content": "更多解答 " * 200},
             {"role": "user", "content": "保留問題 1"},
             {"role": "assistant", "content": "保留回答 1"},
         ]
 
         new_hist, success = await compactor.compact_history(history)
+        assert engine.stream_called is True
         assert success is False
         assert new_hist == history
 
@@ -121,25 +126,54 @@ def test_compact_history_no_benefit_fallback():
 
 def test_compact_history_empty_or_cancelled():
     async def _test():
-        # 1. 摘要內容為空
-        engine_empty = MockSummaryEngine(summary_output="")
-        compactor_empty = HistoryCompactor(engine_empty, keep_recent_messages=2)
         history = [
             {"role": "user", "content": "長篇大論 " * 200},
             {"role": "assistant", "content": "詳細解答 " * 200},
+            {"role": "user", "content": "更多資訊 " * 200},
+            {"role": "assistant", "content": "更多解答 " * 200},
             {"role": "user", "content": "保留問題 1"},
             {"role": "assistant", "content": "保留回答 1"},
         ]
-        new_hist, success = await compactor_empty.compact_history(history)
-        assert success is False
-        assert new_hist == history
+        orig_snapshot = [dict(m) for m in history]
 
-        # 2. cancel_check 觸發取消
-        engine_cancel = MockSummaryEngine(summary_output="正常摘要")
-        compactor_cancel = HistoryCompactor(engine_cancel, keep_recent_messages=2)
-        new_hist2, success2 = await compactor_cancel.compact_history(history, cancel_check=lambda: True)
+        # 1. 摘要內容為空（確實進入串流）
+        engine_empty = MockSummaryEngine(summary_output="")
+        compactor_empty = HistoryCompactor(engine_empty, keep_recent_messages=2)
+        new_hist, success = await compactor_empty.compact_history(history)
+        assert engine_empty.stream_called is True
+        assert success is False
+        assert new_hist == orig_snapshot
+
+        # 2. 串流途中收到部分文字後因 cancel_check 提前結束迭代
+        cancelled = False
+        stream_entered = False
+        stream_closed = False
+
+        class MidStreamCancelEngine(BaseEngine):
+            def __init__(self):
+                super().__init__(client=None, model="mock-cancel")
+
+            async def stream_chat(self, input_items, instructions, tools, reasoning_param=None, cancel_check=None):
+                nonlocal cancelled, stream_entered, stream_closed
+                stream_entered = True
+                try:
+                    yield EventText("這是尚未完成的部分摘要內容")
+                    # 模擬收到第一個 chunk 後按下取消，引擎偵測 cancel_check 並結束
+                    cancelled = True
+                    if cancel_check and cancel_check():
+                        return
+                    yield EventText("後續內容")
+                finally:
+                    stream_closed = True
+
+        engine_mid_cancel = MidStreamCancelEngine()
+        compactor_cancel = HistoryCompactor(engine_mid_cancel, keep_recent_messages=2)
+        new_hist2, success2 = await compactor_cancel.compact_history(history, cancel_check=lambda: cancelled)
+        assert stream_entered is True
+        assert stream_closed is True
         assert success2 is False
-        assert new_hist2 == history
+        assert new_hist2 is history
+        assert new_hist2 == orig_snapshot
 
     asyncio.run(_test())
 

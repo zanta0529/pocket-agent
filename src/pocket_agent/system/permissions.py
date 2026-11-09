@@ -46,12 +46,26 @@ def _split_command(command: str) -> List[str]:
 
 
 def _normalize_command(command: str) -> str:
-    """分詞後以單一空白重組，分詞失敗時退回簡單空白切分。"""
+    """取得自訂白名單之嚴格原始命令鍵（保留引號、大小寫與參數邊界；語法異常時拒絕）。"""
+    raw = command.strip()
+    if not raw:
+        return ""
     try:
-        parts = _split_command(command)
+        parts = _split_command(raw)
     except Exception:
-        parts = command.strip().split()
-    return " ".join(parts)
+        return ""
+    if not parts:
+        return ""
+    in_quote: str | None = None
+    for ch in raw:
+        if in_quote is None:
+            if ch in ('"', "'"):
+                in_quote = ch
+        elif ch == in_quote:
+            in_quote = None
+    if in_quote is not None:
+        return ""
+    return raw
 
 
 # 這些旗標會寫出檔案、讀取任意檔案，或啟動外部程式（pager、外部 diff、textconv），不符合「唯讀」
@@ -101,8 +115,9 @@ def is_command_allowed(command: str) -> bool:
         return False
 
     for allowed_cmd in user_list:
-        # Allow exact match preserving case
-        if cmd_normalized == _normalize_command(str(allowed_cmd)):
+        # 嚴格原始命令比對（保留大小寫、引號與內部空白邊界）
+        allowed_norm = _normalize_command(str(allowed_cmd))
+        if allowed_norm and cmd_normalized == allowed_norm:
             return True
 
     return False

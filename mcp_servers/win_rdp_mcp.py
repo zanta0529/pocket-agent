@@ -49,6 +49,8 @@ _SERVICE_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 _RUNTIME_CREDS: dict[str, str] = {}
 _ACTIVE_SESSION: dict[str, Any] = {
     "process": None,
+    "pid": 0,
+    "exe_path": "",
     "hwnd": 0,
     "target": "",
 }
@@ -403,9 +405,93 @@ def _delete_ephemeral_rdp_credential(host: str) -> None:
         advapi32.CredDeleteW(ctypes.create_unicode_buffer(target_name), cred_type, 0)
 
 
-def _find_rdp_hwnd_for_host(host: str) -> int:
-    """尋找標題包含目標主機位址之 mstsc.exe 遠端桌面視窗 HWND。"""
-    if os.name != "nt":
+def _get_trusted_mstsc_path() -> str:
+    """僅綁定 Windows 系統目錄下的可信 mstsc.exe，不信任 PATH 中的同名執行檔。"""
+    sys_root = (os.environ.get("SystemRoot") or r"C:\Windows").strip()
+    mstsc_candidate = Path(sys_root) / "System32" / "mstsc.exe"
+    if not mstsc_candidate.is_file():
+        raise RuntimeError("找不到系統內建的遠端桌面客戶端 (mstsc.exe)。")
+    return os.path.normpath(str(mstsc_candidate))
+
+
+def _get_window_pid(hwnd: int) -> int:
+    if os.name != "nt" or not hwnd:
+        return 0
+    user32 = ctypes.windll.user32
+    pid = wintypes.DWORD(0)
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return int(pid.value)
+
+
+def _get_process_image_path(pid: int) -> str:
+    if os.name != "nt" or pid <= 0:
+        return ""
+    kernel32 = ctypes.windll.kernel32
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not h_proc:
+        return ""
+    try:
+        size = wintypes.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(1024)
+        ok = kernel32.QueryFullProcessImageNameW(h_proc, 0, buf, ctypes.byref(size))
+        if not ok:
+            return ""
+        return buf.value
+    finally:
+        kernel32.CloseHandle(h_proc)
+
+
+def _get_window_class_name(hwnd: int) -> str:
+    if os.name != "nt" or not hwnd:
+        return ""
+    user32 = ctypes.windll.user32
+    class_buf = ctypes.create_unicode_buffer(128)
+    length = user32.GetClassNameW(hwnd, class_buf, 128)
+    if length <= 0:
+        return ""
+    return class_buf.value
+
+
+def _verify_rdp_hwnd_identity(hwnd: int, expected_pid: int, expected_exe: str, proc: Any = None) -> bool:
+    """驗證 HWND 是否屬於本工具啟動之 mstsc.exe 且類別為 TscShellContainerClass。"""
+    if os.name != "nt" or not hwnd or expected_pid <= 0 or not expected_exe:
+        return False
+    if proc is not None and proc.poll() is not None:
+        return False
+    user32 = ctypes.windll.user32
+    if not user32.IsWindow(hwnd) or not user32.IsWindowVisible(hwnd):
+        return False
+    if _get_window_class_name(hwnd) != "TscShellContainerClass":
+        return False
+    win_pid = _get_window_pid(hwnd)
+    if win_pid != int(expected_pid):
+        return False
+    actual_exe = _get_process_image_path(win_pid)
+    if not actual_exe:
+        return False
+    return os.path.normcase(os.path.normpath(actual_exe)) == os.path.normcase(os.path.normpath(expected_exe))
+
+
+def _verify_active_session(hwnd: int, expected_target: str | None = None) -> bool:
+    """驗證當前 _ACTIVE_SESSION 的視窗、行程、映像路徑與目標鍵是否有效且一致。"""
+    active_hwnd = int(_ACTIVE_SESSION.get("hwnd") or 0)
+    active_pid = int(_ACTIVE_SESSION.get("pid") or 0)
+    active_exe = str(_ACTIVE_SESSION.get("exe_path") or "")
+    active_proc = _ACTIVE_SESSION.get("process")
+    active_target = str(_ACTIVE_SESSION.get("target") or "")
+    if not active_hwnd or int(hwnd) != active_hwnd:
+        return False
+    if expected_target is not None and active_target != expected_target:
+        return False
+    if active_proc is None or active_proc.poll() is not None:
+        return False
+    return _verify_rdp_hwnd_identity(hwnd, active_pid, active_exe, active_proc)
+
+
+def _find_rdp_hwnd_for_process(expected_pid: int, expected_exe: str, proc: Any = None) -> int:
+    """尋找屬於指定 mstsc.exe PID、可信路徑且類別為 TscShellContainerClass 之 HWND。"""
+    if os.name != "nt" or expected_pid <= 0 or not expected_exe:
         return 0
     user32 = ctypes.windll.user32
     found_hwnd = 0
@@ -414,20 +500,7 @@ def _find_rdp_hwnd_for_host(host: str) -> int:
 
     def _enum_cb(hwnd: int, _lparam: int) -> bool:
         nonlocal found_hwnd
-        if not user32.IsWindowVisible(hwnd):
-            return True
-        length = user32.GetWindowTextLengthW(hwnd)
-        if length <= 0:
-            return True
-        buf = ctypes.create_unicode_buffer(length + 1)
-        user32.GetWindowTextW(hwnd, buf, length + 1)
-        title = buf.value
-        class_buf = ctypes.create_unicode_buffer(64)
-        user32.GetClassNameW(hwnd, class_buf, 64)
-        cls_name = class_buf.value
-        if host.lower() in title.lower() and (
-            "TscShellContainerClass" in cls_name or "Remote Desktop" in title or "遠端桌面" in title
-        ):
+        if _verify_rdp_hwnd_identity(hwnd, expected_pid, expected_exe, proc):
             found_hwnd = hwnd
             return False
         return True
@@ -436,19 +509,33 @@ def _find_rdp_hwnd_for_host(host: str) -> int:
     return found_hwnd
 
 
+def _find_rdp_hwnd_for_host(_host: str) -> int:
+    """僅在已綁定本工具啟動之 mstsc.exe 時尋找 HWND，禁止依標題接管視窗。"""
+    active_pid = int(_ACTIVE_SESSION.get("pid") or 0)
+    active_exe = str(_ACTIVE_SESSION.get("exe_path") or "")
+    active_proc = _ACTIVE_SESSION.get("process")
+    if active_pid <= 0 or not active_exe or active_proc is None:
+        return 0
+    return _find_rdp_hwnd_for_process(active_pid, active_exe, active_proc)
+
+
 def _focus_rdp_window(hwnd: int) -> bool:
     if os.name != "nt" or not hwnd:
         return False
-    user32 = ctypes.windll.user32
-    if not user32.IsWindow(hwnd):
+    if not _verify_active_session(hwnd):
         return False
+    user32 = ctypes.windll.user32
     SW_RESTORE = 9
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, SW_RESTORE)
         time.sleep(0.25)
+    if user32.IsIconic(hwnd):
+        return False
     user32.SetForegroundWindow(hwnd)
     time.sleep(0.15)
-    return int(user32.GetForegroundWindow()) == int(hwnd)
+    if int(user32.GetForegroundWindow()) != int(hwnd):
+        return False
+    return _verify_active_session(hwnd)
 
 
 def _get_client_rect_screen(hwnd: int) -> tuple[int, int, int, int]:
@@ -528,20 +615,15 @@ def _ensure_rdp_session(
             "目前純 Port 3389 GUI/剪貼簿橋接模式僅支援於 Windows 主機（需使用系統內建 mstsc.exe 與 Win32 API）。"
         )
 
-    mstsc_path = shutil.which("mstsc.exe") or r"C:\Windows\System32\mstsc.exe"
-    if not Path(mstsc_path).is_file():
-        raise RuntimeError("找不到系統內建的遠端桌面客戶端 (mstsc.exe)。")
+    mstsc_path = _get_trusted_mstsc_path()
 
     target_key = f"{user}@{host}:{port}"
-    existing_hwnd = _ACTIVE_SESSION.get("hwnd") or 0
-    if _ACTIVE_SESSION.get("target") == target_key and existing_hwnd and ctypes.windll.user32.IsWindow(existing_hwnd):
+    existing_hwnd = int(_ACTIVE_SESSION.get("hwnd") or 0)
+    if existing_hwnd and _verify_active_session(existing_hwnd, expected_target=target_key):
         return existing_hwnd, host
 
-    found = _find_rdp_hwnd_for_host(host)
-    if found:
-        _ACTIVE_SESSION["hwnd"] = found
-        _ACTIVE_SESSION["target"] = target_key
-        return found, host
+    if _ACTIVE_SESSION.get("process") is not None or _ACTIVE_SESSION.get("hwnd"):
+        win_rdp_disconnect()
 
     try:
         timeout = max(5, min(int(os.getenv("WIN_RDP_TIMEOUT") or "15"), 60))
@@ -556,26 +638,37 @@ def _ensure_rdp_session(
     try:
         _set_ephemeral_rdp_credential(host, user, password)
         proc = subprocess.Popen([mstsc_path, str(rdp_file)])
+        proc_pid = int(getattr(proc, "pid", 0) or 0)
         _ACTIVE_SESSION["process"] = proc
+        _ACTIVE_SESSION["pid"] = proc_pid
+        _ACTIVE_SESSION["exe_path"] = mstsc_path
+        _ACTIVE_SESSION["hwnd"] = 0
         _ACTIVE_SESSION["target"] = target_key
 
         deadline = time.time() + timeout
         hwnd = 0
         while time.time() < deadline:
-            hwnd = _find_rdp_hwnd_for_host(host)
+            if proc.poll() is not None:
+                break
+            hwnd = _find_rdp_hwnd_for_process(proc_pid, mstsc_path, proc)
             if hwnd:
                 break
             time.sleep(0.4)
 
         if not hwnd:
+            win_rdp_disconnect()
             _RUNTIME_CREDS.clear()
             raise RuntimeError(
-                f"等待 mstsc.exe 遠端桌面視窗連線至 {host}:{port} 逾時（{timeout} 秒）。"
-                "請確認目標主機 Port 3389 可達且帳號密碼正確。"
+                f"等待 mstsc.exe (PID={proc_pid}) 遠端桌面視窗連線至 {host}:{port} 逾時（{timeout} 秒）。"
+                "為確保安全，拒絕接管無法驗證來源的既有視窗；請確認 Port 3389 可達且帳密正確。"
             )
 
         # 等待 RDP 完成圖形桌面握手載入後再清除暫存憑證
         time.sleep(2.0)
+        if not _verify_rdp_hwnd_identity(hwnd, proc_pid, mstsc_path, proc):
+            win_rdp_disconnect()
+            _RUNTIME_CREDS.clear()
+            raise RuntimeError("遠端桌面視窗於握手期間失效或未通過行程身分驗證。")
         _ACTIVE_SESSION["hwnd"] = hwnd
         return hwnd, host
     finally:
@@ -772,7 +865,7 @@ def _run_rdp_clip_command(
         return f"[ERROR] [CONN_AUTH] 參數驗證失敗: {e}"
     except Exception as e:
         msg = str(e)
-        tag = "[CONN_AUTH] " if "等待 mstsc.exe 遠端桌面視窗連線" in msg else ""
+        tag = "[CONN_AUTH] " if "遠端桌面視窗連線" in msg else ""
         return f"[ERROR] {tag}RDP 遠端巡檢執行異常: {e}"
     finally:
         # 3. 立即還原使用者原本的本機剪貼簿資料
@@ -798,12 +891,23 @@ def win_rdp_screenshot(
         if wait_s > 0:
             time.sleep(wait_s)
 
-        _focus_rdp_window(hwnd)
-        left, top, width, height = _get_client_rect_screen(hwnd)
+        if not _verify_active_session(hwnd):
+            return "[ERROR] 遠端桌面視窗工作階段驗證失敗，已拒絕擷取畫面。"
+        if not _focus_rdp_window(hwnd):
+            return "[ERROR] 無法將遠端桌面視窗置於前景，已中止擷取遠端桌面畫面。"
+        if not _verify_active_session(hwnd):
+            return "[ERROR] 遠端桌面視窗於對焦後身分失效，已中止擷取畫面。"
+
+        _, _, width, height = _get_client_rect_screen(hwnd)
 
         from PIL import ImageGrab
 
-        img = ImageGrab.grab(bbox=(left, top, left + width, top + height), all_screens=True)
+        img = ImageGrab.grab(window=hwnd)
+        if img is None:
+            raise RuntimeError("指定視窗擷取回傳空影像。")
+        if not _verify_active_session(hwnd):
+            return "[ERROR] 擷取期間遠端桌面視窗工作階段狀態變更，已拒絕儲存截圖。"
+
         out_dir = Path(tempfile.gettempdir()) / "pocket_agent_rdp_shots"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"rdp_{host}_{int(time.time())}.png"
@@ -818,7 +922,7 @@ def win_rdp_screenshot(
         return f"[ERROR] [CONN_AUTH] 參數驗證失敗: {e}"
     except Exception as e:
         msg = str(e)
-        tag = "[CONN_AUTH] " if "等待 mstsc.exe 遠端桌面視窗連線" in msg else ""
+        tag = "[CONN_AUTH] " if "遠端桌面視窗連線" in msg else ""
         return f"[ERROR] {tag}擷取遠端桌面畫面失敗: {e}"
 
 
@@ -938,6 +1042,8 @@ def win_rdp_disconnect() -> str:
         except Exception:
             pass
     _ACTIVE_SESSION["process"] = None
+    _ACTIVE_SESSION["pid"] = 0
+    _ACTIVE_SESSION["exe_path"] = ""
     _ACTIVE_SESSION["hwnd"] = 0
     _ACTIVE_SESSION["target"] = ""
     return "[OK] 已關閉 Windows 遠端桌面連線視窗。"

@@ -11,7 +11,7 @@ from pocket_agent.extensions.mcp import MCPManager
 @pytest.fixture(autouse=True)
 def _clean_win_env_and_cache(monkeypatch):
     win_rdp_mcp._RUNTIME_CREDS.clear()
-    win_rdp_mcp._ACTIVE_SESSION.update({"process": None, "hwnd": 0, "target": ""})
+    win_rdp_mcp._ACTIVE_SESSION.update({"process": None, "pid": 0, "exe_path": "", "hwnd": 0, "target": ""})
     for key in (
         "WIN_HOST",
         "WIN_RDP_PORT",
@@ -300,3 +300,115 @@ def test_send_vk_combo_normal_flow_presses_and_releases():
         assert mock_keybd.call_count == 6
         assert [call.args[0] for call in mock_keybd.call_args_list] == [0x11, 0x10, 0x1B, 0x1B, 0x10, 0x11]
         assert [call.args[2] for call in mock_keybd.call_args_list] == [0, 0, 0, 2, 2, 2]
+
+
+def test_rdp_session_identity_rejects_spoofed_title_wrong_pid_exe_class_and_target():
+    """測試視窗綁定：拒絕偽造標題、錯誤 PID、非系統 mstsc、近似類別與不同 target。"""
+    trusted_exe = r"C:\Windows\System32\mstsc.exe"
+    alive_proc = SimpleNamespace(pid=4321, poll=lambda: None)
+    exited_proc = SimpleNamespace(pid=4321, poll=lambda: 0)
+
+    with (
+        patch("mcp_servers.win_rdp_mcp.os.name", "nt"),
+        patch("ctypes.windll.user32.IsWindow", return_value=True),
+        patch("ctypes.windll.user32.IsWindowVisible", return_value=True),
+        patch("mcp_servers.win_rdp_mcp._get_window_class_name", return_value="TscShellContainerClass"),
+        patch("mcp_servers.win_rdp_mcp._get_window_pid", return_value=4321),
+        patch("mcp_servers.win_rdp_mcp._get_process_image_path", return_value=trusted_exe),
+    ):
+        # 1. 合法綁定通過
+        assert win_rdp_mcp._verify_rdp_hwnd_identity(777, 4321, trusted_exe, alive_proc) is True
+
+        # 2. 行程已退出 -> 拒絕
+        assert win_rdp_mcp._verify_rdp_hwnd_identity(777, 4321, trusted_exe, exited_proc) is False
+
+        # 3. PID 不符（例如本機其他程式或 mstsc 轉交給未知 PID） -> 拒絕
+        assert win_rdp_mcp._verify_rdp_hwnd_identity(777, 9999, trusted_exe, alive_proc) is False
+
+        # 4. 執行檔路徑不符（例如偽造之 C:\Temp\mstsc.exe） -> 拒絕
+        assert win_rdp_mcp._verify_rdp_hwnd_identity(777, 4321, r"C:\Temp\mstsc.exe", alive_proc) is False
+
+    # 5. 近似但非精確的視窗類別（如 FakeTscShellContainerClass） -> 拒絕
+    with (
+        patch("mcp_servers.win_rdp_mcp.os.name", "nt"),
+        patch("ctypes.windll.user32.IsWindow", return_value=True),
+        patch("ctypes.windll.user32.IsWindowVisible", return_value=True),
+        patch("mcp_servers.win_rdp_mcp._get_window_class_name", return_value="FakeTscShellContainerClass"),
+        patch("mcp_servers.win_rdp_mcp._get_window_pid", return_value=4321),
+        patch("mcp_servers.win_rdp_mcp._get_process_image_path", return_value=trusted_exe),
+    ):
+        assert win_rdp_mcp._verify_rdp_hwnd_identity(777, 4321, trusted_exe, alive_proc) is False
+
+    # 6. _verify_active_session 檢查不同 port / user target key -> 拒絕
+    win_rdp_mcp._ACTIVE_SESSION.update(
+        {
+            "process": alive_proc,
+            "pid": 4321,
+            "exe_path": trusted_exe,
+            "hwnd": 777,
+            "target": r"CORP\winadmin@10.20.30.40:3389",
+        }
+    )
+    with patch("mcp_servers.win_rdp_mcp._verify_rdp_hwnd_identity", return_value=True):
+        assert win_rdp_mcp._verify_active_session(777, r"CORP\winadmin@10.20.30.40:3389") is True
+        assert win_rdp_mcp._verify_active_session(777, r"CORP\winadmin@10.20.30.40:3390") is False
+        assert win_rdp_mcp._verify_active_session(777, r"CORP\other@10.20.30.40:3389") is False
+        assert win_rdp_mcp._verify_active_session(888, r"CORP\winadmin@10.20.30.40:3389") is False
+
+
+def test_ensure_rdp_session_does_not_adopt_unverified_window_and_binds_spawned_pid(monkeypatch):
+    """驗證 _ensure_rdp_session 不依標題接管既有視窗，僅綁定新啟動之可信 PID。"""
+    _set_full_win_creds(monkeypatch)
+    trusted_exe = r"C:\Windows\System32\mstsc.exe"
+    fake_proc = SimpleNamespace(pid=5566, poll=lambda: None, terminate=MagicMock())
+
+    with (
+        patch("mcp_servers.win_rdp_mcp.os.name", "nt"),
+        patch("mcp_servers.win_rdp_mcp._get_trusted_mstsc_path", return_value=trusted_exe),
+        patch("mcp_servers.win_rdp_mcp._set_ephemeral_rdp_credential"),
+        patch("mcp_servers.win_rdp_mcp._delete_ephemeral_rdp_credential"),
+        patch("subprocess.Popen", return_value=fake_proc) as mock_popen,
+        patch("mcp_servers.win_rdp_mcp._find_rdp_hwnd_for_process", return_value=31337) as mock_find,
+        patch("mcp_servers.win_rdp_mcp._verify_rdp_hwnd_identity", return_value=True),
+        patch("time.sleep"),
+    ):
+        hwnd, host = win_rdp_mcp._ensure_rdp_session()
+        assert hwnd == 31337
+        assert host == "10.20.30.40"
+        mock_popen.assert_called_once()
+        assert mock_popen.call_args.args[0][0] == trusted_exe
+        mock_find.assert_called_once_with(5566, trusted_exe, fake_proc)
+        assert win_rdp_mcp._ACTIVE_SESSION["pid"] == 5566
+        assert win_rdp_mcp._ACTIVE_SESSION["hwnd"] == 31337
+
+
+def test_win_rdp_screenshot_aborts_on_focus_failure_and_uses_window_capture(monkeypatch, tmp_path):
+    """驗證聚焦失敗時立即中止擷取；成功時使用 ImageGrab.grab(window=hwnd)。"""
+    _set_full_win_creds(monkeypatch)
+    fake_img = MagicMock()
+
+    # 1. 聚焦失敗時不得呼叫 ImageGrab.grab 或儲存圖檔
+    with (
+        patch("mcp_servers.win_rdp_mcp._ensure_rdp_session", return_value=(777, "10.20.30.40")),
+        patch("mcp_servers.win_rdp_mcp._verify_active_session", return_value=True),
+        patch("mcp_servers.win_rdp_mcp._focus_rdp_window", return_value=False),
+        patch("PIL.ImageGrab.grab") as mock_grab,
+    ):
+        out_fail = win_rdp_mcp.win_rdp_screenshot(monitor_wait_sec=0)
+        assert out_fail.startswith("[ERROR]")
+        assert "無法將遠端桌面視窗置於前景" in out_fail
+        mock_grab.assert_not_called()
+
+    # 2. 聚焦與身分驗證通過時，必須使用 window=hwnd 擷取，不得傳入桌面 bbox
+    with (
+        patch("mcp_servers.win_rdp_mcp._ensure_rdp_session", return_value=(777, "10.20.30.40")),
+        patch("mcp_servers.win_rdp_mcp._verify_active_session", return_value=True),
+        patch("mcp_servers.win_rdp_mcp._focus_rdp_window", return_value=True),
+        patch("mcp_servers.win_rdp_mcp._get_client_rect_screen", return_value=(100, 100, 1280, 800)),
+        patch("PIL.ImageGrab.grab", return_value=fake_img) as mock_grab_ok,
+        patch("tempfile.gettempdir", return_value=str(tmp_path)),
+    ):
+        out_ok = win_rdp_mcp.win_rdp_screenshot(monitor_wait_sec=0)
+        assert out_ok.startswith("[OK]")
+        mock_grab_ok.assert_called_once_with(window=777)
+        fake_img.save.assert_called_once()

@@ -235,3 +235,71 @@ def test_agent_web_research_convergence_limits(monkeypatch):
         assert any("調研上限攔截" in out for out in emitted_tool_results)
 
     asyncio.run(_test())
+
+
+def test_agent_blocks_truncated_chat_completion_tool_call_with_valid_json(monkeypatch):
+    """驗證 ChatCompletions 在 finish_reason='length' 且累積參數為合法 JSON 時，Agent 絕不執行該工具。"""
+
+    async def _test():
+        from types import SimpleNamespace
+
+        from pocket_agent.engines.chat_engine import StandardChatCompletionsEngine
+        from pocket_agent.engines.factory import EngineFactory
+
+        chunk_tc = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        tool_calls=[
+                            SimpleNamespace(
+                                index=0,
+                                id="call_trunc",
+                                function=SimpleNamespace(name="read_file", arguments='{"path": "valid.txt"}'),
+                            )
+                        ],
+                        content=None,
+                        reasoning_content=None,
+                    ),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        )
+        chunk_len = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(tool_calls=None, content=None, reasoning_content=None),
+                    finish_reason="length",
+                )
+            ],
+            usage=None,
+        )
+
+        class _FakeStream:
+            def __aiter__(self):
+                async def _g():
+                    yield chunk_tc
+                    yield chunk_len
+
+                return _g()
+
+            async def close(self):
+                pass
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=_FakeStream())
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        engine = StandardChatCompletionsEngine(client=mock_client, model="gemini-pro")
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: engine)
+
+        fs_spy = MagicMock(return_value="should not run")
+        monkeypatch.setattr("pocket_agent.core.agent.call_fs_tool", fs_spy)
+
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="gemini-pro", provider="gemini")
+        await agent.chat("測試截斷工具呼叫")
+
+        fs_spy.assert_not_called()
+
+    asyncio.run(_test())

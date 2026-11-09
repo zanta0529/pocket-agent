@@ -214,33 +214,104 @@ def _validate_identifier(value: str, field_name: str) -> str:
     return clean
 
 
-def _strip_leading_sql_comments(sql: str) -> str:
-    """移除 SQL 開頭的單行 (-- 或 #) 與多行 (/* */) 註解，以便精準檢查語句前綴。"""
-    s = sql.lstrip()
-    while s:
-        if s.startswith("--") or s.startswith("#"):
-            newline_idx = s.find("\n")
-            if newline_idx == -1:
-                return ""
-            s = s[newline_idx + 1 :].lstrip()
-        elif s.startswith("/*"):
-            end_idx = s.find("*/")
+def _normalize_sql_comments(sql: str) -> str:
+    """具引號狀態之 SQL 註解掃描與正規化。
+
+    - 將引號外的一般註解替換為單一空白以保留 token 邊界。
+    - 保留引號內（'...'、"..."、`...`）的字面值與註解符號。
+    - 拒絕可執行註解（/*! ... */、/*M! ... */）、未閉合引號／註解、
+      引號內反斜線跳脫（防範 SQL_MODE 差異）及非標準 '--' 語法。
+    """
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+
+    while i < n:
+        ch = sql[i]
+
+        # 1. 引號字串或識別字 ('...', "...", `...`)
+        if ch in ("'", '"', "`"):
+            quote = ch
+            out.append(quote)
+            i += 1
+            closed = False
+            while i < n:
+                c = sql[i]
+                if c == "\\" and quote in ("'", '"'):
+                    raise ValueError(
+                        "基於安全考量，禁止於引號內使用反斜線跳脫（請改用重複引號），"
+                        "以避免不同 SQL_MODE 下引號邊界解析差異。"
+                    )
+                if c == quote:
+                    if i + 1 < n and sql[i + 1] == quote:
+                        out.append(quote + quote)
+                        i += 2
+                        continue
+                    out.append(quote)
+                    i += 1
+                    closed = True
+                    break
+                out.append(c)
+                i += 1
+            if not closed:
+                raise ValueError("查詢包含未閉合的引號。")
+            continue
+
+        # 2. 區塊註解 /* ... */ 與可執行註解 /*! ... */、/*M! ... */
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            end_idx = sql.find("*/", i + 2)
             if end_idx == -1:
-                return ""
-            s = s[end_idx + 2 :].lstrip()
-        else:
-            break
-    return s
+                raise ValueError("查詢包含未閉合的區塊註解。")
+            body = sql[i + 2 : end_idx]
+            if body.startswith("!") or re.match(r"^[mM]!", body):
+                raise ValueError("基於安全考量，禁止使用 MySQL/MariaDB 可執行註解 (Executable Comments)。")
+            out.append(" ")
+            i = end_idx + 2
+            continue
+
+        # 3. 井字單行註解 # ...
+        if ch == "#":
+            newline_idx = sql.find("\n", i + 1)
+            if newline_idx == -1:
+                out.append(" ")
+                break
+            out.append(" ")
+            i = newline_idx
+            continue
+
+        # 4. 雙連字號單行註解 -- ...
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            if i + 2 < n and not (sql[i + 2].isspace() or ord(sql[i + 2]) <= 32):
+                raise ValueError("基於安全考量，SQL 單行註解 '--' 後方必須緊接空白或換行字元。")
+            newline_idx = sql.find("\n", i + 2)
+            if newline_idx == -1:
+                out.append(" ")
+                break
+            out.append(" ")
+            i = newline_idx
+            continue
+
+        out.append(ch)
+        i += 1
+
+    return "".join(out)
+
+
+def _strip_leading_sql_comments(sql: str) -> str:
+    """移除並正規化 SQL 註解，回傳去除首尾空白之語句。"""
+    return _normalize_sql_comments(sql).strip()
 
 
 def _validate_select_query(query: str) -> str:
     """驗證 SQL 查詢是否為純唯讀單一 SELECT / WITH / EXPLAIN 語句。"""
-    stripped = _strip_leading_sql_comments(query).strip()
-    if not stripped:
+    normalized = _normalize_sql_comments(query).strip()
+    if not normalized:
         raise ValueError("查詢語句不可為空。")
 
     # 移除結尾分號後，若內部仍含分號則拒絕（防止多重語句堆疊注入）
-    without_trailing_semi = stripped.rstrip("; \t\r\n")
+    without_trailing_semi = normalized.rstrip("; \t\r\n").strip()
+    if not without_trailing_semi:
+        raise ValueError("查詢語句不可為空。")
     if ";" in without_trailing_semi:
         raise ValueError("基於安全考量，禁止執行包含分號之多重 SQL 語句。")
 
@@ -456,6 +527,55 @@ def _close_safely(conn: Any) -> None:
         return
     try:
         conn.rollback()
+    except Exception:
+        pass
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def _open_streaming_cursor(conn: Any) -> Any:
+    """為 SELECT 建立 Unbuffered 串流 Cursor，防止大型查詢預先載入全表。"""
+    driver_type = ""
+    driver_mod = None
+    try:
+        driver_type, driver_mod = _load_mysql_driver()
+    except Exception:
+        pass
+
+    if driver_type == "pymysql":
+        ss_cursor_cls = getattr(getattr(driver_mod, "cursors", None), "SSCursor", None)
+        if ss_cursor_cls is None:
+            ss_cursor_cls = getattr(driver_mod, "SSCursor", None)
+        if ss_cursor_cls is None:
+            try:
+                from pymysql.cursors import SSCursor as ss_cursor_cls
+            except ImportError:
+                ss_cursor_cls = None
+        if ss_cursor_cls is not None:
+            return conn.cursor(ss_cursor_cls)
+    elif driver_type == "mysql_connector":
+        return conn.cursor(buffered=False)
+
+    return conn.cursor()
+
+
+def _abort_unbuffered_connection(conn: Any, cursor: Any = None) -> None:
+    """提前截斷或讀取異常時直接中止一次性連線，避免排空剩餘巨量結果。"""
+    if cursor is not None:
+        try:
+            if hasattr(cursor, "_result"):
+                cursor._result = None
+            if hasattr(cursor, "connection"):
+                cursor.connection = None
+        except Exception:
+            pass
+    if conn is None:
+        return
+    try:
+        if hasattr(type(conn), "_force_close"):
+            conn._force_close()
     except Exception:
         pass
     try:
@@ -841,44 +961,45 @@ def mysql_run_select_query(
         return f"[ERROR] {e}"
 
     conn = None
+    cursor = None
+    stream_completed = False
     try:
         conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
         target = _format_audit_target(mysql_host, mysql_port, mysql_user, mysql_database)
-        cursor = conn.cursor()
-        try:
-            cursor.execute(clean_query)
-            if not cursor.description:
-                _audit_log("mysql_run_select_query", clean_query, target=target, status="OK", detail="rows=0")
-                return "查詢未產生欄位結果。"
+        cursor = _open_streaming_cursor(conn)
+        cursor.execute(clean_query)
+        if not cursor.description:
+            stream_completed = True
+            _audit_log("mysql_run_select_query", clean_query, target=target, status="OK", detail="rows=0")
+            return "查詢未產生欄位結果。"
 
-            col_names = [str(description[0]) for description in cursor.description]
-            sensitive_indices = {idx for idx, name in enumerate(col_names) if _SENSITIVE_COL_RE.search(name)}
+        col_names = [str(description[0]) for description in cursor.description]
+        sensitive_indices = {idx for idx, name in enumerate(col_names) if _SENSITIVE_COL_RE.search(name)}
 
-            result = [", ".join(col_names)]
-            chars_count = len(result[0]) + 1
-            total_rows = 0
-            truncated = False
+        result = [", ".join(col_names)]
+        chars_count = len(result[0]) + 1
+        total_rows = 0
+        truncated = False
 
-            batch_size = 100
-            while True:
-                batch = cursor.fetchmany(batch_size)
-                if not batch:
+        batch_size = 100
+        while True:
+            batch = cursor.fetchmany(batch_size)
+            if not batch:
+                stream_completed = True
+                break
+            for row in batch:
+                total_rows += 1
+                formatted_vals = [
+                    _format_cell_value(val, is_sensitive=(idx in sensitive_indices)) for idx, val in enumerate(row)
+                ]
+                row_str = ", ".join(formatted_vals)
+                if chars_count + len(row_str) + 1 > MAX_OUTPUT_CHARS:
+                    truncated = True
                     break
-                for row in batch:
-                    total_rows += 1
-                    formatted_vals = [
-                        _format_cell_value(val, is_sensitive=(idx in sensitive_indices)) for idx, val in enumerate(row)
-                    ]
-                    row_str = ", ".join(formatted_vals)
-                    if chars_count + len(row_str) + 1 > MAX_OUTPUT_CHARS:
-                        truncated = True
-                        break
-                    result.append(row_str)
-                    chars_count += len(row_str) + 1
-                if truncated:
-                    break
-        finally:
-            cursor.close()
+                result.append(row_str)
+                chars_count += len(row_str) + 1
+            if truncated:
+                break
 
         if total_rows == 0:
             _audit_log("mysql_run_select_query", clean_query, target=target, status="OK", detail="rows=0")
@@ -919,7 +1040,15 @@ def mysql_run_select_query(
         )
         return f"[ERROR] 查詢失敗: {e}"
     finally:
-        _close_safely(conn)
+        if stream_completed:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            _close_safely(conn)
+        else:
+            _abort_unbuffered_connection(conn, cursor)
 
 
 if __name__ == "__main__":

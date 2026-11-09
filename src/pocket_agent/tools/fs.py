@@ -321,8 +321,44 @@ def _backup_file(target: Path) -> None:
         log.warning(f"Time Machine: 備份檔案失敗 ({target}): {e}")
 
 
+def _evaluate_fs_confirmation(
+    on_confirm: Callable[[str], bool | str | tuple[bool, str]] | None,
+    action_desc: str,
+    op_name: str,
+) -> str | None:
+    """執行人工確認，僅當回傳值為 True 時放行（回傳 None），否則回傳拒絕訊息。"""
+    if on_confirm is None:
+        return f"[ERROR] 缺乏使用者確認機制，拒絕執行{op_name}操作"
+    try:
+        decision = on_confirm(action_desc)
+    except Exception:
+        log.exception("FS confirm callback 失敗")
+        decision = False
+
+    if decision is True:
+        return None
+    if isinstance(decision, str) and decision.strip():
+        return (
+            f"[使用者拒絕執行此檔案{op_name}操作，並提供後續指示：\n"
+            f"「{decision.strip()}」\n"
+            "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的操作。]"
+        )
+    if isinstance(decision, tuple) and len(decision) == 2 and decision[0] is not True:
+        custom_inst = str(decision[1]).strip()
+        if custom_inst:
+            return (
+                f"[使用者拒絕執行此檔案{op_name}操作，並提供後續指示：\n"
+                f"「{custom_inst}」\n"
+                "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的操作。]"
+            )
+    return f"[使用者拒絕執行此檔案{op_name}操作]"
+
+
 def call_fs_tool(
-    name: str, args: dict, on_confirm: Callable[[str], bool] | None, workspace_dirs: list[str] | None = None
+    name: str,
+    args: dict,
+    on_confirm: Callable[[str], bool | str | tuple[bool, str]] | None,
+    workspace_dirs: list[str] | None = None,
 ) -> str:
     """執行檔案操作工具。"""
     try:
@@ -527,10 +563,9 @@ def call_fs_tool(
 
             # 人工確認
             action_desc = f"修改檔案：{target.name}" if target.exists() else f"建立新檔：{target.name}"
-            if on_confirm is None:
-                return "[ERROR] 缺乏使用者確認機制，拒絕執行寫入操作"
-            if not on_confirm(action_desc):
-                return "[使用者拒絕執行此檔案寫入操作]"
+            refusal = _evaluate_fs_confirmation(on_confirm, action_desc, "寫入")
+            if refusal is not None:
+                return refusal
 
             _backup_file(target)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -543,10 +578,9 @@ def call_fs_tool(
             if not target.exists():
                 return "[ERROR] 檔案不存在，無法附加。請使用 write_to_file 建立新檔。"
 
-            if on_confirm is None:
-                return "[ERROR] 缺乏使用者確認機制，拒絕執行寫入操作"
-            if not on_confirm(f"附加內容至檔案：{target.name}"):
-                return "[使用者拒絕執行此檔案寫入操作]"
+            refusal = _evaluate_fs_confirmation(on_confirm, f"附加內容至檔案：{target.name}", "寫入")
+            if refusal is not None:
+                return refusal
 
             _backup_file(target)
             with target.open("a", encoding="utf-8") as f:
@@ -602,10 +636,9 @@ def call_fs_tool(
                 new_content = content.replace(target_str, replacement)
 
             # 人工確認
-            if on_confirm is None:
-                return "[ERROR] 缺乏使用者確認機制，拒絕執行替換操作"
-            if not on_confirm(f"局部修改檔案：{target.name}"):
-                return "[使用者拒絕執行此檔案替換操作]"
+            refusal = _evaluate_fs_confirmation(on_confirm, f"局部修改檔案：{target.name}", "替換")
+            if refusal is not None:
+                return refusal
 
             _backup_file(target)
             target.write_text(new_content, encoding="utf-8")

@@ -146,3 +146,76 @@ def func_b():
     final_content = test_file.read_text(encoding="utf-8")
     assert 'def func_a():\n    print("Hello")' in final_content  # func_a 保持不變
     assert 'def func_b():\n    print("World")' in final_content  # func_b 已被修改
+
+
+def test_fs_write_tools_reject_string_and_non_true_confirmations(tmp_path: Path, monkeypatch):
+    """測試檔案寫入工具僅接受 True 核准，文字指示與非 True 值均拒絕且不寫入。"""
+    backup_calls = []
+    monkeypatch.setattr("pocket_agent.tools.fs._backup_file", lambda p: backup_calls.append(p))
+
+    existing = tmp_path / "existing.txt"
+    existing.write_text("original\n", encoding="utf-8")
+    new_target = tmp_path / "nested_dir" / "new_file.txt"
+
+    custom_instruction = "不要修改，先給我差異"
+
+    # 1. write_to_file 新檔：文字拒絕時新檔與父目錄均不建立
+    res_new = call_fs_tool(
+        name="write_to_file",
+        args={"path": str(new_target), "content": "new content\n"},
+        on_confirm=lambda _msg: custom_instruction,
+        workspace_dirs=[str(tmp_path)],
+    )
+    assert res_new.startswith("[使用者拒絕執行此檔案寫入操作")
+    assert custom_instruction in res_new
+    assert not new_target.exists()
+    assert not new_target.parent.exists()
+    assert len(backup_calls) == 0
+
+    # 2. write_to_file 覆寫既有檔案：文字拒絕時原檔不變、不備份
+    res_overwrite = call_fs_tool(
+        name="write_to_file",
+        args={"path": str(existing), "content": "overwritten\n", "overwrite": True},
+        on_confirm=lambda _msg: custom_instruction,
+        workspace_dirs=[str(tmp_path)],
+    )
+    assert res_overwrite.startswith("[使用者拒絕執行此檔案寫入操作")
+    assert custom_instruction in res_overwrite
+    assert existing.read_text(encoding="utf-8") == "original\n"
+    assert len(backup_calls) == 0
+
+    # 3. append_to_file：文字拒絕時原檔不變、不備份
+    res_append = call_fs_tool(
+        name="append_to_file",
+        args={"path": str(existing), "content": "extra\n"},
+        on_confirm=lambda _msg: custom_instruction,
+        workspace_dirs=[str(tmp_path)],
+    )
+    assert res_append.startswith("[使用者拒絕執行此檔案寫入操作")
+    assert custom_instruction in res_append
+    assert existing.read_text(encoding="utf-8") == "original\n"
+    assert len(backup_calls) == 0
+
+    # 4. replace_file_content：文字拒絕時原檔不變、不備份
+    res_replace = call_fs_tool(
+        name="replace_file_content",
+        args={"path": str(existing), "target": "original", "replacement": "changed"},
+        on_confirm=lambda _msg: custom_instruction,
+        workspace_dirs=[str(tmp_path)],
+    )
+    assert res_replace.startswith("[使用者拒絕執行此檔案替換操作")
+    assert custom_instruction in res_replace
+    assert existing.read_text(encoding="utf-8") == "original\n"
+    assert len(backup_calls) == 0
+
+    # 5. 其他非 True 值（False、None、空字串、tuple）一律拒絕
+    for non_true in (False, None, "", (False, "請改用其他方式"), (True, "not a bool")):
+        res_other = call_fs_tool(
+            name="replace_file_content",
+            args={"path": str(existing), "target": "original", "replacement": "changed"},
+            on_confirm=lambda _msg, val=non_true: val,
+            workspace_dirs=[str(tmp_path)],
+        )
+        assert res_other.startswith("[使用者拒絕")
+        assert existing.read_text(encoding="utf-8") == "original\n"
+    assert len(backup_calls) == 0

@@ -79,8 +79,16 @@ class StandardChatCompletionsEngine(BaseEngine):
                             yield EventToolCallDelta(tool_calls_buffer[idx]["id"], tc.function.arguments)
 
                 if finish_reason:
-                    for idx, tc_data in tool_calls_buffer.items():
-                        yield EventToolCallDone(tc_data["id"], tc_data["name"], tc_data["args"])
+                    if finish_reason == "tool_calls":
+                        for idx, tc_data in tool_calls_buffer.items():
+                            yield EventToolCallDone(tc_data["id"], tc_data["name"], tc_data["args"])
+                    elif tool_calls_buffer:
+                        log.warning(
+                            "Chat completion tool call stream terminated with finish_reason=%r; "
+                            "discarding %d incomplete tool call(s).",
+                            finish_reason,
+                            len(tool_calls_buffer),
+                        )
                     tool_calls_buffer.clear()
 
                 if delta and getattr(delta, "reasoning_content", None):

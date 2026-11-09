@@ -76,3 +76,29 @@ def test_add_duplicate_prevention(mock_allowlist_path):
     assert "poetry run" in prefixes
     assert "poetry run test" in prefixes
     assert len(prefixes) == 2
+
+
+def test_allowlist_preserves_argument_boundaries_and_fails_closed(mock_allowlist_path):
+    """驗證引號單一參數與拆開參數不共用白名單，且分詞失敗時 fail-closed。"""
+    quoted_cmd = 'python tool.py "--delete target"'
+    split_cmd = "python tool.py --delete target"
+
+    assert add_command_to_allowlist(quoted_cmd) == quoted_cmd
+    assert is_command_allowed(quoted_cmd) is True
+    # 拆開引號後的選項與參數絕不可通過白名單
+    assert is_command_allowed(split_cmd) is False
+    # 內部空白差異與大小寫差異亦不混同
+    assert is_command_allowed('python tool.py "--delete  target"') is False
+    assert is_command_allowed('Python tool.py "--delete target"') is False
+
+    # Windows 路徑反斜線保留測試
+    win_cmd = r'venv\Scripts\python.exe -m pytest "tests\test_fs_tool.py"'
+    assert add_command_to_allowlist(win_cmd) == win_cmd
+    assert is_command_allowed(win_cmd) is True
+    assert is_command_allowed(r"venv\Scripts\python.exe -m pytest tests\test_fs_tool.py") is False
+
+    # 未閉合引號或空白命令必須 fail-closed 拒絕
+    assert add_command_to_allowlist('python tool.py "--unclosed') == ""
+    assert is_command_allowed('python tool.py "--unclosed') is False
+    assert add_command_to_allowlist("   ") == ""
+    assert is_command_allowed("   ") is False

@@ -122,6 +122,10 @@ class HistoryCompactor:
             log.warning("歷史摘要生成失敗 (將降級回滑動視窗): %s", e)
             return history, False
 
+        if cancel_check and cancel_check():
+            log.info("摘要壓縮於串流結束時偵測到使用者取消，放棄替換歷史")
+            return history, False
+
         summary_text = "".join(text_chunks).strip()
         if not summary_text:
             log.warning("摘要結果為空，放棄替換歷史")

@@ -197,3 +197,21 @@ def test_fs_validate_safe_path_global_root_files_forbidden(tmp_path):
     ):
         with pytest.raises(ValueError, match="安全限制：禁止存取敏感目錄或檔案"):
             _validate_safe_path(str(allowlist_file))
+
+
+def test_fs_confirm_contract_blocks_custom_text_refusal_when_accept_edits_off(tmp_path):
+    """確認 Accept-edits 關閉時，on_confirm 回傳文字拒絕不會修改或建立檔案。"""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    f = workspace / "code.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+
+    out = call_fs_tool(
+        "write_to_file",
+        {"path": str(f), "content": "x = 999\n", "overwrite": True},
+        on_confirm=lambda _desc: "先不要寫入，請說明原因",
+        workspace_dirs=[str(workspace)],
+    )
+    assert out.startswith("[使用者拒絕執行此檔案寫入操作")
+    assert "先不要寫入，請說明原因" in out
+    assert f.read_text(encoding="utf-8") == "x = 1\n"
