@@ -376,7 +376,7 @@ class MCPManager:
             schema_attr = getattr(tool, "inputSchema", getattr(tool, "input_schema", None))
             raw_params = schema_attr or {"type": "object", "properties": {}}
             raw_props = raw_params.get("properties") or {}
-            conn_params = {k: v for k, v in _CONN_PARAM_MAP.items() if k in raw_props}
+            conn_params = {k: v for k, v in _CONN_PARAM_MAP.items() if k in raw_props and k not in inject}
             strip_keys = {**inject, **conn_params}
             params = _strip_inject_params(raw_params, strip_keys)
 

@@ -226,7 +226,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
                 "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的指令。]"
             )
         return "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]"
-    elif not allowed:
+    else:
         return "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]"
 
     try:

@@ -4,8 +4,10 @@
 檔案直接寫到本機 generated_files/（agent 跑在本機，不需要下載）。
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
+from pocket_agent.tools.fs import _evaluate_fs_confirmation, _validate_safe_path
 from pocket_agent.tools.image import _next_available
 
 OUTPUT_DIR = Path("generated_files")
@@ -96,27 +98,43 @@ def is_doc_tool(name: str) -> bool:
     return name in _HANDLERS
 
 
-def call_doc_tool(name: str, args: dict) -> tuple[str, Path | None]:
-    """執行文件工具，回傳（給模型的結果訊息, 檔案路徑或 None）。"""
+def call_doc_tool(
+    name: str,
+    args: dict,
+    on_confirm: Callable[[str], bool | str | tuple[bool, str]] | None = None,
+    workspace_dirs: list[str] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> tuple[str, Path | None]:
+    """確認授權與輸出路徑後產生文件；拒絕時不得建立目錄。"""
     try:
-        path = _HANDLERS[name](args)
+        ext = {"create_docx": ".docx", "create_pdf": ".pdf", "create_pptx": ".pptx"}[name]
+        path = _out_path(args["filename"], ext, workspace_dirs)
+        denied = _evaluate_fs_confirmation(on_confirm, f"產生文件：{path}", "寫入")
+        if denied is not None:
+            return denied, None
+        if cancel_check is not None and cancel_check():
+            return "[操作已由使用者取消，文件未寫入]", None
+        path = _validate_safe_path(str(path), workspace_dirs)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _HANDLERS[name](args, path)
         return f"✓ 檔案已產生：{path}", path
     except Exception as e:
         return f"Error: {type(e).__name__}: {e}", None
 
 
-def _out_path(filename: str, ext: str) -> Path:
+def _out_path(filename: str, ext: str, workspace_dirs: list[str] | None = None) -> Path:
     name = Path(str(filename)).name or f"document{ext}"  # 去除路徑，只留檔名
     if not name.lower().endswith(ext):
         name += ext
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    return _next_available((OUTPUT_DIR / name).resolve())
+    directory = _validate_safe_path(str(OUTPUT_DIR), workspace_dirs)
+    path = _next_available(directory / name)
+    return _validate_safe_path(str(path), workspace_dirs)
 
 
 # ── Word ─────────────────────────────────────────
 
 
-def _create_docx(args: dict) -> Path:
+def _create_docx(args: dict, path: Path) -> Path:
     from docx import Document
 
     doc = Document()
@@ -141,7 +159,6 @@ def _create_docx(args: dict) -> Path:
                     for j, cell in enumerate(r):
                         table.cell(i, j).text = str(cell)
 
-    path = _out_path(args["filename"], ".docx")
     doc.save(str(path))
     return path
 
@@ -149,7 +166,7 @@ def _create_docx(args: dict) -> Path:
 # ── PowerPoint ───────────────────────────────────
 
 
-def _create_pptx(args: dict) -> Path:
+def _create_pptx(args: dict, path: Path) -> Path:
     from pptx import Presentation
 
     prs = Presentation()
@@ -171,7 +188,6 @@ def _create_pptx(args: dict) -> Path:
         if sl.get("notes"):
             s.notes_slide.notes_text_frame.text = str(sl["notes"])
 
-    path = _out_path(args["filename"], ".pptx")
     prs.save(str(path))
     return path
 
@@ -199,7 +215,7 @@ def _pdf_font() -> str:
         return "Helvetica"
 
 
-def _create_pdf(args: dict) -> Path:
+def _create_pdf(args: dict, path: Path) -> Path:
     from xml.sax.saxutils import escape
 
     from reportlab.lib import colors
@@ -251,7 +267,6 @@ def _create_pdf(args: dict) -> Path:
                 story.append(tbl)
                 story.append(Spacer(1, 8))
 
-    path = _out_path(args["filename"], ".pdf")
     SimpleDocTemplate(str(path), pagesize=A4).build(story)
     return path
 

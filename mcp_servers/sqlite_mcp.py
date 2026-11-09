@@ -278,6 +278,7 @@ def _get_readonly_connection(
             sqlite3.SQLITE_SELECT,
             sqlite3.SQLITE_READ,
             sqlite3.SQLITE_FUNCTION,
+            sqlite3.SQLITE_RECURSIVE,
         }
         if action_code in allowed_actions:
             return sqlite3.SQLITE_OK

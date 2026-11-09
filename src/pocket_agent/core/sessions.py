@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import tempfile
 import time
 from pathlib import Path
 
@@ -142,10 +143,14 @@ def save_session(
     }
 
     final_path = _path(session_id)
-    tmp_path = final_path.with_suffix(".tmp")
+    tmp_path: Path | None = None
 
     try:
-        tmp_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=final_path.parent, prefix=f"{session_id}-", suffix=".tmp", delete=False
+        ) as stream:
+            tmp_path = Path(stream.name)
+            json.dump(data, stream, ensure_ascii=False)
         tmp_path.replace(final_path)
     except Exception as e:
         import logging
@@ -207,24 +212,14 @@ def list_sessions() -> list[dict]:
             if not is_valid:
                 continue
 
-            meta = raw_data.get("meta")
-            if isinstance(meta, dict) and "id" in meta:
-                metas.append(
-                    {
-                        "id": meta["id"],
-                        "title": meta.get("title", "（無標題）"),
-                        "updated_at": meta.get("updated_at", 0),
-                    }
-                )
-            else:
-                d = json.loads(raw_data["payload"])
-                metas.append(
-                    {
-                        "id": d["id"],
-                        "title": d.get("title", "（無標題）"),
-                        "updated_at": d.get("updated_at", 0),
-                    }
-                )
+            d = json.loads(raw_data["payload"])
+            metas.append(
+                {
+                    "id": d["id"],
+                    "title": d.get("title", "（無標題）"),
+                    "updated_at": d.get("updated_at", 0),
+                }
+            )
         except Exception:
             continue
     return sorted(metas, key=lambda m: m["updated_at"], reverse=True)

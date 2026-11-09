@@ -691,6 +691,7 @@ class Agent:
         sub = Agent(
             client=self.client,
             mcp=self.mcp,
+            provider=self.provider or self.engine.provider_name,
             model=sub_config.get("model") or self.model,
             system_prompt=sub_config.get("system_prompt") or sub_config.get("prompt", "You are a helpful assistant."),
             is_subagent=True,
@@ -1259,6 +1260,9 @@ class Agent:
                             {"tool_name": fc["name"], "tool_args": raw},
                         )
 
+                    if self.cancel_requested:
+                        return thinking, self._stopped_reply(text)
+
                     if is_skill_tool(fc["name"]):
                         result = call_skill_tool(args, self.workspace_dirs)
                     elif fc["name"] in ("run_subagents_parallel", "ask_question") or is_subagent_tool(fc["name"]):
@@ -1284,7 +1288,15 @@ class Agent:
                     elif is_web_tool(fc["name"]):
                         result = await asyncio.to_thread(call_web_tool, fc["name"], args)
                     elif is_doc_tool(fc["name"]):
-                        result, fpath = call_doc_tool(fc["name"], args)
+                        doc_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
+                        result, fpath = await asyncio.to_thread(
+                            call_doc_tool,
+                            fc["name"],
+                            args,
+                            doc_confirm,
+                            self.workspace_dirs,
+                            lambda: self.cancel_requested,
+                        )
                         if fpath:
                             self.last_files.append(fpath)
                             generated_fpath = fpath
@@ -1318,8 +1330,10 @@ class Agent:
                                 )
                                 self._append_tool_pair(input_items, fc, result)
                                 continue
-                            elif not ok:
+                            elif ok is not True:
                                 raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
+                        if self.cancel_requested:
+                            return thinking, self._stopped_reply(text)
                         if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
                             if self.mcp.is_sensitive_tool(fc["name"]):
                                 self.is_sensitive_session = True

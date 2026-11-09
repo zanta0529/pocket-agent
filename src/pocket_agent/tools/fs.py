@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -210,7 +211,8 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
             raise ValueError("安全限制：禁止存取敏感目錄或檔案 (.pocket-agent)")
 
     for part in target.parts:
-        if part == ".git" or part.startswith(".env"):
+        lower_part = part.lower()
+        if lower_part == ".git" or lower_part.startswith(".env"):
             raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
         # 僅當目標不在合法全域使用者目錄內時，才阻擋名為 .pocket-agent 的目錄
         if part == ".pocket-agent" and not is_in_global:
@@ -287,6 +289,8 @@ def _backup_file(target: Path) -> None:
         return
 
     try:
+        import json
+        import secrets
         import shutil
         import time
 
@@ -295,8 +299,19 @@ def _backup_file(target: Path) -> None:
         backup_dir = user_dir() / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
 
+        # 使用不可碰撞的備份名稱：時間戳 + 隨機後綴 + 原始路徑雜湊
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        backup_name = f"{timestamp}_{target.name}"
+        random_suffix = secrets.token_hex(4)
+        # 為區分不同目錄的同名檔案，使用相對路徑的 hash
+        try:
+            from pocket_agent.system.paths import user_dir as user_dir_func
+
+            rel = target.resolve().relative_to(user_dir_func().resolve())
+            path_hash = hashlib.sha256(str(rel).encode()).hexdigest()[:8]
+        except Exception:
+            path_hash = hashlib.sha256(str(target).encode()).hexdigest()[:8]
+
+        backup_name = f"{timestamp}_{random_suffix}_{path_hash}_{target.name}"
         backup_path = backup_dir / backup_name
 
         shutil.copy2(target, backup_path)
@@ -304,8 +319,6 @@ def _backup_file(target: Path) -> None:
 
         # 記錄最新的備份映射以便 /undo 指令還原
         mapping_file = backup_dir / "latest_backup_map.json"
-
-        import json
 
         mapping = {}
         if mapping_file.exists():
