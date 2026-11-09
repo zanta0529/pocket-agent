@@ -14,6 +14,7 @@ from pocket_agent.system.constants import (
     PROVIDER_OLLAMA,
     PROVIDER_OLLAMACLOUD,
     PROVIDER_OPENAI,
+    PROVIDER_OPENAI_API,
     PROVIDER_OPENROUTER,
     PROVIDER_SAMBANOVA,
 )
@@ -25,6 +26,7 @@ ENGINE_MAP = {
     PROVIDER_OLLAMACLOUD: OllamaChatEngine,
     PROVIDER_OPENROUTER: OpenRouterEngine,
     PROVIDER_OPENAI: OpenAIResponsesEngine,
+    PROVIDER_OPENAI_API: OpenAIResponsesEngine,
     PROVIDER_GEMINI: StandardChatCompletionsEngine,
     PROVIDER_GEMINI_OAUTH: StandardChatCompletionsEngine,
     PROVIDER_GROQ: StandardChatCompletionsEngine,
@@ -52,4 +54,7 @@ class EngineFactory:
             raise ValueError(f"EngineFactory 不支援此 Provider: {provider}")
 
         log.debug("Using %s for %s", engine_cls.__name__, model)
-        return engine_cls(client=client, model=model)
+        engine = engine_cls(client=client, model=model)
+        if not getattr(engine, "provider_name", None):
+            engine.provider_name = p
+        return engine

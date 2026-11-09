@@ -299,7 +299,11 @@ class Agent:
                     self.history.pop()
                 else:
                     self.history = ensure_paired_tool_calls(self.history)
-                raise RuntimeError(engine.format_api_error(e)) from e
+                if hasattr(engine, "format_api_error_async"):
+                    formatted_err = await engine.format_api_error_async(e)
+                else:
+                    formatted_err = engine.format_api_error(e)
+                raise RuntimeError(formatted_err) from e
 
             from pocket_agent.core.compaction import ensure_paired_tool_calls
 

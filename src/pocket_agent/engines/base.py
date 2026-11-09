@@ -65,6 +65,8 @@ class QuotaInfo:
     free_requests_limit: Optional[int] = None
     free_requests_remaining: Optional[int] = None
     free_requests_used: Optional[int] = None
+    plan_type: Optional[str] = None
+    extra_lines: Optional[list[str]] = None
 
     def get_display_lines(self) -> list[str]:
         """
@@ -75,6 +77,9 @@ class QuotaInfo:
             return [self.message or "此 Provider 不支援透過 API 查詢額度。"]
 
         lines = []
+        if self.plan_type:
+            lines.append(f"目前訂閱方案: {self.plan_type}")
+
         if self.limit is not None and self.remaining is not None and self.used is not None:
             lines.append(f"API 帳戶額度: 已用 ${self.used:.4f} / 上限 ${self.limit:.4f} (剩餘 ${self.remaining:.4f})")
 
@@ -92,6 +97,9 @@ class QuotaInfo:
                 f"上限 {self.free_requests_limit} 次 (剩餘 {self.free_requests_remaining} 次)"
             )
 
+        if self.extra_lines:
+            lines.extend(self.extra_lines)
+
         return lines
 
 
@@ -102,9 +110,11 @@ class BaseEngine:
     # (provider, base_url, model) -> (window_tokens, expire_ts)
     _context_window_cache: dict[tuple[str, str, str], tuple[int, float]] = {}
 
-    def __init__(self, client: Any, model: str):
+    def __init__(self, client: Any, model: str, provider: str | None = None):
         self.client = client
         self.model = model
+        if provider:
+            self.provider_name = provider
 
     def _cache_key(self) -> tuple[str, str, str]:
         provider = getattr(self, "provider_name", type(self).__name__)
@@ -218,6 +228,128 @@ class BaseEngine:
         raise NotImplementedError
 
     @staticmethod
+    def parse_duration_seconds(raw: object) -> float | None:
+        """
+        將秒數或時間長度字串（如 '90', '1h30m10s', '6m0s', '500ms'）解析為秒數。
+        若傳入為 > 1_000_000_000 的數值（Unix epoch timestamp），回傳 None 交由 timestamp 邏輯處理。
+        """
+        import re
+
+        if raw is None or isinstance(raw, bool):
+            return None
+        if isinstance(raw, (int, float)):
+            val = float(raw)
+            return val if 0 <= val <= 1_000_000_000 else None
+
+        text = str(raw).strip().lower()
+        if not text:
+            return None
+
+        try:
+            val = float(text)
+            return val if 0 <= val <= 1_000_000_000 else None
+        except ValueError:
+            pass
+
+        # 解析複合時間字串，例如 "1d2h", "1h30m15s", "6m0s", "500ms"
+        matches = list(re.finditer(r"(\d+(?:\.\d+)?)\s*(ms|d|h|m|s)", text))
+        if not matches:
+            return None
+
+        unit_multipliers = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
+        total = 0.0
+        for m in matches:
+            amount = float(m.group(1))
+            unit = m.group(2)
+            total += amount * unit_multipliers[unit]
+        return total
+
+    @staticmethod
+    def extract_error_payload(exc: Exception) -> tuple[dict[str, Any] | None, str]:
+        """
+        從 API 例外中提取結構化錯誤字典與乾淨的錯誤訊息。
+        相容：
+        1. OpenAI SDK v3 已預先解包之 `exc.body`（直接為內層 error dict）
+        2. 傳統未解包之 `{"error": {...}}` 或 `{"detail": {...}}`
+        3. `exc.response` 的 `.json()` / `.text` 原始 JSON
+        4. 例外字串內嵌之 JSON 或 Python dict repr（優先 json.loads 再 fallback ast.literal_eval）
+        """
+        import ast
+        import json
+        import re
+
+        err_msg = str(exc)
+        merged: dict[str, Any] = {}
+
+        def _absorb_dict(candidate: object) -> None:
+            if not isinstance(candidate, dict):
+                return
+            for k, v in candidate.items():
+                if k not in ("error", "detail") and v is not None and k not in merged:
+                    merged[k] = v
+            inner_err = candidate.get("error")
+            if isinstance(inner_err, dict):
+                for k, v in inner_err.items():
+                    if v is not None:
+                        merged[k] = v
+            elif isinstance(inner_err, str) and inner_err.strip() and "message" not in merged:
+                merged["message"] = inner_err.strip()
+
+            inner_detail = candidate.get("detail")
+            if isinstance(inner_detail, dict):
+                _absorb_dict(inner_detail)
+            elif isinstance(inner_detail, str) and inner_detail.strip() and "message" not in merged:
+                merged["message"] = inner_detail.strip()
+
+        try:
+            body = getattr(exc, "body", None)
+            if isinstance(body, dict):
+                _absorb_dict(body)
+
+            response = getattr(exc, "response", None)
+            if response is not None:
+                resp_json = None
+                if hasattr(response, "json") and callable(response.json):
+                    try:
+                        resp_json = response.json()
+                    except Exception:
+                        resp_json = None
+                if not isinstance(resp_json, dict):
+                    resp_text = getattr(response, "text", None)
+                    if isinstance(resp_text, str) and "{" in resp_text:
+                        try:
+                            resp_json = json.loads(resp_text)
+                        except Exception:
+                            resp_json = None
+                if isinstance(resp_json, dict):
+                    _absorb_dict(resp_json)
+
+            if not merged:
+                match = re.search(r"\{.*\}", err_msg, re.DOTALL)
+                if match:
+                    raw_block = match.group()
+                    parsed = None
+                    try:
+                        parsed = json.loads(raw_block)
+                    except Exception:
+                        try:
+                            parsed = ast.literal_eval(raw_block)
+                        except Exception:
+                            parsed = None
+                    if isinstance(parsed, dict):
+                        _absorb_dict(parsed)
+
+            if merged:
+                msg_candidate = merged.get("message")
+                if isinstance(msg_candidate, str) and msg_candidate.strip():
+                    err_msg = msg_candidate.strip()
+                return merged, err_msg
+        except Exception:
+            pass
+
+        return None, err_msg
+
+    @staticmethod
     def format_reset_time_hint(
         resets_at: float | int | None = None,
         resets_in_seconds: float | int | None = None,
@@ -267,36 +399,9 @@ class BaseEngine:
         """
         return getattr(exc, "status_code", None) in (402, 429)
 
-    def format_api_error(self, exc: Exception) -> str:
-        """
-        Strategy method to format the API error into a human-readable message.
-        Implementations include the status code (e.g., 429, 402) and any specific hints.
-        """
-        import ast
-        import re
-
+    def _build_api_error_message(self, exc: Exception, hint: str | None) -> str:
         status_code = getattr(exc, "status_code", "Unknown")
-        err_msg = str(exc)
-
-        try:
-            error_dict = None
-            body = getattr(exc, "body", None)
-            if isinstance(body, dict):
-                error_dict = body.get("error")
-
-            if not isinstance(error_dict, dict):
-                match = re.search(r"\{.*\}", err_msg, re.DOTALL)
-                if match:
-                    parsed = ast.literal_eval(match.group())
-                    if isinstance(parsed, dict):
-                        error_dict = parsed.get("error")
-
-            if isinstance(error_dict, dict):
-                err_msg = error_dict.get("message", err_msg)
-        except Exception:
-            pass
-
-        hint = self.parse_api_error(exc)
+        _, err_msg = self.extract_error_payload(exc)
 
         if status_code == 429:
             msg = f"API 請求頻率限制 / 額度耗盡 (HTTP 429 Rate Limit Exceeded)\n\n伺服器回傳：{err_msg}"
@@ -306,9 +411,24 @@ class BaseEngine:
             msg = f"API 錯誤 (HTTP {status_code})\n\n伺服器回傳：{err_msg}"
 
         if hint:
-            msg += hint
+            msg += hint if hint.startswith("\n") else f"\n\n{hint}"
 
         return msg
+
+    def format_api_error(self, exc: Exception) -> str:
+        """
+        Strategy method to format the API error into a human-readable message.
+        Implementations include the status code (e.g., 429, 402) and any specific hints.
+        """
+        hint = self.parse_api_error(exc)
+        return self._build_api_error_message(exc, hint)
+
+    async def format_api_error_async(self, exc: Exception) -> str:
+        """
+        非同步版本的 API 錯誤格式化方法。
+        預設委派給同步的 format_api_error(exc)；子類別可覆寫以在例外缺乏重置時間時進行非同步補齊。
+        """
+        return self.format_api_error(exc)
 
     @staticmethod
     def format_chat_tools(tools: list) -> Any:
