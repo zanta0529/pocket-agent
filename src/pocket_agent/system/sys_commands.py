@@ -147,6 +147,8 @@ class UndoCommand(SysCommand):
             bkup_name = backup_path.name
 
             shutil.copy2(backup_path, original_path)
+            if hasattr(agent, "activity") and getattr(agent, "activity", None) is not None:
+                agent.activity.record_file_change(original_path, "modified", existed_before=True)
 
             # 從紀錄中移除並回寫
             mapping.pop(target_path_str)

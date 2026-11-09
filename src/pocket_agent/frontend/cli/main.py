@@ -138,6 +138,8 @@ async def send_turn(
     state.consume(snapshot)
     _autosave_session(agent, state, renderer, silent=True)
     if result.action == "image":
+        if hasattr(agent, "activity") and getattr(agent, "activity", None) is not None:
+            agent.activity.record_file_change(reply, "added", existed_before=False)
         renderer.message(f"已存檔：{reply}", "green")
     else:
         turn_tokens = getattr(agent, "total_tokens", 0)

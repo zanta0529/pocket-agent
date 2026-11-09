@@ -19,6 +19,7 @@ from pocket_agent.frontend.cli.commands.misc import (
     UsageCommand,
 )
 from pocket_agent.frontend.cli.commands.session import (
+    ActivityCommand,
     CompactCommand,
     NewCommand,
     RenameCommand,
@@ -53,6 +54,9 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("rm-file", RmFileCommand())
     registry.register("attachments", AttachmentsCommand())
     registry.register("session", SessionCommand())
+    activity_cmd = ActivityCommand()
+    registry.register("activity", activity_cmd)
+    registry.register("changes", activity_cmd)
     registry.register("new", NewCommand())
     registry.register("rename", RenameCommand())
     registry.register("compact", CompactCommand())

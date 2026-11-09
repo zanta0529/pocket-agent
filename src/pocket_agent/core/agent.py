@@ -9,6 +9,7 @@ from pathlib import Path
 
 from openai import NOT_GIVEN, AsyncOpenAI
 
+from pocket_agent.core.activity import SessionActivityTracker
 from pocket_agent.core.context_budget import (
     DEFAULT_CONTEXT_WINDOW,
     SOURCE_DEFAULT,
@@ -199,6 +200,7 @@ class Agent:
         self.on_confirm = None
         self.accept_edits: bool = False  # Accept-edits mode：當次會話自動核准工作區內檔案新增與編輯
         self.user_instructions: list[str] = []
+        self.activity = SessionActivityTracker()
 
         # 背景非同步預載模型視窗快取（若使用者未手動指定設定值）
         if not config.get("system.context_window"):
@@ -389,6 +391,7 @@ class Agent:
     def clear_history(self) -> None:
         self.history.clear()
         self.user_instructions.clear()
+        self.activity.clear()
 
     async def compact_history(self, keep_recent: int = 4) -> tuple[bool, int, int]:
         """對目前會話歷史進行主動式高密度摘要壓縮（供 /compact 指令或主動調度使用）。
@@ -742,6 +745,7 @@ class Agent:
             log.debug("子代理「%s」執行失敗：%s", name, e, exc_info=True)
             raise  # Let the caller handle the exception for proper CLI rendering
         finally:
+            self.activity.merge_from(sub.activity)
             if getattr(sub, "is_sensitive_session", False):
                 self.is_sensitive_session = True
             if sub in self.active_subagents:
@@ -1062,6 +1066,7 @@ class Agent:
                         elif isinstance(event, EventImageGenerationDone):
                             path = save_image_b64(event.b64)
                             self.last_images.append(path)
+                            self.activity.record_file_change(path, "added", existed_before=False)
                             log.debug("IMAGE saved %s", path)
                             self._emit("image_saved", str(path))
 
@@ -1178,6 +1183,12 @@ class Agent:
                             f"[調研上限攔截] 本輪網路檢索次數已達上限（{web_hard_limit} 次）。"
                             "系統已暫停執行新的網路調研，請立即根據目前累積之資訊完成回答或寫入檔案。"
                         )
+                        try:
+                            blocked_args = json.loads(fc["arguments"].strip() or "{}")
+                            if isinstance(blocked_args, dict):
+                                self.activity.record_tool_result(fc["name"], blocked_args, result)
+                        except Exception:
+                            pass
                         self._emit(
                             "tool_done",
                             {
@@ -1200,6 +1211,10 @@ class Agent:
                         "is_safe_read": fc["name"] in getattr(self, "_safe_read_tools", set()),
                     },
                 )
+
+                args: dict = {}
+                existed_before: bool | None = None
+                generated_fpath: Path | None = None
 
                 try:
                     raw = fc["arguments"].strip()
@@ -1245,9 +1260,17 @@ class Agent:
                     elif fc["name"] in ("run_subagents_parallel", "ask_question") or is_subagent_tool(fc["name"]):
                         result = await self._execute_core_tool(fc["name"], args, fc["call_id"])
                     elif is_shell_tool(fc["name"]):
+                        before_snap = self.activity.take_workspace_snapshot(self.workspace_dirs)
                         # 阻塞的 subprocess + 確認視窗等待 → 丟到 thread 跑
                         result = await asyncio.to_thread(call_shell_tool, fc["name"], args, self.on_confirm)
+                        if not isinstance(result, str) or not result.startswith(
+                            ("[使用者拒絕", "[操作已由使用者取消", "[ERROR]")
+                        ):
+                            self.activity.apply_workspace_diff(before_snap, self.workspace_dirs)
                     elif is_fs_tool(fc["name"]):
+                        if fc["name"] in ("write_to_file", "append_to_file", "replace_file_content"):
+                            target_p = args.get("path") or args.get("target_file") or args.get("file") or ""
+                            existed_before = self.activity.inspect_file_before_tool(target_p)
                         fs_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
                         result = await asyncio.to_thread(
                             call_fs_tool, fc["name"], args, fs_confirm, self.workspace_dirs
@@ -1260,6 +1283,7 @@ class Agent:
                         result, fpath = call_doc_tool(fc["name"], args)
                         if fpath:
                             self.last_files.append(fpath)
+                            generated_fpath = fpath
                     elif fc["name"] == "indexed_search":
                         from pocket_agent.tools.rag import call_indexed_search
 
@@ -1276,6 +1300,7 @@ class Agent:
                                     f"「{ok.strip()}」\n"
                                     "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的工具。]"
                                 )
+                                self.activity.record_tool_result(fc["name"], args, result)
                                 all_errors = False
                                 ok_status = True
                                 self._emit(
@@ -1357,6 +1382,14 @@ class Agent:
                         log.error("TOOL error %s: %s", type(e).__name__, e)
                         result = f"[ERROR] {e}"
                     ok_status = False
+
+                self.activity.record_tool_result(
+                    fc["name"],
+                    args,
+                    result,
+                    existed_before=existed_before,
+                    generated_path=generated_fpath,
+                )
 
                 self._emit(
                     "tool_done",

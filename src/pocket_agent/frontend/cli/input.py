@@ -20,6 +20,7 @@ from pocket_agent.frontend.cli.render import plain, toolbar
 from pocket_agent.frontend.cli.state import CliState
 
 BUILTINS = {
+    "activity": "列出本次會話新增／修改／刪除的檔案與上網查詢網址清單",
     "add-dir": "單次會話內，將外部資料夾加入工作範圍",
     "agents": "列出目前所有可用的子代理清單與能力",
     "attachments": "查看／移除待送附件",
@@ -137,6 +138,8 @@ class SlashCommandCompleter(Completer):
         for name, description in commands.items():
             if name.startswith(text[1:]):
                 matches.append((name, description))
+            elif name == "activity" and "changes".startswith(text[1:]):
+                matches.append((name, description))
             elif name == "codesearch" and "cs".startswith(text[1:]):
                 matches.append((name, description))
             elif name == "exit" and "quit".startswith(text[1:]):
@@ -149,7 +152,9 @@ class SlashCommandCompleter(Completer):
         # 提供完整候選，讓原生補齊選單隨光棒移動自動捲動。
         for name, description in matches:
             display_name = name
-            if name == "codesearch":
+            if name == "activity":
+                display_name = "activity (changes)"
+            elif name == "codesearch":
                 display_name = "codesearch (cs)"
             elif name == "exit":
                 display_name = "exit (quit)"

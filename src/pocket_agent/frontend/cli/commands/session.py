@@ -1,6 +1,8 @@
 import time
 import uuid
 
+from rich.text import Text
+
 from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
 
 
@@ -78,6 +80,8 @@ class SessionCommand(CliCommand):
                     save_session(ctx.state.session_id, ctx.agent.history)
                 ctx.agent.history = data["history"]
                 ctx.state.session_id = data["id"]
+                if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
+                    ctx.agent.activity.rebuild_from_history(ctx.agent.history)
                 ctx.renderer.message(
                     f"已載入：{data.get('title', '（無標題）')} · {len(data['history'])} 則訊息",
                     "green",
@@ -90,6 +94,8 @@ class SessionCommand(CliCommand):
                 if ctx.state.session_id == selected["id"]:
                     ctx.agent.history = []
                     ctx.state.session_id = str(uuid.uuid4())
+                    if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
+                        ctx.agent.activity.clear()
                 ctx.renderer.message(f"已刪除：{title}")
 
         elif sub == "load":
@@ -102,6 +108,8 @@ class SessionCommand(CliCommand):
                 save_session(ctx.state.session_id, ctx.agent.history)
             ctx.agent.history = data["history"]
             ctx.state.session_id = data["id"]
+            if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
+                ctx.agent.activity.rebuild_from_history(ctx.agent.history)
             ctx.renderer.message(
                 f"已載入：{data.get('title', '（無標題）')} · {len(data['history'])} 則訊息",
                 "green",
@@ -125,6 +133,8 @@ class SessionCommand(CliCommand):
             if ctx.state.session_id == sub_arg:
                 ctx.agent.history = []
                 ctx.state.session_id = str(uuid.uuid4())
+                if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
+                    ctx.agent.activity.clear()
             ctx.renderer.message(f"已刪除：{title}")
         else:
             raise ValueError("用法：/session [list | load <id> | save | delete <id>]")
@@ -199,6 +209,8 @@ class NewCommand(CliCommand):
         ctx.agent.last_files.clear()
         if hasattr(ctx.agent, "user_instructions") and isinstance(ctx.agent.user_instructions, list):
             ctx.agent.user_instructions.clear()
+        if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
+            ctx.agent.activity.clear()
 
         info = f"✓ 已開啟全新對話（Session ID: {ctx.state.session_id}）· 上下文與暫存已完整清空。"
         if saved_msg:
@@ -235,4 +247,75 @@ class RenameCommand(CliCommand):
             save_session(ctx.state.session_id, ctx.agent.history, title=clean_title)
 
         ctx.renderer.message(f"✓ 已將目前對話重新命名為：「{clean_title}」", "green")
+        return CommandResult()
+
+
+class ActivityCommand(CliCommand):
+    """列出本次會話中新增、修改、刪除的檔案清單，以及上網查詢的完整網址與狀態清單。"""
+
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if args.strip():
+            raise ValueError("/activity 不接受參數")
+
+        from pocket_agent.core.activity import SessionActivityTracker
+
+        tracker = getattr(ctx.agent, "activity", None)
+        if tracker is None:
+            tracker = SessionActivityTracker()
+            ctx.agent.activity = tracker
+
+        if not tracker._display_paths and not tracker._urls and getattr(ctx.agent, "history", None):
+            tracker.rebuild_from_history(ctx.agent.history)
+
+        file_changes = tracker.get_file_changes(sync_disk=True)
+        url_items = tracker.get_url_activities()
+
+        console = ctx.renderer.console
+        console.print()
+
+        # ── 區塊一：本次會話檔案異動清單 ─────────────────────────────
+        console.print(Text("📁 本次會話檔案異動清單", style="bold cyan"))
+        total_files = sum(len(v) for v in file_changes.values())
+        if total_files == 0:
+            console.print(Text("  （本次會話尚無新增、修改或刪除的檔案）", style="dim"))
+        else:
+            categories = (
+                ("added", "新增", "+", "bold green"),
+                ("modified", "修改", "~", "bold yellow"),
+                ("deleted", "刪除", "-", "bold red"),
+            )
+            for key, label, symbol, color in categories:
+                paths = file_changes.get(key, [])
+                header = Text("  ")
+                header.append(f"[{label}]", style=color)
+                header.append(f" ({len(paths)})", style="dim")
+                console.print(header)
+                if not paths:
+                    console.print(Text("    （無）", style="dim"))
+                else:
+                    for p in paths:
+                        line = Text("    ")
+                        line.append(f"{symbol} ", style=color)
+                        line.append(p)
+                        console.print(line, soft_wrap=True, overflow="ignore", crop=False)
+
+        console.print()
+
+        # ── 區塊二：本次會話上網查詢網址清單 ─────────────────────────
+        console.print(Text("🌐 本次會話上網查詢網址清單", style="bold magenta"))
+        if not url_items:
+            console.print(Text("  （本次會話尚無上網查詢網址紀錄）", style="dim"))
+        else:
+            for idx, item in enumerate(url_items, 1):
+                is_ok = item.status == "success"
+                status_label = "[成功]" if is_ok else "[失敗]"
+                status_style = "bold green" if is_ok else "bold red"
+                line = Text(f"  {idx}. ")
+                line.append(status_label, style=status_style)
+                line.append(f" {item.url}")
+                if item.count > 1:
+                    line.append(f" ({item.count} 次)", style="dim")
+                console.print(line, soft_wrap=True, overflow="ignore", crop=False)
+
+        console.print()
         return CommandResult()

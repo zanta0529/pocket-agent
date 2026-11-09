@@ -394,3 +394,221 @@ def test_agent_accept_edits_auto_approves_fs_writes_only(tmp_path, monkeypatch):
     assert (tmp_path / "file_b.py").read_text(encoding="utf-8") == "y = 2\n"
     # 檔案操作均自動放行，僅 run_command 觸發 on_confirm 一次
     confirm_mock.assert_called_once_with("echo hi")
+
+
+def test_activity_command_completer_and_dispatch():
+    """測試 AC-1：/activity 與別名 /changes 註冊、Tab 補全顯示及參數檢查。"""
+    from prompt_toolkit.completion import CompleteEvent
+    from prompt_toolkit.document import Document
+
+    from pocket_agent.core.activity import SessionActivityTracker
+    from pocket_agent.frontend.cli.commands import CommandHandler
+    from pocket_agent.frontend.cli.input import BUILTINS, SlashCommandCompleter
+
+    assert "activity" in BUILTINS
+    state = CliState("openai", "model")
+    completer = SlashCommandCompleter(state)
+
+    with (
+        patch("pocket_agent.system.commands.list_commands", return_value=[]),
+        patch("pocket_agent.extensions.skills.list_skills", return_value=[]),
+        patch("pocket_agent.core.subagents.list_subagents", return_value=[]),
+    ):
+        act_Matches = list(completer.get_completions(Document("/act"), CompleteEvent()))
+        ch_matches = list(completer.get_completions(Document("/ch"), CompleteEvent()))
+
+    assert any(c.text == "activity" and c.display_text == "activity (changes)" for c in act_Matches)
+    assert any(c.text == "activity" and c.display_text == "activity (changes)" for c in ch_matches)
+
+    output = StringIO()
+    renderer = CliRenderer(Console(file=output, force_terminal=False, width=80))
+    agent = SimpleNamespace(history=[], activity=SessionActivityTracker(), workspace_dirs=[])
+    handler = CommandHandler(agent, state, Mock(), renderer, [])
+
+    res1 = asyncio.run(handler.dispatch("/activity"))
+    assert res1.action == "handled"
+    res2 = asyncio.run(handler.dispatch("/changes"))
+    assert res2.action == "handled"
+
+    with pytest.raises(ValueError, match="不接受參數"):
+        asyncio.run(handler.dispatch("/activity extra"))
+
+
+def test_activity_command_files_and_urls_separated_with_status(tmp_path, monkeypatch):
+    """測試 AC-2、AC-3、AC-4：檔案（新增／修改／刪除）與網址（完整網址＋成功／失敗＋次數）分區顯示。"""
+    from pocket_agent.core.activity import SessionActivityTracker
+    from pocket_agent.frontend.cli.commands import CommandHandler
+
+    monkeypatch.chdir(tmp_path)
+    existing_file = tmp_path / "existing.py"
+    existing_file.write_text("old = 1\n", encoding="utf-8")
+    to_delete_file = tmp_path / "obsolete.py"
+    to_delete_file.write_text("remove_me = True\n", encoding="utf-8")
+
+    tracker = SessionActivityTracker()
+
+    # 1. 新建檔案（後續再局部修改仍應維持為「新增」）
+    new_file = tmp_path / "created.py"
+    existed_new = tracker.inspect_file_before_tool(new_file)
+    new_file.write_text("a = 1\n", encoding="utf-8")
+    tracker.record_tool_result(
+        "write_to_file",
+        {"path": str(new_file)},
+        f"[SUCCESS] 成功寫入檔案 {new_file}",
+        existed_before=existed_new,
+    )
+    tracker.record_tool_result(
+        "replace_file_content",
+        {"path": str(new_file)},
+        f"[SUCCESS] 成功替換檔案 {new_file} 的局部內容",
+        existed_before=True,
+    )
+
+    # 2. 修改既有檔案
+    existed_mod = tracker.inspect_file_before_tool(existing_file)
+    existing_file.write_text("old = 2\n", encoding="utf-8")
+    tracker.record_tool_result(
+        "replace_file_content",
+        {"path": str(existing_file)},
+        f"[SUCCESS] 成功替換檔案 {existing_file} 的局部內容",
+        existed_before=existed_mod,
+    )
+
+    # 3. 使用者拒絕寫入的檔案不得列入
+    rejected_file = tmp_path / "rejected.py"
+    tracker.record_tool_result(
+        "write_to_file",
+        {"path": str(rejected_file)},
+        "[使用者拒絕執行此檔案寫入操作]",
+        existed_before=False,
+    )
+
+    # 4. 透過工作區快照捕捉刪除檔案
+    snap_before = tracker.take_workspace_snapshot()
+    to_delete_file.unlink()
+    tracker.apply_workspace_diff(snap_before)
+
+    # 5. 記錄網路查詢（含極長完整網址、404 失敗、以及方案 A 重複查詢更新狀態與次數）
+    long_url = (
+        "https://docs.python.org/3.14/whatsnew/3.14.html"
+        "?section=free-threaded-cpython&detail=very-long-query-parameter-that-must-not-be-truncated"
+    )
+    fail_url = "https://example.com/missing/documentation/page/404"
+    retry_url = "https://api.example.org/v1/status?env=prod"
+
+    tracker.record_tool_result(
+        "read_url_content",
+        {"url": long_url},
+        "<external_content>\nPython 3.14 notes\n</external_content>",
+    )
+    tracker.record_tool_result(
+        "read_url_content",
+        {"url": fail_url},
+        "[ERROR] 網路操作失敗: HTTP 404",
+    )
+    # retry_url 第一次失敗、第二次成功 -> 方案 A 應保留單筆、狀態更新為 [成功] 且顯示 (2 次)
+    tracker.record_tool_result("read_url_content", {"url": retry_url}, "[ERROR] 網路操作失敗: timeout")
+    tracker.record_tool_result(
+        "read_url_content",
+        {"url": retry_url},
+        "<external_content>\nOK\n</external_content>",
+    )
+
+    output = StringIO()
+    # 故意設定較窄的 console width=60，驗證完整網址仍不會被截斷
+    renderer = CliRenderer(Console(file=output, force_terminal=False, width=60))
+    state = CliState("openai", "model")
+    agent = SimpleNamespace(history=[], activity=tracker, workspace_dirs=[])
+    handler = CommandHandler(agent, state, Mock(), renderer, [])
+
+    asyncio.run(handler.dispatch("/changes"))
+    rendered = output.getvalue()
+
+    file_sec_idx = rendered.index("📁 本次會話檔案異動清單")
+    url_sec_idx = rendered.index("🌐 本次會話上網查詢網址清單")
+    assert file_sec_idx < url_sec_idx
+
+    file_section = rendered[file_sec_idx:url_sec_idx]
+    url_section = rendered[url_sec_idx:]
+
+    # 檔案區塊驗證：區分新增、修改、刪除，且不包含拒絕項目與網址
+    assert "[新增] (1)" in file_section
+    assert "+ created.py" in file_section
+    assert "[修改] (1)" in file_section
+    assert "~ existing.py" in file_section
+    assert "[刪除] (1)" in file_section
+    assert "- obsolete.py" in file_section
+    assert "rejected.py" not in rendered
+    assert "https://" not in file_section
+
+    # 網址區塊驗證：完整網址不截斷、附帶成功／失敗狀態與重複次數
+    assert f"1. [成功] {long_url}" in url_section
+    assert f"2. [失敗] {fail_url}" in url_section
+    assert f"3. [成功] {retry_url} (2 次)" in url_section
+    assert "created.py" not in url_section
+
+
+def test_activity_command_lifecycle_clear_new_and_session_load(tmp_path, monkeypatch):
+    """測試 AC-5：/clear、/new 清空活動紀錄，以及 /session load 從歷史對話重建紀錄。"""
+    import json
+
+    from pocket_agent.core import sessions
+    from pocket_agent.core.agent import Agent
+    from pocket_agent.frontend.cli.commands import CommandHandler
+
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path)
+    client = Mock()
+    mcp = Mock()
+    mcp.openai_tools.return_value = []
+    agent = Agent(client=client, mcp=mcp, model="test-model")
+
+    agent.activity.record_file_change(tmp_path / "temp.py", "added", existed_before=False)
+    agent.activity.record_url("https://example.com/a", success=True)
+    assert len(agent.activity.get_url_activities()) == 1
+
+    output = StringIO()
+    renderer = CliRenderer(Console(file=output, force_terminal=False, width=100))
+    state = CliState("openai", "model")
+    handler = CommandHandler(agent, state, Mock(), renderer, [])
+
+    # 1. /clear 應清空 activity
+    asyncio.run(handler.dispatch("/clear"))
+    assert sum(len(v) for v in agent.activity.get_file_changes().values()) == 0
+    assert len(agent.activity.get_url_activities()) == 0
+
+    # 2. 儲存一份含工具呼叫的歷史對話，再透過 /session load 載入並重建 activity
+    saved_id = "20261109-120000-abcdef"
+    saved_history = [
+        {"role": "user", "content": "請查資料並寫檔"},
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "read_url_content",
+            "arguments": json.dumps({"url": "https://python.org/doc"}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "<external_content>\nDoc\n</external_content>",
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_2",
+            "name": "write_to_file",
+            "arguments": json.dumps({"path": "notes.md", "content": "hello", "overwrite": False}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_2",
+            "output": "[SUCCESS] 成功寫入檔案 notes.md",
+        },
+    ]
+    sessions.save_session(saved_id, saved_history, title="測試載入重建")
+
+    asyncio.run(handler.dispatch(f"/session load {saved_id}"))
+    changes = agent.activity.get_file_changes(sync_disk=False)
+    urls = agent.activity.get_url_activities()
+    assert "notes.md" in changes["added"]
+    assert len(urls) == 1
+    assert urls[0].url == "https://python.org/doc"
+    assert urls[0].status == "success"
