@@ -197,6 +197,7 @@ class Agent:
         # CLI 指令確認回呼：callable(command) -> bool | str。
         # None 時不確認直接執行；GUI 會掛上跳確認視窗的實作。
         self.on_confirm = None
+        self.accept_edits: bool = False  # Accept-edits mode：當次會話自動核准工作區內檔案新增與編輯
         self.user_instructions: list[str] = []
 
         # 背景非同步預載模型視窗快取（若使用者未手動指定設定值）
@@ -606,6 +607,12 @@ class Agent:
                 extra += f"- {wd}\n"
             base += extra
 
+        if self.accept_edits:
+            base += (
+                "\n\n[權限狀態] 使用者已啟用 Accept-edits mode（自動允許檔案編輯模式），"
+                "本次會話中在允許工作區內的檔案新增與修改操作將自動核准。"
+            )
+
         # --- Verification Prompts 規則 ---
         base += (
             "\n\n[安全規範] 若你在本輪對話中修改了程式碼，在最終回覆總結時，"
@@ -686,6 +693,7 @@ class Agent:
         )
         sub.workspace_dirs = list(self.workspace_dirs)
         sub.on_confirm = self.on_confirm
+        sub.accept_edits = self.accept_edits
         sub.user_instructions = list(self.user_instructions)
 
         text_buffer = []
@@ -1240,8 +1248,9 @@ class Agent:
                         # 阻塞的 subprocess + 確認視窗等待 → 丟到 thread 跑
                         result = await asyncio.to_thread(call_shell_tool, fc["name"], args, self.on_confirm)
                     elif is_fs_tool(fc["name"]):
+                        fs_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
                         result = await asyncio.to_thread(
-                            call_fs_tool, fc["name"], args, self.on_confirm, self.workspace_dirs
+                            call_fs_tool, fc["name"], args, fs_confirm, self.workspace_dirs
                         )
                     elif is_document_tool(fc["name"]):
                         result = await asyncio.to_thread(call_document_tool, fc["name"], args, self.workspace_dirs)

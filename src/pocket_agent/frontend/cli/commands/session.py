@@ -187,11 +187,13 @@ class NewCommand(CliCommand):
         # 徹底清空當前上下文與會話狀態
         ctx.agent.clear_history()
         ctx.agent.is_sensitive_session = False
+        ctx.agent.accept_edits = False
         ctx.state.session_id = new_session_id()
         ctx.state.pending_files.clear()
         ctx.state.last_failed_input = ""
         ctx.state.session_tokens = 0
         ctx.state.session_approved_commands.clear()
+        ctx.state.accept_edits = False
         ctx.agent.context_usage = None
         ctx.agent.last_images.clear()
         ctx.agent.last_files.clear()

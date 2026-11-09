@@ -170,6 +170,9 @@ def toolbar(state: CliState, width: int) -> FormattedText:
         used = state.quota_limit - state.quota_remaining
         tokens_str += f" · 額度 ${used:.3f}/${state.quota_limit:.3f}"
 
+    if getattr(state, "accept_edits", False):
+        tokens_str += " · ✏️ Accept-edits"
+
     if getattr(state, "staged_update_version", None):
         tokens_str += f" · ✨ 新版 ({state.staged_update_version}) 就緒"
 
@@ -177,7 +180,12 @@ def toolbar(state: CliState, width: int) -> FormattedText:
     budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
     line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
 
-    for extra in [" · / 指令  @ 檔案", " · Enter 送出  Esc+Enter 換行", f" · {Path.cwd().name}"]:
+    for extra in [
+        " · / 指令  @ 檔案",
+        " · Shift+Tab 自動編輯",
+        " · Enter 送出  Esc+Enter 換行",
+        f" · {Path.cwd().name}",
+    ]:
         if cell_len(plain(line + extra)) <= width:
             line += extra
     return FormattedText([("", clip(line, width))])
@@ -369,7 +377,7 @@ class CliRenderer:
 
     def welcome(self, state: CliState, tools: list[str]) -> None:
         self.message(f"[ {state.provider} ] {state.model} · {len(tools)} 個 MCP 工具 · 就緒")
-        self.message("/ 指令 · @ 檔案 · Tab 補全 · Enter 送出 · Esc 後 Enter 換行")
+        self.message("/ 指令 · @ 檔案 · Tab 補全 · Shift+Tab 切換自動編輯 · Enter 送出 · Esc 後 Enter 換行")
 
     def user(self, raw: str) -> None:
         self.console.print()

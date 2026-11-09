@@ -20,6 +20,7 @@ class CliState:
     session_id: str = field(default_factory=_new_session_id)
     session_tokens: int = 0  # 本 session 累計 token 用量（供 toolbar 顯示）
     session_approved_commands: set = field(default_factory=set)  # 本次對話中允許的指令清單
+    accept_edits: bool = False  # Accept-edits mode：當次會話自動核准檔案新增與編輯
     quota_supported: bool = False
     quota_limit: float | None = None
     quota_remaining: float | None = None

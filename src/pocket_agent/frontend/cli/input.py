@@ -12,6 +12,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.output import ColorDepth
@@ -334,6 +335,17 @@ def key_bindings(
         else:
             buffer.start_completion(select_first=True)
 
+    @bindings.add("s-tab", filter=Condition(lambda: not selecting()))
+    def toggle_accept_edits(event: KeyPressEvent) -> None:
+        """Shift+Tab：切換 Accept-edits mode（當次會話自動核准檔案新增與編輯）。"""
+        new_mode = False
+        if state is not None:
+            new_mode = not getattr(state, "accept_edits", False)
+            state.accept_edits = new_mode
+        if agent is not None:
+            agent.accept_edits = new_mode
+        event.app.invalidate()
+
     @bindings.add("c-l")
     def clear_screen(event: KeyPressEvent) -> None:
         """清除終端畫面（不清對話歷史），符合 terminal 習慣。"""
@@ -370,6 +382,13 @@ class CliInput:
             multiline=True,
             completer=self.completer,
             complete_while_typing=True,
+            placeholder=lambda: (
+                FormattedText(
+                    [("fg:ansibrightblack", "Accept-edits mode: file edits auto-approved (shift+tab to cycle)")]
+                )
+                if not self.selecting and getattr(state, "accept_edits", False)
+                else ""
+            ),
             bottom_toolbar=lambda: toolbar(state, shutil.get_terminal_size().columns),
             key_bindings=key_bindings(
                 lambda: self.selecting,

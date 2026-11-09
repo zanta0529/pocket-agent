@@ -440,7 +440,10 @@ class HelpCommand(CliCommand):
             ctx.renderer.message("/update  檢查並套用 GitHub 最新更新（自動儲存並重啟）")
 
         ctx.renderer.message("/attachments remove <編號> · /attachments clear")
-        ctx.renderer.message("Enter 送出 · Esc 後 Enter 換行 · Ctrl+C 清空輸入 · 空輸入 Ctrl+D 離開")
+        ctx.renderer.message(
+            "Shift+Tab 切換自動編輯 (Accept-edits) · Enter 送出 · Esc 後 Enter 換行 · "
+            "Ctrl+C 清空輸入 · 空輸入 Ctrl+D 離開"
+        )
         for command in list_commands():
             ctx.renderer.message("/" + command["name"] + "  " + command["description"])
         return CommandResult()

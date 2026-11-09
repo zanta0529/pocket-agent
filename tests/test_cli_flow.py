@@ -185,6 +185,8 @@ def test_new_command_cleans_context_and_saves_old_session(tmp_path, monkeypatch)
     state.session_tokens = 5000
     state.last_failed_input = "failed"
     state.session_approved_commands.add("git status")
+    state.accept_edits = True
+    agent.accept_edits = True
 
     ctx = CommandContext(agent=agent, state=state, reader=reader, renderer=renderer, tools=[])
     cmd = NewCommand()
@@ -203,6 +205,8 @@ def test_new_command_cleans_context_and_saves_old_session(tmp_path, monkeypatch)
     assert state.session_tokens == 0
     assert state.last_failed_input == ""
     assert len(state.session_approved_commands) == 0
+    assert state.accept_edits is False
+    assert agent.accept_edits is False
     assert agent.context_usage is None
     assert len(agent.last_images) == 0
     assert len(agent.last_files) == 0
@@ -302,3 +306,68 @@ def test_agent_dynamic_instructions_with_user_instructions():
     # 驗證 clear_history 會清空指示
     agent.clear_history()
     assert len(agent.user_instructions) == 0
+
+
+def test_agent_accept_edits_auto_approves_fs_writes_only(tmp_path, monkeypatch):
+    """測試開啟 accept_edits 時，跨檔建立與修改自動核准不觸發 on_confirm，但 run_command 仍需 on_confirm。"""
+    import json
+
+    from pocket_agent.core.agent import Agent
+    from pocket_agent.engines import EventText, EventToolCallDone, EventToolCallStart
+
+    monkeypatch.chdir(tmp_path)
+    client = Mock()
+    mcp = Mock()
+    mcp.openai_tools.return_value = []
+    agent = Agent(client=client, mcp=mcp, model="test-model")
+    confirm_mock = Mock(return_value=False)
+    agent.on_confirm = confirm_mock
+    agent.accept_edits = True
+
+    assert "Accept-edits mode" in agent._instructions()
+
+    rounds = [
+        [
+            EventToolCallStart(call_id="c1", name="write_to_file"),
+            EventToolCallDone(
+                call_id="c1",
+                name="write_to_file",
+                full_args=json.dumps({"path": "file_a.py", "content": "x = 1\n"}),
+            ),
+            EventToolCallStart(call_id="c2", name="write_to_file"),
+            EventToolCallDone(
+                call_id="c2",
+                name="write_to_file",
+                full_args=json.dumps({"path": "file_b.py", "content": "y = 2\n"}),
+            ),
+            EventToolCallStart(call_id="c3", name="replace_file_content"),
+            EventToolCallDone(
+                call_id="c3",
+                name="replace_file_content",
+                full_args=json.dumps({"path": "file_a.py", "target": "x = 1", "replacement": "x = 10"}),
+            ),
+            EventToolCallStart(call_id="c4", name="run_command"),
+            EventToolCallDone(
+                call_id="c4",
+                name="run_command",
+                full_args=json.dumps({"command": "echo hi"}),
+            ),
+        ],
+        [EventText(delta="done")],
+    ]
+
+    async def fake_stream_chat(**kwargs):
+        for ev in rounds.pop(0):
+            yield ev
+
+    with (
+        patch.object(agent.engine, "stream_chat", side_effect=fake_stream_chat),
+        patch("pocket_agent.system.paths.user_dir", return_value=tmp_path / ".pa"),
+    ):
+        _, reply = asyncio.run(agent._run_loop())
+
+    assert reply == "done"
+    assert (tmp_path / "file_a.py").read_text(encoding="utf-8") == "x = 10\n"
+    assert (tmp_path / "file_b.py").read_text(encoding="utf-8") == "y = 2\n"
+    # 檔案操作均自動放行，僅 run_command 觸發 on_confirm 一次
+    confirm_mock.assert_called_once_with("echo hi")

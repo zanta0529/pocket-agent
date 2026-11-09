@@ -272,3 +272,35 @@ def test_slash_command_alias_display_names():
             c.text: c.display_text for c in completer.get_completions(Document("/tools"), CompleteEvent())
         }
         assert tools_completions.get("mcp") == "mcp (tools)"
+
+
+def test_shift_tab_toggles_accept_edits_and_placeholder():
+    from prompt_toolkit.formatted_text import fragment_list_to_text
+
+    from pocket_agent.frontend.cli.input import CliInput
+
+    state = CliState("openai", "model")
+    agent = SimpleNamespace(accept_edits=False)
+    bindings = key_bindings(lambda: False, state=state, agent=agent)
+    event = SimpleNamespace(app=SimpleNamespace(invalidate=lambda: None))
+    handler = bindings.get_bindings_for_keys((Keys.BackTab,))[-1].handler
+
+    assert state.accept_edits is False
+    assert agent.accept_edits is False
+
+    handler(event)
+    assert state.accept_edits is True
+    assert agent.accept_edits is True
+
+    with create_pipe_input() as pipe:
+        with patch("pocket_agent.frontend.cli.input.PromptSession") as mock_session_cls:
+            CliInput(state, agent=agent)
+            placeholder_fn = mock_session_cls.call_args.kwargs["placeholder"]
+            assert "Accept-edits mode: file edits auto-approved (shift+tab to cycle)" in fragment_list_to_text(
+                placeholder_fn()
+            )
+            handler(event)
+            assert state.accept_edits is False
+            assert agent.accept_edits is False
+            assert placeholder_fn() == ""
+            _ = pipe

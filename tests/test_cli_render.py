@@ -36,6 +36,13 @@ def test_toolbar_strips_control_characters():
     assert "\x1b" not in text and "\n" not in text
 
 
+def test_toolbar_displays_accept_edits_mode():
+    state = CliState("openai", "model")
+    assert "Accept-edits" not in fragment_list_to_text(toolbar(state, 100))
+    state.accept_edits = True
+    assert "Accept-edits" in fragment_list_to_text(toolbar(state, 100))
+
+
 def test_banner_narrow_and_wide():
     # Narrow width
     stream_narrow = StringIO()
