@@ -170,8 +170,8 @@ def toolbar(state: CliState, width: int) -> FormattedText:
         used = state.quota_limit - state.quota_remaining
         tokens_str += f" · 額度 ${used:.3f}/${state.quota_limit:.3f}"
 
-    if getattr(state, "accept_edits", False):
-        tokens_str += " · ✏️ Accept-edits"
+    accept_status = "ON" if getattr(state, "accept_edits", False) else "OFF"
+    tokens_str += f" · Accept-edits: {accept_status}"
 
     if getattr(state, "staged_update_version", None):
         tokens_str += f" · ✨ 新版 ({state.staged_update_version}) 就緒"

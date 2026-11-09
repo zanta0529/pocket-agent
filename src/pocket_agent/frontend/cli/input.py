@@ -12,7 +12,6 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.output import ColorDepth
@@ -382,11 +381,6 @@ class CliInput:
             multiline=True,
             completer=self.completer,
             complete_while_typing=True,
-            placeholder=lambda: (
-                FormattedText([("fg:ansibrightblack", "Accept-edits 模式：自動允許檔案編輯（按 Shift+Tab 切換）")])
-                if not self.selecting and getattr(state, "accept_edits", False)
-                else ""
-            ),
             bottom_toolbar=lambda: toolbar(state, shutil.get_terminal_size().columns),
             key_bindings=key_bindings(
                 lambda: self.selecting,

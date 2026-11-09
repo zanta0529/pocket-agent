@@ -38,9 +38,9 @@ def test_toolbar_strips_control_characters():
 
 def test_toolbar_displays_accept_edits_mode():
     state = CliState("openai", "model")
-    assert "Accept-edits" not in fragment_list_to_text(toolbar(state, 100))
+    assert "Accept-edits: OFF" in fragment_list_to_text(toolbar(state, 100))
     state.accept_edits = True
-    assert "Accept-edits" in fragment_list_to_text(toolbar(state, 100))
+    assert "Accept-edits: ON" in fragment_list_to_text(toolbar(state, 100))
 
 
 def test_banner_narrow_and_wide():
