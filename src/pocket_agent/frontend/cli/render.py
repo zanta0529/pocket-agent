@@ -214,6 +214,11 @@ class CliRenderer:
             except Exception:
                 pass
             self._active_status = None
+        # 強制確保終端機光標恢復顯示，避免 Live / Status 異常中斷時隱藏光標殘留
+        try:
+            self.console.show_cursor(True)
+        except Exception:
+            pass
 
     def _ensure_newline(self) -> None:
         """若文字串流游標未換行，補一個換行確保後續輸出從行首開始。
@@ -670,7 +675,12 @@ class CliRenderer:
                         )
                     )
 
-            if self.console.is_terminal and not is_multi:
+            is_cancelled = False
+            if isinstance(data, dict):
+                res = str(data.get("result", ""))
+                is_cancelled = not data.get("ok", True) or "[操作已由使用者取消中斷" in res
+
+            if self.console.is_terminal and not is_multi and not is_cancelled:
                 from rich.status import Status
 
                 self._active_status = Status("思考中…", spinner="dots", console=self.console)

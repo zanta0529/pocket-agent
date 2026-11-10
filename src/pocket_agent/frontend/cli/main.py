@@ -42,6 +42,7 @@ async def send_turn(
     from pocket_agent.frontend.cli.input import references
 
     try:
+        agent.on_stream = renderer.event
         state.add_files(references(result.prompt))
         snapshot = state.snapshot()
 
@@ -92,24 +93,28 @@ async def send_turn(
                 _, reply, _ = chat_task.result()
             except asyncio.CancelledError, KeyboardInterrupt:
                 agent.request_stop()
+                agent.on_stream = None
+                renderer._stop_status()
                 chat_task.cancel()
                 try:
-                    # 給予至多 1 秒協調正在進行之工具中斷與狀態寫入
-                    await asyncio.wait_for(asyncio.shield(chat_task), timeout=1.0)
-                except asyncio.TimeoutError, asyncio.CancelledError, Exception:
+                    # 給予至多 1 秒協調正在進行之工具中斷與狀態寫入（不使用 shield，確保取消直達底層）
+                    await asyncio.wait_for(chat_task, timeout=1.0)
+                except asyncio.TimeoutError, asyncio.CancelledError, Exception, BaseException:
                     pass
                 renderer._stop_status()
                 renderer.message("⏹ 已停止主代理", "yellow")
                 state.last_failed_input = raw
                 return
             finally:
-                # 若模型未串流任何 text（如 Ollama buffer 全量）：停止 spinner
+                # 確保串流狀態停止，並卸載回呼防止殘餘事件
+                agent.on_stream = None
                 renderer._stop_status()
 
     except Exception as exc:
+        agent.on_stream = None
+        renderer._stop_status()
         state.last_failed_input = raw
         renderer._ensure_newline()
-        renderer._stop_status()
 
         from rich.markdown import Markdown
         from rich.panel import Panel
@@ -213,6 +218,8 @@ async def conversation(
             except KeyboardInterrupt:
                 # Ctrl+C 在 send_turn 等待期間：中止當前輪次，不退出
                 agent.request_stop()
+                agent.on_stream = None
+                renderer._stop_status()
                 state.last_failed_input = raw
                 renderer.message("⏹ 已停止", "yellow")
 
