@@ -6,19 +6,33 @@
   模型不需要知道這些參數的存在。
 """
 
+import asyncio
 import copy
+import logging
 import os
+import re
 import sys
+import threading
+import time
+import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from pocket_agent.system.paths import bundle_dir, is_frozen, mcp_config_path, mcp_example_path
+from pocket_agent.system.paths import bundle_dir, is_frozen, log_dir, mcp_config_path, mcp_example_path
+
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
 
 try:
     from mcp.client.sse import sse_client
@@ -26,6 +40,22 @@ try:
     HAS_SSE = True
 except ImportError:
     HAS_SSE = False
+
+try:
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.shared._httpx_utils import create_mcp_http_client
+
+    HAS_STREAMABLE_HTTP = True
+except ImportError:
+    HAS_STREAMABLE_HTTP = False
+
+try:
+    from mcp.client.auth import AuthorizationCodeResult, OAuthClientProvider
+    from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
+
+    HAS_MCP_OAUTH = True
+except ImportError:
+    HAS_MCP_OAUTH = False
 
 
 _CONN_PARAM_MAP = {
@@ -126,14 +156,10 @@ class MCPManager:
         return MCPStartupResult(len(servers), ready_servers, failed_servers, len(self._tools))
 
     async def stop(self) -> None:
-        import asyncio
-
         for closer in reversed(self._exit_stack_closers):
             try:
                 await asyncio.wait_for(closer(None, None, None), timeout=1.5)
             except Exception as e:
-                import logging
-
                 logging.getLogger("pocket-agent").warning("MCP closer failed: %s", e, exc_info=True)
 
     # ── Tool access ───────────────────────────────
@@ -180,8 +206,6 @@ class MCPManager:
             missing.append(env_key)
 
         if missing and self.on_prompt_conn is not None:
-            import asyncio
-
             prompted = await asyncio.to_thread(self.on_prompt_conn, entry.server_name, missing)
             for k, v in (prompted or {}).items():
                 clean_v = str(v) if "PASSWORD" in k or "PASSPHRASE" in k else str(v).strip()
@@ -285,13 +309,14 @@ class MCPManager:
         resolved_args: list[str] = []
         for arg in spec.get("args") or []:
             arg_str = str(arg)
-            p = Path(arg_str)
-            if not p.is_absolute() and not (Path.cwd() / p).exists():
-                for base in (bundle_dir(), self.config_path.parent):
-                    candidate = base / p
-                    if candidate.exists():
-                        arg_str = str(candidate.resolve())
-                        break
+            if not arg_str.startswith("-") and "://" not in arg_str:
+                p = Path(arg_str)
+                if not p.is_absolute() and not (Path.cwd() / p).exists():
+                    for base in (bundle_dir(), self.config_path.parent):
+                        candidate = base / p
+                        if candidate.exists():
+                            arg_str = str(candidate.resolve())
+                            break
             resolved_args.append(arg_str)
 
         if is_py_cmd:
@@ -311,8 +336,6 @@ class MCPManager:
         raw_env = spec.get("env")
         env_dict: dict[str, str] | None = None
         if raw_env or is_py_cmd:
-            from pocket_agent.system.paths import log_dir
-
             env_dict = dict(os.environ)
             env_dict.setdefault("PYTHONUTF8", "1")
             env_dict.setdefault("PYTHONIOENCODING", "utf-8")
@@ -324,18 +347,118 @@ class MCPManager:
 
         return StdioServerParameters(command=command, args=resolved_args, env=env_dict)
 
+    def _open_stdio_errlog(self) -> Any:
+        """將 stdio 子行程的 stderr 導向日誌檔案，避免 Windows CREATE_NO_WINDOW 下主控台控制代碼失效。"""
+        try:
+            err_path = log_dir() / "mcp_stdio.log"
+            err_path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(err_path, "a", encoding="utf-8")
+
+            async def _close_errlog(*_args: Any) -> None:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+
+            self._exit_stack_closers.append(_close_errlog)
+            return fh
+        except Exception:
+            return sys.stderr
+
+    def _resolve_http_headers(self, name: str, spec: dict) -> dict[str, str] | None:
+        """解析遠端 MCP 伺服器的自訂 HTTP Headers 與 Bearer Token。"""
+        server_env = self._server_envs.get(name, {})
+        headers: dict[str, str] = {}
+        raw_headers = spec.get("headers")
+        if isinstance(raw_headers, dict):
+            for k, v in raw_headers.items():
+                if v is None:
+                    continue
+                val_str = str(v).strip()
+                missing_var = False
+
+                def _replace_var(match: re.Match[str]) -> str:
+                    nonlocal missing_var
+                    env_key = match.group(1).strip()
+                    resolved = (server_env.get(env_key) or os.getenv(env_key) or "").strip()
+                    if not resolved:
+                        missing_var = True
+                    return resolved
+
+                val_str = re.sub(r"\$\{([^}]+)\}", _replace_var, val_str).strip()
+                if val_str and not missing_var:
+                    headers[str(k)] = val_str
+
+        has_auth_header = any(k.lower() == "authorization" for k in headers)
+        if not has_auth_header:
+            token = (
+                spec.get("bearer_token") or server_env.get("BEARER_TOKEN") or server_env.get("MCP_BEARER_TOKEN") or ""
+            )
+            token_str = str(token).strip()
+            if token_str:
+                headers["Authorization"] = f"Bearer {token_str}"
+
+        return headers or None
+
+    def _build_oauth_provider(self, name: str, spec: dict, headers: dict[str, str] | None = None) -> Any:
+        """為遠端 SSE / Streamable HTTP 伺服器建立 OAuth 2.1 PKCE 認證提供者。"""
+        if not HAS_MCP_OAUTH:
+            return None
+        if spec.get("oauth") is False:
+            return None
+        if headers and any(k.lower() == "authorization" for k in headers) and spec.get("oauth") is not True:
+            return None
+
+        from pocket_agent.system.auth import REDIRECT_URI
+
+        redirect_uri = str(spec.get("redirect_uri") or REDIRECT_URI).strip()
+        storage = KeyringTokenStorage(name)
+        flow_handler = _McpOAuthFlowHandler(name, redirect_uri)
+        metadata = OAuthClientMetadata(
+            client_name=str(spec.get("client_name") or "PocketAgent"),
+            redirect_uris=[redirect_uri],
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+            scope=spec.get("scope"),
+        )
+        return _KeyringOAuthClientProvider(
+            server_url=str(spec["url"]),
+            client_metadata=metadata,
+            storage=storage,
+            redirect_handler=flow_handler.redirect_handler,
+            callback_handler=flow_handler.callback_handler,
+        )
+
     async def _connect(self, name: str, spec: dict) -> ClientSession:
         transport = spec.get("transport", "stdio")
+        norm_transport = str(transport).strip().lower().replace(" ", "-").replace("_", "-")
         closers_before = len(self._exit_stack_closers)
 
         try:
-            if transport == "stdio":
+            if norm_transport == "stdio":
                 params = self._resolve_stdio_params(spec)
-                read, write, _ = await self._enter(stdio_client(params))
-            elif transport == "sse":
+                errlog = self._open_stdio_errlog()
+                read, write, _ = await self._enter(stdio_client(params, errlog=errlog))
+            elif norm_transport == "sse":
                 if not HAS_SSE:
                     raise ImportError("需要安裝 mcp[sse] 才能使用 SSE transport")
-                read, write, _ = await self._enter(sse_client(spec["url"]))
+                headers = self._resolve_http_headers(name, spec)
+                auth_provider = self._build_oauth_provider(name, spec, headers=headers)
+                sse_kwargs: dict[str, Any] = {}
+                if headers is not None:
+                    sse_kwargs["headers"] = headers
+                if auth_provider is not None:
+                    sse_kwargs["auth"] = auth_provider
+                read, write, _ = await self._enter(sse_client(spec["url"], **sse_kwargs))
+            elif norm_transport in ("streamable-http", "streamablehttp", "http"):
+                if not HAS_STREAMABLE_HTTP:
+                    raise ImportError("目前 mcp 版本不支援 Streamable HTTP transport")
+                headers = self._resolve_http_headers(name, spec)
+                auth_provider = self._build_oauth_provider(name, spec, headers=headers)
+                http_client = create_mcp_http_client(headers=headers, auth=auth_provider)
+                await http_client.__aenter__()
+                self._exit_stack_closers.append(http_client.__aexit__)
+                read, write, _ = await self._enter(streamable_http_client(spec["url"], http_client=http_client))
             else:
                 raise ValueError(f"未知 transport: {transport!r}")
 
@@ -452,3 +575,168 @@ def _is_conn_auth_error(text: str) -> bool:
         or "access denied" in lower
         or "authentication failed" in lower
     )
+
+
+class KeyringTokenStorage:
+    """基於作業系統原生 Keyring 的 MCP OAuth 2.1 憑證儲存器（零明碼落盤）。"""
+
+    def __init__(self, server_name: str):
+        self.server_name = server_name
+        self._token_key = f"mcp-oauth-{server_name}"
+        self._client_key = f"mcp-client-{server_name}"
+
+    async def get_tokens(self) -> Any:
+        if not HAS_MCP_OAUTH:
+            return None
+        from pocket_agent.system.auth import _load_token
+
+        data = _load_token(self._token_key)
+        if not isinstance(data, dict) or not data.get("access_token"):
+            return None
+        expires_at = data.get("expires_at")
+        if isinstance(expires_at, int | float):
+            remaining = int(expires_at - time.time())
+            if remaining <= 0 and not data.get("refresh_token"):
+                return None
+            data = {**data, "expires_in": remaining}
+        return OAuthToken.model_validate(data)
+
+    async def set_tokens(self, tokens: Any) -> None:
+        from pocket_agent.system.auth import _save_token
+
+        payload = tokens.model_dump(mode="json", exclude_none=True)
+        _save_token(self._token_key, payload)
+
+    async def get_client_info(self) -> Any:
+        if not HAS_MCP_OAUTH:
+            return None
+        from pocket_agent.system.auth import _load_token
+
+        data = _load_token(self._client_key)
+        if not isinstance(data, dict) or not data.get("client_id"):
+            return None
+        return OAuthClientInformationFull.model_validate(data)
+
+    async def set_client_info(self, client_info: Any) -> None:
+        from pocket_agent.system.auth import _save_token
+
+        payload = client_info.model_dump(mode="json", exclude_none=True)
+        _save_token(self._client_key, payload)
+
+
+if HAS_MCP_OAUTH:
+
+    class _KeyringOAuthClientProvider(OAuthClientProvider):
+        """擴充標準 OAuthClientProvider，於載入儲存之 Token 時同步計算到期時間以觸發自動更新。"""
+
+        async def _initialize(self) -> None:
+            await super()._initialize()
+            if self.context.current_tokens is not None:
+                self.context.update_token_expiry(self.context.current_tokens)
+
+else:
+    _KeyringOAuthClientProvider = None  # type: ignore[assignment]
+
+
+class _McpOAuthFlowHandler:
+    """處理遠端 MCP 伺服器的本機瀏覽器 OAuth 2.1 PKCE 授權跳轉與回呼接收。"""
+
+    def __init__(self, server_name: str, redirect_uri: str):
+        self.server_name = server_name
+        self.redirect_uri = redirect_uri
+        self._bucket: dict[str, Any] = {}
+        self._server: Any = None
+        self._opened: bool = False
+
+    async def redirect_handler(self, authorization_url: str) -> None:
+        import uvicorn
+        from fastapi import FastAPI
+        from fastapi.responses import HTMLResponse
+
+        self._bucket.clear()
+        parsed_uri = urlparse(self.redirect_uri)
+        listen_port = parsed_uri.port or 1455
+        listen_path = parsed_uri.path or "/auth/callback"
+        app = FastAPI()
+
+        def _page(color: str, message: str) -> HTMLResponse:
+            return HTMLResponse(
+                f"<h1 style='font-family:sans-serif;text-align:center;padding-top:20vh;color:{color}'>{message}</h1>"
+            )
+
+        @app.get(listen_path)
+        async def callback(
+            code: str = "",
+            state: str = "",
+            iss: str = "",
+            error: str = "",
+            error_description: str = "",
+        ):
+            if error:
+                self._bucket["error"] = error_description or error
+                return _page("#c0392b", f"✗ MCP 授權未完成：{error}")
+            if not code:
+                self._bucket["error"] = "沒有收到授權碼。"
+                return _page("#c0392b", "✗ 沒有收到授權碼。")
+            self._bucket["code"] = code
+            self._bucket["state"] = state or None
+            self._bucket["iss"] = iss or None
+            return _page("#10a37f", "✓ MCP 認證成功！請關閉此視窗回到 Pocket Agent。")
+
+        cfg = uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=listen_port,
+            log_level="error",
+            log_config=None,
+        )
+        self._server = uvicorn.Server(cfg)
+        thread = threading.Thread(target=self._server.run, daemon=True)
+        thread.start()
+
+        for _ in range(30):
+            if self._server.started:
+                break
+            if not thread.is_alive():
+                raise RuntimeError(f"無法在 port {listen_port} 啟動 MCP OAuth 本機回呼服務，請確認連接埠未被占用。")
+            await asyncio.sleep(0.1)
+        else:
+            raise RuntimeError("MCP OAuth 本機回呼服務啟動逾時。")
+
+        try:
+            self._opened = bool(webbrowser.open(authorization_url))
+        except Exception:
+            self._opened = False
+
+        if self._opened:
+            print(f"\n[MCP:{self.server_name}] 瀏覽器已開啟，請完成 OAuth 登入並授權…")
+        else:
+            print(f"\n[MCP:{self.server_name}] 無法自動開啟瀏覽器，請手動複製以下網址完成授權：")
+        print(f"\n  {authorization_url}\n")
+
+    async def callback_handler(self) -> Any:
+        try:
+            for i in range(300):
+                if "code" in self._bucket:
+                    return AuthorizationCodeResult(
+                        code=self._bucket["code"],
+                        state=self._bucket.get("state"),
+                        iss=self._bucket.get("iss"),
+                    )
+                if "error" in self._bucket:
+                    raise RuntimeError(f"MCP OAuth 授權未完成：{self._bucket['error']}")
+                if i == 15 and not self._opened and sys.stdin is not None and sys.stdin.isatty():
+                    prompt_msg = f"\n[MCP:{self.server_name}] 登入後請貼上瀏覽器跳轉的完整 redirect URL：\n> "
+                    redirect_url = (await asyncio.to_thread(input, prompt_msg)).strip()
+                    parsed = parse_qs(urlparse(redirect_url).query)
+                    if "code" in parsed:
+                        return AuthorizationCodeResult(
+                            code=parsed["code"][0],
+                            state=parsed.get("state", [None])[0],
+                            iss=parsed.get("iss", [None])[0],
+                        )
+                await asyncio.sleep(1.0)
+            raise TimeoutError(f"MCP OAuth 認證逾時（{self.server_name}）")
+        finally:
+            if self._server is not None:
+                self._server.should_exit = True

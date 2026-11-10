@@ -27,6 +27,16 @@ servers:
   #   transport: sse
   #   url: http://localhost:3001/sse
 
+  # 範例：遠端 Streamable HTTP server（原生支援 MCP OAuth 2.1 自動瀏覽器授權或自訂 headers）
+  # agensi:
+  #   transport: Streamable HTTP
+  #   url: https://mcp.agensi.io/mcp/auth
+  #   # 選填：若伺服器改用靜態 Bearer Token 或自訂 Header，可透過 headers 或 env 設定
+  #   # headers:
+  #   #   Authorization: "Bearer ${AGENSI_TOKEN}"
+  #   # env:
+  #   #   AGENSI_TOKEN: ""
+
   # 瀏覽器操作（純 Python，用系統已裝的 Edge/Chrome，不需要 Node.js）
   # 進階：設 BROWSER_CDP_URL 可連既有瀏覽器保留登入狀態，見 browser_mcp.py 註解
   # browser:

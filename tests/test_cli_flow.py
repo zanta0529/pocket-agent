@@ -612,3 +612,116 @@ def test_activity_command_lifecycle_clear_new_and_session_load(tmp_path, monkeyp
     assert len(urls) == 1
     assert urls[0].url == "https://python.org/doc"
     assert urls[0].status == "success"
+
+
+def test_mcp_streamable_http_and_oauth_keyring_storage(tmp_path, monkeypatch):
+    """測試 MCPManager 支援 Streamable HTTP 傳輸協定、自訂 Headers、OAuth Provider 及 Keyring 儲存。"""
+    from contextlib import asynccontextmanager
+
+    from pocket_agent.extensions.mcp import KeyringTokenStorage, MCPManager, OAuthClientInformationFull, OAuthToken
+
+    cfg_file = tmp_path / "mcp_config.yaml"
+    cfg_file.write_text(
+        "servers:\n"
+        "  agensi:\n"
+        "    transport: Streamable HTTP\n"
+        "    url: https://mcp.agensi.io/mcp/auth\n"
+        "  custom_http:\n"
+        "    transport: streamable-http\n"
+        "    url: https://example.com/mcp\n"
+        "    headers:\n"
+        "      Authorization: 'Bearer ${MY_TOKEN}'\n"
+        "    env:\n"
+        "      MY_TOKEN: 'secret-token-123'\n",
+        encoding="utf-8",
+    )
+
+    created_clients: list[dict] = []
+    entered_urls: list[str] = []
+
+    class DummyHttpClient:
+        def __init__(self, headers=None, auth=None):
+            self.headers = headers
+            self.auth = auth
+            self.closed = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            self.closed = True
+
+    def fake_create_http_client(headers=None, timeout=None, auth=None):
+        client = DummyHttpClient(headers=headers, auth=auth)
+        created_clients.append({"headers": headers, "auth": auth, "client": client})
+        return client
+
+    @asynccontextmanager
+    async def fake_streamable_http_client(url, *, http_client=None, **kwargs):
+        entered_urls.append(url)
+        yield ("read_stream", "write_stream")
+
+    class DummySession:
+        def __init__(self, read, write):
+            self.read = read
+            self.write = write
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def initialize(self):
+            return None
+
+        async def list_tools(self):
+            tool = SimpleNamespace(
+                name=f"tool_{len(entered_urls)}",
+                description="test tool",
+                inputSchema={"type": "object", "properties": {}},
+            )
+            return SimpleNamespace(tools=[tool])
+
+    with (
+        patch("pocket_agent.extensions.mcp.create_mcp_http_client", side_effect=fake_create_http_client),
+        patch("pocket_agent.extensions.mcp.streamable_http_client", side_effect=fake_streamable_http_client),
+        patch("pocket_agent.extensions.mcp.ClientSession", side_effect=DummySession),
+    ):
+        mgr = MCPManager(config_path=cfg_file)
+        res = asyncio.run(mgr.start())
+        assert res.configured_servers == 2
+        assert res.ready_servers == 2
+        assert res.failed_servers == 0
+        assert res.tool_count == 2
+        assert entered_urls == ["https://mcp.agensi.io/mcp/auth", "https://example.com/mcp"]
+        # agensi 未提供靜態 Authorization header，應自動掛載 OAuthClientProvider
+        assert created_clients[0]["headers"] is None
+        assert created_clients[0]["auth"] is not None
+        # custom_http 已提供 Authorization header，應解析環境變數並略過 OAuth
+        assert created_clients[1]["headers"] == {"Authorization": "Bearer secret-token-123"}
+        assert created_clients[1]["auth"] is None
+
+        asyncio.run(mgr.stop())
+        assert all(item["client"].closed for item in created_clients)
+
+    # 驗證 KeyringTokenStorage 讀寫 OAuthToken 與 OAuthClientInformationFull
+    store: dict[str, dict] = {}
+    with (
+        patch("pocket_agent.system.auth._save_token", side_effect=lambda k, v: store.__setitem__(k, dict(v))),
+        patch("pocket_agent.system.auth._load_token", side_effect=lambda k: store.get(k)),
+    ):
+        storage = KeyringTokenStorage("agensi")
+        tok = OAuthToken(access_token="acc-1", token_type="Bearer", expires_in=3600, refresh_token="ref-1")
+        asyncio.run(storage.set_tokens(tok))
+        loaded_tok = asyncio.run(storage.get_tokens())
+        assert loaded_tok is not None
+        assert loaded_tok.access_token == "acc-1"
+        assert loaded_tok.refresh_token == "ref-1"
+
+        info = OAuthClientInformationFull(client_id="cid-123", client_secret="csec-456")
+        asyncio.run(storage.set_client_info(info))
+        loaded_info = asyncio.run(storage.get_client_info())
+        assert loaded_info is not None
+        assert loaded_info.client_id == "cid-123"
+        assert loaded_info.client_secret == "csec-456"

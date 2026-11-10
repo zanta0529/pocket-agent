@@ -139,12 +139,15 @@ def _step_mcp() -> None:
 
     while True:
         name = Prompt.ask("Server 名稱").strip()
-        transport = Prompt.ask("傳輸方式", choices=["stdio", "sse"], default="stdio")
+        transport = Prompt.ask("傳輸方式", choices=["stdio", "sse", "streamable-http"], default="stdio")
 
         if transport == "stdio":
             command = Prompt.ask("執行指令（例如 npx）").strip()
             args_raw = Prompt.ask("參數（空白分隔，可留空）", default="").strip()
             servers[name] = {"transport": "stdio", "command": command, "args": args_raw.split() if args_raw else []}
+        elif transport == "streamable-http":
+            url = Prompt.ask("Streamable HTTP URL").strip()
+            servers[name] = {"transport": "streamable-http", "url": url}
         else:
             url = Prompt.ask("SSE URL").strip()
             servers[name] = {"transport": "sse", "url": url}

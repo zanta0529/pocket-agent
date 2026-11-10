@@ -1,6 +1,6 @@
 # Pocket Agent MCP 伺服器掛載與注入機制
 
-Model Context Protocol (MCP) 是標準化的 AI 工具橋接協定。Pocket Agent 實作了強健的 MCP Manager（`src/pocket_agent/extensions/mcp.py`），除了支援標準的 Stdio 與 SSE 傳輸層外，更加入了**機密金鑰注入**與**沙盒隔離**兩大企業級安全機制。
+Model Context Protocol (MCP) 是標準化的 AI 工具橋接協定。Pocket Agent 實作了強健的 MCP Manager（`src/pocket_agent/extensions/mcp.py`），除了完整支援標準的 **Stdio**、**SSE** 與 **Streamable HTTP** 三大傳輸層，以及遠端 **MCP OAuth 2.1（PKCE + OS Keyring 儲存）** 與自訂 **HTTP Headers** 認證外，更加入了**機密金鑰注入**與**沙盒隔離**兩大企業級安全機制。
 
 ## 架構與安全攔截機制視覺化
 
@@ -70,6 +70,17 @@ Pocket Agent 的解決方案：
 2. **設定檔與環境變數優先**：執行工具時，依序檢查 `mcp_config.yaml` 的 `env` 設定、當次 Session 記憶體快取（`_runtime_conn_cache`）與系統環境變數。已設定且非空白的項目會直接使用。
 3. **缺漏項目動態詢問（`on_prompt_conn`）**：若任何一項連線參數留空字串 `""` 或直接省略，`MCPManager` 會在首次呼叫工具前觸發前端回呼（CLI 會安全暫停 `rich.status` 動畫後透過 `Prompt.ask` 詢問，其中密碼強制使用 `password=True` 隱藏輸入；若無前端回呼則由 MCP Server 透過系統底層 TTY `CONIN$`／`/dev/tty` 詢問）。
 4. **記憶體快取與失敗自動清除**：詢問取得的連線資訊僅暫存於當次執行期的記憶體中，同一對話後續呼叫無需重複輸入；一旦工具回傳 `[ERROR]`（例如認證失敗或連線逾時），系統會自動清除記憶體快取，以便下次重新提示輸入。所有敏感欄位在 `agent.log` 除錯日誌中一律遮罩為 `[REDACTED]`。
+
+### 5. 遠端 Streamable HTTP 傳輸層與 MCP OAuth 2.1（OS Keyring 整合）
+
+針對採用新世代 `Streamable HTTP` 傳輸協定或需要認證的外部遠端 MCP 伺服器（例如 `https://mcp.agensi.io/mcp/auth`），`MCPManager` 提供零外部 Node.js 依賴的原生整合：
+
+1. **彈性傳輸協定識別**：`transport` 支援設定為 `Streamable HTTP`、`streamable-http`、`streamable_http` 或 `http`，底層直接透過 `mcp.client.streamable_http.streamable_http_client` 與 `truststore` 系統憑證庫建立連線。
+2. **MCP OAuth 2.1 動態授權與零明碼落盤（`KeyringTokenStorage`）**：
+   - 當遠端伺服器回應 HTTP `401 Unauthorized` 時，`OAuthClientProvider` 會自動執行 Protected Resource Metadata 探索与 Dynamic Client Registration，並開啟瀏覽器引導使用者完成 OAuth 2.1 PKCE 登入。
+   - 授權取得的 `OAuthToken` 與 `OAuthClientInformationFull` 一律透過作業系統原生 `keyring`（`mcp-oauth-<server>` 與 `mcp-client-<server>`）分段加密儲存，絕不以明碼寫入磁碟；重新連線時自動載入並計算有效期限，到期時優先以 `refresh_token` 背景續期。
+3. **自訂 HTTP Headers 與環境變數展開**：若遠端伺服器採用靜態金鑰或 Bearer Token，可在設定檔配置 `headers`（支援 `${ENV_VAR}` 語法從 `env` 或系統環境變數代入）或 `bearer_token`；當已明確指定 `Authorization` 標頭時，預設略過 OAuth 動態流程。
+4. **Windows `stdio` 子行程 `stderr` 安全導向**：針對本機 `stdio` 伺服器，`MCPManager` 會將 `errlog` 導向工作區沙盒日誌 `mcp_stdio.log` 的實體檔案控制代碼，避免 Windows `CREATE_NO_WINDOW` 旗標導致 `.cmd`／Node.js 子行程因主控台 `stderr` 失效而發生 `Connection closed` 異常退出。
 
 ---
 
