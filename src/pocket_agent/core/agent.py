@@ -37,12 +37,18 @@ from pocket_agent.system.constants import (
 )
 from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool, is_doc_tool
 from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool, is_document_tool
-from pocket_agent.tools.fs import FS_TOOLS, call_fs_tool, is_fs_tool
+from pocket_agent.tools.fs import FS_TOOLS, _validate_safe_path, call_fs_tool, is_fs_tool
 from pocket_agent.tools.image import image_tool, save_image_b64
 from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool
 from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_soft_web_error, is_web_tool
 
 _logging_setup_done = False
+
+# 列入 safe_read_tools 時仍需依路徑動態授權的 MCP 工具（工具名稱 → 路徑參數名稱）
+_PATH_GATED_SAFE_TOOLS = {
+    "sqlite_switch_database": "target_db_path",
+    "db_switch_database": "target_db_path",
+}
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
@@ -496,6 +502,26 @@ class Agent:
             summary = summary[:-3]
 
         return summary.strip()
+
+    def _needs_mcp_confirm(self, name: str, args: dict) -> bool:
+        """判斷 MCP 工具是否需要人工確認；路徑型 safe_read 工具僅在工作區內才免確認。
+
+        通過工作區檢查時，會就地將路徑參數正規化為絕對路徑，避免 MCP 子行程以不同 CWD 解析。
+        """
+        if name not in getattr(self, "_safe_read_tools", set()):
+            return True
+        arg_key = _PATH_GATED_SAFE_TOOLS.get(name)
+        if arg_key is None:
+            return False
+        raw = str(args.get(arg_key) or "").strip().strip("'\"")
+        # UNC／網路路徑須在任何檔案系統操作前攔下，避免 resolve() 觸發 SMB 認證外洩
+        if not raw or raw.startswith(("\\\\", "//")):
+            return True
+        try:
+            args[arg_key] = str(_validate_safe_path(raw, self.workspace_dirs))
+        except ValueError:
+            return True
+        return False
 
     # ── Core loop ─────────────────────────────────
 
@@ -1213,7 +1239,11 @@ class Agent:
                         "call_id": fc["call_id"],
                         "name": fc["name"],
                         "arguments": fc["arguments"],
-                        "is_safe_read": fc["name"] in getattr(self, "_safe_read_tools", set()),
+                        # 路徑型工具是否免確認需待參數檢查後才知道，顯示上保守視為非 safe_read
+                        "is_safe_read": (
+                            fc["name"] in getattr(self, "_safe_read_tools", set())
+                            and fc["name"] not in _PATH_GATED_SAFE_TOOLS
+                        ),
                     },
                 )
 
@@ -1306,7 +1336,8 @@ class Agent:
                         result = await asyncio.to_thread(call_indexed_search, args, self.workspace_dirs)
                     else:
                         # 未知 MCP 工具預設需要確認，除非明確標示為 safe_read
-                        if fc["name"] not in getattr(self, "_safe_read_tools", set()):
+                        # 路徑型 safe_read 工具（如 sqlite_switch_database）於工作區外仍需確認
+                        if self._needs_mcp_confirm(fc["name"], args):
                             if self.on_confirm is None:
                                 raise RuntimeError(f"缺乏使用者確認機制，拒絕執行 MCP 工具 {fc['name']}")
                             ok = await asyncio.to_thread(self.on_confirm, fc["name"], args)

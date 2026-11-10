@@ -35,7 +35,7 @@ BUILTINS = {
     "help": "指令說明",
     "learn": "從近期對話萃取為共用技能",
     "logout": "登出",
-    "mcp": "MCP 工具清單",
+    "mcp": "MCP 工具清單（/mcp sqlite <路徑> 可切換 SQLite 資料庫）",
     "model": "切換當次提供者與模型",
     "new": "開啟全新乾淨對話（自動儲存既有對話，完整清空上下文）",
     "parallel": "手動平行啟動多個子代理 (用法: /parallel <name>:<task> | <name>:<task>)",

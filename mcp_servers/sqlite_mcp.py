@@ -207,17 +207,28 @@ def _tty_prompt(prompt_text: str) -> str:
         ) from exc
 
 
+_UNC_PREFIXES = ("\\\\", "//")
+
+
+def _is_network_path(raw: str | None) -> bool:
+    """判斷是否為 UNC／網路路徑（須在任何檔案系統操作前呼叫，避免 SMB 認證雜湊外洩）。"""
+    if not raw:
+        return False
+    return raw.strip().strip("'\"").startswith(_UNC_PREFIXES)
+
+
 def get_db_path(custom_path: str = "") -> Path:
     """解析並驗證 DB_PATH 目標檔案路徑。若未設定或為空，則提示使用者輸入並快取於記憶體。"""
     _ensure_creds_ttl()
     raw_path = custom_path.strip().strip("'\"") if custom_path else ""
 
     if _is_empty_or_null(raw_path):
+        # 執行期已切換並驗證的路徑優先於啟動環境變數，避免切換後被 DB_PATH 蓋回
         env_val = os.getenv("DB_PATH")
-        if not _is_empty_or_null(env_val):
-            raw_path = env_val.strip().strip("'\"")
-        elif not _is_empty_or_null(_RUNTIME_CREDS.get("DB_PATH")):
+        if not _is_empty_or_null(_RUNTIME_CREDS.get("DB_PATH")):
             raw_path = _RUNTIME_CREDS["DB_PATH"]
+        elif not _is_empty_or_null(env_val):
+            raw_path = env_val.strip().strip("'\"")
         else:
             prompt_text = "請輸入要連線的 SQLite 資料庫完整路徑與檔名 (DB_PATH): "
             raw_path = _tty_prompt(prompt_text).strip().strip("'\"")
@@ -225,6 +236,10 @@ def get_db_path(custom_path: str = "") -> Path:
     if _is_empty_or_null(raw_path):
         _clear_creds_cache()
         raise ValueError("未提供 SQLite 資料庫路徑 (DB_PATH)。")
+
+    # 必須早於 resolve()/exists()，否則對外 SMB 連線已發生
+    if _is_network_path(raw_path):
+        raise ValueError("安全限制：不接受 UNC／網路路徑，請先將資料庫複製到本機。")
 
     p = Path(raw_path).expanduser().resolve()
     if not p.exists():
@@ -512,10 +527,65 @@ def sqlite_run_select_query(query: str, db_path: str = "") -> str:
             conn.close()
 
 
+@mcp.tool()
+def sqlite_switch_database(target_db_path: str) -> str:
+    """切換目前連線的 SQLite 資料庫檔案路徑（以唯讀模式驗證檔案有效性，失敗時保留原連線）"""
+    clean_target = (target_db_path or "").strip().strip("'\"")
+    if _is_empty_or_null(clean_target):
+        _audit_log("sqlite_switch_database", "SWITCH", status="BLOCKED", detail="缺少 target_db_path 參數")
+        return "[ERROR] 請提供要切換的 SQLite 資料庫檔案路徑 (target_db_path)。"
+    if _is_network_path(clean_target):
+        _audit_log(
+            "sqlite_switch_database",
+            "SWITCH",
+            target=clean_target,
+            status="BLOCKED",
+            detail="拒絕 UNC／網路路徑",
+        )
+        return "[ERROR] 安全限制：不接受 UNC／網路路徑，請先將資料庫複製到本機。"
+
+    _ensure_creds_ttl()
+    prev_db = _RUNTIME_CREDS.get("DB_PATH")
+    conn = None
+    sql = "SELECT count(*) FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%';"
+    try:
+        conn = _get_readonly_connection("sqlite_switch_database", sql, db_path=clean_target)
+        row = conn.execute(sql).fetchone()
+        table_count = int(row[0]) if row else 0
+        resolved = _RUNTIME_CREDS.get("DB_PATH", clean_target)
+        _audit_log(
+            "sqlite_switch_database",
+            f"SWITCH TO {resolved}",
+            target=resolved,
+            status="OK",
+            detail=f"tables={table_count}",
+        )
+        return f"[SUCCESS] 已切換 SQLite 資料庫至：{resolved}（共 {table_count} 個資料表／檢視表）"
+    except Exception as e:
+        # 驗證失敗（含非 SQLite 檔案於 execute 階段才拋錯）時還原原路徑，避免快取無效路徑
+        if prev_db:
+            _RUNTIME_CREDS["DB_PATH"] = prev_db
+            _touch_creds_cache()
+        else:
+            _RUNTIME_CREDS.pop("DB_PATH", None)
+        _audit_log(
+            "sqlite_switch_database",
+            f"SWITCH TO {clean_target}",
+            target=clean_target,
+            status="ERROR",
+            detail=str(e),
+        )
+        return f"[ERROR] 切換 SQLite 資料庫失敗: {e}"
+    finally:
+        if conn:
+            conn.close()
+
+
 # 向後相容別名 (Backward compatibility aliases)
 db_list_tables = sqlite_list_tables
 db_describe_schema = sqlite_describe_schema
 db_run_select_query = sqlite_run_select_query
+db_switch_database = sqlite_switch_database
 
 
 if __name__ == "__main__":

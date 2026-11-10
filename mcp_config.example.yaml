@@ -61,6 +61,8 @@ servers:
   #     GITHUB_ALLOWED_REPOS: ""            # 選填：允許存取之 owner/repo 白名單（逗號分隔，如 "org/repo1,org/repo2"）
 
   # 本機 SQLite 資料庫檢索 (唯讀 SELECT 查詢)
+  # 對話中可請 AI 切換資料庫，或輸入 /mcp sqlite <路徑> 直接切換
+  # sqlite_switch_database 列入 safe_read_tools 時，僅工作區內路徑免確認；工作區外仍會詢問，UNC 網路路徑一律拒絕
   # sqlite:
   #   transport: stdio
   #   command: python
@@ -69,6 +71,7 @@ servers:
   #     - sqlite_list_tables
   #     - sqlite_describe_schema
   #     - sqlite_run_select_query
+  #     - sqlite_switch_database
   #   env:
   #     DB_PATH: "dev.db" # 選填：SQLite 資料庫完整路徑與檔名（留空、null 或省略時將於執行時詢問）
 

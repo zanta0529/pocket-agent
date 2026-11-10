@@ -6,6 +6,9 @@ from rich.text import Text
 from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
 from pocket_agent.frontend.cli.input import BUILTINS, file_argument
 
+# /mcp sqlite <db_path> 所呼叫的 SQLite MCP 切換工具名稱
+_SQLITE_SWITCH_TOOL = "sqlite_switch_database"
+
 
 class QuitCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
@@ -274,6 +277,11 @@ class McpCommand(CliCommand):
 
         arg = args.strip()
         if arg:
+            # /mcp sqlite <db_path>：零 Token 直接切換 SQLite 資料庫檔案
+            head, _, rest = arg.partition(" ")
+            if head.lower() == "sqlite" and rest.strip():
+                return await self._switch_sqlite(ctx, mcp_manager, rest.strip())
+
             # 支援查看特定 MCP 工具的詳細功能說明
             matched_server = None
             for s_name in grouped:
@@ -301,6 +309,7 @@ class McpCommand(CliCommand):
                     line.append(f"\n    {first_line}", style="dim")
                 ctx.renderer.console.print(line)
             ctx.renderer.console.print()
+            self._print_sqlite_status(ctx, mcp_manager, matched_server)
             return CommandResult()
 
         # 預設無參數：以分組方式清晰呈現啟用的 MCP 工具與功能清單
@@ -339,8 +348,82 @@ class McpCommand(CliCommand):
         tip.append(f"/mcp {sample_server}", style="cyan")
         tip.append("）", style="dim")
         ctx.renderer.console.print(tip)
+        if mcp_manager is not None and hasattr(mcp_manager, "find_server_for_tool"):
+            if isinstance(mcp_manager.find_server_for_tool(_SQLITE_SWITCH_TOOL), str):
+                sqlite_tip = Text("💡 提示：輸入 ", style="dim")
+                sqlite_tip.append("/mcp sqlite <資料庫路徑>", style="bold yellow")
+                sqlite_tip.append(" 可直接切換 SQLite 資料庫檔案", style="dim")
+                ctx.renderer.console.print(sqlite_tip)
         ctx.renderer.console.print()
 
+        return CommandResult()
+
+    @staticmethod
+    def _print_sqlite_status(ctx: CommandContext, mcp_manager, server_name: str) -> None:
+        """若指定伺服器提供 SQLite 切換工具，顯示目前生效的資料庫路徑與切換用法。"""
+        if mcp_manager is None or not hasattr(mcp_manager, "find_server_for_tool"):
+            return
+        if mcp_manager.find_server_for_tool(_SQLITE_SWITCH_TOOL) != server_name:
+            return
+        current = mcp_manager.get_runtime_conn_param(server_name, "DB_PATH")
+        ctx.renderer.message(f"目前 SQLite 資料庫：{current or '（尚未設定，首次查詢時詢問）'}", "cyan")
+        ctx.renderer.message("提示：輸入 /mcp sqlite <資料庫路徑> 可切換資料庫檔案", "dim")
+
+    @staticmethod
+    async def _switch_sqlite(ctx: CommandContext, mcp_manager, raw_path: str) -> CommandResult:
+        """處理 /mcp sqlite <db_path>：拒絕 UNC、工作區外需確認，並經 MCP 工具完成切換與稽核。"""
+        server_name = None
+        if mcp_manager is not None and hasattr(mcp_manager, "find_server_for_tool"):
+            server_name = mcp_manager.find_server_for_tool(_SQLITE_SWITCH_TOOL)
+        if not isinstance(server_name, str) or not server_name:
+            ctx.renderer.message("目前未掛載支援切換資料庫的 SQLite MCP 服務。", "yellow")
+            return CommandResult()
+
+        clean = raw_path.strip().strip("'\"")
+        # 必須早於任何 Path 解析，避免 UNC 路徑觸發 SMB 認證外洩
+        if not clean or clean.startswith(("\\\\", "//")):
+            ctx.renderer.message("✗ 安全限制：不接受空白或 UNC／網路路徑，請先將資料庫複製到本機。", "red")
+            return CommandResult()
+
+        from pocket_agent.tools.fs import _validate_safe_path
+
+        try:
+            target = Path(clean).expanduser().resolve(strict=False)
+        except OSError, RuntimeError, ValueError:
+            ctx.renderer.message(f"✗ 無效的路徑格式：{clean}", "red")
+            return CommandResult()
+
+        try:
+            _validate_safe_path(str(target), getattr(ctx.agent, "workspace_dirs", None))
+        except ValueError:
+            from rich.panel import Panel
+
+            ctx.renderer._ensure_newline()
+            ctx.renderer.console.print(
+                Panel(
+                    Text(f"資料庫不在目前工作區內或位於受保護路徑：\n  🗄 {target}", style="yellow"),
+                    title="【安全警告】SQLite 資料庫切換確認",
+                    title_align="left",
+                    border_style="bold red",
+                    expand=False,
+                )
+            )
+            try:
+                ans = input("\n確定要切換到此資料庫嗎？[y/N] ").strip().lower()
+            except KeyboardInterrupt, EOFError:
+                ans = ""
+            if ans != "y":
+                ctx.renderer.message("✗ 已取消切換。")
+                return CommandResult()
+
+        try:
+            result = await mcp_manager.call(_SQLITE_SWITCH_TOOL, {"target_db_path": str(target)})
+        except Exception as e:
+            ctx.renderer.message(f"✗ 切換 SQLite 資料庫失敗：{e}", "red")
+            return CommandResult()
+        clean_result = result.replace("<external_content>\n", "").replace("\n</external_content>", "").strip()
+        style = "green" if clean_result.startswith("[SUCCESS]") else "red"
+        ctx.renderer.message(clean_result, style)
         return CommandResult()
 
 

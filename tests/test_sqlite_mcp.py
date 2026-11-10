@@ -176,3 +176,186 @@ def test_mcp_manager_strips_db_path_and_prompts_when_missing(tmp_path):
     assert prompt_calls == [("sqlite", ["DB_PATH"])]
     _, sent_args = fake_session.call_tool.call_args.args
     assert sent_args == {"db_path": str(db_file)}
+
+
+def _create_other_db(db_file: Path) -> Path:
+    conn = sqlite3.connect(str(db_file))
+    try:
+        conn.executescript("CREATE TABLE orders (id INTEGER PRIMARY KEY, amount INTEGER);")
+        conn.commit()
+    finally:
+        conn.close()
+    return db_file
+
+
+def test_sqlite_switch_database_changes_active_db(tmp_path):
+    first = _create_sample_db(tmp_path / "first.db")
+    second = _create_other_db(tmp_path / "second.db")
+
+    assert sqlite_mcp.sqlite_switch_database(str(first)).startswith("[SUCCESS]")
+    assert "users" in sqlite_mcp.sqlite_list_tables().splitlines()
+
+    out = sqlite_mcp.sqlite_switch_database(str(second))
+    assert out.startswith("[SUCCESS]")
+    assert str(second.resolve()) in out
+    assert sqlite_mcp.sqlite_list_tables().splitlines() == ["orders"]
+    assert "[ERROR]" not in sqlite_mcp.sqlite_run_select_query("SELECT count(*) FROM orders")
+
+
+def test_sqlite_switch_database_runtime_path_overrides_env(tmp_path, monkeypatch):
+    first = _create_sample_db(tmp_path / "first.db")
+    second = _create_other_db(tmp_path / "second.db")
+    monkeypatch.setenv("DB_PATH", str(first))
+
+    assert sqlite_mcp.sqlite_switch_database(str(second)).startswith("[SUCCESS]")
+    assert sqlite_mcp.sqlite_list_tables().splitlines() == ["orders"]
+
+
+@pytest.mark.parametrize("bad_name", ["missing.db", "not_sqlite.db"])
+def test_sqlite_switch_database_failure_keeps_previous_db(tmp_path, bad_name):
+    first = _create_sample_db(tmp_path / "first.db")
+    (tmp_path / "not_sqlite.db").write_text("this is not a sqlite database " * 10, encoding="utf-8")
+    assert sqlite_mcp.sqlite_switch_database(str(first)).startswith("[SUCCESS]")
+
+    out = sqlite_mcp.sqlite_switch_database(str(tmp_path / bad_name))
+    assert out.startswith("[ERROR]")
+    assert sqlite_mcp._RUNTIME_CREDS["DB_PATH"] == str(first.resolve())
+    assert "users" in sqlite_mcp.sqlite_list_tables().splitlines()
+
+
+def test_sqlite_switch_database_invalid_file_without_previous_db_is_not_cached(tmp_path):
+    bad = tmp_path / "not_sqlite.db"
+    bad.write_text("this is not a sqlite database " * 10, encoding="utf-8")
+
+    assert sqlite_mcp.sqlite_switch_database(str(bad)).startswith("[ERROR]")
+    assert "DB_PATH" not in sqlite_mcp._RUNTIME_CREDS
+
+
+@pytest.mark.parametrize("unc_path", ["\\\\attacker\\share\\a.db", "//attacker/share/a.db", "'\\\\host\\s\\b.db'"])
+def test_sqlite_switch_database_blocks_unc_without_touching_filesystem(monkeypatch, unc_path):
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("UNC 路徑不應觸發任何連線或檔案系統操作")
+
+    monkeypatch.setattr(sqlite_mcp.sqlite3, "connect", _fail)
+    monkeypatch.setattr(sqlite_mcp, "_get_readonly_connection", _fail)
+    monkeypatch.setattr(sqlite_mcp, "get_db_path", _fail)
+
+    out = sqlite_mcp.sqlite_switch_database(unc_path)
+    assert out.startswith("[ERROR]")
+    assert "UNC" in out
+
+
+def test_sqlite_get_db_path_blocks_unc_custom_path(monkeypatch):
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("UNC 路徑不應觸發 resolve()")
+
+    monkeypatch.setattr(sqlite_mcp.Path, "resolve", _fail)
+    with pytest.raises(ValueError, match="UNC"):
+        sqlite_mcp.get_db_path("\\\\attacker\\share\\a.db")
+
+
+def _make_switch_manager(call_text: str) -> tuple[MCPManager, SimpleNamespace]:
+    manager = MCPManager()
+    manager._server_envs["sqlite"] = {"DB_PATH": ""}
+    fake_tools = [
+        SimpleNamespace(
+            name="sqlite_list_tables",
+            description="list sqlite tables",
+            inputSchema={"type": "object", "properties": {"db_path": {"type": "string"}}},
+        ),
+        SimpleNamespace(
+            name="sqlite_switch_database",
+            description="switch sqlite db",
+            inputSchema={
+                "type": "object",
+                "properties": {"target_db_path": {"type": "string"}},
+                "required": ["target_db_path"],
+            },
+        ),
+    ]
+    fake_session = SimpleNamespace(
+        list_tools=AsyncMock(return_value=SimpleNamespace(tools=fake_tools)),
+        call_tool=AsyncMock(return_value=MagicMock(content=[MagicMock(text=call_text)])),
+    )
+    asyncio.run(
+        manager._register_tools(
+            "sqlite",
+            fake_session,
+            inject={},
+            safe_read_tools=["sqlite_list_tables", "sqlite_switch_database"],
+        )
+    )
+    return manager, fake_session
+
+
+def test_mcp_manager_syncs_runtime_cache_after_switch(tmp_path):
+    db_file = _create_other_db(tmp_path / "second.db")
+    manager, fake_session = _make_switch_manager("[SUCCESS] 已切換 SQLite 資料庫")
+
+    schemas = {s["name"]: s for s in manager.openai_tools()}
+    assert "target_db_path" in schemas["sqlite_switch_database"]["parameters"]["properties"]
+    assert manager.find_server_for_tool("sqlite_switch_database") == "sqlite"
+
+    asyncio.run(manager.call("sqlite_switch_database", {"target_db_path": str(db_file)}))
+    assert manager.get_runtime_conn_param("sqlite", "DB_PATH") == str(db_file.resolve())
+
+    manager.on_prompt_conn = MagicMock(side_effect=AssertionError("已切換後不應再詢問 DB_PATH"))
+    asyncio.run(manager.call("sqlite_list_tables", {}))
+    _, sent_args = fake_session.call_tool.call_args.args
+    assert sent_args == {"db_path": str(db_file.resolve())}
+
+
+def test_mcp_manager_does_not_cache_failed_switch(tmp_path):
+    manager, _ = _make_switch_manager("[ERROR] 切換 SQLite 資料庫失敗")
+    asyncio.run(manager.call("sqlite_switch_database", {"target_db_path": str(tmp_path / "x.db")}))
+    assert manager.get_runtime_conn_param("sqlite", "DB_PATH") is None
+
+
+def _make_gate_agent(workspace: Path, safe_tools: set[str]):
+    from pocket_agent.core.agent import Agent
+
+    agent = Agent.__new__(Agent)
+    agent._safe_read_tools = safe_tools
+    agent.workspace_dirs = [str(workspace)]
+    return agent
+
+
+def test_agent_switch_gate_auto_approves_inside_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    agent = _make_gate_agent(workspace, {"sqlite_switch_database"})
+
+    args = {"target_db_path": str(workspace / "sub" / ".." / "data.db")}
+    assert agent._needs_mcp_confirm("sqlite_switch_database", args) is False
+    assert args["target_db_path"] == str((workspace / "data.db").resolve())
+
+
+@pytest.mark.parametrize(
+    "target_factory",
+    [
+        lambda root: str(root / "outside" / "Cookies"),
+        lambda root: "\\\\attacker\\share\\a.db",
+        lambda root: "//attacker/share/a.db",
+        lambda root: str(root / "ws" / ".git" / "a.db"),
+        lambda root: "",
+    ],
+)
+def test_agent_switch_gate_requires_confirm_outside_workspace(tmp_path, target_factory):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    agent = _make_gate_agent(workspace, {"sqlite_switch_database"})
+
+    raw = target_factory(tmp_path)
+    args = {"target_db_path": raw}
+    assert agent._needs_mcp_confirm("sqlite_switch_database", args) is True
+    assert args["target_db_path"] == raw
+
+
+def test_agent_switch_gate_respects_safe_read_membership(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    agent = _make_gate_agent(workspace, {"sqlite_list_tables"})
+
+    assert agent._needs_mcp_confirm("sqlite_switch_database", {"target_db_path": str(workspace / "a.db")}) is True
+    assert agent._needs_mcp_confirm("sqlite_list_tables", {}) is False
+    assert agent._needs_mcp_confirm("unknown_tool", {}) is True

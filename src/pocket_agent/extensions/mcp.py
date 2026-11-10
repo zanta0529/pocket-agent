@@ -82,6 +82,9 @@ _CONN_PARAM_MAP = {
     "github_token": "GITHUB_TOKEN",
 }
 
+# 切換 SQLite 資料庫的工具；成功後需同步 _runtime_conn_cache 的 DB_PATH
+_DB_SWITCH_TOOLS = frozenset({"sqlite_switch_database", "db_switch_database"})
+
 
 @dataclass
 class ToolEntry:
@@ -260,7 +263,34 @@ class MCPManager:
         joined = "\n".join(parts)
         if entry.conn_params and _is_conn_auth_error(joined):
             self._runtime_conn_cache.pop(entry.server_name, None)
+        if tool_name in _DB_SWITCH_TOOLS and joined.lstrip().startswith("[SUCCESS]"):
+            target = str(arguments.get("target_db_path") or "").strip().strip("'\"")
+            if target:
+                # 伺服器端已拒絕 UNC 路徑，成功即代表為本機路徑，可安全正規化為絕對路徑
+                try:
+                    target = str(Path(target).expanduser().resolve())
+                except OSError, RuntimeError:
+                    pass
+                self.set_runtime_conn_param(entry.server_name, "DB_PATH", target)
         return wrap_external_content(joined)
+
+    def set_runtime_conn_param(self, server_name: str, env_key: str, value: str) -> None:
+        """更新指定伺服器的執行期連線參數快取（僅存於記憶體，不落盤）。"""
+        self._runtime_conn_cache.setdefault(server_name, {})[env_key] = value
+
+    def get_runtime_conn_param(self, server_name: str, env_key: str) -> str | None:
+        """取得目前生效的連線參數：執行期快取 → mcp_config.yaml env → 環境變數。"""
+        for source in (self._runtime_conn_cache.get(server_name, {}), self._server_envs.get(server_name, {})):
+            val = str(source.get(env_key) or "").strip()
+            if val and val.lower() not in ("null", "none", "~"):
+                return val
+        env_val = (os.getenv(env_key) or "").strip()
+        return env_val or None
+
+    def find_server_for_tool(self, tool_name: str) -> str | None:
+        """回傳提供指定工具的 MCP 伺服器名稱；找不到時回傳 None。"""
+        entry = self._tools.get(tool_name)
+        return entry.server_name if entry is not None else None
 
     def get_grouped_tools(self) -> dict[str, list[dict[str, str]]]:
         """回傳依 MCP 伺服器分組的工具資訊清單。"""
