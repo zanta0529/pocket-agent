@@ -229,6 +229,15 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
     if global_user_dir is not None:
         allowed_roots.append(global_user_dir)
 
+    try:
+        from pocket_agent.system.paths import bundle_dir
+
+        bundled_skills = (bundle_dir() / "skills").resolve()
+        if bundled_skills.exists():
+            allowed_roots.append(bundled_skills)
+    except Exception:
+        pass
+
     # workspace_dirs 是使用者明確授權的額外工作目錄，疊加進去
     if workspace_dirs:
         for wd in workspace_dirs:
@@ -367,6 +376,59 @@ def _evaluate_fs_confirmation(
     return f"[使用者拒絕執行此檔案{op_name}操作]"
 
 
+def _resolve_skill_reference_path(path_str: str, workspace_dirs: list[str] | None = None) -> Path | None:
+    """若相對路徑在目前工作區不存在，嘗試在已註冊之合法技能目錄中尋找對應檔案。
+
+    支援格式：
+    1. 包含技能名稱：<skill_name>/reference/ref1.md
+    2. 省略技能名稱：reference/ref1.md 或 ref1.md
+    """
+    cleaned = path_str.strip().strip("'\"")
+    if not cleaned:
+        return None
+
+    path_obj = Path(cleaned)
+    if path_obj.is_absolute() or any(p in ("..", "/", "\\") for p in path_obj.parts):
+        return None
+
+    try:
+        from pocket_agent.extensions.skills import REPO_SKILLS_DIR, USER_SKILLS_DIR, _get_workspace_skill_dirs
+
+        search_roots = [USER_SKILLS_DIR, REPO_SKILLS_DIR] + _get_workspace_skill_dirs(workspace_dirs)
+    except Exception:
+        return None
+
+    target_rel = path_obj
+    if len(target_rel.parts) > 1 and target_rel.parts[0].lower() == "skills":
+        target_rel = Path(*target_rel.parts[1:])
+
+    # 1. 直接匹配：若路徑開頭即為某技能名稱（如 abc/reference/ref1.md）
+    for root in search_roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        try:
+            candidate = (root / target_rel).resolve()
+            if candidate.exists() and candidate.is_relative_to(root.resolve()):
+                return candidate
+        except Exception:
+            continue
+
+    # 2. 次層比對：若路徑省略技能名稱，直接指向內部子路徑（如 reference/ref1.md）
+    for root in search_roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        try:
+            for skill_dir in root.iterdir():
+                if skill_dir.is_dir():
+                    candidate = (skill_dir / target_rel).resolve()
+                    if candidate.exists() and candidate.is_relative_to(skill_dir.resolve()):
+                        return candidate
+        except Exception:
+            continue
+
+    return None
+
+
 def call_fs_tool(
     name: str,
     args: dict,
@@ -379,7 +441,26 @@ def call_fs_tool(
         if not path_str:
             return "[ERROR] 缺少必填參數 'path'"
 
-        target = _validate_safe_path(path_str, workspace_dirs)
+        target = None
+        # 唯讀操作支援技能參考路徑回退解析
+        if name in ("read_file", "get_file_info", "list_dir"):
+            try:
+                candidate_target = _validate_safe_path(path_str, workspace_dirs)
+                if candidate_target.exists():
+                    target = candidate_target
+            except ValueError:
+                pass
+
+            if target is None:
+                skill_path = _resolve_skill_reference_path(path_str, workspace_dirs)
+                if skill_path is not None:
+                    try:
+                        target = _validate_safe_path(str(skill_path), workspace_dirs)
+                    except ValueError:
+                        pass
+
+        if target is None:
+            target = _validate_safe_path(path_str, workspace_dirs)
 
         if name == "list_dir":
             if not target.exists():
@@ -435,13 +516,18 @@ def call_fs_tool(
 
         elif name == "get_file_info":
             if not target.exists():
-                return f"[ERROR] 檔案或目錄不存在: {target}"
+                return f"[ERROR] 檔案或目錄不存在: {path_str}"
 
             stat = target.stat()
             size_bytes = stat.st_size
             mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
 
-            info = [f"路徑: {target}"]
+            display_path = (
+                str(target.relative_to(Path.cwd().resolve()))
+                if target.is_relative_to(Path.cwd().resolve())
+                else path_str
+            )
+            info = [f"路徑: {display_path}"]
             if target.is_dir():
                 info.append("類型: 目錄")
             else:
@@ -460,12 +546,17 @@ def call_fs_tool(
             return "\n".join(info)
 
         elif name == "read_file":
+            display_path = (
+                str(target.relative_to(Path.cwd().resolve()))
+                if target.is_relative_to(Path.cwd().resolve())
+                else path_str
+            )
             if not target.exists():
-                return f"[ERROR] 檔案不存在: {target}"
+                return f"[ERROR] 檔案不存在: {display_path}"
             if target.is_dir():
-                return f"[ERROR] {target} 是一個目錄。請改用 'list_dir' 工具來查看該目錄內容。"
+                return f"[ERROR] {display_path} 是一個目錄。請改用 'list_dir' 工具來查看該目錄內容。"
             if not target.is_file():
-                return f"[ERROR] 不是一般檔案: {target}"
+                return f"[ERROR] 不是一般檔案: {display_path}"
 
             try:
                 fsize = target.stat().st_size

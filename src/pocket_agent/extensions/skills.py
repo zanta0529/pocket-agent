@@ -353,10 +353,11 @@ def call_skill_tool(args: dict, workspace_dirs: list[str] | None = None) -> str:
 
     roots_display = "\n".join(f"  - {r}" for r in roots)
     workspace_context = (
-        f"[System] Current workspace roots (use these as the base for ALL file paths):\n"
-        f"{roots_display}\n"
-        f"NEVER construct file paths from memory or training data. "
-        f"Always derive paths relative to the workspace roots listed above.\n\n"
+        f"[System] Skill '{name}' is active.\n"
+        f"- Current workspace roots for project files:\n{roots_display}\n"
+        f"- Relative paths referencing files or subdirectories within this skill (or prefixed with '{name}/') "
+        f"can be accessed directly via read_file or list_dir. Do not guess host absolute paths.\n"
+        f"- For all project codebase files, derive paths relative to the workspace roots listed above.\n\n"
     )
 
     from pocket_agent.tools.fs import wrap_external_content
