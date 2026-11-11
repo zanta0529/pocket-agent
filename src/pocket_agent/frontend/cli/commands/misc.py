@@ -76,11 +76,10 @@ class CleanCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
             raise ValueError("/clean 不接受參數")
-        import asyncio
-
+        from pocket_agent.core.cancellation import run_sync
         from pocket_agent.system.housekeeping import default_housekeeper
 
-        res = await asyncio.to_thread(default_housekeeper.run_cleanup, force=True)
+        res = await run_sync(default_housekeeper.run_cleanup, force=True)
         files = res.get("cleaned_files", 0)
         mb = res.get("freed_mb", 0.0)
         if files > 0:
@@ -556,8 +555,6 @@ class ImageCommand(CliCommand):
 
 class CodeSearchCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
-        import asyncio
-
         from rich.panel import Panel
 
         from pocket_agent.tools.rag import call_indexed_search
@@ -576,7 +573,9 @@ class CodeSearchCommand(CliCommand):
 
         ctx.renderer.message(f"正在搜尋工作區：'{query}'...", "yellow")
 
-        result = await asyncio.to_thread(call_indexed_search, {"query": query, "top_k": 5}, ctx.agent.workspace_dirs)
+        from pocket_agent.core.cancellation import run_sync
+
+        result = await run_sync(call_indexed_search, {"query": query, "top_k": 5}, ctx.agent.workspace_dirs)
 
         clean_result = result
         if clean_result.startswith("<external_content>"):

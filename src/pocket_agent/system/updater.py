@@ -24,6 +24,7 @@ from pathlib import Path
 import certifi
 import httpx
 
+from pocket_agent.core.cancellation import run_sync
 from pocket_agent.system.config import config
 from pocket_agent.system.constants import DEFAULT_MAX_REDIRECTS, DEFAULT_NETWORK_TIMEOUT_SEC
 from pocket_agent.system.paths import build_info_path, bundle_dir, is_portable, portable_root
@@ -616,7 +617,7 @@ class UpdateManager:
             if on_status:
                 on_status(f"正在解壓並組裝 ({remote.short_sha}) 更新內容…")
 
-            payload_dir, install_deps = await asyncio.to_thread(
+            payload_dir, install_deps = await run_sync(
                 self._assemble_payload_sync,
                 zip_path,
                 staging_dir,

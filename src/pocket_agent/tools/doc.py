@@ -7,6 +7,7 @@
 from collections.abc import Callable
 from pathlib import Path
 
+from pocket_agent.core.cancellation import check_cancelled
 from pocket_agent.tools.fs import _evaluate_fs_confirmation, _validate_safe_path
 from pocket_agent.tools.image import _next_available
 
@@ -159,6 +160,7 @@ def _create_docx(args: dict, path: Path) -> Path:
                     for j, cell in enumerate(r):
                         table.cell(i, j).text = str(cell)
 
+    check_cancelled()
     doc.save(str(path))
     return path
 
@@ -188,6 +190,7 @@ def _create_pptx(args: dict, path: Path) -> Path:
         if sl.get("notes"):
             s.notes_slide.notes_text_frame.text = str(sl["notes"])
 
+    check_cancelled()
     prs.save(str(path))
     return path
 
@@ -267,6 +270,7 @@ def _create_pdf(args: dict, path: Path) -> Path:
                 story.append(tbl)
                 story.append(Spacer(1, 8))
 
+    check_cancelled()
     SimpleDocTemplate(str(path), pagesize=A4).build(story)
     return path
 

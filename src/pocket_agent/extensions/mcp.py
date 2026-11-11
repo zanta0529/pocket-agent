@@ -25,6 +25,7 @@ import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from pocket_agent.core.cancellation import run_sync
 from pocket_agent.system.paths import bundle_dir, is_frozen, log_dir, mcp_config_path, mcp_example_path
 
 try:
@@ -209,7 +210,7 @@ class MCPManager:
             missing.append(env_key)
 
         if missing and self.on_prompt_conn is not None:
-            prompted = await asyncio.to_thread(self.on_prompt_conn, entry.server_name, missing)
+            prompted = await run_sync(self.on_prompt_conn, entry.server_name, missing)
             for k, v in (prompted or {}).items():
                 clean_v = str(v) if "PASSWORD" in k or "PASSPHRASE" in k else str(v).strip()
                 if clean_v:
@@ -757,7 +758,7 @@ class _McpOAuthFlowHandler:
                     raise RuntimeError(f"MCP OAuth 授權未完成：{self._bucket['error']}")
                 if i == 15 and not self._opened and sys.stdin is not None and sys.stdin.isatty():
                     prompt_msg = f"\n[MCP:{self.server_name}] 登入後請貼上瀏覽器跳轉的完整 redirect URL：\n> "
-                    redirect_url = (await asyncio.to_thread(input, prompt_msg)).strip()
+                    redirect_url = (await run_sync(input, prompt_msg)).strip()
                     parsed = parse_qs(urlparse(redirect_url).query)
                     if "code" in parsed:
                         return AuthorizationCodeResult(

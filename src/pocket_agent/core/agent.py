@@ -10,6 +10,7 @@ from pathlib import Path
 from openai import NOT_GIVEN, AsyncOpenAI
 
 from pocket_agent.core.activity import SessionActivityTracker
+from pocket_agent.core.cancellation import run_sync
 from pocket_agent.core.context_budget import (
     DEFAULT_CONTEXT_WINDOW,
     SOURCE_DEFAULT,
@@ -259,7 +260,7 @@ class Agent:
         start_time = time.time()
 
         if not self._is_subagent:
-            await asyncio.to_thread(run_hooks, "before_send", {"user_input": user_input})
+            await run_sync(run_hooks, "before_send", {"user_input": user_input})
 
         content = await self._build_content(user_input, attachments or [])
         hist_len_before = len(self.history)
@@ -370,7 +371,7 @@ class Agent:
                     except Exception as e:
                         log.warning(f"Auto-Learn 背景作業失敗: {e}")
 
-            await asyncio.to_thread(
+            await run_sync(
                 run_hooks,
                 "after_response",
                 {"user_input": user_input, "reply": reply},
@@ -1284,7 +1285,7 @@ class Agent:
                     log.debug("TOOL calling %s", fc["name"])
 
                     if not self._is_subagent:
-                        await asyncio.to_thread(
+                        await run_sync(
                             run_hooks,
                             "before_tool",
                             {"tool_name": fc["name"], "tool_args": raw},
@@ -1300,7 +1301,7 @@ class Agent:
                     elif is_shell_tool(fc["name"]):
                         before_snap = self.activity.take_workspace_snapshot(self.workspace_dirs)
                         # 阻塞的 subprocess + 確認視窗等待 → 丟到 thread 跑
-                        result = await asyncio.to_thread(call_shell_tool, fc["name"], args, self.on_confirm)
+                        result = await run_sync(call_shell_tool, fc["name"], args, self.on_confirm)
                         if not isinstance(result, str) or not result.startswith(
                             ("[使用者拒絕", "[操作已由使用者取消", "[ERROR]")
                         ):
@@ -1310,16 +1311,14 @@ class Agent:
                             target_p = args.get("path") or args.get("target_file") or args.get("file") or ""
                             existed_before = self.activity.inspect_file_before_tool(target_p)
                         fs_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
-                        result = await asyncio.to_thread(
-                            call_fs_tool, fc["name"], args, fs_confirm, self.workspace_dirs
-                        )
+                        result = await run_sync(call_fs_tool, fc["name"], args, fs_confirm, self.workspace_dirs)
                     elif is_document_tool(fc["name"]):
-                        result = await asyncio.to_thread(call_document_tool, fc["name"], args, self.workspace_dirs)
+                        result = await run_sync(call_document_tool, fc["name"], args, self.workspace_dirs)
                     elif is_web_tool(fc["name"]):
-                        result = await asyncio.to_thread(call_web_tool, fc["name"], args)
+                        result = await run_sync(call_web_tool, fc["name"], args)
                     elif is_doc_tool(fc["name"]):
                         doc_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
-                        result, fpath = await asyncio.to_thread(
+                        result, fpath = await run_sync(
                             call_doc_tool,
                             fc["name"],
                             args,
@@ -1333,14 +1332,14 @@ class Agent:
                     elif fc["name"] == "indexed_search":
                         from pocket_agent.tools.rag import call_indexed_search
 
-                        result = await asyncio.to_thread(call_indexed_search, args, self.workspace_dirs)
+                        result = await run_sync(call_indexed_search, args, self.workspace_dirs)
                     else:
                         # 未知 MCP 工具預設需要確認，除非明確標示為 safe_read
                         # 路徑型 safe_read 工具（如 sqlite_switch_database）於工作區外仍需確認
                         if self._needs_mcp_confirm(fc["name"], args):
                             if self.on_confirm is None:
                                 raise RuntimeError(f"缺乏使用者確認機制，拒絕執行 MCP 工具 {fc['name']}")
-                            ok = await asyncio.to_thread(self.on_confirm, fc["name"], args)
+                            ok = await run_sync(self.on_confirm, fc["name"], args)
                             if isinstance(ok, str) and ok.strip():
                                 result = (
                                     f"[使用者拒絕執行此工具，並提供後續指示：\n"
@@ -1372,7 +1371,7 @@ class Agent:
                     log.debug("TOOL result name=%s chars=%d", fc["name"], len(result) if isinstance(result, str) else 0)
 
                     if not self._is_subagent:
-                        await asyncio.to_thread(
+                        await run_sync(
                             run_hooks,
                             "after_tool",
                             {"tool_name": fc["name"], "tool_result": result},

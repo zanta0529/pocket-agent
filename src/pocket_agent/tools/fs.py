@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Callable
 
+from pocket_agent.core.cancellation import check_cancelled
 from pocket_agent.system.constants import (
     DEFAULT_READ_FILE_LINES,
     DEFAULT_SEARCH_MAX_RESULTS,
@@ -294,6 +295,7 @@ def _get_ignore_spec(target_dir: Path):
 
 def _backup_file(target: Path) -> None:
     """時光機機制：在修改檔案前進行無感備份 (Native I/O)，不觸發 Shell 子行程。"""
+    check_cancelled()
     if not target.exists() or not target.is_file():
         return
 
@@ -671,6 +673,7 @@ def call_fs_tool(
             if refusal is not None:
                 return refusal
 
+            check_cancelled()
             _backup_file(target)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
@@ -686,6 +689,7 @@ def call_fs_tool(
             if refusal is not None:
                 return refusal
 
+            check_cancelled()
             _backup_file(target)
             with target.open("a", encoding="utf-8") as f:
                 f.write(content)
@@ -744,6 +748,7 @@ def call_fs_tool(
             if refusal is not None:
                 return refusal
 
+            check_cancelled()
             _backup_file(target)
             target.write_text(new_content, encoding="utf-8")
             return f"[SUCCESS] 成功替換檔案 {target} 的局部內容"

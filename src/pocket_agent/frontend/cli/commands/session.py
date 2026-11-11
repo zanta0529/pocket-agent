@@ -154,13 +154,25 @@ class CompactCommand(CliCommand):
         ctx.renderer.message("壓縮中…（正在建立高密度對話摘要）", "dim")
         original_len = len(history)
         keep_recent = 2 if len(history) < 8 else 4
+
+        from pocket_agent.frontend.cli.interrupts import OperationInterrupted, run_operation
+
+        def stopping() -> None:
+            ctx.agent.request_stop()
+            ctx.renderer._stop_status()
+            ctx.renderer.message("⏸ 停止要求已送出，等待進行中的工作收尾…", "yellow")
+
         try:
-            success, orig_tokens, comp_tokens = await ctx.agent.compact_history(keep_recent=keep_recent)
+            success, orig_tokens, comp_tokens = await run_operation(
+                ctx.agent.compact_history(keep_recent=keep_recent), stopping
+            )
+        except OperationInterrupted:
+            ctx.renderer._stop_status()
+            ctx.renderer.message("⏹ 壓縮已中止", "yellow")
+            return CommandResult()
         except Exception as e:
             ctx.renderer.message(f"壓縮失敗：{e}", "red")
             return CommandResult()
-
-        if not success:
             ctx.renderer.message("目前歷史對話結構過短或無顯著壓縮收益，歷史未變更。", "yellow")
             return CommandResult()
 
