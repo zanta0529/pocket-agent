@@ -7,13 +7,14 @@ client.files.create() 上傳大檔，若後端不支援該端點，這個沒有 
 改成本地處理後就不再有任何會卡住的網路呼叫。
 """
 
-import asyncio
 import logging
 import mimetypes
 from pathlib import Path
 from typing import Callable, Optional
 
 from openai import AsyncOpenAI
+
+from pocket_agent.core.cancellation import run_sync
 
 log = logging.getLogger("pocket-agent")
 
@@ -78,7 +79,7 @@ class FileUploader:
             raise FileNotFoundError(f"找不到檔案或目錄：{p}")
 
         if p.is_dir():
-            return await asyncio.to_thread(self._read_directory, p)
+            return await run_sync(self._read_directory, p)
 
         ext = p.suffix.lower()
 
@@ -86,10 +87,10 @@ class FileUploader:
             return await self._read_image(p)
         elif ext == ".pdf":
             # 逐頁解析可能較慢，丟到 thread 避免卡住共用的 asyncio event loop
-            return await asyncio.to_thread(self._read_pdf, p)
+            return await run_sync(self._read_pdf, p)
         else:
             # TEXT_DOCUMENT_TYPES 或未知副檔名，都嘗試當文字讀（容錯路徑）
-            return await asyncio.to_thread(self._read_text_file, p)
+            return await run_sync(self._read_text_file, p)
 
     async def _read_image(self, p: Path) -> dict:
         """圖片轉 base64 data URL，直接嵌入 message。"""

@@ -25,6 +25,7 @@ import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from pocket_agent.core.cancellation import run_sync
 from pocket_agent.system.paths import bundle_dir, is_frozen, log_dir, mcp_config_path, mcp_example_path
 
 try:
@@ -97,6 +98,14 @@ class ToolEntry:
     is_sensitive: bool = False
 
 
+@dataclass
+class _ServerRunner:
+    name: str
+    task: asyncio.Task
+    stop_event: asyncio.Event
+    session: ClientSession | None = None
+
+
 @dataclass(frozen=True)
 class MCPStartupResult:
     """本次初始化結果；ready 表示連線與工具註冊皆成功。"""
@@ -114,6 +123,7 @@ class MCPManager:
         self.config_path = Path(config_path) if config_path else mcp_config_path()
         self._tools: dict[str, ToolEntry] = {}
         self._sessions: list[ClientSession] = []
+        self._runners: dict[str, _ServerRunner] = {}
         self._exit_stack_closers: list[Any] = []
         self._server_envs: dict[str, dict[str, str]] = {}
         self._runtime_conn_cache: dict[str, dict[str, str]] = {}
@@ -158,12 +168,43 @@ class MCPManager:
                 print(f"[MCP] ⚠ 無法連線 {name!r}: {e}")
         return MCPStartupResult(len(servers), ready_servers, failed_servers, len(self._tools))
 
-    async def stop(self) -> None:
-        for closer in reversed(self._exit_stack_closers):
+    async def stop(self, timeout: float = 3.0) -> None:
+        runners = list(self._runners.values())
+        self._runners.clear()
+        self._sessions.clear()
+        self._tools.clear()
+
+        closers = list(reversed(self._exit_stack_closers))
+        self._exit_stack_closers.clear()
+
+        async def _close_runner(r: _ServerRunner) -> None:
+            r.stop_event.set()
             try:
-                await asyncio.wait_for(closer(None, None, None), timeout=1.5)
+                await asyncio.wait_for(r.task, timeout=1.5)
+            except asyncio.TimeoutError, asyncio.CancelledError:
+                r.task.cancel()
+                try:
+                    await asyncio.wait_for(r.task, timeout=0.5)
+                except Exception:
+                    pass
             except Exception as e:
-                logging.getLogger("pocket-agent").warning("MCP closer failed: %s", e, exc_info=True)
+                logging.getLogger("pocket-agent").warning("MCP runner failed for %s: %s", r.name, e)
+
+        async def _close_legacy(closer: Any) -> None:
+            try:
+                await asyncio.wait_for(closer(None, None, None), timeout=1.0)
+            except Exception as e:
+                logging.getLogger("pocket-agent").warning("MCP legacy closer failed: %s", e)
+
+        close_coros = [_close_runner(r) for r in runners] + [_close_legacy(c) for c in closers]
+        if close_coros:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*close_coros, return_exceptions=True),
+                    timeout=timeout,
+                )
+            except (asyncio.TimeoutError, Exception) as e:
+                logging.getLogger("pocket-agent").warning("MCP 服務整體關閉逾時或失敗: %s", e)
 
     # ── Tool access ───────────────────────────────
 
@@ -209,7 +250,7 @@ class MCPManager:
             missing.append(env_key)
 
         if missing and self.on_prompt_conn is not None:
-            prompted = await asyncio.to_thread(self.on_prompt_conn, entry.server_name, missing)
+            prompted = await run_sync(self.on_prompt_conn, entry.server_name, missing)
             for k, v in (prompted or {}).items():
                 clean_v = str(v) if "PASSWORD" in k or "PASSPHRASE" in k else str(v).strip()
                 if clean_v:
@@ -459,16 +500,30 @@ class MCPManager:
             callback_handler=flow_handler.callback_handler,
         )
 
-    async def _connect(self, name: str, spec: dict) -> ClientSession:
-        transport = spec.get("transport", "stdio")
-        norm_transport = str(transport).strip().lower().replace(" ", "-").replace("_", "-")
+    async def _run_server_lifecycle(
+        self,
+        name: str,
+        spec: dict,
+        ready_future: asyncio.Future[ClientSession],
+        stop_event: asyncio.Event,
+    ) -> None:
+        closers: list[Callable[[], Any]] = []
         closers_before = len(self._exit_stack_closers)
 
+        async def _enter_cm(cm: Any) -> Any:
+            res = await cm.__aenter__()
+            closers.append(lambda: cm.__aexit__(None, None, None))
+            return res
+
         try:
+            transport = spec.get("transport", "stdio")
+            norm_transport = str(transport).strip().lower().replace(" ", "-").replace("_", "-")
+
             if norm_transport == "stdio":
                 params = self._resolve_stdio_params(spec)
                 errlog = self._open_stdio_errlog()
-                read, write, _ = await self._enter(stdio_client(params, errlog=errlog))
+                res = await _enter_cm(stdio_client(params, errlog=errlog))
+                read, write = res[0], res[1]
             elif norm_transport == "sse":
                 if not HAS_SSE:
                     raise ImportError("需要安裝 mcp[sse] 才能使用 SSE transport")
@@ -479,35 +534,82 @@ class MCPManager:
                     sse_kwargs["headers"] = headers
                 if auth_provider is not None:
                     sse_kwargs["auth"] = auth_provider
-                read, write, _ = await self._enter(sse_client(spec["url"], **sse_kwargs))
+                res = await _enter_cm(sse_client(spec["url"], **sse_kwargs))
+                read, write = res[0], res[1]
             elif norm_transport in ("streamable-http", "streamablehttp", "http"):
                 if not HAS_STREAMABLE_HTTP:
                     raise ImportError("目前 mcp 版本不支援 Streamable HTTP transport")
                 headers = self._resolve_http_headers(name, spec)
                 auth_provider = self._build_oauth_provider(name, spec, headers=headers)
                 http_client = create_mcp_http_client(headers=headers, auth=auth_provider)
-                await http_client.__aenter__()
-                self._exit_stack_closers.append(http_client.__aexit__)
-                read, write, _ = await self._enter(streamable_http_client(spec["url"], http_client=http_client))
+                await _enter_cm(http_client)
+                res = await _enter_cm(streamable_http_client(spec["url"], http_client=http_client))
+                read, write = res[0], res[1]
             else:
                 raise ValueError(f"未知 transport: {transport!r}")
 
             session = ClientSession(read, write)
-            await session.__aenter__()
-            try:
-                await session.initialize()
-            except BaseException:
-                await session.__aexit__(None, None, None)
-                raise
-            self._exit_stack_closers.append(session.__aexit__)
-            return session
-        except BaseException:
+            await _enter_cm(session)
+            await session.initialize()
+            if not ready_future.done():
+                ready_future.set_result(session)
+        except BaseException as exc:
             while len(self._exit_stack_closers) > closers_before:
                 closer = self._exit_stack_closers.pop()
                 try:
                     await closer(None, None, None)
                 except Exception:
                     pass
+            for closer in reversed(closers):
+                try:
+                    await closer()
+                except Exception:
+                    pass
+            if not ready_future.done():
+                ready_future.set_exception(exc)
+            return
+
+        try:
+            await stop_event.wait()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            while len(self._exit_stack_closers) > closers_before:
+                closer = self._exit_stack_closers.pop()
+                try:
+                    await closer(None, None, None)
+                except Exception:
+                    pass
+            for closer in reversed(closers):
+                try:
+                    await closer()
+                except Exception:
+                    pass
+
+    async def _connect(self, name: str, spec: dict) -> ClientSession:
+        loop = asyncio.get_running_loop()
+        ready_future: asyncio.Future[ClientSession] = loop.create_future()
+        stop_event = asyncio.Event()
+
+        task = asyncio.create_task(
+            self._run_server_lifecycle(name, spec, ready_future, stop_event),
+            name=f"mcp-server-{name}",
+        )
+        runner = _ServerRunner(name=name, task=task, stop_event=stop_event)
+        self._runners[name] = runner
+
+        try:
+            session = await ready_future
+            runner.session = session
+            return session
+        except BaseException:
+            stop_event.set()
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=1.0)
+            except Exception:
+                pass
+            self._runners.pop(name, None)
             raise
 
     async def _enter(self, cm):
@@ -757,7 +859,7 @@ class _McpOAuthFlowHandler:
                     raise RuntimeError(f"MCP OAuth 授權未完成：{self._bucket['error']}")
                 if i == 15 and not self._opened and sys.stdin is not None and sys.stdin.isatty():
                     prompt_msg = f"\n[MCP:{self.server_name}] 登入後請貼上瀏覽器跳轉的完整 redirect URL：\n> "
-                    redirect_url = (await asyncio.to_thread(input, prompt_msg)).strip()
+                    redirect_url = (await run_sync(input, prompt_msg)).strip()
                     parsed = parse_qs(urlparse(redirect_url).query)
                     if "code" in parsed:
                         return AuthorizationCodeResult(

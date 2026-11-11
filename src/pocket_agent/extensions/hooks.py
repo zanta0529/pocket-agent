@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pocket_agent.core.cancellation import check_cancelled
+
 log = logging.getLogger("pocket-agent")
 
 HOOKS_PATH = Path.home() / ".pocket-agent" / "hooks.json"
@@ -62,6 +64,7 @@ def run_hooks(event: str, context: dict | None = None) -> None:
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
     for hook in hooks:
+        check_cancelled()
         try:
             subprocess.run(
                 hook["command"],

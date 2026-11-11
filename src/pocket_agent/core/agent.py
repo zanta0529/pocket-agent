@@ -10,6 +10,7 @@ from pathlib import Path
 from openai import NOT_GIVEN, AsyncOpenAI
 
 from pocket_agent.core.activity import SessionActivityTracker
+from pocket_agent.core.cancellation import run_sync
 from pocket_agent.core.context_budget import (
     DEFAULT_CONTEXT_WINDOW,
     SOURCE_DEFAULT,
@@ -189,6 +190,8 @@ class Agent:
         self.is_sensitive_session: bool = False  # 敏感工具呼叫後設為 True，防止對話內容與衍生內容落盤
 
         self.active_subagents: list["Agent"] = []  # 追蹤執行中的子代理，用於連動取消與狀態監控
+        self._subagent_tasks: dict["Agent", asyncio.Task] = {}  # 追蹤子代理非同步 Task 以便立即中斷
+        self._current_task: asyncio.Task | None = None  # 當前主代理執行 Task
         self._bg_tasks: set[asyncio.Task] = set()  # 追蹤背景任務以防垃圾回收
 
         # 串流回呼：callable(kind, data)，從背景 asyncio thread 呼叫，
@@ -257,9 +260,11 @@ class Agent:
         self.cancel_requested = False
         self.total_tokens = 0
         start_time = time.time()
+        current_task = asyncio.current_task()
+        self._current_task = current_task
 
         if not self._is_subagent:
-            await asyncio.to_thread(run_hooks, "before_send", {"user_input": user_input})
+            await run_sync(run_hooks, "before_send", {"user_input": user_input})
 
         content = await self._build_content(user_input, attachments or [])
         hist_len_before = len(self.history)
@@ -370,26 +375,60 @@ class Agent:
                     except Exception as e:
                         log.warning(f"Auto-Learn 背景作業失敗: {e}")
 
-            await asyncio.to_thread(
+            await run_sync(
                 run_hooks,
                 "after_response",
                 {"user_input": user_input, "reply": reply},
             )
 
+        if self._current_task is current_task:
+            self._current_task = None
         return thinking, reply, usage_str
 
     def request_stop(self) -> bool:
-        """要求停止本輪工作（從 GUI 執行緒呼叫）。
-        若有執行中的子代理，僅中斷子代理（保留主代理繼續處理其部分結果）。
+        """要求停止本輪工作（從 GUI 執行緒或訊號處理常式呼叫）。
+        若有執行中的子代理，中斷所有子代理及其 Task（保留主代理繼續處理其部分結果）。
         回傳 True 代表中斷了主代理；False 代表僅中斷子代理。
         """
         if self.active_subagents:
-            for sub in self.active_subagents:
+            for sub in list(self.active_subagents):
                 sub.request_stop()
+            for task in list(self._subagent_tasks.values()):
+                if not task.done():
+                    task.cancel()
             return False
 
         self.cancel_requested = True
+        if self._current_task is not None and not self._current_task.done():
+            self._current_task.cancel()
         return True
+
+    async def shutdown(self, timeout: float = 3.0) -> None:
+        """優雅關閉 Agent：中斷所有子代理、取消並收斂背景任務。"""
+        self.cancel_requested = True
+        for sub in list(self.active_subagents):
+            sub.request_stop()
+        for task in list(self._subagent_tasks.values()):
+            if not task.done():
+                task.cancel()
+        if self._subagent_tasks:
+            await asyncio.gather(*self._subagent_tasks.values(), return_exceptions=True)
+            self._subagent_tasks.clear()
+
+        if self._current_task is not None and not self._current_task.done():
+            self._current_task.cancel()
+
+        if self._bg_tasks:
+            tasks = list(self._bg_tasks)
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            try:
+                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+            except (asyncio.TimeoutError, Exception) as bg_err:
+                log.warning("Agent 背景任務關閉逾時或失敗 (%s 秒): %s", timeout, bg_err)
+            finally:
+                self._bg_tasks.clear()
 
     async def get_quota(self):
         return await self.engine.get_quota()
@@ -769,13 +808,19 @@ class Agent:
 
         log.info("SUBAGENT run %s task=%r", name, task[:80])
 
+        sub_task = asyncio.create_task(sub.chat(task))
+        self._subagent_tasks[sub] = sub_task
         self.active_subagents.append(sub)
         try:
-            _thinking, reply, _usage_str = await sub.chat(task)
+            _thinking, reply, _usage_str = await sub_task
+        except asyncio.CancelledError:
+            log.info("SUBAGENT %s task 已由取消要求中斷", name)
+            reply = f"（子代理 {name} 執行已被使用者停止）"
         except Exception as e:
             log.debug("子代理「%s」執行失敗：%s", name, e, exc_info=True)
             raise  # Let the caller handle the exception for proper CLI rendering
         finally:
+            self._subagent_tasks.pop(sub, None)
             self.activity.merge_from(sub.activity)
             if getattr(sub, "is_sensitive_session", False):
                 self.is_sensitive_session = True
@@ -1284,7 +1329,7 @@ class Agent:
                     log.debug("TOOL calling %s", fc["name"])
 
                     if not self._is_subagent:
-                        await asyncio.to_thread(
+                        await run_sync(
                             run_hooks,
                             "before_tool",
                             {"tool_name": fc["name"], "tool_args": raw},
@@ -1300,7 +1345,7 @@ class Agent:
                     elif is_shell_tool(fc["name"]):
                         before_snap = self.activity.take_workspace_snapshot(self.workspace_dirs)
                         # 阻塞的 subprocess + 確認視窗等待 → 丟到 thread 跑
-                        result = await asyncio.to_thread(call_shell_tool, fc["name"], args, self.on_confirm)
+                        result = await run_sync(call_shell_tool, fc["name"], args, self.on_confirm)
                         if not isinstance(result, str) or not result.startswith(
                             ("[使用者拒絕", "[操作已由使用者取消", "[ERROR]")
                         ):
@@ -1310,16 +1355,14 @@ class Agent:
                             target_p = args.get("path") or args.get("target_file") or args.get("file") or ""
                             existed_before = self.activity.inspect_file_before_tool(target_p)
                         fs_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
-                        result = await asyncio.to_thread(
-                            call_fs_tool, fc["name"], args, fs_confirm, self.workspace_dirs
-                        )
+                        result = await run_sync(call_fs_tool, fc["name"], args, fs_confirm, self.workspace_dirs)
                     elif is_document_tool(fc["name"]):
-                        result = await asyncio.to_thread(call_document_tool, fc["name"], args, self.workspace_dirs)
+                        result = await run_sync(call_document_tool, fc["name"], args, self.workspace_dirs)
                     elif is_web_tool(fc["name"]):
-                        result = await asyncio.to_thread(call_web_tool, fc["name"], args)
+                        result = await run_sync(call_web_tool, fc["name"], args)
                     elif is_doc_tool(fc["name"]):
                         doc_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
-                        result, fpath = await asyncio.to_thread(
+                        result, fpath = await run_sync(
                             call_doc_tool,
                             fc["name"],
                             args,
@@ -1333,14 +1376,14 @@ class Agent:
                     elif fc["name"] == "indexed_search":
                         from pocket_agent.tools.rag import call_indexed_search
 
-                        result = await asyncio.to_thread(call_indexed_search, args, self.workspace_dirs)
+                        result = await run_sync(call_indexed_search, args, self.workspace_dirs)
                     else:
                         # 未知 MCP 工具預設需要確認，除非明確標示為 safe_read
                         # 路徑型 safe_read 工具（如 sqlite_switch_database）於工作區外仍需確認
                         if self._needs_mcp_confirm(fc["name"], args):
                             if self.on_confirm is None:
                                 raise RuntimeError(f"缺乏使用者確認機制，拒絕執行 MCP 工具 {fc['name']}")
-                            ok = await asyncio.to_thread(self.on_confirm, fc["name"], args)
+                            ok = await run_sync(self.on_confirm, fc["name"], args)
                             if isinstance(ok, str) and ok.strip():
                                 result = (
                                     f"[使用者拒絕執行此工具，並提供後續指示：\n"
@@ -1372,7 +1415,7 @@ class Agent:
                     log.debug("TOOL result name=%s chars=%d", fc["name"], len(result) if isinstance(result, str) else 0)
 
                     if not self._is_subagent:
-                        await asyncio.to_thread(
+                        await run_sync(
                             run_hooks,
                             "after_tool",
                             {"tool_name": fc["name"], "tool_result": result},

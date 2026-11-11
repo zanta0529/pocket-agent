@@ -51,16 +51,24 @@ async def send_turn(
 
         started = monotonic()
 
+        from pocket_agent.frontend.cli.interrupts import OperationInterrupted, run_operation
+
+        def stopping() -> None:
+            agent.request_stop()
+            renderer._stop_status()
+            renderer.message("⏸ 停止要求已送出，等待進行中的工作收尾…", "yellow")
+
         if result.action == "image":
-            # 圖片生成無串流事件，保留 status spinner
             from pocket_agent.tools.image import generate_image
 
-            with renderer.console.status("生圖中…", spinner="dots"):
-                reply = await generate_image(
+            reply = await run_operation(
+                generate_image(
                     result.prompt,
                     output_path=Path("generated_images") / "image.png",
                     input_images=snapshot or None,
-                )
+                ),
+                stopping,
+            )
         else:
             # 串流模式：啟動思考中 spinner，等第一個 text 事件停止它
             from rich.status import Status
@@ -69,47 +77,20 @@ async def send_turn(
             renderer._active_status = status
             status.start()
 
-            chat_task = asyncio.ensure_future(agent.chat(result.prompt, attachments=snapshot))
             try:
-                while not chat_task.done():
-                    try:
-                        done, pending = await asyncio.wait([chat_task], return_when=asyncio.FIRST_COMPLETED)
-                        if done:
-                            break
-                    except asyncio.CancelledError:
-                        is_main_stopped = agent.request_stop()
-                        if not is_main_stopped:
-                            renderer.message("⏸ 已中斷執行中的子代理，主代理接續處理中...", "yellow")
-                            continue
-                        else:
-                            raise
-                    except KeyboardInterrupt:
-                        is_main_stopped = agent.request_stop()
-                        if not is_main_stopped:
-                            renderer.message("⏸ 已中斷執行中的子代理，主代理接續處理中...", "yellow")
-                            continue
-                        else:
-                            raise
-                _, reply, _ = chat_task.result()
-            except asyncio.CancelledError, KeyboardInterrupt:
-                agent.request_stop()
-                agent.on_stream = None
-                renderer._stop_status()
-                chat_task.cancel()
-                try:
-                    # 給予至多 1 秒協調正在進行之工具中斷與狀態寫入（不使用 shield，確保取消直達底層）
-                    await asyncio.wait_for(chat_task, timeout=1.0)
-                except asyncio.TimeoutError, asyncio.CancelledError, Exception, BaseException:
-                    pass
-                renderer._stop_status()
-                renderer.message("⏹ 已停止主代理", "yellow")
-                state.last_failed_input = raw
-                return
+                _, reply, _ = await run_operation(agent.chat(result.prompt, attachments=snapshot), stopping)
             finally:
                 # 確保串流狀態停止，並卸載回呼防止殘餘事件
                 agent.on_stream = None
                 renderer._stop_status()
 
+    except OperationInterrupted, asyncio.CancelledError:
+        agent.request_stop()
+        agent.on_stream = None
+        renderer._stop_status()
+        state.last_failed_input = raw
+        renderer.message("⏹ 已停止主代理", "yellow")
+        return
     except Exception as exc:
         agent.on_stream = None
         renderer._stop_status()
@@ -183,6 +164,12 @@ async def conversation(
     tools: list[str],
 ) -> None:
     from pocket_agent.frontend.cli.commands import CommandHandler
+    from pocket_agent.frontend.cli.interrupts import OperationInterrupted, run_operation
+
+    def stopping() -> None:
+        agent.request_stop()
+        renderer._stop_status()
+        renderer.message("⏸ 停止要求已送出，等待進行中的工作收尾…", "yellow")
 
     handler = CommandHandler(agent, state, reader, renderer, tools)
     agent.on_stream = renderer.event
@@ -206,7 +193,11 @@ async def conversation(
         if not raw.strip():
             continue
         try:
-            result = await handler.dispatch(raw)
+            result = await run_operation(handler.dispatch(raw), stopping)
+        except OperationInterrupted:
+            renderer._stop_status()
+            renderer.message("⏹ 操作已收尾，未自動重送", "yellow")
+            continue
         except Exception as exc:
             renderer.message(f"指令未執行：{exc}", "red")
             continue
@@ -214,8 +205,8 @@ async def conversation(
             break
         elif result.action in ("chat", "image"):
             try:
-                await send_turn(agent, state, renderer, raw, result)
-            except KeyboardInterrupt:
+                await run_operation(send_turn(agent, state, renderer, raw, result), stopping)
+            except OperationInterrupted:
                 # Ctrl+C 在 send_turn 等待期間：中止當前輪次，不退出
                 agent.request_stop()
                 agent.on_stream = None
@@ -241,10 +232,13 @@ class CliFrontend(FrontendStrategy):
         from pocket_agent.system.compat import setup_win_sigint_workaround
 
         sigint_task = setup_win_sigint_workaround()
+        update_task = None
+        housekeeping_task = None
 
         from rich.console import Console
 
         from pocket_agent.core.agent import Agent
+        from pocket_agent.core.cancellation import run_sync
         from pocket_agent.extensions.mcp import MCPManager
         from pocket_agent.frontend.cli.input import CliInput
         from pocket_agent.frontend.cli.render import CliRenderer
@@ -297,7 +291,7 @@ class CliFrontend(FrontendStrategy):
                                 continue
 
                             if md_target.exists() and md_target.is_file():
-                                md_content = await asyncio.to_thread(md_target.read_text, encoding="utf-8")
+                                md_content = await run_sync(md_target.read_text, encoding="utf-8")
                                 md_content = md_content.strip()
                                 if md_content:
                                     _g_ctx += (
@@ -583,7 +577,9 @@ class CliFrontend(FrontendStrategy):
                         status.start()
                     return False
 
-            agent.on_confirm = _cli_confirm
+            from pocket_agent.frontend.cli.confirmation import ConfirmationBridge
+
+            agent.on_confirm = ConfirmationBridge(agent, state, renderer)
 
             def _cli_prompt_mcp_conn(server_name: str, missing_keys: list[str]) -> dict[str, str]:
                 status = renderer._active_status
@@ -668,7 +664,7 @@ class CliFrontend(FrontendStrategy):
             from pocket_agent.system.housekeeping import default_housekeeper
             from pocket_agent.system.updater import update_manager
 
-            asyncio.create_task(asyncio.to_thread(default_housekeeper.run_cleanup, force=False))
+            housekeeping_task = asyncio.create_task(run_sync(default_housekeeper.run_cleanup, force=False))
 
             if update_manager.is_auto_update_enabled():
 
@@ -691,24 +687,25 @@ class CliFrontend(FrontendStrategy):
         except Exception as exc:
             renderer.message(f"CLI 執行失敗：{exc}", "red")
         finally:
-            if sigint_task is not None and not sigint_task.done():
-                sigint_task.cancel()
-                try:
-                    await sigint_task
-                except asyncio.CancelledError, Exception:
-                    pass
+            for bg_t in (sigint_task, update_task, housekeeping_task):
+                if bg_t is not None and not bg_t.done():
+                    bg_t.cancel()
+                    try:
+                        await bg_t
+                    except asyncio.CancelledError, Exception:
+                        pass
 
-            if update_task is not None and not update_task.done():
-                update_task.cancel()
+            # 收斂 Agent（停止子代理、收斂背景任務，避免 client 關閉後呼叫）
+            if agent is not None and hasattr(agent, "shutdown"):
                 try:
-                    await update_task
-                except asyncio.CancelledError, Exception:
-                    pass
+                    await asyncio.wait_for(agent.shutdown(timeout=3.0), timeout=3.5)
+                except Exception as agent_err:
+                    log.warning("Agent 關閉逾時或失敗：%s", agent_err)
 
-            # MCP shutdown failure must not skip closing the active model client.
+            # MCP 關閉失敗不阻礙關閉 Client
             try:
                 if mcp is not None:
-                    await asyncio.wait_for(mcp.stop(), timeout=3.0)
+                    await asyncio.wait_for(mcp.stop(timeout=3.0), timeout=3.5)
             except (asyncio.TimeoutError, Exception) as mcp_err:
                 log.warning("MCP 服務停止逾時或失敗：%s", mcp_err)
             finally:
