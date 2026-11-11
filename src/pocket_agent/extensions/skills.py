@@ -304,7 +304,7 @@ def skills_index_prompt(workspace_dirs: list[str] | None = None, query: str = ""
     return "\n".join(lines)
 
 
-# ── use_skill 工具 ────────────────────────────────
+# ── use_skill 與 search_skills 工具 ───────────────────────
 
 SKILL_TOOL = {
     "type": "function",
@@ -317,24 +317,49 @@ SKILL_TOOL = {
         "properties": {
             "name": {
                 "type": "string",
-                "description": "skill 名稱（見系統提示中的清單）",
+                "description": "skill 名稱（見系統提示中的清單或透過 search_skills 檢索）",
             },
         },
         "required": ["name"],
     },
+    "_is_safe_read": True,
+}
+
+SEARCH_SKILLS_TOOL = {
+    "type": "function",
+    "name": "search_skills",
+    "description": (
+        "搜尋本機工作區（.agents/skills/）、使用者目錄（~/.pocket-agent/skills/）"
+        "與內建的可用技能（操作手冊）。根據關鍵字檢索最相關的技能名稱與描述，可搭配 use_skill 載入完整指示。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "搜尋關鍵字或任務描述（例如 'asyncio cancellation'、'weekly-report'）",
+            },
+            "top_k": {
+                "type": "integer",
+                "description": "最多回傳的相關技能數量（預設 5）",
+            },
+        },
+        "required": ["query"],
+    },
+    "_is_safe_read": True,
 }
 
 
 def skill_tools(workspace_dirs: list[str] | None = None) -> list[dict]:
     """有 skill 才註冊工具，避免無謂佔用 context。"""
-    return [SKILL_TOOL] if list_skills(workspace_dirs) else []
+    return [SKILL_TOOL, SEARCH_SKILLS_TOOL] if list_skills(workspace_dirs) else []
 
 
 def is_skill_tool(name: str) -> bool:
-    return name == "use_skill"
+    return name in ("use_skill", "search_skills")
 
 
-def call_skill_tool(args: dict, workspace_dirs: list[str] | None = None) -> str:
+def _call_use_skill(args: dict, workspace_dirs: list[str] | None = None) -> str:
     name = str(args.get("name", "")).strip()
     body = load_skill(name, workspace_dirs)
 
@@ -363,3 +388,42 @@ def call_skill_tool(args: dict, workspace_dirs: list[str] | None = None) -> str:
     from pocket_agent.tools.fs import wrap_external_content
 
     return f"# Skill: {name}\n\n{workspace_context}{wrap_external_content(body)}"
+
+
+def _call_search_skills(args: dict, workspace_dirs: list[str] | None = None) -> str:
+    query = str(args.get("query", "")).strip()
+    raw_top_k = args.get("top_k") or args.get("limit") or 5
+    try:
+        top_k = max(1, min(20, int(raw_top_k)))
+    except ValueError, TypeError:
+        top_k = 5
+
+    results = search_skills(query, workspace_dirs=workspace_dirs, top_k=top_k)
+    if not results:
+        available = ", ".join(s["name"] for s in list_skills(workspace_dirs)) or "（無）"
+        return f"找不到與「{query}」相關的技能。目前可用技能清單：{available}"
+
+    lines = [f"### 搜尋技能結果（關鍵字：{query}，共 {len(results)} 項）", ""]
+    for s in results:
+        lines.append(f"- **{s['name']}**：{s['description']}")
+    lines.append("\n💡 提示：若需使用上述技能，請呼叫 `use_skill` 並帶入 `name` 參數載入完整操作手冊。")
+    return "\n".join(lines)
+
+
+def call_skill_tool(
+    name_or_args: str | dict,
+    args_or_workspaces: dict | list[str] | None = None,
+    workspace_dirs: list[str] | None = None,
+) -> str:
+    if isinstance(name_or_args, str):
+        tool_name = name_or_args
+        tool_args = args_or_workspaces if isinstance(args_or_workspaces, dict) else {}
+        ws = workspace_dirs
+    else:
+        tool_name = "use_skill"
+        tool_args = name_or_args
+        ws = args_or_workspaces if isinstance(args_or_workspaces, list) else None
+
+    if tool_name == "search_skills":
+        return _call_search_skills(tool_args, ws)
+    return _call_use_skill(tool_args, ws)

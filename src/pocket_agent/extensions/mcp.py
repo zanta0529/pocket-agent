@@ -86,6 +86,42 @@ _CONN_PARAM_MAP = {
 # 切換 SQLite 資料庫的工具；成功後需同步 _runtime_conn_cache 的 DB_PATH
 _DB_SWITCH_TOOLS = frozenset({"sqlite_switch_database", "db_switch_database"})
 
+# Pocket Agent 內建工具名稱清單；當 MCP 工具與內建工具同名時，強制冠上 mcp__{server}__{tool}
+# 命名空間進行隔離，確保內建工具不被覆蓋，且 MCP 工具限制在該 server 範圍內執行
+_BUILTIN_TOOL_NAMES = frozenset(
+    {
+        # Skills
+        "search_skills",
+        "use_skill",
+        # File System
+        "read_file",
+        "write_to_file",
+        "append_to_file",
+        "replace_file_content",
+        "list_dir",
+        "get_file_info",
+        "search_files",
+        # Document Export & Read
+        "export_docx",
+        "export_pptx",
+        "export_pdf",
+        "read_document",
+        # Shell
+        "run_command",
+        # Web
+        "web_search",
+        "fetch_web_page",
+        "batch_web_search",
+        # RAG
+        "indexed_search",
+        # Core / Subagents / Interactive
+        "ask_question",
+        "run_subagents_parallel",
+        "image_tool",
+        "generate_image",
+    }
+)
+
 
 @dataclass
 class ToolEntry:
@@ -96,6 +132,7 @@ class ToolEntry:
     inject: dict = field(default_factory=dict)  # 自動注入的參數值
     conn_params: dict[str, str] = field(default_factory=dict)
     is_sensitive: bool = False
+    original_name: str = ""
 
 
 @dataclass
@@ -259,11 +296,32 @@ class MCPManager:
 
         return {arg_name: resolved.get(env_key, "") for arg_name, env_key in entry.conn_params.items()}
 
+    def find_entry(self, tool_name: str) -> ToolEntry | None:
+        """尋找工具 entry，支援前綴名稱（mcp__<server>__<tool>）與原始名稱。"""
+        entry = self._tools.get(tool_name)
+        if entry is not None:
+            return entry
+        # 若傳入前綴名稱但工具以原始名稱註冊
+        if tool_name.startswith("mcp__"):
+            parts = tool_name.split("__", 2)
+            if len(parts) == 3:
+                s_name, t_name = parts[1], parts[2]
+                for e in self._tools.values():
+                    if (e.original_name == t_name or e.name == t_name) and e.server_name == s_name:
+                        return e
+        # 向下相容比對原始名稱
+        for e in self._tools.values():
+            if e.original_name == tool_name:
+                return e
+        return None
+
     async def call(self, tool_name: str, arguments: dict) -> str:
         """執行指定工具，自動補入 inject 參數後呼叫。"""
-        entry = self._tools.get(tool_name)
+        entry = self.find_entry(tool_name)
         if entry is None:
             raise KeyError(f"找不到工具 {tool_name!r}，可用：{list(self._tools)}")
+
+        actual_tool_name = entry.original_name or tool_name
 
         # 注入參數（模型看不到，但 server 需要）
         full_args = {**arguments, **entry.inject}
@@ -274,7 +332,7 @@ class MCPManager:
         from pocket_agent.core.agent import log
 
         # Artifact 隔離攔截
-        if tool_name in ("write_to_file", "write_file", "create_file") and "ArtifactMetadata" in full_args:
+        if actual_tool_name in ("write_to_file", "write_file", "create_file") and "ArtifactMetadata" in full_args:
             artifact_meta = full_args.pop("ArtifactMetadata")
             if artifact_meta.get("UserFacing"):
                 from pocket_agent.system.paths import user_dir
@@ -289,8 +347,8 @@ class MCPManager:
                     log.info(f"Artifact redirected from {original_path} to {new_path}")
 
         # 工具內容可能包含未知機密；所有 MCP 呼叫統一只記錄中繼資料。
-        log.debug("MCP call_tool name=%r", tool_name)
-        result = await entry.session.call_tool(tool_name, full_args)
+        log.debug("MCP call_tool name=%r (target=%r)", tool_name, actual_tool_name)
+        result = await entry.session.call_tool(actual_tool_name, full_args)
         log.debug("MCP result name=%r blocks=%d", tool_name, len(result.content))
 
         parts = []
@@ -304,7 +362,7 @@ class MCPManager:
         joined = "\n".join(parts)
         if entry.conn_params and _is_conn_auth_error(joined):
             self._runtime_conn_cache.pop(entry.server_name, None)
-        if tool_name in _DB_SWITCH_TOOLS and joined.lstrip().startswith("[SUCCESS]"):
+        if actual_tool_name in _DB_SWITCH_TOOLS and joined.lstrip().startswith("[SUCCESS]"):
             target = str(arguments.get("target_db_path") or "").strip().strip("'\"")
             if target:
                 # 伺服器端已拒絕 UNC 路徑，成功即代表為本機路徑，可安全正規化為絕對路徑
@@ -330,7 +388,7 @@ class MCPManager:
 
     def find_server_for_tool(self, tool_name: str) -> str | None:
         """回傳提供指定工具的 MCP 伺服器名稱；找不到時回傳 None。"""
-        entry = self._tools.get(tool_name)
+        entry = self.find_entry(tool_name)
         return entry.server_name if entry is not None else None
 
     def get_grouped_tools(self) -> dict[str, list[dict[str, str]]]:
@@ -340,6 +398,7 @@ class MCPManager:
             grouped.setdefault(entry.server_name, []).append(
                 {
                     "name": entry.name,
+                    "original_name": entry.original_name,
                     "description": (entry.schema.get("description") or "").strip(),
                 }
             )
@@ -350,14 +409,15 @@ class MCPManager:
 
     def is_sensitive_tool(self, tool_name: str) -> bool:
         """依據本機受信任伺服器註冊中繼資料，判定指定工具是否屬於高敏感系統工具。"""
-        entry = self._tools.get(tool_name)
+        entry = self.find_entry(tool_name)
         if entry is not None:
             return bool(entry.is_sensitive)
+        raw_name = tool_name.split("__")[-1]
         return (
-            tool_name.startswith("rhel_")
-            or tool_name.startswith("win_rdp_")
-            or tool_name.startswith("mysql_")
-            or tool_name.startswith("mssql_")
+            raw_name.startswith("rhel_")
+            or raw_name.startswith("win_rdp_")
+            or raw_name.startswith("mysql_")
+            or raw_name.startswith("mssql_")
         )
 
     # ── Internal ──────────────────────────────────
@@ -648,33 +708,41 @@ class MCPManager:
                     "required": ["Summary", "UserFacing"],
                 }
 
+            # 若工具名稱與內建工具同名，冠上 Claude Code 風格之 mcp__{server}__{tool} 命名空間隔離
+            if tool.name in _BUILTIN_TOOL_NAMES:
+                scoped_name = f"mcp__{server_name}__{tool.name}"
+            else:
+                scoped_name = tool.name
+
             schema = {
                 "type": "function",
-                "name": tool.name,
+                "name": scoped_name,
                 "description": tool.description or "",
                 "parameters": params,
             }
             if safe_read_tools == "*" or (
-                isinstance(safe_read_tools, list | tuple | set) and tool.name in safe_read_tools
+                isinstance(safe_read_tools, (list, tuple, set))
+                and (tool.name in safe_read_tools or scoped_name in safe_read_tools)
             ):
                 schema["_is_safe_read"] = True
-            if tool.name in self._tools:
+            if scoped_name in self._tools:
                 from pocket_agent.core.agent import log
 
                 log.warning(
-                    f"MCP Tool conflict: '{tool.name}' from server '{server_name}' "
+                    f"MCP Tool conflict: '{scoped_name}' from server '{server_name}' "
                     "will be ignored because it is already registered."
                 )
                 continue
 
-            self._tools[tool.name] = ToolEntry(
-                name=tool.name,
+            self._tools[scoped_name] = ToolEntry(
+                name=scoped_name,
                 server_name=server_name,
                 session=session,
                 schema=schema,
                 inject=inject,
                 conn_params=conn_params,
                 is_sensitive=is_sensitive,
+                original_name=tool.name,
             )
 
 

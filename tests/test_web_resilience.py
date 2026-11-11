@@ -222,7 +222,7 @@ def test_soft_web_404_does_not_trigger_consecutive_all_errors_abort():
             _, reply, _ = await agent.chat("測試連續 404 不拔除工具")
 
         assert "仍保有" in reply
-        assert "0 個可用工具" not in reply
+        assert "保有 0 個可用工具" not in reply
 
     asyncio.run(_test())
 

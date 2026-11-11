@@ -293,7 +293,12 @@ def test_mcp_manager_syncs_runtime_cache_after_switch(tmp_path):
     manager, fake_session = _make_switch_manager("[SUCCESS] 已切換 SQLite 資料庫")
 
     schemas = {s["name"]: s for s in manager.openai_tools()}
-    assert "target_db_path" in schemas["sqlite_switch_database"]["parameters"]["properties"]
+    switch_key = (
+        "mcp__sqlite__sqlite_switch_database"
+        if "mcp__sqlite__sqlite_switch_database" in schemas
+        else "sqlite_switch_database"
+    )
+    assert "target_db_path" in schemas[switch_key]["parameters"]["properties"]
     assert manager.find_server_for_tool("sqlite_switch_database") == "sqlite"
 
     asyncio.run(manager.call("sqlite_switch_database", {"target_db_path": str(db_file)}))

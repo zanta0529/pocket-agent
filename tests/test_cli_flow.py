@@ -1,7 +1,7 @@
 import asyncio
 from io import StringIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from rich.console import Console
@@ -725,3 +725,89 @@ def test_mcp_streamable_http_and_oauth_keyring_storage(tmp_path, monkeypatch):
         assert loaded_info is not None
         assert loaded_info.client_id == "cid-123"
         assert loaded_info.client_secret == "csec-456"
+
+
+def test_builtin_search_skills_tool():
+    """驗證內建 search_skills 工具之註冊、判定與格式化回傳。"""
+    from pocket_agent.extensions.skills import SEARCH_SKILLS_TOOL, call_skill_tool, is_skill_tool
+
+    assert is_skill_tool("search_skills") is True
+    assert is_skill_tool("use_skill") is True
+    assert is_skill_tool("other_tool") is False
+    assert SEARCH_SKILLS_TOOL["_is_safe_read"] is True
+
+    # 查無結果情境
+    with patch("pocket_agent.extensions.skills.search_skills", return_value=[]):
+        with patch("pocket_agent.extensions.skills.list_skills", return_value=[{"name": "weekly-report"}]):
+            res_empty = call_skill_tool("search_skills", {"query": "nonexistent"})
+            assert "找不到與「nonexistent」相關的技能" in res_empty
+            assert "weekly-report" in res_empty
+
+    # 搜尋成功情境
+    fake_hits = [{"name": "pbv", "description": "plan build verify workflow"}]
+    with patch("pocket_agent.extensions.skills.search_skills", return_value=fake_hits):
+        res_hit = call_skill_tool("search_skills", {"query": "plan", "top_k": 3})
+        assert "pbv" in res_hit
+        assert "plan build verify workflow" in res_hit
+        assert "use_skill" in res_hit
+
+
+def test_mcp_claude_code_namespacing_and_dispatch(tmp_path):
+    """驗證 MCPManager 對齊 Claude Code 雙底線命名空間（mcp__<server>__<tool>）與雙向轉發。"""
+    from pocket_agent.extensions.mcp import MCPManager
+
+    fake_tool = SimpleNamespace(
+        name="search_skills",
+        description="Search Agensi remote skills registry",
+        inputSchema={"type": "object", "properties": {"query": {"type": "string"}}},
+    )
+    fake_session = SimpleNamespace(
+        list_tools=AsyncMock(return_value=SimpleNamespace(tools=[fake_tool])),
+        call_tool=AsyncMock(return_value=MagicMock(content=[MagicMock(text='{"skills": ["remote-skill"]} blend')])),
+    )
+
+    manager = MCPManager(config_path=tmp_path / "mcp_config.yaml")
+    asyncio.run(
+        manager._register_tools(
+            "agensi",
+            fake_session,
+            inject={},
+            safe_read_tools=["search_skills"],
+        )
+    )
+
+    # 1. 驗證對外工具 schema 冠上 mcp__agensi__ 前綴且 safe_read 正確判定
+    tools = manager.openai_tools()
+    assert len(tools) == 1
+    assert tools[0]["name"] == "mcp__agensi__search_skills"
+    assert tools[0]["_is_safe_read"] is True
+
+    # 2. 驗證透過完整前綴呼叫時，轉發給 session 執行的是原始名稱 "search_skills"
+    out1 = asyncio.run(manager.call("mcp__agensi__search_skills", {"query": "python"}))
+    assert "remote-skill" in out1
+    fake_session.call_tool.assert_awaited_with("search_skills", {"query": "python"})
+
+    # 3. 驗證向下相容：透過原始名稱呼叫亦能正確轉發
+    out2 = asyncio.run(manager.call("search_skills", {"query": "asyncio"}))
+    assert "remote-skill" in out2
+    fake_session.call_tool.assert_awaited_with("search_skills", {"query": "asyncio"})
+
+
+def test_cli_renderer_mcp_tag_formatting():
+    """驗證 CliRenderer 針對 mcp__ 前綴工具自動拆分 [server] 標籤與工具名稱。"""
+    from pocket_agent.frontend.cli.render import CliRenderer
+
+    renderer = CliRenderer(Console(file=StringIO()))
+    info = {
+        "action": "Read",
+        "action_color": "bold yellow",
+        "name_color": "bold cyan",
+        "real_name": "search_skills",
+        "target": "python asyncio",
+        "server_tag": "agensi",
+    }
+    lines = renderer._format_tool_lines(("● ", "bold green"), info)
+    plain_text = lines[0].plain
+    assert "Read" in plain_text
+    assert "[agensi]" in plain_text
+    assert "(search_skills)" in plain_text

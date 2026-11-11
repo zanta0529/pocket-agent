@@ -264,10 +264,13 @@ class McpCommand(CliCommand):
         if not grouped and ctx.tools:
             for tool_name in ctx.tools:
                 server_key = "mcp"
-                for prefix in ("rhel_", "win_rdp_", "browser_", "sqlite_", "mysql_", "mssql_"):
-                    if tool_name.startswith(prefix):
-                        server_key = prefix.rstrip("_").replace("_", "-")
-                        break
+                if tool_name.startswith("mcp__") and len(tool_name.split("__")) >= 3:
+                    server_key = tool_name.split("__")[1]
+                else:
+                    for prefix in ("rhel_", "win_rdp_", "browser_", "sqlite_", "mysql_", "mssql_"):
+                        if tool_name.startswith(prefix):
+                            server_key = prefix.rstrip("_").replace("_", "-")
+                            break
                 grouped.setdefault(server_key, []).append({"name": tool_name, "description": ""})
 
         if not grouped:

@@ -306,16 +306,10 @@ class CliRenderer:
         """格式化工具行：未超過終端寬度時單行接續，超過時改為樹狀結構兩行。"""
         parts = [prefix, (info["action"], info["action_color"])]
         if info.get("sa_name"):
-            parts.extend(
-                [
-                    (f" [{info['sa_name']}]", "bold magenta"),
-                    (" (", ""),
-                    (info["real_name"], info["name_color"]),
-                    (")", ""),
-                ]
-            )
-        else:
-            parts.extend([(" (", ""), (info["real_name"], info["name_color"]), (")", "")])
+            parts.append((f" [{info['sa_name']}]", "bold magenta"))
+        if info.get("server_tag"):
+            parts.append((f" [{info['server_tag']}]", "bold cyan"))
+        parts.extend([(" (", ""), (info["real_name"], info["name_color"]), (")", "")])
 
         target_text = info.get("target") or info.get("summary") or ""
         if not target_text:
@@ -526,6 +520,14 @@ class CliRenderer:
                 call_id = name
 
             real_name = name.split("::")[-1]
+            sa_name = name.split("::", 1)[0] if "::" in name else None
+            server_tag = None
+            if real_name.startswith("mcp__"):
+                mcp_parts = real_name.split("__", 2)
+                if len(mcp_parts) == 3:
+                    server_tag = mcp_parts[1]
+                    real_name = mcp_parts[2]
+
             name_lower = real_name.lower()
 
             if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep"]):
@@ -548,7 +550,8 @@ class CliRenderer:
                 "name_color": name_color,
                 "target": plain(target) if target else "",
                 "summary": plain(target) if target else "",
-                "sa_name": name.split("::", 1)[0] if "::" in name else None,
+                "sa_name": sa_name,
+                "server_tag": server_tag,
             }
 
             if self.console.is_terminal:
@@ -638,6 +641,9 @@ class CliRenderer:
                     if "::" in name:
                         sa_name, real_name = name.split("::", 1)
                         formatted_name = f"[{sa_name}] {real_name}"
+                    elif name.startswith("mcp__"):
+                        mcp_parts = name.split("__", 2)
+                        formatted_name = f"[{mcp_parts[1]}] {mcp_parts[2]}" if len(mcp_parts) == 3 else name
                     else:
                         formatted_name = name
 

@@ -549,7 +549,8 @@ class Agent:
         """
         if name not in getattr(self, "_safe_read_tools", set()):
             return True
-        arg_key = _PATH_GATED_SAFE_TOOLS.get(name)
+        raw_name = name.split("__")[-1]
+        arg_key = _PATH_GATED_SAFE_TOOLS.get(name) or _PATH_GATED_SAFE_TOOLS.get(raw_name)
         if arg_key is None:
             return False
         raw = str(args.get(arg_key) or "").strip().strip("'\"")
@@ -1288,6 +1289,7 @@ class Agent:
                         "is_safe_read": (
                             fc["name"] in getattr(self, "_safe_read_tools", set())
                             and fc["name"] not in _PATH_GATED_SAFE_TOOLS
+                            and fc["name"].split("__")[-1] not in _PATH_GATED_SAFE_TOOLS
                         ),
                     },
                 )
@@ -1339,7 +1341,7 @@ class Agent:
                         return thinking, self._stopped_reply(text)
 
                     if is_skill_tool(fc["name"]):
-                        result = call_skill_tool(args, self.workspace_dirs)
+                        result = call_skill_tool(fc["name"], args, self.workspace_dirs)
                     elif fc["name"] in ("run_subagents_parallel", "ask_question") or is_subagent_tool(fc["name"]):
                         result = await self._execute_core_tool(fc["name"], args, fc["call_id"])
                     elif is_shell_tool(fc["name"]):
