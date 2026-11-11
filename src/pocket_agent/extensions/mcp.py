@@ -507,63 +507,84 @@ class MCPManager:
         ready_future: asyncio.Future[ClientSession],
         stop_event: asyncio.Event,
     ) -> None:
-        from contextlib import AsyncExitStack
-
+        closers: list[Callable[[], Any]] = []
         closers_before = len(self._exit_stack_closers)
-        async with AsyncExitStack() as stack:
-            try:
-                transport = spec.get("transport", "stdio")
-                norm_transport = str(transport).strip().lower().replace(" ", "-").replace("_", "-")
 
-                if norm_transport == "stdio":
-                    params = self._resolve_stdio_params(spec)
-                    errlog = self._open_stdio_errlog()
-                    res = await stack.enter_async_context(stdio_client(params, errlog=errlog))
-                    read, write = res[0], res[1]
-                elif norm_transport == "sse":
-                    if not HAS_SSE:
-                        raise ImportError("需要安裝 mcp[sse] 才能使用 SSE transport")
-                    headers = self._resolve_http_headers(name, spec)
-                    auth_provider = self._build_oauth_provider(name, spec, headers=headers)
-                    sse_kwargs: dict[str, Any] = {}
-                    if headers is not None:
-                        sse_kwargs["headers"] = headers
-                    if auth_provider is not None:
-                        sse_kwargs["auth"] = auth_provider
-                    res = await stack.enter_async_context(sse_client(spec["url"], **sse_kwargs))
-                    read, write = res[0], res[1]
-                elif norm_transport in ("streamable-http", "streamablehttp", "http"):
-                    if not HAS_STREAMABLE_HTTP:
-                        raise ImportError("目前 mcp 版本不支援 Streamable HTTP transport")
-                    headers = self._resolve_http_headers(name, spec)
-                    auth_provider = self._build_oauth_provider(name, spec, headers=headers)
-                    http_client = create_mcp_http_client(headers=headers, auth=auth_provider)
-                    await stack.enter_async_context(http_client)
-                    res = await stack.enter_async_context(streamable_http_client(spec["url"], http_client=http_client))
-                    read, write = res[0], res[1]
-                else:
-                    raise ValueError(f"未知 transport: {transport!r}")
+        async def _enter_cm(cm: Any) -> Any:
+            res = await cm.__aenter__()
+            closers.append(lambda: cm.__aexit__(None, None, None))
+            return res
 
-                session = ClientSession(read, write)
-                await stack.enter_async_context(session)
-                await session.initialize()
-                if not ready_future.done():
-                    ready_future.set_result(session)
-            except BaseException as exc:
-                while len(self._exit_stack_closers) > closers_before:
-                    closer = self._exit_stack_closers.pop()
-                    try:
-                        await closer(None, None, None)
-                    except Exception:
-                        pass
-                if not ready_future.done():
-                    ready_future.set_exception(exc)
-                return
+        try:
+            transport = spec.get("transport", "stdio")
+            norm_transport = str(transport).strip().lower().replace(" ", "-").replace("_", "-")
 
-            try:
-                await stop_event.wait()
-            except asyncio.CancelledError:
-                pass
+            if norm_transport == "stdio":
+                params = self._resolve_stdio_params(spec)
+                errlog = self._open_stdio_errlog()
+                res = await _enter_cm(stdio_client(params, errlog=errlog))
+                read, write = res[0], res[1]
+            elif norm_transport == "sse":
+                if not HAS_SSE:
+                    raise ImportError("需要安裝 mcp[sse] 才能使用 SSE transport")
+                headers = self._resolve_http_headers(name, spec)
+                auth_provider = self._build_oauth_provider(name, spec, headers=headers)
+                sse_kwargs: dict[str, Any] = {}
+                if headers is not None:
+                    sse_kwargs["headers"] = headers
+                if auth_provider is not None:
+                    sse_kwargs["auth"] = auth_provider
+                res = await _enter_cm(sse_client(spec["url"], **sse_kwargs))
+                read, write = res[0], res[1]
+            elif norm_transport in ("streamable-http", "streamablehttp", "http"):
+                if not HAS_STREAMABLE_HTTP:
+                    raise ImportError("目前 mcp 版本不支援 Streamable HTTP transport")
+                headers = self._resolve_http_headers(name, spec)
+                auth_provider = self._build_oauth_provider(name, spec, headers=headers)
+                http_client = create_mcp_http_client(headers=headers, auth=auth_provider)
+                await _enter_cm(http_client)
+                res = await _enter_cm(streamable_http_client(spec["url"], http_client=http_client))
+                read, write = res[0], res[1]
+            else:
+                raise ValueError(f"未知 transport: {transport!r}")
+
+            session = ClientSession(read, write)
+            await _enter_cm(session)
+            await session.initialize()
+            if not ready_future.done():
+                ready_future.set_result(session)
+        except BaseException as exc:
+            while len(self._exit_stack_closers) > closers_before:
+                closer = self._exit_stack_closers.pop()
+                try:
+                    await closer(None, None, None)
+                except Exception:
+                    pass
+            for closer in reversed(closers):
+                try:
+                    await closer()
+                except Exception:
+                    pass
+            if not ready_future.done():
+                ready_future.set_exception(exc)
+            return
+
+        try:
+            await stop_event.wait()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            while len(self._exit_stack_closers) > closers_before:
+                closer = self._exit_stack_closers.pop()
+                try:
+                    await closer(None, None, None)
+                except Exception:
+                    pass
+            for closer in reversed(closers):
+                try:
+                    await closer()
+                except Exception:
+                    pass
 
     async def _connect(self, name: str, spec: dict) -> ClientSession:
         loop = asyncio.get_running_loop()
