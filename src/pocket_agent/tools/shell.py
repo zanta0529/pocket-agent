@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 from pocket_agent.system.constants import (
     DEFAULT_CLI_TIMEOUT_SEC,
@@ -125,19 +126,41 @@ def is_shell_tool(name: str) -> bool:
     return name == "run_command"
 
 
-def _kill_proc_tree(proc: subprocess.Popen) -> None:
-    """終止子行程及其整個行程樹。"""
+def _kill_proc_tree(proc: subprocess.Popen, timeout: float = 0.5) -> None:
+    """終止子行程及其整個行程樹，具備逾時確認與強制升級。"""
     if sys.platform == "win32":
-        subprocess.call(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            res = subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+            )
+            if res.returncode != 0 and proc.poll() is None:
+                proc.kill()
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
     else:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < timeout:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            if proc.poll() is None:
+                os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         except Exception:
-            proc.terminate()
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
 
 _active_shell_procs: set[subprocess.Popen] = set()
@@ -151,13 +174,20 @@ def interrupt_active_shell_processes() -> int:
     count = 0
     with _shell_proc_lock:
         _shell_cancel_generation += 1
-        for p in list(_active_shell_procs):
-            try:
-                _kill_proc_tree(p)
-                count += 1
-            except Exception:
-                pass
-        _active_shell_procs.clear()
+        procs = list(_active_shell_procs)
+
+    for p in procs:
+        try:
+            _kill_proc_tree(p)
+            count += 1
+        except Exception:
+            pass
+
+    time.sleep(0.05)
+    with _shell_proc_lock:
+        still_running = {p for p in _active_shell_procs if p.poll() is None}
+        _active_shell_procs.intersection_update(still_running)
+
     if count:
         log.warning("已強制終止 %d 個進行中的 Shell 子進程樹", count)
     return count
@@ -321,7 +351,11 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
             t.join(timeout=1.0)
         except subprocess.TimeoutExpired:
             _kill_proc_tree(proc)
-            t.join(timeout=1.0)
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+            t.join(timeout=0.5)
             partial = collect_output()
             message = f"[ERROR] 指令逾時（{timeout} 秒），已強制終止。"
             if partial:
@@ -330,12 +364,11 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         finally:
             with _shell_proc_lock:
                 _active_shell_procs.discard(proc)
-            # 讀取執行緒仍在阻塞讀取時關閉管道可能卡住，故僅在其結束後才關閉，避免檔案描述元外洩
-            if not t.is_alive():
-                try:
-                    proc.stdout.close()
-                except Exception:
-                    pass
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+            t.join(timeout=0.2)
     except Exception as e:
         return f"[ERROR] {e}"
 

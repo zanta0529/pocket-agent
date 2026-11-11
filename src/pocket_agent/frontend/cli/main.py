@@ -232,6 +232,8 @@ class CliFrontend(FrontendStrategy):
         from pocket_agent.system.compat import setup_win_sigint_workaround
 
         sigint_task = setup_win_sigint_workaround()
+        update_task = None
+        housekeeping_task = None
 
         from rich.console import Console
 
@@ -662,7 +664,7 @@ class CliFrontend(FrontendStrategy):
             from pocket_agent.system.housekeeping import default_housekeeper
             from pocket_agent.system.updater import update_manager
 
-            asyncio.create_task(run_sync(default_housekeeper.run_cleanup, force=False))
+            housekeeping_task = asyncio.create_task(run_sync(default_housekeeper.run_cleanup, force=False))
 
             if update_manager.is_auto_update_enabled():
 
@@ -685,24 +687,25 @@ class CliFrontend(FrontendStrategy):
         except Exception as exc:
             renderer.message(f"CLI 執行失敗：{exc}", "red")
         finally:
-            if sigint_task is not None and not sigint_task.done():
-                sigint_task.cancel()
-                try:
-                    await sigint_task
-                except asyncio.CancelledError, Exception:
-                    pass
+            for bg_t in (sigint_task, update_task, housekeeping_task):
+                if bg_t is not None and not bg_t.done():
+                    bg_t.cancel()
+                    try:
+                        await bg_t
+                    except asyncio.CancelledError, Exception:
+                        pass
 
-            if update_task is not None and not update_task.done():
-                update_task.cancel()
+            # 收斂 Agent（停止子代理、收斂背景任務，避免 client 關閉後呼叫）
+            if agent is not None and hasattr(agent, "shutdown"):
                 try:
-                    await update_task
-                except asyncio.CancelledError, Exception:
-                    pass
+                    await asyncio.wait_for(agent.shutdown(timeout=3.0), timeout=3.5)
+                except Exception as agent_err:
+                    log.warning("Agent 關閉逾時或失敗：%s", agent_err)
 
-            # MCP shutdown failure must not skip closing the active model client.
+            # MCP 關閉失敗不阻礙關閉 Client
             try:
                 if mcp is not None:
-                    await asyncio.wait_for(mcp.stop(), timeout=3.0)
+                    await asyncio.wait_for(mcp.stop(timeout=3.0), timeout=3.5)
             except (asyncio.TimeoutError, Exception) as mcp_err:
                 log.warning("MCP 服務停止逾時或失敗：%s", mcp_err)
             finally:
