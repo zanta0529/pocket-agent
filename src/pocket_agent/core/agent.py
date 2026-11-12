@@ -1176,6 +1176,10 @@ class Agent:
                     max_stream_retries,
                     e,
                 )
+                self._emit(
+                    "thinking",
+                    f"\n[連線異常] 串流中斷或逾時，正在進行第 {stream_consecutive_errors}/{max_stream_retries} 次重試…",
+                )
                 if engine.is_invalid_tool_call_error(e):
                     from pocket_agent.core.compaction import ensure_paired_tool_calls
 

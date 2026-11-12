@@ -19,10 +19,13 @@ def setup_asyncio_policy() -> None:
                 pass
 
 
-def setup_win_sigint_workaround() -> asyncio.Task | None:
-    """Windows 下 asyncio 在等待標準輸入時可能延遲處理 SIGINT (Ctrl+C)。
+_GLOBAL_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
-    透過低開銷的背景睡眠定時喚醒事件迴圈。
+
+def setup_win_sigint_workaround() -> asyncio.Task | None:
+    """Windows 下 asyncio 在等待標準輸入或網路 Socket 時可能延遲處理 SIGINT (Ctrl+C)。
+
+    透過低開銷的背景睡眠定時喚醒事件迴圈，並將 Task 存放於全域強引用集合以避免遭 Python GC 回收。
     """
     if sys.platform == "win32":
 
@@ -30,5 +33,8 @@ def setup_win_sigint_workaround() -> asyncio.Task | None:
             while True:
                 await asyncio.sleep(0.5)
 
-        return asyncio.create_task(_workaround())
+        task = asyncio.create_task(_workaround())
+        _GLOBAL_BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_GLOBAL_BACKGROUND_TASKS.discard)
+        return task
     return None

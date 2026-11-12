@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 from pocket_agent.core.cancellation import CancellationScope, current_scope
+from pocket_agent.system.constants import DEFAULT_OPERATION_DRAIN_TIMEOUT_SEC
 
 T = TypeVar("T")
 
@@ -20,17 +21,26 @@ async def run_operation(operation: Awaitable[T], stopping: Callable[[], None]) -
     token = current_scope.set(scope)
     task = asyncio.ensure_future(operation)
     interrupted = False
-    draining = False
+    force_abort = False
+    cleanup_task: asyncio.Task | None = None
     previous = signal.getsignal(signal.SIGINT)
 
     def interrupt() -> None:
-        nonlocal interrupted
-        if draining or interrupted or task.done():
+        nonlocal interrupted, force_abort
+        if not interrupted:
+            interrupted = True
+            scope.cancel()
+            stopping()
+            task.cancel()
             return
-        interrupted = True
-        scope.cancel()
-        stopping()
-        task.cancel()
+
+        # 若已處於中斷或收尾階段，使用者再次按下 Ctrl+C 觸發強制中止
+        if not force_abort:
+            force_abort = True
+            scope.cancel()
+            task.cancel()
+            if cleanup_task is not None and not cleanup_task.done():
+                cleanup_task.cancel()
 
     def handler(signum: int, frame: object) -> None:
         loop.call_soon_threadsafe(interrupt)
@@ -40,7 +50,10 @@ async def run_operation(operation: Awaitable[T], stopping: Callable[[], None]) -
         signal.signal(signal.SIGINT, handler)
         installed = True
         try:
-            return await asyncio.shield(task)
+            res = await asyncio.shield(task)
+            if interrupted:
+                raise OperationInterrupted from None
+            return res
         except asyncio.CancelledError:
             scope.cancel()
             task.cancel()
@@ -48,7 +61,6 @@ async def run_operation(operation: Awaitable[T], stopping: Callable[[], None]) -
                 raise OperationInterrupted from None
             raise
     finally:
-        draining = True
         scope.cancel()
 
         async def cleanup() -> None:
@@ -57,14 +69,18 @@ async def run_operation(operation: Awaitable[T], stopping: Callable[[], None]) -
 
         cleanup_task = asyncio.create_task(cleanup())
         try:
-            while not cleanup_task.done():
+            # 加入逾時保護，若工作在保底時間內未退出或遭遇強制中止則立即放棄等待
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(cleanup_task),
+                    timeout=DEFAULT_OPERATION_DRAIN_TIMEOUT_SEC,
+                )
+            except asyncio.TimeoutError, asyncio.CancelledError:
+                cleanup_task.cancel()
                 try:
-                    await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError:
-                    # 必須完成清理；外部取消仍在下方重新傳遞。
-                    if not interrupted:
-                        task.cancel()
-            cleanup_task.result()
+                    await asyncio.wait_for(cleanup_task, timeout=0.3)
+                except Exception:
+                    pass
         finally:
             current_scope.reset(token)
             if installed:

@@ -811,3 +811,83 @@ def test_cli_renderer_mcp_tag_formatting():
     assert "Read" in plain_text
     assert "[agensi]" in plain_text
     assert "(search_skills)" in plain_text
+
+
+def test_run_operation_drain_timeout_and_force_abort():
+    """驗證 run_operation 在背景任務阻塞時能在收尾逾時或二次中斷下安全結束。"""
+    from pocket_agent.frontend.cli.interrupts import OperationInterrupted, run_operation
+
+    async def stuck_operation():
+        await asyncio.sleep(10.0)
+
+    stop_called = False
+
+    def on_stop():
+        nonlocal stop_called
+        stop_called = True
+
+    async def _test():
+        task = asyncio.create_task(run_operation(stuck_operation(), on_stop))
+        await asyncio.sleep(0.05)
+        # 模擬第一次 Ctrl+C 觸發中斷
+        import signal
+
+        handler = signal.getsignal(signal.SIGINT)
+        assert callable(handler)
+        handler(signal.SIGINT, None)
+        await asyncio.sleep(0.05)
+        # 模擬第二次 Ctrl+C 觸發強制中止
+        handler(signal.SIGINT, None)
+
+        with pytest.raises(OperationInterrupted):
+            await task
+
+    asyncio.run(_test())
+    assert stop_called is True
+
+
+def test_setup_win_sigint_workaround_retains_strong_ref(monkeypatch):
+    """驗證 Windows 下 setup_win_sigint_workaround 能將 Task 存入強引用集合避免 GC。"""
+    import sys
+
+    from pocket_agent.system import compat
+
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    async def _test():
+        task = compat.setup_win_sigint_workaround()
+        assert task is not None
+        assert task in compat._GLOBAL_BACKGROUND_TASKS
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        assert task not in compat._GLOBAL_BACKGROUND_TASKS
+
+    asyncio.run(_test())
+
+
+def test_agent_sleep_with_cancel_quick_response():
+    """驗證 Agent._sleep_with_cancel 在 cancel_requested 為 True 時立即返回，且支援 Task 取消。"""
+    from types import SimpleNamespace
+
+    from pocket_agent.core.agent import Agent
+
+    agent_inst = SimpleNamespace(cancel_requested=True)
+    sleep_func = Agent._sleep_with_cancel.__get__(agent_inst)
+
+    async def _test():
+        # 當已要求取消時，直接返回不 sleep
+        await sleep_func(10.0)
+
+        # 支援 asyncio.CancelledError 取消
+        agent_normal = SimpleNamespace(cancel_requested=False)
+        sleep_normal = Agent._sleep_with_cancel.__get__(agent_normal)
+        task = asyncio.create_task(sleep_normal(10.0))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_test())
