@@ -37,7 +37,7 @@ servers:
   #   # env:
   #   #   AGENSI_TOKEN: ""
   #   # safe_read_tools:
-  #   # - safe_read_tools
+  #   # - mcp__agensi__search_skills
 
   # 瀏覽器操作（純 Python，用系統已裝的 Edge/Chrome，不需要 Node.js）
   # 進階：設 BROWSER_CDP_URL 可連既有瀏覽器保留登入狀態，見 browser_mcp.py 註解
