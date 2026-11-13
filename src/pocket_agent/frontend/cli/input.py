@@ -213,71 +213,71 @@ def key_bindings(
             else:
                 unauthorized_paths.append((p, target_dir))
 
-                if unauthorized_paths:
-                    from prompt_toolkit.application.run_in_terminal import run_in_terminal
+        if unauthorized_paths:
+            from prompt_toolkit.application.run_in_terminal import run_in_terminal
 
-                    def ask_workspace_auth():
-                        from rich.console import Console
-                        from rich.panel import Panel
-                        from rich.text import Text
+            def ask_workspace_auth():
+                from rich.console import Console
+                from rich.panel import Panel
+                from rich.text import Text
 
-                        console = Console()
-                        content = "以下貼上的檔案不在目前工作區內：\n"
-                        for p, _ in unauthorized_paths:
-                            content += f"  📄 {p}\n"
+                console = Console()
+                content = "以下貼上的檔案不在目前工作區內：\n"
+                for p, _ in unauthorized_paths:
+                    content += f"  📄 {p}\n"
 
-                        panel = Panel(
-                            Text(content.strip(), style="yellow"),
-                            title="【安全警告】工作區權限請求",
-                            title_align="left",
-                            border_style="bold red",
-                            expand=False,
-                        )
-                        console.print()
-                        console.print(panel)
+                panel = Panel(
+                    Text(content.strip(), style="yellow"),
+                    title="【安全警告】工作區權限請求",
+                    title_align="left",
+                    border_style="bold red",
+                    expand=False,
+                )
+                console.print()
+                console.print(panel)
 
-                        try:
-                            ans = input("是否將它們所在的資料夾加入工作區並掛載？[y/N] ").strip().lower()
-                            if ans == "y":
-                                for p, t_dir in unauthorized_paths:
-                                    if t_dir:
-                                        agent.add_workspace_dir(t_dir)
-                                        authorized_paths.append(p)
-                                console.print("[green]✓ 已授權並加入附件。[/green]")
-                            else:
-                                console.print("[red]✗ 已取消加入這些檔案。[/red]")
-                        except KeyboardInterrupt:
-                            console.print("\n[red]✗ 已取消操作。[/red]")
-                        except EOFError:
-                            console.print("\n[red]✗ 已取消操作。[/red]")
+                try:
+                    ans = input("是否將它們所在的資料夾加入工作區並掛載？[y/N] ").strip().lower()
+                    if ans == "y":
+                        for p, t_dir in unauthorized_paths:
+                            if t_dir:
+                                agent.add_workspace_dir(t_dir)
+                                authorized_paths.append(p)
+                        console.print("[green]✓ 已授權並加入附件。[/green]")
+                    else:
+                        console.print("[red]✗ 已取消加入這些檔案。[/red]")
+                except KeyboardInterrupt:
+                    console.print("\n[red]✗ 已取消操作。[/red]")
+                except EOFError:
+                    console.print("\n[red]✗ 已取消操作。[/red]")
 
-                        # 在回呼函式內（取得授權後）才執行加入，避免非同步時序問題
-                        if authorized_paths:
-                            try:
-                                added = state.add_files(authorized_paths)
-                                for added_path in added:
-                                    console.print(f"已加入待送：{added_path}")
-                            except Exception:
-                                pass
+                # 在回呼函式內（取得授權後）才執行加入，避免非同步時序問題
+                if authorized_paths:
+                    try:
+                        added = state.add_files(authorized_paths)
+                        for added_path in added:
+                            console.print(f"已加入待送：{added_path}")
+                    except Exception:
+                        pass
 
-                    run_in_terminal(ask_workspace_auth)
-                else:
-                    if authorized_paths:
-                        from prompt_toolkit.application.run_in_terminal import run_in_terminal
+            run_in_terminal(ask_workspace_auth)
+            event.app.invalidate()
+        elif authorized_paths:
+            from prompt_toolkit.application.run_in_terminal import run_in_terminal
 
-                        def notify_added():
-                            from rich.console import Console
+            def notify_added():
+                from rich.console import Console
 
-                            console = Console()
-                            try:
-                                added = state.add_files(authorized_paths)
-                                for added_path in added:
-                                    console.print(f"已加入待送：{added_path}")
-                            except Exception:
-                                pass
+                console = Console()
+                try:
+                    added = state.add_files(authorized_paths)
+                    for added_path in added:
+                        console.print(f"已加入待送：{added_path}")
+                except Exception:
+                    pass
 
-                        run_in_terminal(notify_added)
-                        event.app.invalidate()
+            run_in_terminal(notify_added)
+            event.app.invalidate()
 
     @bindings.add("enter")
     def submit(event: KeyPressEvent) -> None:
