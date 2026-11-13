@@ -37,18 +37,13 @@ class OpenRouterProvider(BaseProvider):
             "X-Title": config.get("providers.openrouter.title", "Pocket Agent"),
         }
 
-        # OpenRouter usually does not need a custom HTTPX client for basic trust_env,
-        # but to keep consistency with the original code, we don't pass http_client here.
-        # Wait, the original code in auth.py:
-        # http_client = None
-        # for openrouter, it doesn't set http_client, so it passes None.
-
+        timeout = httpx.Timeout(timeout=1800.0, connect=10.0)
         return AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
             default_headers=extra_headers,
-            http_client=None,
-            timeout=httpx.Timeout(timeout=1800.0, connect=10.0),
+            http_client=self.build_async_http_client(timeout),
+            timeout=timeout,
         )
 
     def fetch_models(self) -> List[str]:

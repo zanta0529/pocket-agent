@@ -51,12 +51,13 @@ class OpenAIProvider(BaseProvider):
         if account_id:
             extra_headers["chatgpt-account-id"] = account_id
 
+        timeout = httpx.Timeout(timeout=1800.0, connect=15.0, read=DEFAULT_STREAM_READ_TIMEOUT_SEC)
         return AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
             default_headers=extra_headers,
-            http_client=None,
-            timeout=httpx.Timeout(timeout=1800.0, connect=15.0, read=DEFAULT_STREAM_READ_TIMEOUT_SEC),
+            http_client=self.build_async_http_client(timeout),
+            timeout=timeout,
         )
 
     def fetch_models(self) -> List[str]:
@@ -125,10 +126,11 @@ class OpenAIApiProvider(BaseProvider):
         if not api_key:
             raise ValueError("未設定 OpenAI API Key。請設定 `providers.openai-api.api_key`。")
 
+        timeout = httpx.Timeout(timeout=180.0, connect=15.0, read=DEFAULT_STREAM_READ_TIMEOUT_SEC)
         return AsyncOpenAI(
             api_key=api_key,
-            http_client=None,
-            timeout=httpx.Timeout(timeout=180.0, connect=15.0, read=DEFAULT_STREAM_READ_TIMEOUT_SEC),
+            http_client=self.build_async_http_client(timeout),
+            timeout=timeout,
         )
 
     def fetch_models(self) -> List[str]:

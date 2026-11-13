@@ -347,14 +347,22 @@ class CodexOAuthQuotaStrategy(OpenAIErrorQuotaStrategy):
 
         url = self._resolve_wham_usage_url()
         try:
-            async with httpx.AsyncClient(timeout=5.0, verify=_SSL_VERIFY) as http_client:
-                resp = await http_client.get(url, headers=headers)
-                if resp.status_code != 200:
-                    return None
-                data = resp.json()
-                if isinstance(data, dict):
-                    self.__class__._usage_cache = (data, time.time() + 60.0)
-                    return data
+            existing = getattr(self.client, "_client", None)
+            if (
+                isinstance(httpx.AsyncClient, type)
+                and isinstance(existing, httpx.AsyncClient)
+                and not existing.is_closed
+            ):
+                resp = await existing.get(url, headers=headers, timeout=5.0)
+            else:
+                async with httpx.AsyncClient(timeout=5.0, verify=_SSL_VERIFY) as http_client:
+                    resp = await http_client.get(url, headers=headers)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            if isinstance(data, dict):
+                self.__class__._usage_cache = (data, time.time() + 60.0)
+                return data
         except Exception as e:
             log.debug("查詢 Codex /wham/usage 失敗: %s", e)
         return None

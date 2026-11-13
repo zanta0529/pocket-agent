@@ -1,6 +1,9 @@
+import importlib.util
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, List
+
+import httpx
 
 log = logging.getLogger("pocket-agent")
 
@@ -67,6 +70,13 @@ class BaseProvider(ABC):
                         console.print("[red]密碼不一致或為空，請重新輸入。[/red]")
 
         console.print(f"[green]✓ {display_name} API Key 設定已更新[/green]\n")
+
+    @staticmethod
+    def build_async_http_client(timeout: httpx.Timeout) -> httpx.AsyncClient:
+        """建立具備連線池與可選 HTTP/2 支援的共用非同步 HTTP Client。"""
+        has_h2 = importlib.util.find_spec("h2") is not None
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=60.0)
+        return httpx.AsyncClient(timeout=timeout, limits=limits, http2=has_h2)
 
     @abstractmethod
     def get_client(self) -> Any:

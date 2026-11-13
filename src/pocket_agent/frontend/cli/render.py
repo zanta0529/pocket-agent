@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from time import monotonic
 
 from prompt_toolkit.formatted_text import FormattedText
 from rich.cells import cell_len
@@ -206,6 +207,10 @@ class CliRenderer:
         self._state: CliState | None = None
         self._thinking_buffer: str = ""
         self._pending_tools: dict[str, dict] = {}
+        self._text_buffer: list[str] = []
+        self._text_buffer_len: int = 0
+        self._last_text_flush: float = 0.0
+        self._last_thinking_update: float = 0.0
 
     def _stop_status(self) -> None:
         """停止思考中 spinner（若仍在執行），確保不與串流輸出衝突。"""
@@ -221,12 +226,36 @@ class CliRenderer:
         except Exception:
             pass
 
+    def _flush_text_buffer(self) -> None:
+        """將累積的串流文字微批次輸出至終端機，降低逐字重繪背壓。"""
+        if not self._text_buffer:
+            return
+        text_str = "".join(self._text_buffer)
+        self._text_buffer.clear()
+        self._text_buffer_len = 0
+        self._last_text_flush = monotonic()
+        if self._round_is_dim:
+            if "\n" in text_str:
+                parts = text_str.split("\n", 1)
+                if parts[0]:
+                    self.console.print(Text(parts[0], style="dim"), end="", highlight=False)
+                self.console.print("\n", end="", highlight=False, markup=False)
+                if parts[1]:
+                    self.console.print(parts[1], end="", highlight=False, markup=False)
+                self._round_is_dim = False
+            else:
+                self.console.print(Text(text_str, style="dim"), end="", highlight=False)
+        else:
+            self.console.print(text_str, end="", highlight=False, markup=False)
+        self._stream_has_content = True
+
     def _ensure_newline(self) -> None:
         """若文字串流游標未換行，補一個換行確保後續輸出從行首開始。
 
         text 事件以 end="" 輸出，游標停在行尾；tool_start、tool_done、
         read 等事件若緊接其後，不補換行會造成輸出黏在回應文字後方。
         """
+        self._flush_text_buffer()
         if self._stream_has_content:
             self.console.print()
             self._stream_has_content = False
@@ -385,6 +414,7 @@ class CliRenderer:
         self.console.print(Text("› " + "\n".join(plain(line) for line in raw.split("\n")), style="bold blue"))
 
     def reply(self, reply: str, seconds: float, tokens: int, streamed: bool = False) -> None:
+        self._flush_text_buffer()
         if not streamed or (streamed and not self._stream_has_content and reply):
             # 非串流模式（fallback）或沒有產生任何文字（例如純後補產出）：印標頭 + 完整 Markdown 回答
             if self._stream_has_content:
@@ -432,6 +462,7 @@ class CliRenderer:
             self.message(f"已儲存檔案：{data}", "green")
 
         elif kind == "round_start":
+            self._flush_text_buffer()
             # 工具呼叫後重跑：若已串流了文字，換行確認，再開始新輪
             if self._stream_has_content:
                 self.console.print()
@@ -444,6 +475,7 @@ class CliRenderer:
         elif kind == "text":
             # 判斷是否為「非首次」的中途輸出文字
             is_intermediate = self._stream_header_printed and not self._round_text_printed
+            is_first_token = not self._stream_header_printed or is_intermediate
 
             if not self._stream_header_printed:
                 # 第一個 token 到來：先停止思考中 spinner，再印標頭
@@ -461,27 +493,27 @@ class CliRenderer:
                 self._round_text_printed = True
                 self._round_is_dim = True
 
-            # 實際列印內容，若目前正在印中途文字，套用 dim
             text_str = str(data)
-            if self._round_is_dim:
-                if "\n" in text_str:
-                    parts = text_str.split("\n", 1)
-                    if parts[0]:
-                        self.console.print(Text(parts[0], style="dim"), end="", highlight=False)
-                    self.console.print("\n", end="", highlight=False, markup=False)
-                    if parts[1]:
-                        self.console.print(parts[1], end="", highlight=False, markup=False)
-                    self._round_is_dim = False
-                else:
-                    self.console.print(Text(text_str, style="dim"), end="", highlight=False)
+            self._text_buffer.append(text_str)
+            self._text_buffer_len += len(text_str)
+            now = monotonic()
+            if (
+                is_first_token
+                or "\n" in text_str
+                or self._text_buffer_len >= 16
+                or (now - self._last_text_flush) >= 0.04
+            ):
+                self._flush_text_buffer()
             else:
-                self.console.print(text_str, end="", highlight=False, markup=False)
-
-            self._stream_has_content = True
+                self._stream_has_content = True
 
         elif kind == "thinking":
             self._thinking_buffer += str(data)
             if self._active_status:
+                now = monotonic()
+                if (now - self._last_thinking_update) < 0.1:
+                    return
+                self._last_thinking_update = now
                 snippet = self._thinking_buffer.replace("\n", " ").strip()
                 if len(snippet) > 60:
                     snippet = "..." + snippet[-57:]

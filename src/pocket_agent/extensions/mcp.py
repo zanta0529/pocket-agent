@@ -175,13 +175,32 @@ class MCPManager:
             return MCPStartupResult(0, 0, 0, 0)
         if on_start is not None:
             on_start(len(servers))
+
+        for name, spec in servers.items():
+            raw_env = spec.get("env") or {}
+            self._server_envs[name] = {str(k): str(v) for k, v in raw_env.items() if v is not None}
+
+        async def _connect_one(name: str, spec: dict) -> ClientSession:
+            return await self._connect(name, spec)
+
+        items = list(servers.items())
+        connect_results = await asyncio.gather(
+            *(_connect_one(name, spec) for name, spec in items),
+            return_exceptions=True,
+        )
+        for conn_res in connect_results:
+            if isinstance(conn_res, asyncio.CancelledError):
+                raise conn_res
+
         ready_servers = 0
         failed_servers = 0
-        for name, spec in servers.items():
+        for (name, spec), conn_res in zip(items, connect_results):
+            if isinstance(conn_res, BaseException):
+                failed_servers += 1
+                print(f"[MCP] ⚠ 無法連線 {name!r}: {conn_res}")
+                continue
             try:
-                raw_env = spec.get("env") or {}
-                self._server_envs[name] = {str(k): str(v) for k, v in raw_env.items() if v is not None}
-                session = await self._connect(name, spec)
+                session = conn_res
                 self._sessions.append(session)
                 inject = spec.get("inject") or {}
                 safe_read = spec.get("safe_read_tools") or []

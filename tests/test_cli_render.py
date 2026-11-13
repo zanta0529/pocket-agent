@@ -87,6 +87,7 @@ def test_stream_text_prints_header_once():
     renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=80))
     renderer.event("text", "Hello")
     renderer.event("text", " world")
+    renderer._flush_text_buffer()
     output = stream.getvalue()
     assert output.count("● Pocket Agent") == 1
     assert "Hello" in output
@@ -148,12 +149,13 @@ def test_tool_done_fail_prints_cross():
 
 def test_thinking_event_buffers_and_updates_spinner():
     """thinking 不再逐行印出，而是動態更新至 spinner。"""
-    from unittest.mock import Mock
+    from unittest.mock import Mock, patch
 
     renderer = CliRenderer(Console(file=StringIO(), force_terminal=False, no_color=True, width=120))
     renderer._active_status = Mock()
-    renderer.event("thinking", " Line one\n")
-    renderer.event("thinking", "Line two ")
+    with patch("pocket_agent.frontend.cli.render.monotonic", side_effect=[1.0, 1.2]):
+        renderer.event("thinking", " Line one\n")
+        renderer.event("thinking", "Line two ")
 
     assert renderer._thinking_buffer == " Line one\nLine two "
     renderer._active_status.update.assert_called_with("思考中… Line one Line two")

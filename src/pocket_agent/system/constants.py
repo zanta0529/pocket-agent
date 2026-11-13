@@ -87,6 +87,7 @@ MAX_RAG_TOP_K = 10  # 本機 FTS5 檢索最大片段數
 # 控制工具呼叫輪次、調研防發散限制以及本機日誌自動輪轉大小。
 # ==============================================================================
 DEFAULT_MAX_TOOL_ROUNDS = 20  # 單次回合允許工具自主呼叫之最大輪次
+DEFAULT_MAX_LINKED_DOCS_CHARS = 24000  # 啟動時 AGENTS.md / instructions.md 自動展開連結文件之總字元上限
 VALID_REASONING_EFFORTS = ("auto", "high", "medium", "low", "none")  # 支援的推理強度選項
 DEFAULT_REASONING_EFFORT = "auto"  # 預設交由模型／供應商自行決定，兼顧首字延遲與品質
 DEFAULT_MAX_STREAM_RETRIES = 3  # 串流連線異常時允許之最大重試次數
