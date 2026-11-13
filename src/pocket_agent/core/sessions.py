@@ -79,6 +79,15 @@ def _sign_data(data_str: str, iterations: int = PBKDF2_ITERATIONS) -> str:
     return hmac.new(_get_hmac_key(iterations), data_str.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def _verify_payload_signature(payload_str: str, signature: str) -> bool:
+    """驗證 payload 簽章（同時支援新版與舊版 PBKDF2 迭代次數）。"""
+    expected_sig = _sign_data(payload_str)
+    if hmac.compare_digest(expected_sig, signature):
+        return True
+    legacy_sig = _sign_data(payload_str, iterations=LEGACY_PBKDF2_ITERATIONS)
+    return hmac.compare_digest(legacy_sig, signature)
+
+
 def new_session_id() -> str:
     return time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3)
 
@@ -156,7 +165,7 @@ def save_session(
         import logging
 
         logging.getLogger("pocket-agent").error(f"Failed to atomic save session {session_id}: {e}")
-        if tmp_path.exists():
+        if tmp_path is not None and tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
         raise
 
@@ -168,14 +177,7 @@ def load_session(session_id: str) -> dict | None:
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
         if "signature" in data and "payload" in data:
-            expected_sig = _sign_data(data["payload"])
-            is_valid = hmac.compare_digest(expected_sig, data["signature"])
-            if not is_valid:
-                # 嘗試以舊版迭代次數驗證（向下相容舊 Session）
-                legacy_sig = _sign_data(data["payload"], iterations=LEGACY_PBKDF2_ITERATIONS)
-                is_valid = hmac.compare_digest(legacy_sig, data["signature"])
-
-            if not is_valid:
+            if not _verify_payload_signature(data["payload"], data["signature"]):
                 import logging
 
                 logging.getLogger("pocket-agent").warning(
@@ -204,22 +206,27 @@ def list_sessions() -> list[dict]:
             raw_data = json.loads(f.read_text(encoding="utf-8"))
             if "signature" not in raw_data or "payload" not in raw_data:
                 continue
-            expected_sig = _sign_data(raw_data["payload"])
-            is_valid = hmac.compare_digest(expected_sig, raw_data["signature"])
-            if not is_valid:
-                legacy_sig = _sign_data(raw_data["payload"], iterations=LEGACY_PBKDF2_ITERATIONS)
-                is_valid = hmac.compare_digest(legacy_sig, raw_data["signature"])
-            if not is_valid:
+            if not _verify_payload_signature(raw_data["payload"], raw_data["signature"]):
                 continue
 
-            d = json.loads(raw_data["payload"])
-            metas.append(
-                {
-                    "id": d["id"],
-                    "title": d.get("title", "（無標題）"),
-                    "updated_at": d.get("updated_at", 0),
-                }
-            )
+            meta = raw_data.get("meta")
+            if isinstance(meta, dict) and "id" in meta:
+                metas.append(
+                    {
+                        "id": meta["id"],
+                        "title": meta.get("title", "（無標題）"),
+                        "updated_at": meta.get("updated_at", 0),
+                    }
+                )
+            else:
+                d = json.loads(raw_data["payload"])
+                metas.append(
+                    {
+                        "id": d["id"],
+                        "title": d.get("title", "（無標題）"),
+                        "updated_at": d.get("updated_at", 0),
+                    }
+                )
         except Exception:
             continue
     return sorted(metas, key=lambda m: m["updated_at"], reverse=True)

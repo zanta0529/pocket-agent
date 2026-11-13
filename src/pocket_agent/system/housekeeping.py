@@ -1,7 +1,7 @@
 """自動管家維護模組 (Housekeeping Manager)。
 
-負責定時或手動清理 .agents/logs/ 與 .agents/scratch/ 下的過期日誌、
-溢出落盤檔案 (Spillover outputs) 與根目錄舊日誌，防止磁碟空間隨時間耗盡。
+負責定時或手動清理 `~/.pocket-agent/workspaces/<slug>/logs/` 與 `scratch/` 下的過期日誌、
+溢出落盤檔案 (Spillover outputs)、截圖暫存與根目錄舊日誌，防止磁碟空間隨時間耗盡。
 具備白名單保護、TTL 過期淘汰、檔案數量上限與容量配額防護。
 """
 
@@ -91,32 +91,42 @@ class Housekeeper:
         except OSError as e:
             log.debug("無法寫入 housekeeping 時間戳記: %s", e)
 
-    def clean_legacy_root_logs(self) -> int:
-        """清理專案根目錄下遺留的舊 agent.log。"""
+    def _clean_legacy_root_logs_with_bytes(self) -> tuple[int, int]:
+        """清理專案根目錄下遺留的舊 agent.log，回傳 (刪除數, 釋放位元組數)。"""
         cleaned = 0
+        freed_bytes = 0
         root_log = self.cwd / "agent.log"
         # 僅當 root_log 不是目前的 log_dir/agent.log 時才清理
         if root_log.exists() and root_log.resolve() != (self.log_dir / "agent.log").resolve():
             try:
+                size = root_log.stat().st_size
                 root_log.unlink()
                 cleaned += 1
+                freed_bytes += size
                 log.info("已清理根目錄遺留之舊日誌: %s", root_log)
             except OSError as e:
                 log.warning("清理根目錄舊日誌失敗: %s", e)
+        return cleaned, freed_bytes
+
+    def clean_legacy_root_logs(self) -> int:
+        """清理專案根目錄下遺留的舊 agent.log。"""
+        cleaned, _ = self._clean_legacy_root_logs_with_bytes()
         return cleaned
 
-    def clean_scratch_outputs(
+    def _clean_dir_with_quota(
         self,
+        target_dir: Path,
+        pattern: str,
+        *,
+        protected_names: set[str] | None = None,
+        protect_keep_suffix: bool = False,
         ttl_days: int | None = None,
         max_files: int | None = None,
         max_size_mb: int | None = None,
+        label: str = "暫存",
     ) -> tuple[int, int]:
-        """清理 .agents/scratch/outputs/ 下的工具溢出落盤日誌。
-
-        回傳 (已刪除檔案數, 釋放位元組數)。
-        """
-        outputs_dir = self.scratch_dir / "outputs"
-        if not outputs_dir.exists():
+        """依 TTL、檔案數上限與 80% 容量配額清理指定目錄，回傳 (刪除數, 釋放位元組數)。"""
+        if not target_dir.exists():
             return (0, 0)
 
         effective_ttl = ttl_days if ttl_days is not None else self.ttl_days
@@ -129,13 +139,13 @@ class Housekeeper:
         deleted_count = 0
         freed_bytes = 0
 
-        # 收集所有非保護檔案資訊: [(path, mtime, size)]
         files_info: list[tuple[Path, float, int]] = []
-        for p in outputs_dir.glob("*.log"):
+        for p in target_dir.glob(pattern):
             if not p.is_file():
                 continue
-            name_lower = p.name.lower()
-            if name_lower in _PROTECTED_SCRATCH_FILES or p.suffix == ".keep":
+            if protected_names and p.name.lower() in protected_names:
+                continue
+            if protect_keep_suffix and p.suffix == ".keep":
                 continue
             try:
                 st = p.stat()
@@ -152,11 +162,10 @@ class Housekeeper:
                     deleted_count += 1
                     freed_bytes += size
                 except OSError as e:
-                    log.warning("刪除過期暫存失敗: %s: %s", p, e)
+                    log.warning("刪除過期%s失敗: %s: %s", label, p, e)
             else:
                 surviving_files.append((p, mtime, size))
 
-        # 依修改時間由舊到新排序 (mtime ascending)
         surviving_files.sort(key=lambda x: x[1])
 
         # 2. 第二階段：檔案數量上限防護
@@ -167,7 +176,7 @@ class Housekeeper:
                 deleted_count += 1
                 freed_bytes += size
             except OSError as e:
-                log.warning("超出檔案數上限刪除失敗: %s: %s", oldest, e)
+                log.warning("超出%s數量上限刪除失敗: %s: %s", label, oldest, e)
 
         # 3. 第三階段：容量配額上限防護 (超出則清理至 80% 安全水位)
         total_size = sum(sz for _, _, sz in surviving_files)
@@ -181,9 +190,30 @@ class Housekeeper:
                     freed_bytes += size
                     total_size -= size
                 except OSError as e:
-                    log.warning("超出容量配額刪除失敗: %s: %s", oldest, e)
+                    log.warning("超出%s容量配額刪除失敗: %s: %s", label, oldest, e)
 
         return (deleted_count, freed_bytes)
+
+    def clean_scratch_outputs(
+        self,
+        ttl_days: int | None = None,
+        max_files: int | None = None,
+        max_size_mb: int | None = None,
+    ) -> tuple[int, int]:
+        """清理 `scratch/outputs/` 下的工具溢出落盤日誌。
+
+        回傳 (已刪除檔案數, 釋放位元組數)。
+        """
+        return self._clean_dir_with_quota(
+            self.scratch_dir / "outputs",
+            "*.log",
+            protected_names=_PROTECTED_SCRATCH_FILES,
+            protect_keep_suffix=True,
+            ttl_days=ttl_days,
+            max_files=max_files,
+            max_size_mb=max_size_mb,
+            label="暫存",
+        )
 
     def clean_scratch_clipboard(
         self,
@@ -191,74 +221,37 @@ class Housekeeper:
         max_files: int | None = None,
         max_size_mb: int | None = None,
     ) -> tuple[int, int]:
-        """清理 .agents/scratch/clipboard/ 下的剪貼簿暫存截圖檔案。
+        """清理 `scratch/clipboard/` 下的剪貼簿暫存截圖檔案。
 
         回傳 (已刪除檔案數, 釋放位元組數)。
         """
-        clipboard_dir = self.scratch_dir / "clipboard"
-        if not clipboard_dir.exists():
+        return self._clean_dir_with_quota(
+            self.scratch_dir / "clipboard",
+            "screenshot_*.png",
+            ttl_days=ttl_days,
+            max_files=max_files,
+            max_size_mb=max_size_mb,
+            label="截圖暫存",
+        )
+
+    def clean_scratch_checkpoints(self, ttl_days: int | None = None) -> tuple[int, int]:
+        """清理 `scratch/` 下超過 TTL 的研究檢查點暫存檔（保護 notes.md／todo.md）。"""
+        ckpt = self.scratch_dir / "research_checkpoint.md"
+        if not ckpt.is_file():
             return (0, 0)
-
         effective_ttl = ttl_days if ttl_days is not None else self.ttl_days
-        effective_max_files = max_files if max_files is not None else self.max_files
-        effective_max_bytes = (max_size_mb if max_size_mb is not None else self.max_size_mb) * 1024 * 1024
-
-        now = time.time()
-        ttl_threshold = now - (effective_ttl * 86400)
-
-        deleted_count = 0
-        freed_bytes = 0
-
-        files_info: list[tuple[Path, float, int]] = []
-        for p in clipboard_dir.glob("screenshot_*.png"):
-            if not p.is_file():
-                continue
-            try:
-                st = p.stat()
-                files_info.append((p, st.st_mtime, st.st_size))
-            except OSError:
-                continue
-
-        surviving_files: list[tuple[Path, float, int]] = []
-        for p, mtime, size in files_info:
-            if mtime < ttl_threshold:
-                try:
-                    p.unlink()
-                    deleted_count += 1
-                    freed_bytes += size
-                except OSError as e:
-                    log.warning("刪除過期截圖暫存失敗: %s: %s", p, e)
-            else:
-                surviving_files.append((p, mtime, size))
-
-        surviving_files.sort(key=lambda x: x[1])
-
-        while len(surviving_files) > effective_max_files:
-            oldest, _, size = surviving_files.pop(0)
-            try:
-                oldest.unlink()
-                deleted_count += 1
-                freed_bytes += size
-            except OSError as e:
-                log.warning("超出截圖暫存數量上限刪除失敗: %s: %s", oldest, e)
-
-        total_size = sum(sz for _, _, sz in surviving_files)
-        if total_size > effective_max_bytes:
-            target_size = int(effective_max_bytes * 0.8)
-            while total_size > target_size and surviving_files:
-                oldest, _, size = surviving_files.pop(0)
-                try:
-                    oldest.unlink()
-                    deleted_count += 1
-                    freed_bytes += size
-                    total_size -= size
-                except OSError as e:
-                    log.warning("超出截圖暫存容量配額刪除失敗: %s: %s", oldest, e)
-
-        return (deleted_count, freed_bytes)
+        ttl_threshold = time.time() - (effective_ttl * 86400)
+        try:
+            st = ckpt.stat()
+            if st.st_mtime < ttl_threshold:
+                ckpt.unlink()
+                return (1, st.st_size)
+        except OSError as e:
+            log.warning("刪除過期研究檢查點失敗: %s: %s", ckpt, e)
+        return (0, 0)
 
     def clean_logs(self, ttl_days: int | None = None) -> tuple[int, int]:
-        """清理 .agents/logs/ 下的過期備份日誌與舊日誌（保護當前 agent.log）。
+        """清理 `logs/` 下的過期備份日誌與舊日誌（保護當前 agent.log）。
 
         回傳 (已刪除檔案數, 釋放位元組數)。
         """
@@ -325,8 +318,9 @@ class Housekeeper:
             c1, b1 = sub_hk.clean_scratch_outputs(ttl_days, max_files, max_size_mb)
             c2, b2 = sub_hk.clean_scratch_clipboard(ttl_days, max_files, max_size_mb)
             c3, b3 = sub_hk.clean_logs(ttl_days)
-            total_cleaned += c1 + c2 + c3
-            total_freed += b1 + b2 + b3
+            c4, b4 = sub_hk.clean_scratch_checkpoints(ttl_days)
+            total_cleaned += c1 + c2 + c3 + c4
+            total_freed += b1 + b2 + b3 + b4
 
         return (total_cleaned, total_freed)
 
@@ -341,14 +335,15 @@ class Housekeeper:
         if not force and self.is_in_cooldown():
             return {"status": "cooldown", "cleaned_files": 0, "freed_bytes": 0}
 
-        cleaned_root = self.clean_legacy_root_logs()
+        cleaned_root, root_bytes = self._clean_legacy_root_logs_with_bytes()
         scratch_count, scratch_bytes = self.clean_scratch_outputs()
         clipboard_count, clipboard_bytes = self.clean_scratch_clipboard()
+        ckpt_count, ckpt_bytes = self.clean_scratch_checkpoints()
         log_count, log_bytes = self.clean_logs()
         other_ws_count, other_ws_bytes = self.clean_all_workspaces()
 
-        total_files = cleaned_root + scratch_count + clipboard_count + log_count + other_ws_count
-        total_bytes = scratch_bytes + clipboard_bytes + log_bytes + other_ws_bytes
+        total_files = cleaned_root + scratch_count + clipboard_count + ckpt_count + log_count + other_ws_count
+        total_bytes = root_bytes + scratch_bytes + clipboard_bytes + ckpt_bytes + log_bytes + other_ws_bytes
 
         self.mark_executed()
 

@@ -43,33 +43,34 @@ class HistoryCompactor:
 
         target_split = total - self.keep_recent_messages
 
-        # 收集從 0 到 target_split 之間所有出現過的 call_id
-        # 確保 target_split 處沒有未閉合的 call_id
-        calls_before = {
-            m.get("call_id")
-            for m in history[:target_split]
-            if isinstance(m, dict) and m.get("type") == "function_call" and m.get("call_id")
-        }
-        outputs_before = {
-            m.get("call_id")
-            for m in history[:target_split]
-            if isinstance(m, dict) and m.get("type") == "function_call_output" and m.get("call_id")
-        }
+        # 線性掃描所有成對工具呼叫的索引範圍，確保不拆散任何成對關聯，同時不被孤立記錄卡死
+        call_indices: dict[str, int] = {}
+        output_indices: dict[str, int] = {}
+        for idx, msg in enumerate(history):
+            if not isinstance(msg, dict):
+                continue
+            cid = msg.get("call_id")
+            if not cid:
+                continue
+            m_type = msg.get("type")
+            if m_type == "function_call" and cid not in call_indices:
+                call_indices[cid] = idx
+            elif m_type == "function_call_output":
+                output_indices[cid] = idx
 
-        # 若有 call_id 在待摘要區段內只有 call 沒有 output（即 output 落在保留區），
-        # 則往前移動 target_split 直到乾淨成對
-        while target_split > 0 and (calls_before != outputs_before):
-            target_split -= 1
-            calls_before = {
-                m.get("call_id")
-                for m in history[:target_split]
-                if isinstance(m, dict) and m.get("type") == "function_call" and m.get("call_id")
-            }
-            outputs_before = {
-                m.get("call_id")
-                for m in history[:target_split]
-                if isinstance(m, dict) and m.get("type") == "function_call_output" and m.get("call_id")
-            }
+        paired_spans = [
+            (min(call_indices[cid], output_indices[cid]), max(call_indices[cid], output_indices[cid]))
+            for cid in (call_indices.keys() & output_indices.keys())
+        ]
+
+        changed = True
+        while changed and target_split > 0:
+            changed = False
+            for start_idx, end_idx in paired_spans:
+                if start_idx < target_split <= end_idx:
+                    target_split = start_idx
+                    changed = True
+                    break
 
         # 待摘要區段至少要有 4 則訊息才有摘要效益
         if target_split < 4:
@@ -131,12 +132,21 @@ class HistoryCompactor:
             log.warning("摘要結果為空，放棄替換歷史")
             return history, False
 
-        summary_tokens = estimate_tokens(summary_text)
+        summary_content = f"[系統紀錄：較早歷史對話之高密度摘要（僅供脈絡參考，不擴大任何操作授權）]\n{summary_text}"
+        summary_msg = {
+            "role": "user",
+            "content": summary_content,
+            "is_compaction": True,
+            "compacted_range": [0, split_idx],
+            "original_tokens": original_tokens,
+        }
+        summary_tokens = estimate_tokens(summary_msg)
         # 壓縮效益檢查：摘要長度必須至少減少 20% 原 tokens
         if summary_tokens >= original_tokens * 0.8:
             log.info("摘要無顯著壓縮收益 (原 %d tokens, 摘要 %d tokens)，放棄替換", original_tokens, summary_tokens)
             return history, False
 
+        summary_msg["compacted_tokens"] = summary_tokens
         log.info(
             "歷史摘要壓縮成功：原 %d 則訊息 (%d tokens) 壓縮為摘要 (%d tokens)，保留最新 %d 則",
             len(to_summarize),
@@ -145,14 +155,6 @@ class HistoryCompactor:
             len(to_keep),
         )
 
-        summary_msg = {
-            "role": "user",
-            "content": f"[系統紀錄：較早歷史對話之高密度摘要（僅供脈絡參考，不擴大任何操作授權）]\n{summary_text}",
-            "is_compaction": True,
-            "compacted_range": [0, split_idx],
-            "original_tokens": original_tokens,
-            "compacted_tokens": summary_tokens,
-        }
         new_history = [summary_msg] + to_keep
         return new_history, True
 

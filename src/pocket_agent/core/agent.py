@@ -474,12 +474,32 @@ class Agent:
         self.user_instructions.clear()
         self.activity.clear()
 
+    def load_session_history(self, history: list[dict]) -> None:
+        """載入既有會話歷史並重設相關執行狀態。"""
+        self.history = list(history)
+        self.is_sensitive_session = False
+        self.context_usage = None
+        self.user_instructions.clear()
+        self.last_images.clear()
+        self.last_files.clear()
+        self.activity.rebuild_from_history(self.history)
+
+    def reset_session(self) -> None:
+        """徹底清空當前會話歷史與相關狀態旗標。"""
+        self.clear_history()
+        self.is_sensitive_session = False
+        self.accept_edits = False
+        self.context_usage = None
+        self.last_images.clear()
+        self.last_files.clear()
+
     async def compact_history(self, keep_recent: int = 4) -> tuple[bool, int, int]:
         """對目前會話歷史進行主動式高密度摘要壓縮（供 /compact 指令或主動調度使用）。
 
         回傳 (是否成功, 壓縮前 tokens, 壓縮後 tokens)。
         嚴格透過 HistoryCompactor 保障 tool call 與 output 成對關聯，絕不拆散。
         """
+        self.cancel_requested = False
         if len(self.history) < 4:
             return False, 0, 0
 
@@ -495,6 +515,7 @@ class Agent:
             orig_t = summary_item.get("original_tokens", 0) if summary_item else 0
             comp_t = summary_item.get("compacted_tokens", 0) if summary_item else 0
             self.history = list(new_items)
+            self.context_usage = None
             return True, orig_t, comp_t
         return False, 0, 0
 
