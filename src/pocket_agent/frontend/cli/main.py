@@ -59,14 +59,22 @@ async def send_turn(
             renderer.message("⏸ 停止要求已送出，等待進行中的工作收尾…", "yellow")
 
         if result.action == "image":
-            out_path = Path("generated_images") / "image.png"
-            if hasattr(agent, "generate_image"):
-                coro = agent.generate_image(result.prompt, output_path=out_path, input_images=snapshot or None)
-            else:
-                from pocket_agent.tools.image import generate_image
+            from rich.status import Status
 
-                coro = generate_image(result.prompt, output_path=out_path, input_images=snapshot or None)
-            reply = await run_operation(coro, stopping)
+            status = Status("生圖中（可能需要 1-2 分鐘）…", spinner="dots", console=renderer.console)
+            renderer._active_status = status
+            status.start()
+            try:
+                out_path = Path("generated_images") / "image.png"
+                if hasattr(agent, "generate_image"):
+                    coro = agent.generate_image(result.prompt, output_path=out_path, input_images=snapshot or None)
+                else:
+                    from pocket_agent.tools.image import generate_image
+
+                    coro = generate_image(result.prompt, output_path=out_path, input_images=snapshot or None)
+                reply = await run_operation(coro, stopping)
+            finally:
+                renderer._stop_status()
         else:
             # 串流模式：啟動思考中 spinner，等第一個 text 事件停止它
             from rich.status import Status
