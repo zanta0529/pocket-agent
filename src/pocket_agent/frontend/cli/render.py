@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
 
+from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.frontend.cli.state import CliState
 
 
@@ -266,7 +267,9 @@ class CliRenderer:
             term_w = getattr(self.console, "width", 80) or 80
             max_width = max(70, min(140, term_w - 10))
 
-        name_lower = name.lower()
+        raw_name = name.split("::")[-1]
+        _, raw_name = parse_mcp_tool_name(raw_name)
+        name_lower = raw_name.lower()
         parsed: dict | None = None
         if args_raw:
             try:
@@ -554,12 +557,7 @@ class CliRenderer:
 
             real_name = name.split("::")[-1]
             sa_name = name.split("::", 1)[0] if "::" in name else None
-            server_tag = None
-            if real_name.startswith("mcp__"):
-                mcp_parts = real_name.split("__", 2)
-                if len(mcp_parts) == 3:
-                    server_tag = mcp_parts[1]
-                    real_name = mcp_parts[2]
+            server_tag, real_name = parse_mcp_tool_name(real_name)
 
             name_lower = real_name.lower()
 
@@ -672,13 +670,15 @@ class CliRenderer:
 
                 if not ok:
                     if "::" in name:
-                        sa_name, real_name = name.split("::", 1)
-                        formatted_name = f"[{sa_name}] {real_name}"
-                    elif name.startswith("mcp__"):
-                        mcp_parts = name.split("__", 2)
-                        formatted_name = f"[{mcp_parts[1]}] {mcp_parts[2]}" if len(mcp_parts) == 3 else name
+                        sa_name, inner_name = name.split("::", 1)
+                        server_tag, real_name = parse_mcp_tool_name(inner_name)
+                        if server_tag:
+                            formatted_name = f"[{sa_name}] [{server_tag}] {real_name}"
+                        else:
+                            formatted_name = f"[{sa_name}] {real_name}"
                     else:
-                        formatted_name = name
+                        server_tag, real_name = parse_mcp_tool_name(name)
+                        formatted_name = f"[{server_tag}] {real_name}" if server_tag else name
 
                     result_text = str(data.get("result", ""))
 

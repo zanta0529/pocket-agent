@@ -221,9 +221,9 @@ def test_mcp_manager_strips_github_token_and_clears_cache_on_conn_auth():
         ),
     )
     schemas = {s["name"]: s for s in manager.openai_tools()}
-    assert "github_token" not in schemas["github_list_prs"]["parameters"]["properties"]
+    assert "github_token" not in schemas["mcp__github__github_list_prs"]["parameters"]["properties"]
 
-    res = asyncio.run(manager.call("github_list_prs", {"owner": "octocat", "repo": "hello"}))
+    res = asyncio.run(manager.call("mcp__github__github_list_prs", {"owner": "octocat", "repo": "hello"}))
     manager.on_prompt_conn.assert_called_once_with("github", ["GITHUB_TOKEN"])
     fake_session.call_tool.assert_awaited_once_with(
         "github_list_prs",

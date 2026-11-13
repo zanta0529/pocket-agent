@@ -199,11 +199,15 @@ def test_mcp_manager_strips_rdp_params_and_prompts_only_win_keys():
         )
     )
     schemas = {s["name"]: s for s in manager.openai_tools()}
-    assert schemas["win_system_overview"].get("_is_safe_read") is True
-    assert schemas["win_system_overview"]["parameters"]["properties"] == {}
+    assert schemas["mcp__win_rdp__win_system_overview"].get("_is_safe_read") is True
+    assert schemas["mcp__win_rdp__win_system_overview"]["parameters"]["properties"] == {}
     # win_rdp_mouse_action 未列入 safe_read_tools，必須維持預設攔截確認，且隱藏 rdp_* 參數
-    assert schemas["win_rdp_mouse_action"].get("_is_safe_read") is None
-    assert set(schemas["win_rdp_mouse_action"]["parameters"]["properties"].keys()) == {"action", "x", "y"}
+    assert schemas["mcp__win_rdp__win_rdp_mouse_action"].get("_is_safe_read") is None
+    assert set(schemas["mcp__win_rdp__win_rdp_mouse_action"]["parameters"]["properties"].keys()) == {
+        "action",
+        "x",
+        "y",
+    }
 
     prompt_calls = []
 

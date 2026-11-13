@@ -206,8 +206,8 @@ def test_mcp_manager_strips_ssh_params_and_prompts_only_missing():
         )
     )
     schemas = {s["name"]: s for s in manager.openai_tools()}
-    assert schemas["rhel_system_overview"].get("_is_safe_read") is True
-    assert schemas["rhel_system_overview"]["parameters"]["properties"] == {}
+    assert schemas["mcp__rhel_ops__rhel_system_overview"].get("_is_safe_read") is True
+    assert schemas["mcp__rhel_ops__rhel_system_overview"]["parameters"]["properties"] == {}
 
     prompt_calls = []
 

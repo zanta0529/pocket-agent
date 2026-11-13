@@ -143,7 +143,7 @@ def test_start_counts_ready_servers_and_registry(tool_names):
         patch.object(manager, "_connect", side_effect=connect),
     ):
         result = asyncio.run(manager.start(on_start=lambda count: events.append(count)))
-    assert result == MCPStartupResult(len(sessions), len(sessions), 0, len(set(tool_names)))
+    assert result == MCPStartupResult(len(sessions), len(sessions), 0, len(tool_names))
     assert events == [len(sessions), *map(str, range(len(sessions)))]
     load.assert_called_once_with()
     for session in sessions:

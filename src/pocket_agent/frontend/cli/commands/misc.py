@@ -1,13 +1,38 @@
 from pathlib import Path
 
+from rich.cells import cell_len
 from rich.markdown import Markdown
 from rich.text import Text
 
+from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
 from pocket_agent.frontend.cli.input import BUILTINS, file_argument
 
 # /mcp sqlite <db_path> 所呼叫的 SQLite MCP 切換工具名稱
 _SQLITE_SWITCH_TOOL = "sqlite_switch_database"
+
+
+def _mcp_display_name(tool_info: dict[str, str]) -> str:
+    """回傳精簡的工具顯示名稱（移除 mcp__<server>__ 前綴）。"""
+    orig = (tool_info.get("original_name") or "").strip()
+    if orig:
+        return orig
+    _, raw_name = parse_mcp_tool_name(tool_info.get("name", ""))
+    return raw_name
+
+
+def _compute_mcp_grid_layout(grouped: dict[str, list[dict[str, str]]], term_width: int) -> tuple[int, int]:
+    """依實際最長工具名稱與終端機寬度動態計算 /mcp 清單的 (欄數, 單欄寬度)。"""
+    avail_width = max(24, term_width - 4)
+    gap = 3
+    max_item_len = max(
+        (cell_len(f"• {_mcp_display_name(t)}") for tools in grouped.values() for t in tools),
+        default=20,
+    )
+    min_col_width = max(24, max_item_len + gap)
+    num_cols = max(1, min(3, (avail_width + gap) // min_col_width))
+    col_width = max(min_col_width, avail_width // num_cols)
+    return num_cols, col_width
 
 
 class QuitCommand(CliCommand):
@@ -256,6 +281,7 @@ class McpCommand(CliCommand):
                 grouped.setdefault(entry.server_name, []).append(
                     {
                         "name": entry.name,
+                        "original_name": getattr(entry, "original_name", ""),
                         "description": (entry.schema.get("description") or "").strip(),
                     }
                 )
@@ -263,15 +289,20 @@ class McpCommand(CliCommand):
         # Fallback: 若無 MCPManager 物件但有 ctx.tools (例如測試環境或直接傳遞)
         if not grouped and ctx.tools:
             for tool_name in ctx.tools:
-                server_key = "mcp"
-                if tool_name.startswith("mcp__") and len(tool_name.split("__")) >= 3:
-                    server_key = tool_name.split("__")[1]
+                parsed_server, parsed_tool = parse_mcp_tool_name(tool_name)
+                if parsed_server is not None:
+                    server_key = parsed_server
+                    display_name = parsed_tool
                 else:
+                    server_key = "mcp"
+                    display_name = tool_name
                     for prefix in ("rhel_", "win_rdp_", "browser_", "sqlite_", "mysql_", "mssql_"):
                         if tool_name.startswith(prefix):
                             server_key = prefix.rstrip("_").replace("_", "-")
                             break
-                grouped.setdefault(server_key, []).append({"name": tool_name, "description": ""})
+                grouped.setdefault(server_key, []).append(
+                    {"name": tool_name, "original_name": display_name, "description": ""}
+                )
 
         if not grouped:
             ctx.renderer.message("目前未掛載任何 MCP 工具。")
@@ -304,7 +335,7 @@ class McpCommand(CliCommand):
             ctx.renderer.console.print(header)
 
             for t in tools:
-                line = Text(f"  • {t['name']}", style="bold green")
+                line = Text(f"  • {_mcp_display_name(t)}", style="bold green")
                 desc = t.get("description")
                 if desc:
                     first_line = desc.split("\n")[0].strip()
@@ -324,8 +355,7 @@ class McpCommand(CliCommand):
 
         raw_width = getattr(ctx.renderer.console, "width", 80)
         width = raw_width if isinstance(raw_width, int) and raw_width > 0 else 80
-        num_cols = max(1, min(3, (width - 4) // 32))
-        col_width = max(24, (width - 6) // num_cols)
+        num_cols, col_width = _compute_mcp_grid_layout(grouped, width)
 
         for server_name, tools in grouped.items():
             title = Text(f"📦 {server_name} ", style="bold cyan")
@@ -336,9 +366,10 @@ class McpCommand(CliCommand):
                 row_tools = tools[i : i + num_cols]
                 line = Text("   ")
                 for j, t in enumerate(row_tools):
-                    tool_text = f"• {t['name']}"
+                    tool_text = f"• {_mcp_display_name(t)}"
                     if j < len(row_tools) - 1:
-                        tool_text = tool_text.ljust(col_width)
+                        pad = max(1, col_width - cell_len(tool_text))
+                        tool_text = tool_text + (" " * pad)
                     line.append(tool_text, style="green")
                 ctx.renderer.console.print(line)
             ctx.renderer.console.print()
