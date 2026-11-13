@@ -31,6 +31,8 @@ MIN_TOOL_OUTPUT_CHARS = 500
 # ==============================================================================
 DEFAULT_PROCESS_BUFFER_BYTES = 1024 * 1024  # 1 MB 安全串流排空上限
 MAX_READ_FILE_BYTES = 10 * 1024 * 1024  # 10 MB: 本機讀檔保護底線，超過此大小拒絕直接讀入
+MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024  # 20 MB: /image 單張參考圖最大檔案大小
+MAX_IMAGE_INPUT_COUNT = 10  # /image 單次請求最多允許的參考圖數量
 MAX_FILE_SEARCH_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB: search_files 全文檢索時跳過的大檔閾值
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024  # 2 MB: Web 工具爬取網頁時的最大 HTTP 接收大小
 

@@ -437,6 +437,12 @@ class Agent:
         """目前引擎是否支援圖片生成能力。"""
         return bool(self.engine.supports_image_generation)
 
+    @property
+    def supports_image_command(self) -> bool:
+        """/image 獨立指令目前僅限使用 ChatGPT OAuth (openai) 訂閱配額。"""
+        provider = self.provider or getattr(self.engine, "provider_name", "")
+        return str(provider).lower() == "openai" and self.supports_image_generation
+
     async def get_quota(self):
         return await self.engine.get_quota()
 
@@ -450,7 +456,12 @@ class Agent:
         """透過核心生圖流程產生圖片並自動記錄檔案變更。"""
         from pocket_agent.tools.image import generate_image as _generate_image
 
-        out = await _generate_image(prompt, output_path=output_path, input_images=input_images)
+        out = await _generate_image(
+            prompt,
+            output_path=output_path,
+            input_images=input_images,
+            workspace_dirs=self.workspace_dirs,
+        )
         self.activity.record_file_change(out, "added", existed_before=False)
         return out
 

@@ -517,7 +517,7 @@ class HelpCommand(CliCommand):
 
         for command, description in BUILTINS.items():
             ctx.renderer.message(f"/{command}  {description}")
-        supports_img = getattr(ctx.agent, "supports_image_generation", ctx.state.provider in ("openai", "openai-api"))
+        supports_img = ctx.state.provider == "openai" and bool(getattr(ctx.agent, "supports_image_command", True))
         if supports_img:
             ctx.renderer.message("/image <描述>  生圖，待送附件作參考圖")
         from pocket_agent.system.paths import is_portable
@@ -552,9 +552,9 @@ class ImageCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if not args:
             raise ValueError("用法：/image <描述>")
-        supports_img = getattr(ctx.agent, "supports_image_generation", ctx.state.provider in ("openai", "openai-api"))
+        supports_img = ctx.state.provider == "openai" and bool(getattr(ctx.agent, "supports_image_command", True))
         if not supports_img:
-            raise ValueError("產生圖片功能目前僅限使用支援生圖之引擎（如 OpenAI Responses 引擎）")
+            raise ValueError("產生圖片功能目前僅限使用 openai (ChatGPT OAuth 訂閱配額) 引擎時支援")
         return CommandResult("image", args)
 
 
