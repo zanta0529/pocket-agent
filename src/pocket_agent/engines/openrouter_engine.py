@@ -125,25 +125,15 @@ class OpenRouterEngine(StandardChatCompletionsEngine):
 
     def parse_api_error(self, exc: Exception) -> str | None:
         """Parse OpenRouter APIStatusError for reset time or remedy hint."""
-        import ast
-        import re
-        from datetime import datetime, timezone
-
         try:
             status_code = getattr(exc, "status_code", None)
-
-            # Attempt to extract JSON from error string
-            text = str(exc)
-            match = re.search(r"\{.*\}", text, re.DOTALL)
-            if not match:
+            error_data, _ = self.extract_error_payload(exc)
+            if not isinstance(error_data, dict):
                 return None
 
-            parsed = ast.literal_eval(match.group())
-            if not isinstance(parsed, dict):
-                return None
-
-            error_data = parsed.get("error", {})
             metadata = error_data.get("metadata", {})
+            if not isinstance(metadata, dict):
+                return None
 
             if status_code == 402:
                 remedy = metadata.get("remedy_hint")
@@ -155,31 +145,14 @@ class OpenRouterEngine(StandardChatCompletionsEngine):
                 return None
 
             headers = metadata.get("headers", {})
+            if not isinstance(headers, dict):
+                return None
 
             reset_ms = headers.get("X-RateLimit-Reset")
             if not reset_ms:
                 return None
 
             reset_ts = int(reset_ms) / 1000.0
-            reset_dt = datetime.fromtimestamp(reset_ts, tz=timezone.utc).astimezone()
-
-            import time
-
-            now_ts = time.time()
-            if reset_ts > now_ts:
-                secs = int(reset_ts - now_ts)
-                hours, remainder = divmod(secs, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                if hours:
-                    countdown = f"{hours} 小時 {minutes} 分 {seconds} 秒"
-                elif minutes:
-                    countdown = f"{minutes} 分 {seconds} 秒"
-                else:
-                    countdown = f"{seconds} 秒"
-
-                return f"\n\n⏳ **重置時間**：{reset_dt.strftime('%Y-%m-%d %H:%M:%S')} (距今約 {countdown})"
-            else:
-                return f"\n\n⏳ **重置時間**：應已於 {reset_dt.strftime('%Y-%m-%d %H:%M:%S')} 重置"
-
+            return self.format_reset_time_hint(resets_at=reset_ts)
         except Exception:
             return None

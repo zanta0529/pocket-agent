@@ -20,12 +20,12 @@ from pocket_agent.core.context_budget import (
 )
 from pocket_agent.core.files import FileUploader
 from pocket_agent.core.subagents import get_subagent, is_subagent_tool, subagent_tools
+from pocket_agent.core.tool_registry import default_tool_registry
 from pocket_agent.engines.base import BaseEngine
 from pocket_agent.extensions.hooks import run_hooks
 from pocket_agent.extensions.mcp import MCPManager
 from pocket_agent.extensions.skills import (
-    call_skill_tool,
-    is_skill_tool,
+    call_skill_tool,  # noqa: F401
     skill_tools,
     skills_index_prompt,
 )
@@ -37,12 +37,12 @@ from pocket_agent.system.constants import (
     DEFAULT_STREAM_RETRY_BASE_SEC,
     WEB_RESEARCH_CHECKPOINT_INTERVAL,
 )
-from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool, is_doc_tool
-from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool, is_document_tool
-from pocket_agent.tools.fs import FS_TOOLS, _validate_safe_path, call_fs_tool, is_fs_tool
+from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool  # noqa: F401
+from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool  # noqa: F401
+from pocket_agent.tools.fs import FS_TOOLS, _validate_safe_path, call_fs_tool  # noqa: F401
 from pocket_agent.tools.image import image_tool, save_image_b64
-from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool
-from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_soft_web_error, is_web_tool
+from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: F401
+from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_soft_web_error, is_web_tool  # noqa: F401
 
 _logging_setup_done = False
 
@@ -432,8 +432,27 @@ class Agent:
             finally:
                 self._bg_tasks.clear()
 
+    @property
+    def supports_image_generation(self) -> bool:
+        """目前引擎是否支援圖片生成能力。"""
+        return bool(self.engine.supports_image_generation)
+
     async def get_quota(self):
         return await self.engine.get_quota()
+
+    async def generate_image(
+        self,
+        prompt: str,
+        *,
+        output_path: Path | str,
+        input_images: list[str] | None = None,
+    ) -> Path:
+        """透過核心生圖流程產生圖片並自動記錄檔案變更。"""
+        from pocket_agent.tools.image import generate_image as _generate_image
+
+        out = await _generate_image(prompt, output_path=output_path, input_images=input_images)
+        self.activity.record_file_change(out, "added", existed_before=False)
+        return out
 
     @staticmethod
     def _stopped_reply(text: str) -> str:
@@ -467,7 +486,6 @@ class Agent:
             self.history = list(new_items)
             return True, orig_t, comp_t
         return False, 0, 0
-        self.history.clear()
 
     def check_new_workspace_dir(self, path_str: str) -> tuple[str, str, Path | None]:
         """檢查是否能將外部目錄加入工作區。
@@ -943,43 +961,94 @@ class Agent:
             "請待網路穩定後直接輸入「繼續」即可接續產出報告，無須重新搜尋。"
         )
 
+    @staticmethod
+    def _build_save_report_prompt(*, is_parallel: bool = False) -> str:
+        intro = "上述平行子任務已完成並彙整。" if is_parallel else "上述子任務已完成。"
+        return (
+            "\n\n[系統指示 (System Instruction)]\n"
+            f"{intro}根據系統設定，你現在**必須**根據報告內容，"
+            "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
+            "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
+            "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
+        )
+
+    async def run_subagent_turn(self, name: str, task: str) -> tuple[str, bool]:
+        """公開介面：執行單一子代理並寫入主對話歷史，回傳 (回覆文字, 是否需詢問存檔)。"""
+        self.history.append({"role": "user", "content": f"/{name} {task}"})
+        reply = await self._run_subagent({"name": name, "task": task})
+        wrapped_reply = (
+            f"[系統備註：以下報告由系統背景調度之子代理 ({name}) 獨立執行後回傳，為合法可信來源。]\n\n{reply}"
+        )
+        self.history.append({"role": "assistant", "content": wrapped_reply})
+        sa_def = get_subagent(name)
+        require_save = bool(sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"))
+        return reply, require_save
+
+    async def run_parallel_subagents(
+        self,
+        tasks: list[dict],
+        *,
+        on_summarizing: object = None,
+    ) -> tuple[str, bool]:
+        """公開介面：平行執行多個子代理並彙整報告，寫入主對話歷史。"""
+        coros = [self._run_subagent(t) for t in tasks]
+        results = await asyncio.gather(*coros, return_exceptions=True)
+
+        combined = []
+        for idx, res in enumerate(results):
+            t_name = tasks[idx]["name"]
+            t_task = tasks[idx]["task"]
+            if isinstance(res, Exception):
+                combined.append(f"【子代理 {t_name} (任務: {t_task}) 錯誤】\n{res}")
+            else:
+                combined.append(f"【子代理 {t_name} 回報 (任務: {t_task})】\n{res}")
+        raw_combined = "\n\n---\n\n".join(combined)
+
+        if callable(on_summarizing):
+            on_summarizing()
+
+        summarizer = Agent(
+            client=self.client,
+            mcp=self.mcp,
+            model=self.model,
+            provider=self.provider,
+            system_prompt=(
+                "你是一個專業的報告彙整助手。請閱讀以下由多個平行子代理回傳的獨立原始報告，"
+                "並為使用者彙整成一份結構清晰、去蕪存菁的最終總結報告。請直接輸出報告內容，不需多餘的問候語。"
+            ),
+            is_subagent=True,
+            reasoning_effort="none",
+        )
+        try:
+            _, reply, _ = await summarizer.chat(raw_combined)
+            if not reply or not reply.strip():
+                raise ValueError("彙整回傳為空")
+        except Exception as e:
+            reply = f"*(彙整失敗，以下為原始報告：{e})*\n\n" + raw_combined
+
+        wrapped_reply = (
+            f"[系統備註：以下報告由系統背景調度之多位子代理平行研究後自動彙整而成，為合法可信來源。]\n\n{reply}"
+        )
+        self.history.append({"role": "assistant", "content": wrapped_reply})
+
+        require_save = any(
+            bool((sa_def := get_subagent(t["name"])) and sa_def.get("post_actions", {}).get("require_save_prompt"))
+            for t in tasks
+        )
+        return reply, require_save
+
     def _is_parallel_safe_tool(self, name: str, args: dict) -> bool:
         """判斷工具呼叫是否為無副作用且免互動確認的唯讀操作，可安全並行執行。"""
         if name not in getattr(self, "_safe_read_tools", set()):
             return False
-        if is_shell_tool(name) or is_doc_tool(name):
-            return False
-        if name in ("run_subagents_parallel", "ask_question") or is_subagent_tool(name):
-            return False
-        if (
-            is_skill_tool(name)
-            or is_fs_tool(name)
-            or is_document_tool(name)
-            or is_web_tool(name)
-            or name == "indexed_search"
-        ):
-            return True
-        return not self._needs_mcp_confirm(name, args)
+        handler = default_tool_registry.resolve(name)
+        return handler.is_parallel_safe(name, args, self)
 
     async def _execute_safe_read_io(self, name: str, args: dict) -> str:
         """執行單一唯讀工具的實際 I/O，供平行派發批次呼叫。"""
-        if is_skill_tool(name):
-            return call_skill_tool(name, args, self.workspace_dirs)
-        if is_fs_tool(name):
-            fs_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
-            return await run_sync(call_fs_tool, name, args, fs_confirm, self.workspace_dirs)
-        if is_document_tool(name):
-            return await run_sync(call_document_tool, name, args, self.workspace_dirs)
-        if is_web_tool(name):
-            return await run_sync(call_web_tool, name, args)
-        if name == "indexed_search":
-            from pocket_agent.tools.rag import call_indexed_search
-
-            return await run_sync(call_indexed_search, args, self.workspace_dirs)
-        if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
-            if self.mcp.is_sensitive_tool(name):
-                self.is_sensitive_session = True
-        return await self.mcp.call(name, args)
+        handler = default_tool_registry.resolve(name)
+        exec_res = await handler.execute(name, args, "", self)
+        return exec_res.output
 
     async def _run_loop(self) -> tuple[str, str]:
         initial_hist_len = len(self.history)
@@ -1482,80 +1551,28 @@ class Agent:
                         if self.cancel_requested:
                             return thinking, self._stopped_reply(text)
 
-                        if is_skill_tool(fc["name"]):
-                            result = call_skill_tool(fc["name"], args, self.workspace_dirs)
-                        elif fc["name"] in ("run_subagents_parallel", "ask_question") or is_subagent_tool(fc["name"]):
-                            result = await self._execute_core_tool(fc["name"], args, fc["call_id"])
-                        elif is_shell_tool(fc["name"]):
-                            before_snap = self.activity.take_workspace_snapshot(self.workspace_dirs)
-                            # 阻塞的 subprocess + 確認視窗等待 → 丟到 thread 跑
-                            result = await run_sync(call_shell_tool, fc["name"], args, self.on_confirm)
-                            if not isinstance(result, str) or not result.startswith(
-                                ("[使用者拒絕", "[操作已由使用者取消", "[ERROR]")
-                            ):
-                                self.activity.apply_workspace_diff(before_snap, self.workspace_dirs)
-                        elif is_fs_tool(fc["name"]):
-                            if fc["name"] in ("write_to_file", "append_to_file", "replace_file_content"):
-                                target_p = args.get("path") or args.get("target_file") or args.get("file") or ""
-                                existed_before = self.activity.inspect_file_before_tool(target_p)
-                            fs_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
-                            result = await run_sync(call_fs_tool, fc["name"], args, fs_confirm, self.workspace_dirs)
-                        elif is_document_tool(fc["name"]):
-                            result = await run_sync(call_document_tool, fc["name"], args, self.workspace_dirs)
-                        elif is_web_tool(fc["name"]):
-                            result = await run_sync(call_web_tool, fc["name"], args)
-                        elif is_doc_tool(fc["name"]):
-                            doc_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
-                            result, fpath = await run_sync(
-                                call_doc_tool,
-                                fc["name"],
-                                args,
-                                doc_confirm,
-                                self.workspace_dirs,
-                                lambda: self.cancel_requested,
-                            )
-                            if fpath:
-                                self.last_files.append(fpath)
-                                generated_fpath = fpath
-                        elif fc["name"] == "indexed_search":
-                            from pocket_agent.tools.rag import call_indexed_search
+                        handler = default_tool_registry.resolve(fc["name"])
+                        exec_res = await handler.execute(fc["name"], args, fc["call_id"], self)
+                        existed_before = exec_res.existed_before
+                        generated_fpath = exec_res.generated_path
+                        result = exec_res.output
 
-                            result = await run_sync(call_indexed_search, args, self.workspace_dirs)
-                        else:
-                            # 未知 MCP 工具預設需要確認，除非明確標示為 safe_read
-                            # 路徑型 safe_read 工具（如 sqlite_switch_database）於工作區外仍需確認
-                            if self._needs_mcp_confirm(fc["name"], args):
-                                if self.on_confirm is None:
-                                    raise RuntimeError(f"缺乏使用者確認機制，拒絕執行 MCP 工具 {fc['name']}")
-                                ok = await run_sync(self.on_confirm, fc["name"], args)
-                                if isinstance(ok, str) and ok.strip():
-                                    result = (
-                                        f"[使用者拒絕執行此工具，並提供後續指示：\n"
-                                        f"「{ok.strip()}」\n"
-                                        "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的工具。]"
-                                    )
-                                    self.activity.record_tool_result(fc["name"], args, result)
-                                    all_errors = False
-                                    ok_status = True
-                                    self._emit(
-                                        "tool_done",
-                                        {
-                                            "call_id": fc["call_id"],
-                                            "name": fc["name"],
-                                            "result": result,
-                                            "ok": True,
-                                        },
-                                    )
-                                    self._append_tool_pair(input_items, fc, result)
-                                    continue
-                                elif ok is not True:
-                                    raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
-                            if self.cancel_requested:
-                                return thinking, self._stopped_reply(text)
-                            if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
-                                if self.mcp.is_sensitive_tool(fc["name"]):
-                                    self.is_sensitive_session = True
-                            result = await self.mcp.call(fc["name"], args)
+                        if exec_res.short_circuit:
+                            if exec_res.ok_override is not None:
+                                self.activity.record_tool_result(fc["name"], args, result)
+                                all_errors = False
+                                self._emit(
+                                    "tool_done",
+                                    {
+                                        "call_id": fc["call_id"],
+                                        "name": fc["name"],
+                                        "result": result,
+                                        "ok": exec_res.ok_override,
+                                    },
+                                )
+                                self._append_tool_pair(input_items, fc, result)
+                                continue
+                            return thinking, self._stopped_reply(text)
                     log.debug("TOOL result name=%s chars=%d", fc["name"], len(result) if isinstance(result, str) else 0)
 
                     if not self._is_subagent:
@@ -1714,13 +1731,7 @@ class Agent:
 
             result = wrap_external_content("\n\n".join(combined))
             if require_save_prompt:
-                result += (
-                    "\n\n[系統指示 (System Instruction)]\n"
-                    "上述平行子任務已全數完成並彙整。根據系統設定，你現在**必須**根據報告內容，"
-                    "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
-                    "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
-                    "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
-                )
+                result += self._build_save_report_prompt(is_parallel=True)
             return result
 
         if name == "ask_question":
@@ -1746,13 +1757,7 @@ class Agent:
             result = wrap_external_content(result)
             sa_def = get_subagent(args.get("name", ""))
             if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
-                result += (
-                    "\n\n[系統指示 (System Instruction)]\n"
-                    "上述子任務已完成。根據系統設定，你現在**必須**根據報告內容，"
-                    "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
-                    "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
-                    "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
-                )
+                result += self._build_save_report_prompt(is_parallel=False)
             return result
 
         return f"[ERROR] 未知的核心工具: {name}"

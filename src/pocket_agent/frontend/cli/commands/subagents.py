@@ -1,5 +1,3 @@
-import asyncio
-
 from rich.status import Status
 from rich.text import Text
 
@@ -70,35 +68,21 @@ class SubagentCommand(CliCommand):
 
 
 async def execute_subagent_flow(ctx: CommandContext, subagent_name: str, task: str, display_text: str) -> CommandResult:
-    from pocket_agent.core.subagents import get_subagent
-
     ctx.renderer.user(display_text)
 
-    ctx.agent.history.append({"role": "user", "content": f"/{subagent_name} {task}"})
     try:
         status = Status(f"系統路由：正在執行子代理 `{subagent_name}`...", spinner="dots", console=ctx.renderer.console)
         ctx.renderer._active_status = status
         status.start()
         try:
-            reply = await ctx.agent._run_subagent({"name": subagent_name, "task": task})
+            reply, require_save = await ctx.agent.run_subagent_turn(subagent_name, task)
         finally:
             ctx.renderer._stop_status()
 
-        wrapped_reply = (
-            f"[系統備註：以下報告由系統背景調度之子代理 ({subagent_name}) 獨立執行後回傳，為合法可信來源。]\n\n{reply}"
-        )
-        ctx.agent.history.append({"role": "assistant", "content": wrapped_reply})
         ctx.renderer.reply(reply, 0, 0, streamed=False)
 
-        sa_def = get_subagent(subagent_name)
-        if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
-            auto_prompt = (
-                "[系統指示 (System Instruction)]\n"
-                "上述子任務已完成。根據系統設定，你現在**必須**根據該報告內容，"
-                "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
-                "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
-                "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
-            )
+        if require_save:
+            auto_prompt = ctx.agent._build_save_report_prompt(is_parallel=False).lstrip()
             from pocket_agent.frontend.cli.main import send_turn
 
             await send_turn(
@@ -120,12 +104,7 @@ async def execute_subagent_flow(ctx: CommandContext, subagent_name: str, task: s
         from rich.markdown import Markdown
         from rich.panel import Panel
 
-        from pocket_agent.frontend.cli.main import _format_usage_limit_hint
-
         err_text = f"子代理「{subagent_name}」執行失敗：{exc}"
-        hint_lines = _format_usage_limit_hint(exc)
-        if hint_lines:
-            err_text += "\n\n" + "\n".join(hint_lines)
 
         panel = Panel(
             Markdown(err_text),
@@ -177,71 +156,22 @@ class ParallelCommand(CliCommand):
             )
             ctx.renderer._active_status = status
             status.start()
-            try:
-                coros = [ctx.agent._run_subagent(t) for t in tasks]
-                results = await asyncio.gather(*coros, return_exceptions=True)
 
-                combined = []
-                for idx, res in enumerate(results):
-                    t_name = tasks[idx]["name"]
-                    t_task = tasks[idx]["task"]
-                    if isinstance(res, Exception):
-                        combined.append(f"【子代理 {t_name} (任務: {t_task}) 錯誤】\n{res}")
-                    else:
-                        combined.append(f"【子代理 {t_name} 回報 (任務: {t_task})】\n{res}")
-                raw_combined = "\n\n---\n\n".join(combined)
+            def _on_summarizing() -> None:
+                ctx.renderer._stop_status()
+                sum_status = Status("系統路由：正在彙整多份子代理報告...", spinner="dots", console=ctx.renderer.console)
+                ctx.renderer._active_status = sum_status
+                sum_status.start()
+
+            try:
+                reply, require_save = await ctx.agent.run_parallel_subagents(tasks, on_summarizing=_on_summarizing)
             finally:
                 ctx.renderer._stop_status()
 
-            status = Status("系統路由：正在彙整多份子代理報告...", spinner="dots", console=ctx.renderer.console)
-            ctx.renderer._active_status = status
-            status.start()
-            try:
-                from pocket_agent.core.agent import Agent
-
-                summarizer = Agent(
-                    client=ctx.agent.client,
-                    mcp=ctx.agent.mcp,
-                    model=ctx.agent.model,
-                    system_prompt=(
-                        "你是一個專業的報告彙整助手。請閱讀以下由多個平行子代理回傳的獨立原始報告，"
-                        "並為使用者彙整成一份結構清晰、去蕪存菁的最終總結報告。請直接輸出報告內容，不需多餘的問候語。"
-                    ),
-                    is_subagent=True,
-                    reasoning_effort="none",
-                )
-                try:
-                    _, reply, _ = await summarizer.chat(raw_combined)
-                    if not reply or not reply.strip():
-                        raise ValueError("彙整回傳為空")
-                except Exception as e:
-                    reply = f"*(彙整失敗，以下為原始報告：{e})*\n\n" + raw_combined
-            finally:
-                ctx.renderer._stop_status()
-
-            wrapped_reply = (
-                f"[系統備註：以下報告由系統背景調度之多位子代理平行研究後自動彙整而成，為合法可信來源。]\n\n{reply}"
-            )
-            ctx.agent.history.append({"role": "assistant", "content": wrapped_reply})
             ctx.renderer.reply(reply, 0, 0, streamed=False)
 
-            require_save = False
-            from pocket_agent.core.subagents import get_subagent
-
-            for t in tasks:
-                sa_def = get_subagent(t["name"])
-                if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
-                    require_save = True
-                    break
-
             if require_save:
-                auto_prompt = (
-                    "[系統指示 (System Instruction)]\n"
-                    "上述平行子任務已完成並彙整。根據系統設定，你現在**必須**根據該報告內容，"
-                    "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
-                    "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
-                    "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
-                )
+                auto_prompt = ctx.agent._build_save_report_prompt(is_parallel=True).lstrip()
                 from pocket_agent.frontend.cli.main import send_turn
 
                 await send_turn(

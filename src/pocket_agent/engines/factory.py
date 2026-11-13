@@ -39,11 +39,20 @@ class EngineFactory:
     @staticmethod
     def resolve_provider(client: Any) -> str:
         """未明確指定 provider 時的唯一後備：依 client 的 base_url 推論（向下相容用）。"""
-        url_str = str(getattr(client, "base_url", ""))
+        url_str = str(getattr(client, "base_url", "")).lower()
         if "openai.com" in url_str or "chatgpt.com" in url_str:
             return PROVIDER_OPENAI
         if "openrouter.ai" in url_str:
             return PROVIDER_OPENROUTER
+        if "generativelanguage.googleapis.com" in url_str:
+            return PROVIDER_GEMINI
+        if "api.groq.com" in url_str:
+            return PROVIDER_GROQ
+        if "api.mistral.ai" in url_str:
+            return PROVIDER_MISTRAL
+        if "api.sambanova.ai" in url_str:
+            return PROVIDER_SAMBANOVA
+        log.warning("EngineFactory.resolve_provider 無法由 base_url (%s) 識別供應商，後備使用 ollama", url_str)
         return PROVIDER_OLLAMA
 
     @staticmethod
