@@ -36,8 +36,24 @@ servers:
   #   #   Authorization: "Bearer ${AGENSI_TOKEN}"
   #   # env:
   #   #   AGENSI_TOKEN: ""
-  #   # safe_read_tools:
-  #   # - mcp__agensi__search_skills
+  #   # 常用唯讀工具免確認（寫入、上傳、提交與執行付費工具 run_tool 不應列入）
+  #   safe_read_tools:
+  #     - mcp__agensi__search_skills
+  #     - mcp__agensi__get_skill
+  #     - mcp__agensi__list_categories
+  #     - mcp__agensi__get_popular
+  #     - mcp__agensi__get_creator
+  #     - mcp__agensi__get_skill_requests
+  #     - mcp__agensi__find_tools
+  #     - mcp__agensi__skill_tools
+  #     - mcp__agensi__my_library
+  #     - mcp__agensi__my_skills
+  #     - mcp__agensi__my_credits
+  #     - mcp__agensi__creator_status
+  #     - mcp__agensi__quote_tool
+  #     - mcp__agensi__quote_status
+  #     - mcp__agensi__check_job
+  #     - mcp__agensi__read_result
 
   # 瀏覽器操作（純 Python，用系統已裝的 Edge/Chrome，不需要 Node.js）
   # 進階：設 BROWSER_CDP_URL 可連既有瀏覽器保留登入狀態，見 browser_mcp.py 註解

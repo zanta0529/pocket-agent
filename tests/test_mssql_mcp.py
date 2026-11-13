@@ -317,9 +317,9 @@ def test_mcp_manager_strips_mssql_params_and_prompts_only_missing():
         )
     )
     schemas = {s["name"]: s for s in manager.openai_tools()}
-    assert schemas["mssql_list_tables"].get("_is_safe_read") is True
-    assert schemas["mssql_list_tables"]["parameters"]["properties"] == {}
-    assert manager.is_sensitive_tool("mssql_list_tables") is True
+    assert schemas["mcp__mssql__mssql_list_tables"].get("_is_safe_read") is True
+    assert schemas["mcp__mssql__mssql_list_tables"]["parameters"]["properties"] == {}
+    assert manager.is_sensitive_tool("mcp__mssql__mssql_list_tables") is True
 
     prompt_calls = []
 

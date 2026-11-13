@@ -86,41 +86,31 @@ _CONN_PARAM_MAP = {
 # 切換 SQLite 資料庫的工具；成功後需同步 _runtime_conn_cache 的 DB_PATH
 _DB_SWITCH_TOOLS = frozenset({"sqlite_switch_database", "db_switch_database"})
 
-# Pocket Agent 內建工具名稱清單；當 MCP 工具與內建工具同名時，強制冠上 mcp__{server}__{tool}
-# 命名空間進行隔離，確保內建工具不被覆蓋，且 MCP 工具限制在該 server 範圍內執行
-_BUILTIN_TOOL_NAMES = frozenset(
-    {
-        # Skills
-        "search_skills",
-        "use_skill",
-        # File System
-        "read_file",
-        "write_to_file",
-        "append_to_file",
-        "replace_file_content",
-        "list_dir",
-        "get_file_info",
-        "search_files",
-        # Document Export & Read
-        "export_docx",
-        "export_pptx",
-        "export_pdf",
-        "read_document",
-        # Shell
-        "run_command",
-        # Web
-        "web_search",
-        "fetch_web_page",
-        "batch_web_search",
-        # RAG
-        "indexed_search",
-        # Core / Subagents / Interactive
-        "ask_question",
-        "run_subagents_parallel",
-        "image_tool",
-        "generate_image",
-    }
-)
+_MCP_NAME_SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_-]+")
+_MCP_MULTI_UNDERSCORE_RE = re.compile(r"_+")
+_MAX_TOOL_NAME_LEN = 64
+
+
+def normalize_mcp_server_name(server_name: str) -> str:
+    """將 MCP server 名稱正規化為符合 LLM API 規範的識別字串（僅保留 [a-zA-Z0-9_-]）。"""
+    cleaned = _MCP_NAME_SANITIZE_RE.sub("_", server_name.strip())
+    cleaned = _MCP_MULTI_UNDERSCORE_RE.sub("_", cleaned).strip("_")
+    return cleaned or "mcp_server"
+
+
+def format_mcp_tool_name(server_name: str, tool_name: str) -> str:
+    """統一產生 Claude Code 風格之 mcp__{server}__{tool} 工具名稱。"""
+    norm_server = normalize_mcp_server_name(server_name)
+    return f"mcp__{norm_server}__{tool_name}"
+
+
+def parse_mcp_tool_name(name: str) -> tuple[str | None, str]:
+    """解析工具名稱；若為 mcp__<server>__<tool> 格式則回傳 (server, tool)，否則回傳 (None, name)。"""
+    if name.startswith("mcp__"):
+        parts = name.split("__", 2)
+        if len(parts) == 3 and parts[1] and parts[2]:
+            return parts[1], parts[2]
+    return None, name
 
 
 @dataclass
@@ -320,14 +310,14 @@ class MCPManager:
         entry = self._tools.get(tool_name)
         if entry is not None:
             return entry
-        # 若傳入前綴名稱但工具以原始名稱註冊
-        if tool_name.startswith("mcp__"):
-            parts = tool_name.split("__", 2)
-            if len(parts) == 3:
-                s_name, t_name = parts[1], parts[2]
-                for e in self._tools.values():
-                    if (e.original_name == t_name or e.name == t_name) and e.server_name == s_name:
-                        return e
+        # 若傳入前綴名稱，比對 server_name（含正規化名稱）與工具原名
+        s_name, t_name = parse_mcp_tool_name(tool_name)
+        if s_name is not None:
+            for e in self._tools.values():
+                if (e.original_name == t_name or e.name == t_name) and (
+                    e.server_name == s_name or normalize_mcp_server_name(e.server_name) == s_name
+                ):
+                    return e
         # 向下相容比對原始名稱
         for e in self._tools.values():
             if e.original_name == tool_name:
@@ -431,7 +421,7 @@ class MCPManager:
         entry = self.find_entry(tool_name)
         if entry is not None:
             return bool(entry.is_sensitive)
-        raw_name = tool_name.split("__")[-1]
+        _, raw_name = parse_mcp_tool_name(tool_name)
         return (
             raw_name.startswith("rhel_")
             or raw_name.startswith("win_rdp_")
@@ -727,11 +717,17 @@ class MCPManager:
                     "required": ["Summary", "UserFacing"],
                 }
 
-            # 若工具名稱與內建工具同名，冠上 Claude Code 風格之 mcp__{server}__{tool} 命名空間隔離
-            if tool.name in _BUILTIN_TOOL_NAMES:
-                scoped_name = f"mcp__{server_name}__{tool.name}"
-            else:
-                scoped_name = tool.name
+            # 所有 MCP 工具一律比照 Claude Code 冠上 mcp__{server}__{tool} 命名空間隔離
+            scoped_name = format_mcp_tool_name(server_name, tool.name)
+            if len(scoped_name) > _MAX_TOOL_NAME_LEN:
+                from pocket_agent.core.agent import log
+
+                log.warning(
+                    "MCP tool name '%s' (%d chars) exceeds %d-char limit; some LLM APIs may reject it.",
+                    scoped_name,
+                    len(scoped_name),
+                    _MAX_TOOL_NAME_LEN,
+                )
 
             schema = {
                 "type": "function",

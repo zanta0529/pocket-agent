@@ -162,7 +162,7 @@ def test_mcp_manager_strips_db_path_and_prompts_when_missing(tmp_path):
         )
     )
     schemas = {s["name"]: s for s in manager.openai_tools()}
-    assert schemas["sqlite_list_tables"]["parameters"]["properties"] == {}
+    assert schemas["mcp__sqlite__sqlite_list_tables"]["parameters"]["properties"] == {}
 
     prompt_calls = []
 

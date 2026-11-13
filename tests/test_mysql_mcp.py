@@ -222,7 +222,7 @@ def test_mcp_manager_strips_mysql_params():
         )
     )
     schemas = {s["name"]: s for s in manager.openai_tools()}
-    assert schemas["mysql_list_databases"]["parameters"]["properties"] == {}
+    assert schemas["mcp__mysql__mysql_list_databases"]["parameters"]["properties"] == {}
 
 
 @pytest.mark.parametrize(

@@ -45,6 +45,10 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 - **Factory（工廠）**：`EngineFactory` 集中選擇及建立引擎；呼叫端應顯式傳入 `provider`，避免依賴 `resolve_provider` 的 URL 推論後備。
 - **Command（指令）**：前端斜線指令應透過 `CliCommandRegistry` 註冊各自獨立的 `CliCommand` 實作，禁止以單一巨型 `if/elif` 狀態路由器集中處理多個互動指令。
 - **狀態同步**：當指令變更了 Agent 存取權限或全域狀態時，應透過 `Agent._instructions()` 動態注入狀態摘要；業務規則必須統一實作於共用層，前端僅負責接收狀態並渲染。
+- **MCP 工具命名空間與顯示規範**：
+  - **強制前綴隔離**：所有透過 `MCPManager` 註冊的 MCP 工具，一律冠上 `mcp__{normalized_server}__{tool}` 命名空間，以隔離內建工具並避免跨伺服器撞名；命名正規化與解析統一由 `extensions/mcp.py` 的 `normalize_mcp_server_name`、`format_mcp_tool_name` 與 `parse_mcp_tool_name` 集中維護，禁止在各模組重複實作字串切割邏輯。`server_name` 須正規化為 `[a-zA-Z0-9_-]`，並留意模型 API 常見的 64 字元工具名稱上限。
+  - **嚴格權限比對**：`Agent._build_tools` 中的 `allowed_tools` 對 MCP 工具採嚴格比對（須使用完整 `mcp__{server}__{tool}` 名稱），不提供未加前綴的向下相容。
+  - **精簡顯示與前綴剝除**：前端 `/mcp` 指令清單僅顯示精簡工具原名（不含 `mcp__` 前綴），並須依實際最長工具名稱與終端機寬度動態計算欄數與欄寬，避免排版錯位；`CliRenderer._extract_tool_target` 等依工具名稱判定行為之邏輯，須先透過 `parse_mcp_tool_name` 剝除前綴，避免 `server_name` 含關鍵字而誤判。
 
 ## 3. 編碼與相容性要求
 
