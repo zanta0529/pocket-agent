@@ -135,37 +135,26 @@ class SlashCommandCompleter(Completer):
         for sa in list_subagents():
             commands.setdefault(sa["name"], f"[Subagent] {sa.get('description', '')}")
 
+        aliases = {
+            "activity": "changes",
+            "codesearch": "cs",
+            "exit": "quit",
+            "mcp": "tools",
+            "reasoning": "effort",
+            "usage": "quota",
+        }
+        prefix = text[1:]
         matches = []
         for name, description in commands.items():
-            if name.startswith(text[1:]):
-                matches.append((name, description))
-            elif name == "activity" and "changes".startswith(text[1:]):
-                matches.append((name, description))
-            elif name == "codesearch" and "cs".startswith(text[1:]):
-                matches.append((name, description))
-            elif name == "exit" and "quit".startswith(text[1:]):
-                matches.append((name, description))
-            elif name == "usage" and "quota".startswith(text[1:]):
-                matches.append((name, description))
-            elif name == "mcp" and "tools".startswith(text[1:]):
+            alias = aliases.get(name)
+            if name.startswith(prefix) or (alias and alias.startswith(prefix)):
                 matches.append((name, description))
 
         # 提供完整候選，讓原生補齊選單隨光棒移動自動捲動。
         for name, description in matches:
-            display_name = name
-            if name == "activity":
-                display_name = "activity (changes)"
-            elif name == "codesearch":
-                display_name = "codesearch (cs)"
-            elif name == "exit":
-                display_name = "exit (quit)"
-            elif name == "usage":
-                display_name = "usage (quota)"
-            elif name == "mcp":
-                display_name = "mcp (tools)"
-            yield Completion(
-                name, start_position=-(len(text) - 1), display=display_name, display_meta=plain(description)
-            )
+            alias = aliases.get(name)
+            display_name = f"{name} ({alias})" if alias else name
+            yield Completion(name, start_position=-len(prefix), display=display_name, display_meta=plain(description))
 
 
 def key_bindings(
