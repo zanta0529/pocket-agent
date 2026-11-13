@@ -1,19 +1,63 @@
 import time
-import uuid
 
 from rich.text import Text
 
 from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
 
 
+def _load_session_into_context(ctx: CommandContext, session_id: str) -> None:
+    """載入指定 session 至當前上下文，並同步重設相關狀態。"""
+    from pocket_agent.core.sessions import load_session, save_session
+
+    data = load_session(session_id)
+    if data is None:
+        raise ValueError(f"找不到 session：{session_id}")
+    if ctx.agent.history and getattr(ctx.agent, "is_sensitive_session", False) is not True:
+        save_session(ctx.state.session_id, ctx.agent.history)
+
+    if callable(getattr(type(ctx.agent), "load_session_history", None)):
+        ctx.agent.load_session_history(data["history"])
+    else:
+        ctx.agent.history = data["history"]
+        ctx.agent.is_sensitive_session = False
+        ctx.agent.context_usage = None
+        if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
+            ctx.agent.activity.rebuild_from_history(ctx.agent.history)
+
+    ctx.state.session_id = data["id"]
+    ctx.state.session_tokens = 0
+    ctx.state.last_failed_input = ""
+    ctx.renderer.message(
+        f"已載入：{data.get('title', '（無標題）')} · {len(data['history'])} 則訊息",
+        "green",
+    )
+
+
+def _delete_session_by_id(ctx: CommandContext, session_id: str) -> None:
+    """刪除指定 session；若為當前工作階段則同步重置上下文。"""
+    from pocket_agent.core.sessions import delete_session, load_session, new_session_id
+
+    data = load_session(session_id)
+    title = data.get("title", session_id) if data else session_id
+    delete_session(session_id)
+    if ctx.state.session_id == session_id:
+        if callable(getattr(type(ctx.agent), "reset_session", None)):
+            ctx.agent.reset_session()
+        else:
+            ctx.agent.history = []
+            ctx.agent.is_sensitive_session = False
+            ctx.agent.context_usage = None
+            if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
+                ctx.agent.activity.clear()
+        ctx.state.session_id = new_session_id()
+        ctx.state.session_tokens = 0
+        ctx.state.last_failed_input = ""
+    ctx.renderer.message(f"已刪除：{title}")
+
+
 class SessionCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
-        from pocket_agent.core.sessions import (
-            delete_session,
-            list_sessions,
-            load_session,
-            save_session,
-        )
+        from pocket_agent.core.sessions import list_sessions, save_session
 
         parts = args.split(maxsplit=1)
         sub = parts[0] if parts else ""
@@ -73,47 +117,14 @@ class SessionCommand(CliCommand):
                 return CommandResult()
 
             if action == "載入":
-                data = load_session(selected["id"])
-                if data is None:
-                    raise ValueError(f"找不到 session：{selected['id']}")
-                if ctx.agent.history and getattr(ctx.agent, "is_sensitive_session", False) is not True:
-                    save_session(ctx.state.session_id, ctx.agent.history)
-                ctx.agent.history = data["history"]
-                ctx.state.session_id = data["id"]
-                if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
-                    ctx.agent.activity.rebuild_from_history(ctx.agent.history)
-                ctx.renderer.message(
-                    f"已載入：{data.get('title', '（無標題）')} · {len(data['history'])} 則訊息",
-                    "green",
-                )
-
+                _load_session_into_context(ctx, selected["id"])
             elif action == "刪除":
-                data = load_session(selected["id"])
-                title = data.get("title", selected["id"]) if data else selected["id"]
-                delete_session(selected["id"])
-                if ctx.state.session_id == selected["id"]:
-                    ctx.agent.history = []
-                    ctx.state.session_id = str(uuid.uuid4())
-                    if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
-                        ctx.agent.activity.clear()
-                ctx.renderer.message(f"已刪除：{title}")
+                _delete_session_by_id(ctx, selected["id"])
 
         elif sub == "load":
             if not sub_arg:
                 raise ValueError("用法：/session load <id>")
-            data = load_session(sub_arg)
-            if data is None:
-                raise ValueError(f"找不到 session：{sub_arg}")
-            if ctx.agent.history and getattr(ctx.agent, "is_sensitive_session", False) is not True:
-                save_session(ctx.state.session_id, ctx.agent.history)
-            ctx.agent.history = data["history"]
-            ctx.state.session_id = data["id"]
-            if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
-                ctx.agent.activity.rebuild_from_history(ctx.agent.history)
-            ctx.renderer.message(
-                f"已載入：{data.get('title', '（無標題）')} · {len(data['history'])} 則訊息",
-                "green",
-            )
+            _load_session_into_context(ctx, sub_arg)
 
         elif sub == "save":
             if not ctx.agent.history:
@@ -127,15 +138,7 @@ class SessionCommand(CliCommand):
         elif sub == "delete":
             if not sub_arg:
                 raise ValueError("用法：/session delete <id>")
-            data = load_session(sub_arg)
-            title = data.get("title", sub_arg) if data else sub_arg
-            delete_session(sub_arg)
-            if ctx.state.session_id == sub_arg:
-                ctx.agent.history = []
-                ctx.state.session_id = str(uuid.uuid4())
-                if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
-                    ctx.agent.activity.clear()
-            ctx.renderer.message(f"已刪除：{title}")
+            _delete_session_by_id(ctx, sub_arg)
         else:
             raise ValueError("用法：/session [list | load <id> | save | delete <id>]")
 
@@ -173,6 +176,8 @@ class CompactCommand(CliCommand):
         except Exception as e:
             ctx.renderer.message(f"壓縮失敗：{e}", "red")
             return CommandResult()
+
+        if not success:
             ctx.renderer.message("目前歷史對話結構過短或無顯著壓縮收益，歷史未變更。", "yellow")
             return CommandResult()
 
