@@ -659,7 +659,8 @@ def test_mcp_streamable_http_and_oauth_keyring_storage(tmp_path, monkeypatch):
     @asynccontextmanager
     async def fake_streamable_http_client(url, *, http_client=None, **kwargs):
         entered_urls.append(url)
-        yield ("read_stream", "write_stream")
+        idx = len(entered_urls)
+        yield (f"read_stream_{idx}", f"write_stream_{idx}")
 
     class DummySession:
         def __init__(self, read, write):
@@ -676,8 +677,9 @@ def test_mcp_streamable_http_and_oauth_keyring_storage(tmp_path, monkeypatch):
             return None
 
         async def list_tools(self):
+            idx = self.read.removeprefix("read_stream_")
             tool = SimpleNamespace(
-                name=f"tool_{len(entered_urls)}",
+                name=f"tool_{idx}",
                 description="test tool",
                 inputSchema={"type": "object", "properties": {}},
             )

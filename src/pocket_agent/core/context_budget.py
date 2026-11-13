@@ -201,8 +201,9 @@ class ContextBudget:
         instructions: str = "",
         tools: list | None = None,
         actual_input_tokens: int = 0,
+        estimated_tokens: int | None = None,
     ) -> ContextUsage:
-        """有供應商回報的實際 input tokens 時採用實際值，否則估算。"""
+        """有供應商回報的實際 input tokens 時採用實際值，否則沿用既有的估算值或重新估算。"""
         if actual_input_tokens > 0:
             return ContextUsage(
                 actual_input_tokens,
@@ -211,22 +212,30 @@ class ContextBudget:
                 False,
                 effective_budget=self.effective_input_budget,
             )
+        resolved_tokens = (
+            estimated_tokens if estimated_tokens is not None else self.estimate_items(items, instructions, tools)
+        )
         return ContextUsage(
-            self.estimate_items(items, instructions, tools),
+            resolved_tokens,
             self.window,
             self.source,
             True,
             effective_budget=self.effective_input_budget,
         )
 
-    def compact(self, items: list, instructions: str = "", tools: list | None = None) -> int:
-        """超過門檻時，由舊到新把工具輸出換成佔位文字（保留 call／output 成對）。回傳清除筆數。
+    def compact_and_estimate(
+        self,
+        items: list,
+        instructions: str = "",
+        tools: list | None = None,
+    ) -> tuple[int, int]:
+        """超過門檻時，由舊到新把工具輸出換成佔位文字，並回傳 (清除筆數, 當前估算 tokens)。
 
         最近 KEEP_RECENT_OUTPUTS 筆輸出不清除。關鍵指引與技能輸出受白名單保護不清除。items 會被原地修改。
         """
         total = self.estimate_items(items, instructions, tools)
         if total <= self.compact_threshold:
-            return 0
+            return 0, total
 
         # 建立 call_id -> function_call 映射，識別產生輸出的工具名稱與參數
         call_map: dict[str, dict] = {
@@ -261,4 +270,9 @@ class ContextBudget:
             cleared += 1
         if cleared:
             log.info("Context compaction: cleared %d old tool outputs (est. %d tokens now).", cleared, total)
+        return cleared, total
+
+    def compact(self, items: list, instructions: str = "", tools: list | None = None) -> int:
+        """超過門檻時，由舊到新把工具輸出換成佔位文字（保留 call／output 成對）。回傳清除筆數。"""
+        cleared, _ = self.compact_and_estimate(items, instructions, tools)
         return cleared

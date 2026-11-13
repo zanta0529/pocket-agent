@@ -52,16 +52,22 @@ h11==0.16.0
     #   httpcore
     #   httpcore2
     #   uvicorn
+h2==4.4.1
+    # via httpx
+hpack==4.2.0
+    # via h2
 httpcore==1.0.9
     # via httpx
 httpcore2==2.16.0
     # via httpx2
-httpx==0.28.1
+httpx[http2]==0.28.1
     # via -r requirements.in
 httpx2==2.16.0
     # via
     #   mcp
     #   openai
+hyperframe==6.1.0
+    # via h2
 idna==3.20
     # via
     #   anyio

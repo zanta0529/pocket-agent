@@ -84,6 +84,41 @@ async def do_model_flow(ctx: CommandContext, args: str) -> None:
     await switch_model(ctx.agent, ctx.state, provider, model, ctx.renderer)
 
 
+class ReasoningCommand(CliCommand):
+    """在對話中即時切換 LLM 推理強度 (auto / high / medium / low / none)。"""
+
+    _CHOICES = [
+        ("auto", "Auto (預設，交由模型自行決定)"),
+        ("high", "High (深度推理)"),
+        ("medium", "Medium (平衡)"),
+        ("low", "Low (快速回應)"),
+        ("none", "None (關閉推理)"),
+    ]
+
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        from pocket_agent.system.constants import VALID_REASONING_EFFORTS
+
+        raw = args.strip().lower()
+        if not raw:
+            current = str(getattr(ctx.agent, "reasoning_effort", "auto") or "auto").lower()
+            labels = [label for _, label in self._CHOICES]
+            selected = await ctx.reader.choose(f"選擇推理強度（目前：{current.capitalize()}）", labels)
+            if not selected:
+                return CommandResult()
+            level = next((key for key, label in self._CHOICES if label == selected), None)
+            if not level:
+                return CommandResult()
+        else:
+            if raw not in VALID_REASONING_EFFORTS:
+                raise ValueError(f"用法：/reasoning [{'|'.join(VALID_REASONING_EFFORTS)}]")
+            level = raw
+
+        ctx.agent.reasoning_effort = level
+        ctx.state.reasoning_effort = level
+        ctx.renderer.message(f"✓ 推理強度已設為：{level.capitalize()}", "green")
+        return CommandResult()
+
+
 class SysRegistryCommand(CliCommand):
     def __init__(self, name: str):
         self.name = name

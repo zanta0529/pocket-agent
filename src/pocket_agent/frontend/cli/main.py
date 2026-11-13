@@ -117,12 +117,12 @@ async def send_turn(
         renderer.console.print()
         renderer.console.print(panel)
         renderer.message("待送附件保留；本輪可能部分完成，重送前請檢查結果。未自動重試。", "yellow")
-        _autosave_session(agent, state, renderer, silent=True)
+        await asyncio.to_thread(_autosave_session, agent, state, renderer, True)
         return
 
     # Normal return is the boundary; the core may return error text normally.
     state.consume(snapshot)
-    _autosave_session(agent, state, renderer, silent=True)
+    await asyncio.to_thread(_autosave_session, agent, state, renderer, True)
     if result.action == "image":
         if hasattr(agent, "activity") and getattr(agent, "activity", None) is not None:
             agent.activity.record_file_change(reply, "added", existed_before=False)
@@ -259,6 +259,11 @@ class CliFrontend(FrontendStrategy):
                     h.setLevel(logging.WARNING)
 
         # F1.5：載入全域規範 (Global Instructions)
+        from pocket_agent.system.constants import DEFAULT_MAX_LINKED_DOCS_CHARS
+
+        linked_docs_chars = 0
+        linked_docs_capped = False
+
         global_ctx_file = user_dir() / "instructions.md"
         loaded_global_ctx = False
         if global_ctx_file.exists() and global_ctx_file.is_file():
@@ -294,6 +299,10 @@ class CliFrontend(FrontendStrategy):
                                 md_content = await run_sync(md_target.read_text, encoding="utf-8")
                                 md_content = md_content.strip()
                                 if md_content:
+                                    if linked_docs_chars + len(md_content) > DEFAULT_MAX_LINKED_DOCS_CHARS:
+                                        linked_docs_capped = True
+                                        break
+                                    linked_docs_chars += len(md_content)
                                     _g_ctx += (
                                         f"\n\n---\n## [系統提示] 已為您自動載入 {md_target.name}，"
                                         f"請勿使用檔案工具嘗試讀取此路徑：\n" + md_content
@@ -301,6 +310,11 @@ class CliFrontend(FrontendStrategy):
                         except Exception as inner_e:
                             log.debug("展開全域連結文件 %s 失敗：%s", md_rel_path, inner_e)
 
+                    if linked_docs_capped:
+                        _g_ctx += (
+                            "\n\n（註：部分連結文件因超出啟動自動展開字元上限而略過，"
+                            "需要時請使用 `read_file` 按需讀取。）"
+                        )
                     system_prompt = system_prompt + "\n\n---\n## 全域規範\n" + _g_ctx
                     loaded_global_ctx = True
             except Exception as e:
@@ -325,6 +339,7 @@ class CliFrontend(FrontendStrategy):
                     linked_mds = re.findall(r"\[.*?\]\((.*?\.md)\)", _ctx)
                     # 使用 set 去重複，並保持順序（若需要）
                     seen = set()
+                    ws_capped = False
                     for md_rel_path in linked_mds:
                         if md_rel_path in seen:
                             continue
@@ -342,9 +357,18 @@ class CliFrontend(FrontendStrategy):
                                 md_content = await asyncio.to_thread(md_target.read_text, encoding="utf-8")
                                 md_content = md_content.strip()
                                 if md_content:
+                                    if linked_docs_chars + len(md_content) > DEFAULT_MAX_LINKED_DOCS_CHARS:
+                                        ws_capped = True
+                                        break
+                                    linked_docs_chars += len(md_content)
                                     system_prompt += f"\n\n---\n## 自動展開文件：{md_target.name}\n" + md_content
                         except Exception as inner_e:
                             log.debug("展開連結文件 %s 失敗：%s", md_rel_path, inner_e)
+                    if ws_capped:
+                        system_prompt += (
+                            "\n\n（註：部分連結文件因超出啟動自動展開字元上限而略過，"
+                            "需要時請使用 `read_file` 按需讀取。）"
+                        )
             except Exception as e:
                 log.warning("工作區規範讀取失敗：%s", e)
 
@@ -374,7 +398,7 @@ class CliFrontend(FrontendStrategy):
                     client = get_provider_client()
                     state = CliState(load_config().get("active_provider", "openai"), get_model())
                     try:
-                        available = fetch_available_models(state.provider)
+                        available = await asyncio.to_thread(fetch_available_models, state.provider)
                     except Exception:
                         available = []
 
@@ -435,6 +459,7 @@ class CliFrontend(FrontendStrategy):
             agent = Agent(
                 client=client, mcp=mcp, model=state.model, system_prompt=system_prompt, provider=state.provider
             )
+            state.reasoning_effort = getattr(agent, "reasoning_effort", "auto")
 
             # F3：讓 renderer 能取得 model 名稱顯示在標頭
             renderer._state = state

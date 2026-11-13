@@ -11,6 +11,7 @@ from pocket_agent.system.constants import (
     DEFAULT_MAX_TOOL_ROUNDS,
     DEFAULT_PROCESS_BUFFER_BYTES,
     DEFAULT_READ_FILE_LINES,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_REPO_MAP_BUDGET_TOKENS,
     DEFAULT_RESERVE_OUTPUT_TOKENS,
     DEFAULT_SAFETY_MARGIN_TOKENS,
@@ -48,6 +49,7 @@ DEFAULT_CONFIG = {
     "active_model": "gpt-6-astra",
     "system": {
         "max_tool_rounds": DEFAULT_MAX_TOOL_ROUNDS,
+        "reasoning_effort": DEFAULT_REASONING_EFFORT,
         "log_level": "WARNING",
         "use_sandbox": "none",
         "sandbox_container": "pocket_sandbox",
@@ -128,6 +130,7 @@ class EnvConfigProvider(ConfigProvider):
         "providers.openrouter.api_key": "OPENROUTER_API_KEY",
         "providers.openrouter.base_url": "OPENROUTER_BASE_URL",
         "system.max_tool_rounds": "MAX_TOOL_ROUNDS",
+        "system.reasoning_effort": "POCKET_AGENT_REASONING_EFFORT",
         "system.log_level": "POCKET_AGENT_LOG_LEVEL",
         "providers.openai.client_id": "OPENAI_CLIENT_ID",
         "providers.openai.originator": "OPENAI_ORIGINATOR",

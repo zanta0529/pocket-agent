@@ -22,6 +22,12 @@ class StandardChatCompletionsEngine(BaseEngine):
     It implements `<think>` tag parsing to support reasoning models via standard output.
     """
 
+    supports_stream_usage: bool = False
+
+    def _build_extra_body(self, reasoning_param: Any) -> dict[str, Any] | None:
+        """供子類別覆寫以注入供應商專屬之 extra_body 參數。"""
+        return None
+
     async def stream_chat(
         self,
         input_items: list,
@@ -38,13 +44,20 @@ class StandardChatCompletionsEngine(BaseEngine):
 
         chat_tools = self.format_chat_tools(tools)
 
+        create_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "tools": chat_tools,
+            "stream": True,
+        }
+        if self.supports_stream_usage:
+            create_kwargs["stream_options"] = {"include_usage": True}
+        extra_body = self._build_extra_body(reasoning_param)
+        if extra_body:
+            create_kwargs["extra_body"] = extra_body
+
         try:
-            stream = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=chat_tools,
-                stream=True,
-            )
+            stream = await self.client.chat.completions.create(**create_kwargs)
         except Exception as e:
             log.info(f"Standard chat completion failed: {e}")
             raise

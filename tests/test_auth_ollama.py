@@ -116,6 +116,8 @@ def test_explicit_ollama_client_uses_env():
 
 
 def test_explicit_openai_client_preserves_headers():
+    import httpx
+
     from pocket_agent.system.auth import CODEX_BASE_URL, get_provider_client
 
     with (
@@ -129,7 +131,7 @@ def test_explicit_openai_client_preserves_headers():
         client.assert_called_once_with(
             api_key="mock-token",
             base_url=CODEX_BASE_URL,
-            http_client=None,
+            http_client=ANY,
             default_headers={
                 "originator": "pocket-agent",
                 "OpenAI-Beta": "responses=experimental",
@@ -137,6 +139,7 @@ def test_explicit_openai_client_preserves_headers():
             },
             timeout=ANY,
         )
+        assert isinstance(client.call_args.kwargs["http_client"], httpx.AsyncClient)
 
 
 def test_explicit_ollama_environment_fallback():

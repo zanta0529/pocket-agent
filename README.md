@@ -150,7 +150,7 @@ run.bat setup       # Windows
 
 ## 💻 快速上手與日常操作 (Quick Start & Usage)
 
-啟動後，終端機將呈現互動式對話面板。底端狀態列會即時顯示當前專案、使用模型、MCP 工具數與累計 Token 用量。
+啟動後，終端機將呈現互動式對話面板。底端狀態列會即時顯示當前模型、推理強度、待送附件數與累計 Token 用量。
 
 ### 終端互動快捷鍵
 
@@ -173,6 +173,7 @@ run.bat setup       # Windows
 #### 🤖 模型與工作階段管理
 
 - `/model`：啟動互動式選單，即時切換服務供應商與模型（支援 `openai`, `gemini`, `openrouter`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`）。
+- `/reasoning [auto|high|medium|low|none]`：即時調整 LLM 推理強度（預設 `auto` 交由模型／供應商決定；不帶參數時開啟互動選單，目前狀態同步顯示於底部狀態列）。
 - `/session`：啟動歷史對話光棒管理選單，支援分頁檢視、載入與刪除。
 - `/new`：結束當前會話並開啟全新乾淨對話（自動原子性保存舊紀錄，完整重設上下文記憶、待送附件與用量）。
 - `/rename <新標題>`：重新命名當前對話主題，便於日後在 `/session` 中識別。
@@ -303,7 +304,7 @@ PocketAgent 支援階層式指令疊加，讓您無需修改全域設定，即�
 ```
 
 1. **全域規範**：若有跨專案通用的開發原則（例如：一律使用繁體中文、撰寫型別註釋），請建立 `~/.pocket-agent/instructions.md`。每次啟動皆會自動作為基礎 System Prompt。
-2. **專案入口規範 (`AGENTS.md`)**：在目標專案根目錄建立 `AGENTS.md`（或 `.agents/AGENTS.md`）。啟動時將自動附加於全域規範後方，並自動遞迴展開內容中所連結的專案 Markdown 檔案。
+2. **專案入口規範 (`AGENTS.md`)**：在目標專案根目錄建立 `AGENTS.md`（或 `.agents/AGENTS.md`）。啟動時將自動附加於全域規範後方，並自動遞迴展開內容中所連結的專案 Markdown 檔案（累計上限 `24,000` 字元，超出部分改由 `read_file` 工具按需讀取）。
 3. **專案自訂技能 (`.agents/skills/`)**：在專案中建立 `.agents/skills/<skill-name>/SKILL.md`，代理將優先感知並動態載入該技能，自動覆寫全域同名技能。
 
 ---

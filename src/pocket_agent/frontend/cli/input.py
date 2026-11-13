@@ -39,6 +39,7 @@ BUILTINS = {
     "model": "切換當次提供者與模型",
     "new": "開啟全新乾淨對話（自動儲存既有對話，完整清空上下文）",
     "parallel": "手動平行啟動多個子代理 (用法: /parallel <name>:<task> | <name>:<task>)",
+    "reasoning": "調整推理強度 (auto / high / medium / low / none)",
     "rename": "重新命名目前的對話標題，方便日後識別與載入 (/rename <新標題>)",
     "rm-dir": "單次會話內，將外部資料夾從工作範圍移除",
     "rm-file": "從待送區移除附件檔案",

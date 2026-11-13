@@ -7,7 +7,7 @@ import random
 import sys
 from pathlib import Path
 
-from openai import NOT_GIVEN, AsyncOpenAI
+from openai import AsyncOpenAI
 
 from pocket_agent.core.activity import SessionActivityTracker
 from pocket_agent.core.cancellation import run_sync
@@ -33,6 +33,7 @@ from pocket_agent.system.config import config
 from pocket_agent.system.constants import (
     DEFAULT_MAX_STREAM_RETRIES,
     DEFAULT_MAX_TOOL_ROUNDS,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_STREAM_RETRY_BASE_SEC,
     WEB_RESEARCH_CHECKPOINT_INTERVAL,
 )
@@ -153,7 +154,7 @@ class Agent:
         mcp: MCPManager,
         model: str | None = None,
         system_prompt: str = "You are a helpful assistant.",
-        reasoning_effort: str = "medium",  # none/low/medium/high/xhigh
+        reasoning_effort: str | None = None,  # auto/high/medium/low/none；未指定時讀設定或預設 auto
         max_tool_rounds: int | None = None,  # 未指定時讀 MAX_TOOL_ROUNDS 環境變數
         is_subagent: bool = False,  # 子代理不觸發 hooks、不能再開子代理
         allowed_tools: list[str] | None = None,  # 限定可使用的工具清單（None 代表全開）
@@ -170,7 +171,8 @@ class Agent:
         self.allowed_tools = allowed_tools
         self.model = model or config.get("active_model", "gpt-6-astra")
         self.system_prompt = system_prompt
-        self.reasoning_effort = reasoning_effort
+        raw_effort = reasoning_effort if reasoning_effort is not None else config.get("system.reasoning_effort")
+        self.reasoning_effort = str(raw_effort).strip().lower() if raw_effort else DEFAULT_REASONING_EFFORT
 
         rounds_val = max_tool_rounds or config.get("system.max_tool_rounds")
         self.max_tool_rounds = int(rounds_val) if rounds_val is not None else DEFAULT_MAX_TOOL_ROUNDS
@@ -211,8 +213,8 @@ class Agent:
         self.user_instructions: list[str] = []
         self.activity = SessionActivityTracker()
 
-        # 背景非同步預載模型視窗快取（若使用者未手動指定設定值）
-        if not config.get("system.context_window"):
+        # 背景非同步預載模型視窗快取（若為主代理且使用者未手動指定設定值）
+        if not self._is_subagent and not config.get("system.context_window"):
             try:
                 loop = asyncio.get_running_loop()
                 if loop.is_running():
@@ -668,8 +670,14 @@ class Agent:
 
         return cleaned_tools
 
-    def _instructions(self, query: str = "") -> str:
-        """system prompt + skill 目錄（每輪重算，skill 可熱加）。"""
+    def _instructions(
+        self,
+        query: str = "",
+        *,
+        repo_map_str: str | None = None,
+        skills_prompt: str | None = None,
+    ) -> str:
+        """system prompt + skill 目錄（支援由 _run_loop 傳入預先非同步計算之快取結果）。"""
         from pathlib import Path
 
         base = f"[系統資訊] 目前終端機的工作目錄為：{Path.cwd()}"
@@ -725,16 +733,19 @@ class Agent:
         )
 
         # 加入動態預算之專案結構鳥瞰圖 (Repo Map)
-        from pocket_agent.tools.repo_map import default_repo_map
+        if repo_map_str is None:
+            from pocket_agent.tools.repo_map import default_repo_map
 
-        search_roots = self.workspace_dirs if self.workspace_dirs else [Path.cwd()]
-        max_repo_budget = min(1200, int(self._budget.effective_input_budget * 0.05))
-        repo_map_str = default_repo_map.build_repo_map(search_roots, budget_tokens=max_repo_budget)
+            search_roots = self.workspace_dirs if self.workspace_dirs else [Path.cwd()]
+            max_repo_budget = min(1200, int(self._budget.effective_input_budget * 0.05))
+            repo_map_str = default_repo_map.build_repo_map(search_roots, budget_tokens=max_repo_budget)
         if repo_map_str:
             base += f"\n\n{repo_map_str}"
 
         # 加入技能清單
-        instructions = base + skills_index_prompt(self.workspace_dirs, query)
+        if skills_prompt is None:
+            skills_prompt = skills_index_prompt(self.workspace_dirs, query)
+        instructions = base + skills_prompt
 
         # [JIT Context Injection] 將最核心的 system_prompt (包含不可談判的全域阻斷規則)
         # 置於最後，利用新近效應 (Recency Bias) 確保模型在處理使用者任務前的最後一刻讀到它。
@@ -932,6 +943,44 @@ class Agent:
             "請待網路穩定後直接輸入「繼續」即可接續產出報告，無須重新搜尋。"
         )
 
+    def _is_parallel_safe_tool(self, name: str, args: dict) -> bool:
+        """判斷工具呼叫是否為無副作用且免互動確認的唯讀操作，可安全並行執行。"""
+        if name not in getattr(self, "_safe_read_tools", set()):
+            return False
+        if is_shell_tool(name) or is_doc_tool(name):
+            return False
+        if name in ("run_subagents_parallel", "ask_question") or is_subagent_tool(name):
+            return False
+        if (
+            is_skill_tool(name)
+            or is_fs_tool(name)
+            or is_document_tool(name)
+            or is_web_tool(name)
+            or name == "indexed_search"
+        ):
+            return True
+        return not self._needs_mcp_confirm(name, args)
+
+    async def _execute_safe_read_io(self, name: str, args: dict) -> str:
+        """執行單一唯讀工具的實際 I/O，供平行派發批次呼叫。"""
+        if is_skill_tool(name):
+            return call_skill_tool(name, args, self.workspace_dirs)
+        if is_fs_tool(name):
+            fs_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
+            return await run_sync(call_fs_tool, name, args, fs_confirm, self.workspace_dirs)
+        if is_document_tool(name):
+            return await run_sync(call_document_tool, name, args, self.workspace_dirs)
+        if is_web_tool(name):
+            return await run_sync(call_web_tool, name, args)
+        if name == "indexed_search":
+            from pocket_agent.tools.rag import call_indexed_search
+
+            return await run_sync(call_indexed_search, args, self.workspace_dirs)
+        if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
+            if self.mcp.is_sensitive_tool(name):
+                self.is_sensitive_session = True
+        return await self.mcp.call(name, args)
+
     async def _run_loop(self) -> tuple[str, str]:
         initial_hist_len = len(self.history)
         tools = self._build_tools()
@@ -941,7 +990,13 @@ class Agent:
 
         def sanitize_surrogates(obj):
             if isinstance(obj, str):
-                return obj.encode("utf-8", "replace").decode("utf-8")
+                if obj.isascii():
+                    return obj
+                try:
+                    obj.encode("utf-8")
+                    return obj
+                except UnicodeEncodeError:
+                    return obj.encode("utf-8", "replace").decode("utf-8")
             elif isinstance(obj, list):
                 return [sanitize_surrogates(i) for i in obj]
             elif isinstance(obj, dict):
@@ -949,13 +1004,6 @@ class Agent:
             return obj
 
         input_items = sanitize_surrogates(input_items)
-        # reasoning 參數：effort 為 "none" 時不送推理
-        reasoning_param = NOT_GIVEN
-        if self.reasoning_effort and self.reasoning_effort != "none":
-            reasoning_param = {
-                "effort": self.reasoning_effort,
-                "summary": "auto",
-            }
 
         stream_consecutive_errors = 0  # 串流連線／協定層級例外計數
         tool_consecutive_all_errors = 0  # 連續工具全錯輪次計數
@@ -973,6 +1021,33 @@ class Agent:
         )
 
         engine = self.engine
+        reasoning_param = engine.format_reasoning_param(self.reasoning_effort)
+
+        # CR-001：於單次 _run_loop 起始非同步預先計算 RepoMap 與 Skills 目錄並快取，
+        # 避免每輪工具迴圈都在 event loop 同步掃描磁碟與查詢 SQLite，同時穩定 Prompt Prefix。
+        initial_query = ""
+        for msg in reversed(input_items):
+            if msg.get("role") == "user":
+                content = msg.get("content")
+                if isinstance(content, str):
+                    initial_query = content
+                elif isinstance(content, list):
+                    for part in content:
+                        if part.get("type") == "input_text":
+                            initial_query = part.get("text", "")
+                            break
+                break
+
+        def _compute_static_context() -> tuple[str, str]:
+            from pocket_agent.tools.repo_map import default_repo_map
+
+            search_roots = self.workspace_dirs if self.workspace_dirs else [Path.cwd()]
+            max_repo_budget = min(1200, int(self._budget.effective_input_budget * 0.05))
+            rm_str = default_repo_map.build_repo_map(search_roots, budget_tokens=max_repo_budget)
+            sk_str = skills_index_prompt(self.workspace_dirs, initial_query)
+            return rm_str, sk_str
+
+        cached_repo_map, cached_skills_prompt = await run_sync(_compute_static_context)
 
         web_tool_call_count = 0
         web_convergence_warned = False
@@ -1011,7 +1086,13 @@ class Agent:
                                 break
                     break
 
-            instructions = sanitize_surrogates(self._instructions(user_query))
+            instructions = sanitize_surrogates(
+                self._instructions(
+                    user_query,
+                    repo_map_str=cached_repo_map,
+                    skills_prompt=cached_skills_prompt,
+                )
+            )
 
             # 最後一輪強制清空工具，要求模型產出總結，避免子代理達到上限時結果被拋棄
             if round_idx == max_rounds:
@@ -1028,8 +1109,8 @@ class Agent:
                     )
 
             # ── 統一送出前上下文管理流程 ─────────────────────────────────
-            # 1. 優先嘗試清除較舊的工具輸出 (Tool Compact)
-            cleared_outputs = budget.compact(input_items, instructions, tools)
+            # 1. 優先嘗試清除較舊的工具輸出 (Tool Compact)，並直接複用該次估算結果
+            cleared_outputs, estimated_tokens = budget.compact_and_estimate(input_items, instructions, tools)
             if cleared_outputs > 0:
                 compacted_by_call_id = {
                     m["call_id"]: m["output"]
@@ -1047,10 +1128,7 @@ class Agent:
                     ):
                         hist_item["output"] = compacted_by_call_id[hist_item["call_id"]]
 
-            # 2. 估算全量 Payload (含 history、本輪工具輸出、instructions 與 tools schema)
-            estimated_tokens = budget.estimate_items(input_items, instructions, tools)
-
-            # 3. 若清除工具輸出後仍超限，嘗試以專用 Compactor 進行 LLM 歷史摘要
+            # 2. 若清除工具輸出後仍超限，嘗試以專用 Compactor 進行 LLM 歷史摘要
             if estimated_tokens > budget.compact_threshold and len(input_items) > 8:
                 from pocket_agent.core.compaction import HistoryCompactor
 
@@ -1094,7 +1172,12 @@ class Agent:
                     "或利用 `run_subagents_parallel` 將任務分拆給子代理處理。"
                 )
 
-            self.context_usage = budget.snapshot(input_items, instructions, tools)
+            self.context_usage = budget.snapshot(
+                input_items,
+                instructions,
+                tools,
+                estimated_tokens=estimated_tokens,
+            )
 
             try:
                 stream = engine.stream_chat(
@@ -1238,6 +1321,55 @@ class Agent:
                 return thinking, text
 
             # 執行工具，下一輪繼續
+            # CR-003：若開頭連續有多個免確認的唯讀工具呼叫，先以 asyncio.gather 平行執行 I/O
+            parallel_results: dict[str, tuple[str | None, BaseException | None]] = {}
+            if len(fc_list) > 1:
+                parallel_batch: list[tuple[dict, dict, str]] = []
+                projected_web = web_tool_call_count
+                for p_fc in fc_list:
+                    p_name = p_fc["name"]
+                    if self.allowed_tools is not None and p_name not in self.allowed_tools:
+                        break
+                    if is_web_tool(p_name):
+                        projected_web += 1
+                        if projected_web > web_hard_limit:
+                            break
+                    p_raw = p_fc["arguments"].strip()
+                    try:
+                        p_args = json.loads(p_raw) if p_raw else {}
+                    except json.JSONDecodeError:
+                        break
+                    if not isinstance(p_args, dict) or not self._is_parallel_safe_tool(p_name, p_args):
+                        break
+                    parallel_batch.append((p_fc, p_args, p_raw))
+
+                if len(parallel_batch) >= 2:
+                    sem = asyncio.Semaphore(5)
+
+                    async def _run_one_parallel(
+                        p_fc: dict, p_args: dict, p_raw: str
+                    ) -> tuple[str, str | None, BaseException | None]:
+                        async with sem:
+                            try:
+                                if not self._is_subagent:
+                                    await run_sync(
+                                        run_hooks,
+                                        "before_tool",
+                                        {"tool_name": p_fc["name"], "tool_args": p_raw},
+                                    )
+                                if self.cancel_requested:
+                                    raise asyncio.CancelledError()
+                                res = await self._execute_safe_read_io(p_fc["name"], p_args)
+                                return p_fc["call_id"], res, None
+                            except BaseException as exc:
+                                return p_fc["call_id"], None, exc
+
+                    gathered = await asyncio.gather(
+                        *(_run_one_parallel(p_fc, p_args, p_raw) for p_fc, p_args, p_raw in parallel_batch)
+                    )
+                    for cid, res, exc in gathered:
+                        parallel_results[cid] = (res, exc)
+
             all_errors = True
             for fc in fc_list:
                 if self.cancel_requested:
@@ -1334,90 +1466,96 @@ class Agent:
 
                     log.debug("TOOL calling %s", fc["name"])
 
-                    if not self._is_subagent:
-                        await run_sync(
-                            run_hooks,
-                            "before_tool",
-                            {"tool_name": fc["name"], "tool_args": raw},
-                        )
-
-                    if self.cancel_requested:
-                        return thinking, self._stopped_reply(text)
-
-                    if is_skill_tool(fc["name"]):
-                        result = call_skill_tool(fc["name"], args, self.workspace_dirs)
-                    elif fc["name"] in ("run_subagents_parallel", "ask_question") or is_subagent_tool(fc["name"]):
-                        result = await self._execute_core_tool(fc["name"], args, fc["call_id"])
-                    elif is_shell_tool(fc["name"]):
-                        before_snap = self.activity.take_workspace_snapshot(self.workspace_dirs)
-                        # 阻塞的 subprocess + 確認視窗等待 → 丟到 thread 跑
-                        result = await run_sync(call_shell_tool, fc["name"], args, self.on_confirm)
-                        if not isinstance(result, str) or not result.startswith(
-                            ("[使用者拒絕", "[操作已由使用者取消", "[ERROR]")
-                        ):
-                            self.activity.apply_workspace_diff(before_snap, self.workspace_dirs)
-                    elif is_fs_tool(fc["name"]):
-                        if fc["name"] in ("write_to_file", "append_to_file", "replace_file_content"):
-                            target_p = args.get("path") or args.get("target_file") or args.get("file") or ""
-                            existed_before = self.activity.inspect_file_before_tool(target_p)
-                        fs_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
-                        result = await run_sync(call_fs_tool, fc["name"], args, fs_confirm, self.workspace_dirs)
-                    elif is_document_tool(fc["name"]):
-                        result = await run_sync(call_document_tool, fc["name"], args, self.workspace_dirs)
-                    elif is_web_tool(fc["name"]):
-                        result = await run_sync(call_web_tool, fc["name"], args)
-                    elif is_doc_tool(fc["name"]):
-                        doc_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
-                        result, fpath = await run_sync(
-                            call_doc_tool,
-                            fc["name"],
-                            args,
-                            doc_confirm,
-                            self.workspace_dirs,
-                            lambda: self.cancel_requested,
-                        )
-                        if fpath:
-                            self.last_files.append(fpath)
-                            generated_fpath = fpath
-                    elif fc["name"] == "indexed_search":
-                        from pocket_agent.tools.rag import call_indexed_search
-
-                        result = await run_sync(call_indexed_search, args, self.workspace_dirs)
+                    if fc["call_id"] in parallel_results:
+                        p_res, p_exc = parallel_results[fc["call_id"]]
+                        if p_exc is not None:
+                            raise p_exc
+                        result = p_res if p_res is not None else ""
                     else:
-                        # 未知 MCP 工具預設需要確認，除非明確標示為 safe_read
-                        # 路徑型 safe_read 工具（如 sqlite_switch_database）於工作區外仍需確認
-                        if self._needs_mcp_confirm(fc["name"], args):
-                            if self.on_confirm is None:
-                                raise RuntimeError(f"缺乏使用者確認機制，拒絕執行 MCP 工具 {fc['name']}")
-                            ok = await run_sync(self.on_confirm, fc["name"], args)
-                            if isinstance(ok, str) and ok.strip():
-                                result = (
-                                    f"[使用者拒絕執行此工具，並提供後續指示：\n"
-                                    f"「{ok.strip()}」\n"
-                                    "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的工具。]"
-                                )
-                                self.activity.record_tool_result(fc["name"], args, result)
-                                all_errors = False
-                                ok_status = True
-                                self._emit(
-                                    "tool_done",
-                                    {
-                                        "call_id": fc["call_id"],
-                                        "name": fc["name"],
-                                        "result": result,
-                                        "ok": True,
-                                    },
-                                )
-                                self._append_tool_pair(input_items, fc, result)
-                                continue
-                            elif ok is not True:
-                                raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
+                        if not self._is_subagent:
+                            await run_sync(
+                                run_hooks,
+                                "before_tool",
+                                {"tool_name": fc["name"], "tool_args": raw},
+                            )
+
                         if self.cancel_requested:
                             return thinking, self._stopped_reply(text)
-                        if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
-                            if self.mcp.is_sensitive_tool(fc["name"]):
-                                self.is_sensitive_session = True
-                        result = await self.mcp.call(fc["name"], args)
+
+                        if is_skill_tool(fc["name"]):
+                            result = call_skill_tool(fc["name"], args, self.workspace_dirs)
+                        elif fc["name"] in ("run_subagents_parallel", "ask_question") or is_subagent_tool(fc["name"]):
+                            result = await self._execute_core_tool(fc["name"], args, fc["call_id"])
+                        elif is_shell_tool(fc["name"]):
+                            before_snap = self.activity.take_workspace_snapshot(self.workspace_dirs)
+                            # 阻塞的 subprocess + 確認視窗等待 → 丟到 thread 跑
+                            result = await run_sync(call_shell_tool, fc["name"], args, self.on_confirm)
+                            if not isinstance(result, str) or not result.startswith(
+                                ("[使用者拒絕", "[操作已由使用者取消", "[ERROR]")
+                            ):
+                                self.activity.apply_workspace_diff(before_snap, self.workspace_dirs)
+                        elif is_fs_tool(fc["name"]):
+                            if fc["name"] in ("write_to_file", "append_to_file", "replace_file_content"):
+                                target_p = args.get("path") or args.get("target_file") or args.get("file") or ""
+                                existed_before = self.activity.inspect_file_before_tool(target_p)
+                            fs_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
+                            result = await run_sync(call_fs_tool, fc["name"], args, fs_confirm, self.workspace_dirs)
+                        elif is_document_tool(fc["name"]):
+                            result = await run_sync(call_document_tool, fc["name"], args, self.workspace_dirs)
+                        elif is_web_tool(fc["name"]):
+                            result = await run_sync(call_web_tool, fc["name"], args)
+                        elif is_doc_tool(fc["name"]):
+                            doc_confirm = (lambda _desc: True) if self.accept_edits else self.on_confirm
+                            result, fpath = await run_sync(
+                                call_doc_tool,
+                                fc["name"],
+                                args,
+                                doc_confirm,
+                                self.workspace_dirs,
+                                lambda: self.cancel_requested,
+                            )
+                            if fpath:
+                                self.last_files.append(fpath)
+                                generated_fpath = fpath
+                        elif fc["name"] == "indexed_search":
+                            from pocket_agent.tools.rag import call_indexed_search
+
+                            result = await run_sync(call_indexed_search, args, self.workspace_dirs)
+                        else:
+                            # 未知 MCP 工具預設需要確認，除非明確標示為 safe_read
+                            # 路徑型 safe_read 工具（如 sqlite_switch_database）於工作區外仍需確認
+                            if self._needs_mcp_confirm(fc["name"], args):
+                                if self.on_confirm is None:
+                                    raise RuntimeError(f"缺乏使用者確認機制，拒絕執行 MCP 工具 {fc['name']}")
+                                ok = await run_sync(self.on_confirm, fc["name"], args)
+                                if isinstance(ok, str) and ok.strip():
+                                    result = (
+                                        f"[使用者拒絕執行此工具，並提供後續指示：\n"
+                                        f"「{ok.strip()}」\n"
+                                        "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的工具。]"
+                                    )
+                                    self.activity.record_tool_result(fc["name"], args, result)
+                                    all_errors = False
+                                    ok_status = True
+                                    self._emit(
+                                        "tool_done",
+                                        {
+                                            "call_id": fc["call_id"],
+                                            "name": fc["name"],
+                                            "result": result,
+                                            "ok": True,
+                                        },
+                                    )
+                                    self._append_tool_pair(input_items, fc, result)
+                                    continue
+                                elif ok is not True:
+                                    raise Exception(f"使用者拒絕執行 MCP 工具 {fc['name']}")
+                            if self.cancel_requested:
+                                return thinking, self._stopped_reply(text)
+                            if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
+                                if self.mcp.is_sensitive_tool(fc["name"]):
+                                    self.is_sensitive_session = True
+                            result = await self.mcp.call(fc["name"], args)
                     log.debug("TOOL result name=%s chars=%d", fc["name"], len(result) if isinstance(result, str) else 0)
 
                     if not self._is_subagent:
