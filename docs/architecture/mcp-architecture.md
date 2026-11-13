@@ -77,7 +77,7 @@ Pocket Agent 的解決方案：
 
 1. **彈性傳輸協定識別**：`transport` 支援設定為 `Streamable HTTP`、`streamable-http`、`streamable_http` 或 `http`，底層直接透過 `mcp.client.streamable_http.streamable_http_client` 與 `truststore` 系統憑證庫建立連線。
 2. **MCP OAuth 2.1 動態授權與零明碼落盤（`KeyringTokenStorage`）**：
-   - 當遠端伺服器回應 HTTP `401 Unauthorized` 時，`OAuthClientProvider` 會自動執行 Protected Resource Metadata 探索与 Dynamic Client Registration，並開啟瀏覽器引導使用者完成 OAuth 2.1 PKCE 登入。
+   - 當遠端伺服器回應 HTTP `401 Unauthorized` 時，`OAuthClientProvider` 會自動執行 Protected Resource Metadata 探索與 Dynamic Client Registration，並開啟瀏覽器引導使用者完成 OAuth 2.1 PKCE 登入。
    - 授權取得的 `OAuthToken` 與 `OAuthClientInformationFull` 一律透過作業系統原生 `keyring`（`mcp-oauth-<server>` 與 `mcp-client-<server>`）分段加密儲存，絕不以明碼寫入磁碟；重新連線時自動載入並計算有效期限，到期時優先以 `refresh_token` 背景續期。
 3. **自訂 HTTP Headers 與環境變數展開**：若遠端伺服器採用靜態金鑰或 Bearer Token，可在設定檔配置 `headers`（支援 `${ENV_VAR}` 語法從 `env` 或系統環境變數代入）或 `bearer_token`；當已明確指定 `Authorization` 標頭時，預設略過 OAuth 動態流程。
 4. **Windows `stdio` 子行程 `stderr` 安全導向**：針對本機 `stdio` 伺服器，`MCPManager` 會將 `errlog` 導向工作區沙盒日誌 `mcp_stdio.log` 的實體檔案控制代碼，避免 Windows `CREATE_NO_WINDOW` 旗標導致 `.cmd`／Node.js 子行程因主控台 `stderr` 失效而發生 `Connection closed` 異常退出。

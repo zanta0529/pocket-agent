@@ -207,7 +207,7 @@ run.bat setup       # Windows
 - `/update`：檢查並立即套用 GitHub 最新 Commit 更新，自動儲存並重啟（僅限 Modern Portable 版）。
 - `/logout`：清除本機儲存的 OAuth 憑證。
 
-> 💡 更多關於路徑解析、圖生圖細節及系統邊界行為，請詳閱：[CLI 操作與限制說明](docs/cli-usage-limitations.md)。
+> 💡 更多關於路徑解析、圖生圖細節及系統邊界行為，請詳閱：[CLI 操作與限制說明](docs/guides/cli-usage-limitations.md)。
 
 ---
 
@@ -250,19 +250,20 @@ run.bat setup       # Windows
 
 如需深入探討 Pocket Agent 的架構設計，請參考隨附的技術規格文件：
 
-- [OAuth 2.0 PKCE 認證機制](docs/oauth-mechanism.md)
-- [雙軌大模型轉接架構 (LLM Engine Adapter)](docs/llm-adapter-architecture.md)
-- [上下文預算管理架構 (Context Budget Architecture)](docs/context-management-architecture.md)
-- [設定檔規格說明書 (Configuration Specification)](docs/configuration-specification.md)
-- [分層配置與上下文探索機制 (Agent Configuration Standards)](docs/agent-configuration-standards.md)
-- [MCP 伺服器掛載與安全注入機制](docs/mcp-architecture.md)
-- [工具呼叫與 Subagent 委派機制](docs/tool-subagent-mechanism.md)
-- [Hooks 生命週期機制](docs/hooks-lifecycle.md)
-- [BM25 向量檢索與記憶機制](docs/bm25-visual-explanation.md)
-- [敏感設定加密與 OS Keyring 整合](docs/sensitive-data-protection.md)
-- [三層式路由架構 (Three-Tiered Routing)](docs/three-tier-routing-architecture.md)
-- [子代理權限與工作區隔離報告](docs/agent-workspace-architecture-report.md)
-- [CLI 操作與限制說明 (CLI Usage & Limitations)](docs/cli-usage-limitations.md)
+- **系統核心架構 (`docs/architecture/`)**：
+  - [認證與敏感憑證保護機制 (OAuth 2.0 PKCE + OS Keyring)](docs/architecture/security-and-auth.md)
+  - [多軌大模型轉接架構 (LLM Engine Adapter)](docs/architecture/llm-adapter-architecture.md)
+  - [上下文管理架構 (Context Budget & Compaction)](docs/architecture/context-management-architecture.md)
+  - [三層式路由、分層配置與子代理機制](docs/architecture/routing-and-subagents.md)
+  - [MCP 伺服器掛載與安全注入機制](docs/architecture/mcp-architecture.md)
+  - [Hooks 生命週期機制](docs/architecture/hooks-lifecycle.md)
+- **設定與操作手冊 (`docs/guides/`)**：
+  - [設定檔規格說明書 (Configuration Specification)](docs/guides/configuration-specification.md)
+  - [CLI 操作與限制說明 (CLI Usage & Limitations)](docs/guides/cli-usage-limitations.md)
+- **外部調研與演算法原理 (`docs/research/`)**：
+  - [子代理權限與工作區隔離評估報告](docs/research/agent-workspace-architecture-report.md)
+  - [圖解 BM25 評分與 SQLite FTS5 檢索機制](docs/research/bm25-visual-explanation.md)
+  - [Python 發布方式分析（PyInstaller 與 Bundled Python env）](docs/research/python-distribution-analysis.md)
 
 ---
 
@@ -287,7 +288,7 @@ PocketAgent 的全域設定檔位於 `~/.pocket-agent/config.json`，採巢狀 J
 }
 ```
 
-> 完整設定規格說明請參考：[設定檔規格說明書](docs/configuration-specification.md)。
+> 完整設定規格說明請參考：[設定檔規格說明書](docs/guides/configuration-specification.md)。
 
 ---
 

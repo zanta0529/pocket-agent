@@ -1,6 +1,6 @@
 # AI Agent 工具「主代理 / 子代理」權限與上下文機制評估報告
 
-_（主要比較對象：Claude Code（Anthropic）、Codex CLI（OpenAI）、Antigravity CLI（Google）；Hermes Agent（Nous Research）作為補充參考案例，機制真實存在但治理成熟度不列入同等比較）_
+> 本文件為外部代理工具（Claude Code、Codex CLI、Antigravity CLI、Hermes Agent）之架構調研報告，僅供設計參考，並非 PocketAgent 自身實作規格。
 
 ---
 

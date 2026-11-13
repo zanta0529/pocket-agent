@@ -63,7 +63,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
   - 送出前採用統一流程：優先清除舊工具輸出（至目標水位 60%）→ 嘗試 `HistoryCompactor` 歷史摘要壓縮（串流結束後須再次驗證 `cancel_check`，禁止於使用者取消後提交半截摘要）→ 安全滑動視窗降級 → 不可縮減超限強制停止。
   - 使用者可透過 `system.context_window`、`system.context_reserve_output`、`system.context_safety_margin` 與 `system.context_compact_target_ratio` 微調設定。
   - `read_file` 具備 500 行與 12,000 字元雙重限制，並支援 `char_offset` 單行行內字元游標續讀；讀取大型檔案應優先使用 `search_files` 或搭配精準範圍閱讀。
-  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入集中式暫存區**（PocketAgent 執行期沙盒 `~/.pocket-agent/workspaces/<slug>/scratch/notes.md` 或外部開發代理專屬暫存區 `<artifact_dir>`）以建立外部長期記憶；**嚴禁在工作目錄建立 `.agents/scratch`** 避免污染版本庫。詳見 [context-management-architecture.md](context-management-architecture.md) 與 [configuration-specification.md](configuration-specification.md)。
+  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入集中式暫存區**（PocketAgent 執行期沙盒 `~/.pocket-agent/workspaces/<slug>/scratch/notes.md` 或外部開發代理專屬暫存區 `<artifact_dir>`）以建立外部長期記憶；**嚴禁在工作目錄建立 `.agents/scratch`** 避免污染版本庫。詳見 [context-management-architecture.md](architecture/context-management-architecture.md) 與 [configuration-specification.md](guides/configuration-specification.md)。
 
 ## 4. 資料、擴充與安全邊界
 

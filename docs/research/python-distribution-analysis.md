@@ -119,8 +119,6 @@ PyInstaller 會收集分析到的相依性，不代表其結果就是最小；Bu
 
 這些需求與 ComfyUI Portable 的公開設計相符，但**有 AI 套件不代表 PyInstaller 一定不可行**；關鍵仍是環境是否需要持續擴充。
 
-參考：[ComfyUI Portable 官方文件](https://docs.comfy.org/installation/comfyui_portable_windows)。
-
 ### 兩種方案都應納入的發布要求
 
 以下是建議的驗收條件，而不是任一工具自動保證的能力：

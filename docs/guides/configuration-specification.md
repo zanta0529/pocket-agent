@@ -23,7 +23,7 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 
 | 鍵值 (Key)        | 型別     | 預設值          | 環境變數                | 說明                                                                                                           |
 | :---------------- | :------- | :-------------- | :---------------------- | :------------------------------------------------------------------------------------------------------------- |
-| `active_provider` | `string` | `"openai"`      | `POCKET_AGENT_PROVIDER` | 目前啟用的主要模型供應商（如 `openai`, `openrouter`, `ollama`, `ollama_cloud`, `sambanova`, `groq`, `gemini`） |
+| `active_provider` | `string` | `"openai"`      | `POCKET_AGENT_PROVIDER` | 目前啟用的主要模型供應商（如 `openai`, `openrouter`, `ollama`, `ollamacloud`, `sambanova`, `groq`, `mistral`, `gemini`） |
 | `active_model`    | `string` | `"gpt-6-astra"` | `OPENAI_MODEL`          | 目前啟用的模型名稱                                                                                             |
 
 ---
@@ -57,14 +57,14 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 }
 ```
 
-| 鍵值 (Key)                 | 型別      | 預設值             | 環境變數                  | 說明                                                                       |
-| :------------------------- | :-------- | :----------------- | :------------------------ | :------------------------------------------------------------------------- |
-| `system.max_tool_rounds`   | `integer` | `20`               | `MAX_TOOL_ROUNDS`              | 單輪對話中允許 Agent 連續調用工具的最大輪次上限。                          |
+| 鍵值 (Key)                 | 型別      | 預設值             | 環境變數                        | 說明                                                                                                      |
+| :------------------------- | :-------- | :----------------- | :------------------------------ | :-------------------------------------------------------------------------------------------------------- |
+| `system.max_tool_rounds`   | `integer` | `20`               | `MAX_TOOL_ROUNDS`               | 單輪對話中允許 Agent 連續調用工具的最大輪次上限。                                                         |
 | `system.reasoning_effort`  | `string`  | `"auto"`           | `POCKET_AGENT_REASONING_EFFORT` | 預設推理強度（`auto`, `high`, `medium`, `low`, `none`），對話中可用 `/reasoning` (或 `/effort`) 即時切換。 |
-| `system.log_level`         | `string`  | `"WARNING"`        | `POCKET_AGENT_LOG_LEVEL`       | 終端機與檔案的日誌記錄等級（可設 `DEBUG`, `INFO`, `WARNING`, `ERROR`）。檔案儲存於全域 `~/.pocket-agent/workspaces/<slug>/logs/agent.log`。 |
-| `system.use_sandbox`       | `string`  | `"none"`           | `USE_SANDBOX`             | 命令列執行沙盒模式（`none` 表示直接本機執行；`docker` 表示透過容器隔離）。 |
-| `system.sandbox_container` | `string`  | `"pocket_sandbox"` | `SANDBOX_CONTAINER`       | 沙盒 Docker 容器名稱。                                                     |
-| `system.auto_learn`        | `boolean` | `false`            | `POCKET_AGENT_AUTO_LEARN` | 是否在對話結束後自動分析萃取共用技能。                                     |
+| `system.log_level`         | `string`  | `"WARNING"`        | `POCKET_AGENT_LOG_LEVEL`        | 終端機與檔案的日誌記錄等級（可設 `DEBUG`, `INFO`, `WARNING`, `ERROR`）。檔案儲存於全域 `~/.pocket-agent/workspaces/<slug>/logs/agent.log`。 |
+| `system.use_sandbox`       | `string`  | `"none"`           | `USE_SANDBOX`                   | 命令列執行沙盒模式（`none` 表示直接本機執行；`docker` 表示透過容器隔離）。                                |
+| `system.sandbox_container` | `string`  | `"pocket_sandbox"` | `SANDBOX_CONTAINER`             | 沙盒 Docker 容器名稱。                                                                                    |
+| `system.auto_learn`        | `boolean` | `false`            | `POCKET_AGENT_AUTO_LEARN`       | 是否在對話結束後自動分析萃取共用技能。                                                                    |
 
 #### 上下文預算控制 (Context Budget)
 
@@ -77,11 +77,11 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 
 #### 大工具輸出落盤虛擬化 (Spill-to-Disk)
 
-| 鍵值 (Key)                         | 型別                | 預設值 | 環境變數                           | 說明                                                                                             |
-| :--------------------------------- | :------------------ | :----- | :--------------------------------- | :----------------------------------------------------------------------------------------------- |
+| 鍵值 (Key)                         | 型別                | 預設值 | 環境變數                           | 說明                                                                                                                             |
+| :--------------------------------- | :------------------ | :----- | :--------------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
 | `system.spillover_threshold_chars` | `integer` \| `null` | `null` | `POCKET_AGENT_SPILLOVER_THRESHOLD` | 啟動工具巨量輸出落盤的字元門檻。設為 `null` 時動態依模型輸入預算之 15% 計算（保底 6,000 字元）。儲存於工作區沙盒 `scratch/outputs/`。 |
-| `system.spillover_head_chars`      | `integer`           | `1500` | `POCKET_AGENT_SPILLOVER_HEAD`      | 注入 Context 的頂部預覽字元長度（不超過門檻的 1/3）。                                            |
-| `system.spillover_tail_chars`      | `integer`           | `1500` | `POCKET_AGENT_SPILLOVER_TAIL`      | 注入 Context 的尾部結論字元長度（通常包含測試/建置結論）。                                       |
+| `system.spillover_head_chars`      | `integer`           | `1500` | `POCKET_AGENT_SPILLOVER_HEAD`      | 注入 Context 的頂部預覽字元長度（不超過門檻的 1/3）。                                                                            |
+| `system.spillover_tail_chars`      | `integer`           | `1500` | `POCKET_AGENT_SPILLOVER_TAIL`      | 注入 Context 的尾部結論字元長度（通常包含測試/建置結論）。                                                                       |
 
 #### 專案結構鳥瞰圖 (Pocket Repo Map)
 
@@ -104,11 +104,11 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 
 > 💡 **環境隔離保護**：線上更新僅於 Modern Portable 打包版（含 `app/PORTABLE` 標記）生效，直接追蹤公開 GitHub 主分支最新 Commit SHA 並自動下載快照套用，無須手動建立 Release；開發人員使用 `run.bat` 執行原始碼時完全停用。
 
-| 鍵值 (Key)             | 型別      | 預設值   | 環境變數                     | 說明                                                                                |
-| :--------------------- | :-------- | :------- | :--------------------------- | :---------------------------------------------------------------------------------- |
-| `system.auto_update`   | `boolean` | `true`   | `POCKET_AGENT_AUTO_UPDATE`   | 啟動時是否於背景自動檢查並預備最新 Commit 程式碼，並於關閉視窗時自動套用更新。      |
-| `system.update_repo`   | `string`  | `""`     | `POCKET_AGENT_UPDATE_REPO`   | 公開 GitHub 儲存庫（格式 `owner/repo`）。留空時自動採用 `BUILD_INFO.json` 記錄值。  |
-| `system.update_branch` | `string`  | `"main"` | `POCKET_AGENT_UPDATE_BRANCH` | 線上更新追蹤的 GitHub 分支名稱（預設為 `"main"`）。                                 |
+| 鍵值 (Key)             | 型別      | 預設值   | 環境變數                     | 說明                                                                               |
+| :--------------------- | :-------- | :------- | :--------------------------- | :--------------------------------------------------------------------------------- |
+| `system.auto_update`   | `boolean` | `true`   | `POCKET_AGENT_AUTO_UPDATE`   | 啟動時是否於背景自動檢查並預備最新 Commit 程式碼，並於關閉視窗時自動套用更新。     |
+| `system.update_repo`   | `string`  | `""`     | `POCKET_AGENT_UPDATE_REPO`   | 公開 GitHub 儲存庫（格式 `owner/repo`）。留空時自動採用 `BUILD_INFO.json` 記錄值。 |
+| `system.update_branch` | `string`  | `"main"` | `POCKET_AGENT_UPDATE_BRANCH` | 線上更新追蹤的 GitHub 分支名稱（預設為 `"main"`）。                                |
 
 ---
 
@@ -137,9 +137,9 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 - `api_key`: 雲端存取金鑰。
 - `base_url`: 預設為 `"https://ollama.com/v1"`。
 
-#### 5. SambaNova / Groq / Gemini
+#### 5. SambaNova / Groq / Mistral / Gemini
 
-- 可直接在 `providers` 下設定 `api_key` 與 `base_url`，或使用對應環境變數（如 `GROQ_API_KEY`, `GEMINI_API_KEY`）。
+- 可直接在 `providers` 下設定 `api_key` 與 `base_url`，或使用對應環境變數（如 `GROQ_API_KEY`, `MISTRAL_API_KEY`, `SAMBANOVA_API_KEY`, `GEMINI_API_KEY`）。
 
 ---
 

@@ -35,19 +35,16 @@ def build_manual():
     readme = read_md(readme_path)
 
     files = {
-        "config_spec": read_md(os.path.join(docs_dir, "configuration-specification.md")),
-        "agent_config": read_md(os.path.join(docs_dir, "agent-configuration-standards.md")),
-        "hooks": read_md(os.path.join(docs_dir, "hooks-lifecycle.md")),
-        "llm_adapter": read_md(os.path.join(docs_dir, "llm-adapter-architecture.md")),
-        "mcp": read_md(os.path.join(docs_dir, "mcp-architecture.md")),
-        "oauth": read_md(os.path.join(docs_dir, "oauth-mechanism.md")),
-        "tool_subagent": read_md(os.path.join(docs_dir, "tool-subagent-mechanism.md")),
-        "cli_limits": read_md(os.path.join(docs_dir, "cli-usage-limitations.md")),
-        "skills_comp": read_md(os.path.join(docs_dir, "subagents-skills-comparison.md")),
-        "bm25": read_md(os.path.join(docs_dir, "bm25-visual-explanation.md")),
-        "arch_report": read_md(os.path.join(docs_dir, "agent-workspace-architecture-report.md")),
-        "routing": read_md(os.path.join(docs_dir, "three-tier-routing-architecture.md")),
-        "crypto": read_md(os.path.join(docs_dir, "sensitive-data-protection.md")),
+        "config_spec": read_md(os.path.join(docs_dir, "guides", "configuration-specification.md")),
+        "cli_limits": read_md(os.path.join(docs_dir, "guides", "cli-usage-limitations.md")),
+        "hooks": read_md(os.path.join(docs_dir, "architecture", "hooks-lifecycle.md")),
+        "llm_adapter": read_md(os.path.join(docs_dir, "architecture", "llm-adapter-architecture.md")),
+        "mcp": read_md(os.path.join(docs_dir, "architecture", "mcp-architecture.md")),
+        "security_auth": read_md(os.path.join(docs_dir, "architecture", "security-and-auth.md")),
+        "routing": read_md(os.path.join(docs_dir, "architecture", "routing-and-subagents.md")),
+        "context_budget": read_md(os.path.join(docs_dir, "architecture", "context-management-architecture.md")),
+        "bm25": read_md(os.path.join(docs_dir, "research", "bm25-visual-explanation.md")),
+        "arch_report": read_md(os.path.join(docs_dir, "research", "agent-workspace-architecture-report.md")),
     }
 
     def extract_section(start_pattern, end_pattern=None):
@@ -103,25 +100,20 @@ def build_manual():
     manual.append("  - [1.2 發布與建置](#12-發布與建置)")
     manual.append("- [二、日常操作 (Daily Operations)](#二日常操作-daily-operations)")
     manual.append("  - [2.1 基本操作與指令](#21-基本操作與指令)")
-    manual.append("  - [2.2 Subagents 與 Skills 的差異與使用](#22-subagents-與-skills-的差異與使用)")
     manual.append("- [三、設定與擴充 (Configuration & Extensions)](#三設定與擴充-configuration--extensions)")
     manual.append("  - [3.1 進階設定與 MCP](#31-進階設定與-mcp)")
     manual.append(
         "  - [3.2 設定檔規格說明書 (Configuration Specification)](#32-設定檔規格說明書-configuration-specification)"
     )
-    manual.append(
-        "  - [3.3 代理配置標準 (Agent Configuration Standards)](#33-代理配置標準-agent-configuration-standards)"
-    )
-    manual.append("  - [3.4 Hooks 生命週期機制](#34-hooks-生命週期機制)")
+    manual.append("  - [3.3 Hooks 生命週期機制](#33-hooks-生命週期機制)")
     manual.append("- [四、架構與安全 (Architecture & Security)](#四架構與安全-architecture--security)")
-    manual.append("  - [4.1 雙軌大模型轉接架構](#41-雙軌大模型轉接架構)")
-    manual.append("  - [4.2 OAuth 2.0 認證機制](#42-oauth-20-認證機制)")
-    manual.append("  - [4.3 MCP 伺服器掛載與注入機制](#43-mcp-伺服器掛載與注入機制)")
-    manual.append("  - [4.4 工具呼叫與 Subagent 委派機制](#44-工具呼叫與-subagent-委派機制)")
-    manual.append("  - [4.5 BM25 向量檢索與記憶機制](#45-bm25-向量檢索與記憶機制)")
-    manual.append("  - [4.6 敏感設定加密與 OS Keyring 整合](#46-敏感設定加密與-os-keyring-整合)")
-    manual.append("  - [4.7 子代理權限與工作區隔離機制](#47-子代理權限與工作區隔離機制)")
-    manual.append("  - [4.8 三層式路由架構](#48-三層式路由架構)")
+    manual.append("  - [4.1 多軌大模型轉接架構](#41-多軌大模型轉接架構)")
+    manual.append("  - [4.2 認證與敏感憑證保護機制](#42-認證與敏感憑證保護機制)")
+    manual.append("  - [4.3 上下文管理架構](#43-上下文管理架構)")
+    manual.append("  - [4.4 三層式路由、分層配置與子代理機制](#44-三層式路由分層配置與子代理機制)")
+    manual.append("  - [4.5 MCP 伺服器掛載與注入機制](#45-mcp-伺服器掛載與注入機制)")
+    manual.append("  - [4.6 BM25 評分與 SQLite FTS5 檢索機制](#46-bm25-評分與-sqlite-fts5-檢索機制)")
+    manual.append("  - [4.7 子代理權限與工作區隔離評估](#47-子代理權限與工作區隔離評估)")
     manual.append("- [五、疑難排解 (Troubleshooting)](#五疑難排解-troubleshooting)")
     manual.append("  - [5.1 CLI 操作與限制說明](#51-cli-操作與限制說明)")
     manual.append("- [六、免責聲明 (Disclaimer)](#六免責聲明-disclaimer)\n")
@@ -140,9 +132,6 @@ def build_manual():
     manual.append("### 2.1 基本操作與指令\n")
     manual.append(demote_headers(readme_usage, 1) + "\n")
 
-    manual.append("### 2.2 Subagents 與 Skills 的差異與使用\n")
-    manual.append(demote_headers(strip_title(files["skills_comp"]), 2) + "\n")
-
     manual.append("## 三、設定與擴充 (Configuration & Extensions)\n")
     manual.append("### 3.1 進階設定與 MCP\n")
     manual.append(demote_headers(readme_config, 1) + "\n")
@@ -150,36 +139,30 @@ def build_manual():
     manual.append("### 3.2 設定檔規格說明書 (Configuration Specification)\n")
     manual.append(demote_headers(strip_title(files["config_spec"]), 2) + "\n")
 
-    manual.append("### 3.3 代理配置標準 (Agent Configuration Standards)\n")
-    manual.append(demote_headers(strip_title(files["agent_config"]), 2) + "\n")
-
-    manual.append("### 3.4 Hooks 生命週期機制\n")
+    manual.append("### 3.3 Hooks 生命週期機制\n")
     manual.append(demote_headers(strip_title(files["hooks"]), 2) + "\n")
 
     manual.append("## 四、架構與安全 (Architecture & Security)\n")
-    manual.append("### 4.1 雙軌大模型轉接架構\n")
+    manual.append("### 4.1 多軌大模型轉接架構\n")
     manual.append(demote_headers(strip_title(files["llm_adapter"]), 2) + "\n")
 
-    manual.append("### 4.2 OAuth 2.0 認證機制\n")
-    manual.append(demote_headers(strip_title(files["oauth"]), 2) + "\n")
+    manual.append("### 4.2 認證與敏感憑證保護機制\n")
+    manual.append(demote_headers(strip_title(files["security_auth"]), 2) + "\n")
 
-    manual.append("### 4.3 MCP 伺服器掛載與注入機制\n")
+    manual.append("### 4.3 上下文管理架構\n")
+    manual.append(demote_headers(strip_title(files["context_budget"]), 2) + "\n")
+
+    manual.append("### 4.4 三層式路由、分層配置與子代理機制\n")
+    manual.append(demote_headers(strip_title(files["routing"]), 2) + "\n")
+
+    manual.append("### 4.5 MCP 伺服器掛載與注入機制\n")
     manual.append(demote_headers(strip_title(files["mcp"]), 2) + "\n")
 
-    manual.append("### 4.4 工具呼叫與 Subagent 委派機制\n")
-    manual.append(demote_headers(strip_title(files["tool_subagent"]), 2) + "\n")
-
-    manual.append("### 4.5 BM25 向量檢索與記憶機制\n")
+    manual.append("### 4.6 BM25 評分與 SQLite FTS5 檢索機制\n")
     manual.append(demote_headers(strip_title(files["bm25"]), 2) + "\n")
 
-    manual.append("### 4.6 敏感設定加密與 OS Keyring 整合\n")
-    manual.append(demote_headers(strip_title(files["crypto"]), 2) + "\n")
-
-    manual.append("### 4.7 子代理權限與工作區隔離機制\n")
+    manual.append("### 4.7 子代理權限與工作區隔離評估\n")
     manual.append(demote_headers(strip_title(files["arch_report"]), 2) + "\n")
-
-    manual.append("### 4.8 三層式路由架構\n")
-    manual.append(demote_headers(strip_title(files["routing"]), 2) + "\n")
 
     manual.append("## 五、疑難排解 (Troubleshooting)\n")
     manual.append("### 5.1 CLI 操作與限制說明\n")
