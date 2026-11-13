@@ -94,7 +94,9 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("undo", UndoCommand())
 
     registry.register("image", ImageCommand())
-    registry.register("reasoning", ReasoningCommand())
+    reasoning_cmd = ReasoningCommand()
+    registry.register("reasoning", reasoning_cmd)
+    registry.register("effort", reasoning_cmd)
 
     return registry
 

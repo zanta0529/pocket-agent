@@ -60,7 +60,7 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 | 鍵值 (Key)                 | 型別      | 預設值             | 環境變數                  | 說明                                                                       |
 | :------------------------- | :-------- | :----------------- | :------------------------ | :------------------------------------------------------------------------- |
 | `system.max_tool_rounds`   | `integer` | `20`               | `MAX_TOOL_ROUNDS`              | 單輪對話中允許 Agent 連續調用工具的最大輪次上限。                          |
-| `system.reasoning_effort`  | `string`  | `"auto"`           | `POCKET_AGENT_REASONING_EFFORT` | 預設推理強度（`auto`, `high`, `medium`, `low`, `none`），對話中可用 `/reasoning` 即時切換。 |
+| `system.reasoning_effort`  | `string`  | `"auto"`           | `POCKET_AGENT_REASONING_EFFORT` | 預設推理強度（`auto`, `high`, `medium`, `low`, `none`），對話中可用 `/reasoning` (或 `/effort`) 即時切換。 |
 | `system.log_level`         | `string`  | `"WARNING"`        | `POCKET_AGENT_LOG_LEVEL`       | 終端機與檔案的日誌記錄等級（可設 `DEBUG`, `INFO`, `WARNING`, `ERROR`）。檔案儲存於全域 `~/.pocket-agent/workspaces/<slug>/logs/agent.log`。 |
 | `system.use_sandbox`       | `string`  | `"none"`           | `USE_SANDBOX`             | 命令列執行沙盒模式（`none` 表示直接本機執行；`docker` 表示透過容器隔離）。 |
 | `system.sandbox_container` | `string`  | `"pocket_sandbox"` | `SANDBOX_CONTAINER`       | 沙盒 Docker 容器名稱。                                                     |
