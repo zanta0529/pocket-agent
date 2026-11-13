@@ -150,7 +150,7 @@ run.bat setup       # Windows
 
 ## 💻 快速上手與日常操作 (Quick Start & Usage)
 
-啟動後，終端機將呈現互動式對話面板。底端狀態列會即時顯示當前專案、使用模型、MCP 工具數與累計 Token 用量。
+啟動後，終端機將呈現互動式對話面板。底端狀態列會即時顯示當前模型、推理強度、待送附件數與累計 Token 用量。
 
 ### 終端互動快捷鍵
 
@@ -173,6 +173,7 @@ run.bat setup       # Windows
 #### 🤖 模型與工作階段管理
 
 - `/model`：啟動互動式選單，即時切換服務供應商與模型（支援 `openai`, `gemini`, `openrouter`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`）。
+- `/reasoning [auto|high|medium|low|none]`：即時調整 LLM 推理強度（預設 `auto` 交由模型／供應商決定；不帶參數時開啟互動選單，目前狀態同步顯示於底部狀態列）。
 - `/session`：啟動歷史對話光棒管理選單，支援分頁檢視、載入與刪除。
 - `/new`：結束當前會話並開啟全新乾淨對話（自動原子性保存舊紀錄，完整重設上下文記憶、待送附件與用量）。
 - `/rename <新標題>`：重新命名當前對話主題，便於日後在 `/session` 中識別。

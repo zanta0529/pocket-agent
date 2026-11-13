@@ -26,7 +26,7 @@ from pocket_agent.frontend.cli.commands.session import (
     SessionCommand,
 )
 from pocket_agent.frontend.cli.commands.subagents import AgentsCommand, ParallelCommand, SubagentCommand
-from pocket_agent.frontend.cli.commands.system import SysRegistryCommand, switch_model
+from pocket_agent.frontend.cli.commands.system import ReasoningCommand, SysRegistryCommand, switch_model
 from pocket_agent.frontend.cli.input import CliInput
 from pocket_agent.frontend.cli.render import CliRenderer
 from pocket_agent.frontend.cli.state import CliState
@@ -79,6 +79,7 @@ def _build_registry() -> CliCommandRegistry:
         registry.register(sys_cmd, SysRegistryCommand(sys_cmd))
 
     registry.register("image", ImageCommand())
+    registry.register("reasoning", ReasoningCommand())
 
     return registry
 

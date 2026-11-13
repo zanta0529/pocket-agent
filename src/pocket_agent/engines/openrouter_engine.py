@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from pocket_agent.engines.base import QuotaInfo
 from pocket_agent.engines.chat_engine import StandardChatCompletionsEngine
@@ -11,6 +12,21 @@ class OpenRouterEngine(StandardChatCompletionsEngine):
     Inherits `<think>` tag parsing and tool-call streaming from StandardChatCompletionsEngine."""
 
     provider_name = "openrouter"
+    supports_stream_usage = True
+
+    def format_reasoning_param(self, reasoning_effort: str | None) -> Any:
+        """將統一的推理強度轉換為 OpenRouter unified reasoning 參數。"""
+        effort = (reasoning_effort or "auto").strip().lower()
+        if effort in ("auto", ""):
+            return None
+        if effort == "none":
+            return {"enabled": False}
+        return {"effort": effort}
+
+    def _build_extra_body(self, reasoning_param: Any) -> dict[str, Any] | None:
+        if isinstance(reasoning_param, dict) and reasoning_param:
+            return {"reasoning": reasoning_param}
+        return None
 
     async def fetch_context_window(self) -> int | None:
         import time

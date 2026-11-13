@@ -213,6 +213,10 @@ class BaseEngine:
         """
         return QuotaInfo(is_supported=False, message="此 Provider 不支援透過 API 直接查詢額度。")
 
+    def format_reasoning_param(self, reasoning_effort: str | None) -> Any:
+        """將統一的 reasoning_effort ('auto'|'high'|'medium'|'low'|'none') 轉為供應商專屬參數。"""
+        return None
+
     async def stream_chat(
         self,
         input_items: list,

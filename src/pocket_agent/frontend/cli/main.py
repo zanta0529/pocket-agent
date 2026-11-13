@@ -435,6 +435,7 @@ class CliFrontend(FrontendStrategy):
             agent = Agent(
                 client=client, mcp=mcp, model=state.model, system_prompt=system_prompt, provider=state.provider
             )
+            state.reasoning_effort = getattr(agent, "reasoning_effort", "auto")
 
             # F3：讓 renderer 能取得 model 名稱顯示在標頭
             renderer._state = state

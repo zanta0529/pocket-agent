@@ -171,7 +171,8 @@ def toolbar(state: CliState, width: int) -> FormattedText:
         tokens_str += f" · 額度 ${used:.3f}/${state.quota_limit:.3f}"
 
     accept_status = "ON" if getattr(state, "accept_edits", False) else "OFF"
-    tokens_str += f" · Accept-edits: {accept_status}"
+    reasoning_val = str(getattr(state, "reasoning_effort", "auto") or "auto").strip().capitalize()
+    tokens_str += f" · 推理: {reasoning_val} · Accept-edits: {accept_status}"
 
     if getattr(state, "staged_update_version", None):
         tokens_str += f" · ✨ 新版 ({state.staged_update_version}) 就緒"

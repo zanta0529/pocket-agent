@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Callable, Optional
 
+from openai import NOT_GIVEN
+
 from pocket_agent.engines.base import (
     BaseEngine,
     EventImageGenerationDone,
@@ -513,6 +515,18 @@ class OpenAIResponsesEngine(BaseEngine):
                 cleaned.append(tool)
         return cleaned
 
+    def format_reasoning_param(self, reasoning_effort: str | None) -> Any:
+        """將統一的推理強度轉換為 OpenAI Responses API 參數。
+
+        auto 與 none 皆不送出 reasoning 參數（回傳 NOT_GIVEN）：
+        - auto 讓模型／後端依預設決定；
+        - none 避免對不支援 reasoning 參數的模型（如 gpt-4o）觸發 HTTP 400。
+        """
+        effort = (reasoning_effort or "auto").strip().lower()
+        if effort in ("auto", "none", ""):
+            return NOT_GIVEN
+        return {"effort": effort, "summary": "auto"}
+
     async def stream_chat(
         self,
         input_items: list,
@@ -525,6 +539,7 @@ class OpenAIResponsesEngine(BaseEngine):
 
         # 供應商輸入防禦：確保傳入 Responses API 的 function_call 與 output 嚴格成對
         input_items = self.sanitize_input_items(input_items)
+        effective_reasoning = NOT_GIVEN if reasoning_param is None else reasoning_param
 
         try:
             stream = await self.client.responses.create(
@@ -534,7 +549,7 @@ class OpenAIResponsesEngine(BaseEngine):
                 tools=tools,
                 store=False,
                 stream=True,
-                reasoning=reasoning_param,
+                reasoning=effective_reasoning,
             )
         except Exception as e:
             if self._is_recoverable_image_tool_model_error(e, tools):
@@ -547,7 +562,7 @@ class OpenAIResponsesEngine(BaseEngine):
                     tools=retry_tools,
                     store=False,
                     stream=True,
-                    reasoning=reasoning_param,
+                    reasoning=effective_reasoning,
                 )
             else:
                 raise
