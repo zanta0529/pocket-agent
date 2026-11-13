@@ -26,7 +26,17 @@ from pocket_agent.frontend.cli.commands.session import (
     SessionCommand,
 )
 from pocket_agent.frontend.cli.commands.subagents import AgentsCommand, ParallelCommand, SubagentCommand
-from pocket_agent.frontend.cli.commands.system import ReasoningCommand, SysRegistryCommand, switch_model
+from pocket_agent.frontend.cli.commands.system import (
+    AddDirCommand,
+    ConfigCommand,
+    LearnCommand,
+    ModelCommand,
+    ReasoningCommand,
+    RmDirCommand,
+    UndoCommand,
+    WorkspaceCommand,
+    switch_model,
+)
 from pocket_agent.frontend.cli.input import CliInput
 from pocket_agent.frontend.cli.render import CliRenderer
 from pocket_agent.frontend.cli.state import CliState
@@ -75,8 +85,13 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("codesearch", cs_cmd)
     registry.register("cs", cs_cmd)
 
-    for sys_cmd in ("add-dir", "rm-dir", "workspace", "model", "learn", "config", "undo"):
-        registry.register(sys_cmd, SysRegistryCommand(sys_cmd))
+    registry.register("add-dir", AddDirCommand())
+    registry.register("rm-dir", RmDirCommand())
+    registry.register("workspace", WorkspaceCommand())
+    registry.register("model", ModelCommand())
+    registry.register("learn", LearnCommand())
+    registry.register("config", ConfigCommand())
+    registry.register("undo", UndoCommand())
 
     registry.register("image", ImageCommand())
     registry.register("reasoning", ReasoningCommand())

@@ -1,5 +1,6 @@
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 from pocket_agent.engines.base import BaseEngine
 from pocket_agent.engines.chat_engine import StandardChatCompletionsEngine
@@ -35,15 +36,30 @@ ENGINE_MAP = {
 }
 
 
+def _matches_host(host: str, domain: str) -> bool:
+    """嚴格比對主機名稱是否為指定網域或其子網域，避免不完整 URL 子字串比對漏洞。"""
+    return host == domain or host.endswith(f".{domain}")
+
+
 class EngineFactory:
     @staticmethod
     def resolve_provider(client: Any) -> str:
         """未明確指定 provider 時的唯一後備：依 client 的 base_url 推論（向下相容用）。"""
-        url_str = str(getattr(client, "base_url", ""))
-        if "openai.com" in url_str or "chatgpt.com" in url_str:
+        url_str = str(getattr(client, "base_url", "")).strip()
+        host = (urlparse(url_str).hostname or "").lower()
+        if _matches_host(host, "openai.com") or _matches_host(host, "chatgpt.com"):
             return PROVIDER_OPENAI
-        if "openrouter.ai" in url_str:
+        if _matches_host(host, "openrouter.ai"):
             return PROVIDER_OPENROUTER
+        if _matches_host(host, "generativelanguage.googleapis.com"):
+            return PROVIDER_GEMINI
+        if _matches_host(host, "api.groq.com"):
+            return PROVIDER_GROQ
+        if _matches_host(host, "api.mistral.ai"):
+            return PROVIDER_MISTRAL
+        if _matches_host(host, "api.sambanova.ai"):
+            return PROVIDER_SAMBANOVA
+        log.warning("EngineFactory.resolve_provider 無法由 base_url (%s) 識別供應商，後備使用 ollama", url_str)
         return PROVIDER_OLLAMA
 
     @staticmethod
