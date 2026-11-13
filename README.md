@@ -304,7 +304,7 @@ PocketAgent 支援階層式指令疊加，讓您無需修改全域設定，即�
 ```
 
 1. **全域規範**：若有跨專案通用的開發原則（例如：一律使用繁體中文、撰寫型別註釋），請建立 `~/.pocket-agent/instructions.md`。每次啟動皆會自動作為基礎 System Prompt。
-2. **專案入口規範 (`AGENTS.md`)**：在目標專案根目錄建立 `AGENTS.md`（或 `.agents/AGENTS.md`）。啟動時將自動附加於全域規範後方，並自動遞迴展開內容中所連結的專案 Markdown 檔案。
+2. **專案入口規範 (`AGENTS.md`)**：在目標專案根目錄建立 `AGENTS.md`（或 `.agents/AGENTS.md`）。啟動時將自動附加於全域規範後方，並自動遞迴展開內容中所連結的專案 Markdown 檔案（累計上限 `24,000` 字元，超出部分改由 `read_file` 工具按需讀取）。
 3. **專案自訂技能 (`.agents/skills/`)**：在專案中建立 `.agents/skills/<skill-name>/SKILL.md`，代理將優先感知並動態載入該技能，自動覆寫全域同名技能。
 
 ---

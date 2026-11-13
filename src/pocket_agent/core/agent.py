@@ -213,8 +213,8 @@ class Agent:
         self.user_instructions: list[str] = []
         self.activity = SessionActivityTracker()
 
-        # 背景非同步預載模型視窗快取（若使用者未手動指定設定值）
-        if not config.get("system.context_window"):
+        # 背景非同步預載模型視窗快取（若為主代理且使用者未手動指定設定值）
+        if not self._is_subagent and not config.get("system.context_window"):
             try:
                 loop = asyncio.get_running_loop()
                 if loop.is_running():
@@ -990,7 +990,13 @@ class Agent:
 
         def sanitize_surrogates(obj):
             if isinstance(obj, str):
-                return obj.encode("utf-8", "replace").decode("utf-8")
+                if obj.isascii():
+                    return obj
+                try:
+                    obj.encode("utf-8")
+                    return obj
+                except UnicodeEncodeError:
+                    return obj.encode("utf-8", "replace").decode("utf-8")
             elif isinstance(obj, list):
                 return [sanitize_surrogates(i) for i in obj]
             elif isinstance(obj, dict):
@@ -1103,8 +1109,8 @@ class Agent:
                     )
 
             # ── 統一送出前上下文管理流程 ─────────────────────────────────
-            # 1. 優先嘗試清除較舊的工具輸出 (Tool Compact)
-            cleared_outputs = budget.compact(input_items, instructions, tools)
+            # 1. 優先嘗試清除較舊的工具輸出 (Tool Compact)，並直接複用該次估算結果
+            cleared_outputs, estimated_tokens = budget.compact_and_estimate(input_items, instructions, tools)
             if cleared_outputs > 0:
                 compacted_by_call_id = {
                     m["call_id"]: m["output"]
@@ -1122,10 +1128,7 @@ class Agent:
                     ):
                         hist_item["output"] = compacted_by_call_id[hist_item["call_id"]]
 
-            # 2. 估算全量 Payload (含 history、本輪工具輸出、instructions 與 tools schema)
-            estimated_tokens = budget.estimate_items(input_items, instructions, tools)
-
-            # 3. 若清除工具輸出後仍超限，嘗試以專用 Compactor 進行 LLM 歷史摘要
+            # 2. 若清除工具輸出後仍超限，嘗試以專用 Compactor 進行 LLM 歷史摘要
             if estimated_tokens > budget.compact_threshold and len(input_items) > 8:
                 from pocket_agent.core.compaction import HistoryCompactor
 
@@ -1169,7 +1172,12 @@ class Agent:
                     "或利用 `run_subagents_parallel` 將任務分拆給子代理處理。"
                 )
 
-            self.context_usage = budget.snapshot(input_items, instructions, tools)
+            self.context_usage = budget.snapshot(
+                input_items,
+                instructions,
+                tools,
+                estimated_tokens=estimated_tokens,
+            )
 
             try:
                 stream = engine.stream_chat(
