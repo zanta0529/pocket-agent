@@ -283,10 +283,12 @@ def test_cli_clean_command_output():
     ):
         asyncio.run(handler.dispatch("/clean"))
 
-    msg = renderer.message.call_args.args[0]
-    assert "保留 3 個未過期或受保護檔案" in msg
-    assert "0.12 MB" in msg
-    assert "暫存 7 天／日誌 14 天" in msg
+    messages = [call.args[0] for call in renderer.message.call_args_list]
+    assert len(messages) == 2
+    assert "保留 3 個未過期或受保護檔案" in messages[0]
+    assert "0.12 MB" in messages[0]
+    assert "暫存 7 天／日誌 14 天" in messages[0]
+    assert "/prune" in messages[1]
 
 
 def test_housekeeper_clean_logs_preserves_today_daily_log(tmp_path):

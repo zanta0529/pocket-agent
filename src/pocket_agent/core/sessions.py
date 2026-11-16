@@ -246,3 +246,74 @@ def rename_session(session_id: str, new_title: str) -> bool:
         return False
     save_session(session_id, data.get("history", []), title=clean_title)
     return True
+
+
+def _session_file_size(session_id: str) -> int:
+    try:
+        return _path(session_id).stat().st_size
+    except OSError, ValueError:
+        return 0
+
+
+def find_prunable_sessions(
+    *,
+    days: int | None = None,
+    keep: int | None = None,
+    exclude_session_id: str | None = None,
+) -> tuple[list[dict], int, int]:
+    """依天數或保留筆數找出可清理的歷史對話，永遠排除指定進行中之對話。
+
+    回傳 (候選清單[{id, title, updated_at, size_bytes}], 對話總數, 對話總位元組數)。
+    """
+    if days is None and keep is None:
+        raise ValueError("必須指定 days 或 keep 其中一項條件。")
+    if days is not None and days < 1:
+        raise ValueError("days 必須大於等於 1。")
+    if keep is not None and keep < 0:
+        raise ValueError("keep 不得為負數。")
+
+    all_sessions = list_sessions()
+    total_count = len(all_sessions)
+    total_bytes = 0
+    enriched: list[dict] = []
+    for s in all_sessions:
+        sz = _session_file_size(s["id"])
+        total_bytes += sz
+        enriched.append({**s, "size_bytes": sz})
+
+    candidates: list[dict] = []
+    if days is not None:
+        cutoff = time.time() - (days * 86400)
+        for item in enriched:
+            if exclude_session_id and item["id"] == exclude_session_id:
+                continue
+            if item.get("updated_at", 0) < cutoff:
+                candidates.append(item)
+    elif keep is not None:
+        kept = 0
+        for item in enriched:
+            if exclude_session_id and item["id"] == exclude_session_id:
+                continue
+            if kept < keep:
+                kept += 1
+            else:
+                candidates.append(item)
+
+    return candidates, total_count, total_bytes
+
+
+def prune_sessions(session_ids: list[str], exclude_session_id: str | None = None) -> tuple[int, int]:
+    """刪除指定的歷史對話清單（跳過進行中對話），回傳 (已刪除數, 釋放位元組數)。"""
+    deleted = 0
+    freed = 0
+    for sid in session_ids:
+        if exclude_session_id and sid == exclude_session_id:
+            continue
+        sz = _session_file_size(sid)
+        try:
+            delete_session(sid)
+            deleted += 1
+            freed += sz
+        except OSError, ValueError:
+            continue
+    return deleted, freed

@@ -175,6 +175,7 @@ run.bat setup       # Windows
 - `/model`：啟動互動式選單，即時切換服務供應商與模型（支援 `openai`, `gemini`, `openrouter`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`）。
 - `/reasoning [auto|high|medium|low|none]` (或 `/effort`)：即時調整 LLM 推理強度（預設 `auto` 交由模型／供應商決定；不帶參數時開啟互動選單，目前狀態同步顯示於底部狀態列）。
 - `/session`：啟動歷史對話光棒管理選單，支援分頁檢視、載入與刪除。
+- `/prune [<天數> | --keep <筆數>]` (或 `/session prune`)：手動清理過期或過多的歷史對話（預設清理超過 30 天或僅保留最近 20 筆，永遠保護進行中的對話並須二次確認）。
 - `/new`：結束當前會話並開啟全新乾淨對話（自動原子性保存舊紀錄，完整重設上下文記憶、待送附件與用量）。
 - `/rename <新標題>`：重新命名當前對話主題，便於日後在 `/session` 中識別。
 - `/resume`（啟動參數）：若想在啟動時直接接續上次未完成對話，可執行 `pocket-agent --resume`。

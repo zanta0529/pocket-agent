@@ -22,6 +22,7 @@ from pocket_agent.frontend.cli.commands.session import (
     ActivityCommand,
     CompactCommand,
     NewCommand,
+    PruneCommand,
     RenameCommand,
     SessionCommand,
 )
@@ -68,6 +69,7 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("activity", activity_cmd)
     registry.register("changes", activity_cmd)
     registry.register("new", NewCommand())
+    registry.register("prune", PruneCommand())
     registry.register("rename", RenameCommand())
     registry.register("compact", CompactCommand())
     registry.register("agents", AgentsCommand())

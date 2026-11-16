@@ -112,6 +112,8 @@ DEFAULT_HOUSEKEEPING_MAX_FILES = 100  # 單一暫存目錄允許保留的最大�
 DEFAULT_HOUSEKEEPING_MAX_SIZE_MB = 50  # 單一暫存目錄容量配額上限 (MB)
 DEFAULT_HOUSEKEEPING_BACKUP_MAX_SIZE_MB = 200  # 時光機備份目錄總容量配額上限 (MB)
 DEFAULT_HOUSEKEEPING_COOLDOWN_SECONDS = 86400  # 自動 Housekeeping 冷卻期 (24 小時)
+DEFAULT_SESSION_PRUNE_DAYS = 30  # /prune 手動清理歷史對話預設天數門檻
+DEFAULT_SESSION_PRUNE_KEEP = 20  # /prune 手動清理歷史對話預設保留最新筆數
 
 
 # ==============================================================================

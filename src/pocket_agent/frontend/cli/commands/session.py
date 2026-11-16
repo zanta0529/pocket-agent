@@ -2,7 +2,12 @@ import time
 
 from rich.text import Text
 
-from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
+from pocket_agent.frontend.cli.commands.core import (
+    CliCommand,
+    CliCommandRegistry,
+    CommandContext,
+    CommandResult,
+)
 
 
 def _load_session_into_context(ctx: CommandContext, session_id: str) -> None:
@@ -55,93 +60,226 @@ def _delete_session_by_id(ctx: CommandContext, session_id: str) -> None:
     ctx.renderer.message(f"已刪除：{title}")
 
 
-class SessionCommand(CliCommand):
-    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
-        from pocket_agent.core.sessions import list_sessions, save_session
+class _SessionInteractiveCommand(CliCommand):
+    """互動式分頁瀏覽歷史對話並執行載入或刪除。"""
 
+    _ACTIONS = {
+        "載入": _load_session_into_context,
+        "刪除": _delete_session_by_id,
+    }
+
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        from pocket_agent.core.sessions import list_sessions
+
+        sessions = list_sessions()
+        if not sessions:
+            ctx.renderer.message("尚無歷史對話。")
+            return CommandResult()
+
+        selected = await self._pick_session(ctx, sessions)
+        if not selected:
+            return CommandResult()
+
+        action = await ctx.reader.choose(
+            f"「{selected['title'][:30]}」→ 選擇動作",
+            [*self._ACTIONS.keys(), "取消"],
+        )
+        handler = self._ACTIONS.get(action)
+        if handler is not None:
+            handler(ctx, selected["id"])
+        return CommandResult()
+
+    @staticmethod
+    async def _pick_session(ctx: CommandContext, sessions: list[dict]) -> dict | None:
+        page = 0
+        page_size = 5
+        more_label = "↓ 載入更多歷史紀錄..."
+
+        while True:
+            start = page * page_size
+            end = start + page_size
+            chunk = sessions[start:end]
+
+            choices = [
+                f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(s['updated_at']))}  {s['title'][:40]}" for s in chunk
+            ]
+            if end < len(sessions):
+                choices.append(more_label)
+
+            selected_label = await ctx.reader.choose("選擇對話（↑↓ 移動光棒，Enter 確認，Esc 取消）", choices)
+            if not selected_label:
+                return None
+            if selected_label == more_label:
+                page += 1
+                continue
+            if selected_label not in choices:
+                return None
+            return chunk[choices.index(selected_label)]
+
+
+class _SessionListCommand(CliCommand):
+    """列出所有歷史對話摘要（/session list）。"""
+
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        from pocket_agent.core.sessions import list_sessions
+
+        sessions = list_sessions()
+        if not sessions:
+            ctx.renderer.message("尚無歷史對話。")
+            return CommandResult()
+
+        for i, s in enumerate(sessions, 1):
+            dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["updated_at"]))
+            ctx.renderer.message(f"{i:2}. [{s['id']}]  {s['title']}  ({dt})")
+        return CommandResult()
+
+
+class _SessionLoadCommand(CliCommand):
+    """載入指定歷史對話（/session load <id>）。"""
+
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if not args:
+            raise ValueError("用法：/session load <id>")
+        _load_session_into_context(ctx, args)
+        return CommandResult()
+
+
+class _SessionSaveCommand(CliCommand):
+    """手動儲存目前對話（/session save）。"""
+
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        from pocket_agent.core.sessions import save_session
+
+        if not ctx.agent.history:
+            ctx.renderer.message("對話歷史為空，略過儲存。")
+        elif getattr(ctx.agent, "is_sensitive_session", False) is True:
+            ctx.renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
+        else:
+            save_session(ctx.state.session_id, ctx.agent.history)
+            ctx.renderer.message(f"已存檔：{ctx.state.session_id}", "green")
+        return CommandResult()
+
+
+class _SessionDeleteCommand(CliCommand):
+    """刪除指定歷史對話（/session delete <id>）。"""
+
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        if not args:
+            raise ValueError("用法：/session delete <id>")
+        _delete_session_by_id(ctx, args)
+        return CommandResult()
+
+
+class SessionCommand(CliCommand):
+    """透過子指令註冊表派發 /session 各項操作（Command Pattern）。"""
+
+    def __init__(self) -> None:
+        self._registry = CliCommandRegistry()
+        self._registry.register("", _SessionInteractiveCommand())
+        self._registry.register("list", _SessionListCommand())
+        self._registry.register("load", _SessionLoadCommand())
+        self._registry.register("save", _SessionSaveCommand())
+        self._registry.register("delete", _SessionDeleteCommand())
+        self._registry.register("prune", PruneCommand())
+
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         parts = args.split(maxsplit=1)
         sub = parts[0] if parts else ""
         sub_arg = parts[1] if len(parts) > 1 else ""
 
-        if sub in ("", "list"):
-            sessions = list_sessions()
-            if not sessions:
-                ctx.renderer.message("尚無歷史對話。")
-                return CommandResult()
+        command = self._registry.get(sub)
+        if command is None:
+            raise ValueError("用法：/session [list | load <id> | save | delete <id> | prune]")
+        return await command.execute(ctx, sub_arg)
 
-            if sub == "list":
-                for i, s in enumerate(sessions, 1):
-                    dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["updated_at"]))
-                    ctx.renderer.message(f"{i:2}. [{s['id']}]  {s['title']}  ({dt})")
-                return CommandResult()
 
-            page = 0
-            page_size = 5
-            selected = None
+def _parse_prune_args(args: str) -> tuple[int | None, int | None]:
+    """解析 /prune 參數，回傳 (days, keep)。"""
+    raw = args.strip()
+    if not raw:
+        return (None, None)
+    parts = raw.split()
+    if len(parts) == 1 and parts[0].isdigit():
+        days = int(parts[0])
+        if days < 1:
+            raise ValueError("天數必須大於等於 1。")
+        return (days, None)
+    if len(parts) == 2 and parts[0] == "--keep" and parts[1].isdigit():
+        keep = int(parts[1])
+        return (None, keep)
+    raise ValueError("用法：/prune [<天數> | --keep <筆數>]")
 
-            while True:
-                start = page * page_size
-                end = start + page_size
-                chunk = sessions[start:end]
 
-                choices = []
-                for s in chunk:
-                    dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["updated_at"]))
-                    choices.append(f"{dt}  {s['title'][:40]}")
+def _format_bytes_human(num_bytes: int) -> str:
+    if num_bytes >= 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.2f} MB"
+    return f"{max(0.0, num_bytes / 1024):.1f} KB"
 
-                more_label = "↓ 載入更多歷史紀錄..."
-                if end < len(sessions):
-                    choices.append(more_label)
 
-                selected_label = await ctx.reader.choose("選擇對話（↑↓ 移動光棒，Enter 確認，Esc 取消）", choices)
+async def _run_prune_flow(ctx: CommandContext, args: str) -> None:
+    from pocket_agent.core.sessions import find_prunable_sessions, prune_sessions
+    from pocket_agent.system.constants import DEFAULT_SESSION_PRUNE_DAYS, DEFAULT_SESSION_PRUNE_KEEP
 
-                if not selected_label:
-                    return CommandResult()
-
-                if selected_label == more_label:
-                    page += 1
-                    continue
-
-                if selected_label in choices:
-                    idx_in_chunk = choices.index(selected_label)
-                    selected = chunk[idx_in_chunk]
-                    break
-                else:
-                    return CommandResult()
-
-            action = await ctx.reader.choose(
-                f"「{selected['title'][:30]}」→ 選擇動作",
-                ["載入", "刪除", "取消"],
-            )
-            if not action or action == "取消":
-                return CommandResult()
-
-            if action == "載入":
-                _load_session_into_context(ctx, selected["id"])
-            elif action == "刪除":
-                _delete_session_by_id(ctx, selected["id"])
-
-        elif sub == "load":
-            if not sub_arg:
-                raise ValueError("用法：/session load <id>")
-            _load_session_into_context(ctx, sub_arg)
-
-        elif sub == "save":
-            if not ctx.agent.history:
-                ctx.renderer.message("對話歷史為空，略過儲存。")
-            elif getattr(ctx.agent, "is_sensitive_session", False) is True:
-                ctx.renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
-            else:
-                save_session(ctx.state.session_id, ctx.agent.history)
-                ctx.renderer.message(f"已存檔：{ctx.state.session_id}", "green")
-
-        elif sub == "delete":
-            if not sub_arg:
-                raise ValueError("用法：/session delete <id>")
-            _delete_session_by_id(ctx, sub_arg)
+    days, keep = _parse_prune_args(args)
+    if days is None and keep is None:
+        opt_days = f"清理超過 {DEFAULT_SESSION_PRUNE_DAYS} 天之歷史對話"
+        opt_keep = f"僅保留最近 {DEFAULT_SESSION_PRUNE_KEEP} 筆歷史對話"
+        choice = await ctx.reader.choose("選擇歷史對話清理規則（目前對話將受保護）", [opt_days, opt_keep, "取消"])
+        if not choice or choice == "取消":
+            ctx.renderer.message("已取消清理歷史對話。")
+            return
+        if choice == opt_days:
+            days = DEFAULT_SESSION_PRUNE_DAYS
         else:
-            raise ValueError("用法：/session [list | load <id> | save | delete <id>]")
+            keep = DEFAULT_SESSION_PRUNE_KEEP
 
+    current_sid = getattr(ctx.state, "session_id", None)
+    candidates, total_count, total_bytes = find_prunable_sessions(
+        days=days,
+        keep=keep,
+        exclude_session_id=current_sid,
+    )
+    rule_desc = f"超過 {days} 天" if days is not None else f"僅保留最新 {keep} 筆"
+
+    if not candidates:
+        ctx.renderer.message(
+            f"✓ 沒有符合「{rule_desc}」的歷史對話需清理"
+            f"（目前共 {total_count} 筆，佔 {_format_bytes_human(total_bytes)}）。",
+            "green",
+        )
+        return
+
+    est_bytes = sum(c.get("size_bytes", 0) for c in candidates)
+    ctx.renderer.message(
+        f"找到 {len(candidates)} 筆符合「{rule_desc}」的歷史對話（預計釋放 {_format_bytes_human(est_bytes)}）：",
+        "yellow",
+    )
+    for item in candidates[:5]:
+        dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(item.get("updated_at", 0)))
+        ctx.renderer.message(f"  • [{dt}] {item.get('title', '（無標題）')}", "dim")
+    if len(candidates) > 5:
+        ctx.renderer.message(f"  … 及另外 {len(candidates) - 5} 筆", "dim")
+
+    confirm = await ctx.reader.choose(
+        f"確定要永久刪除上述 {len(candidates)} 筆歷史對話嗎？",
+        ["確認刪除", "取消"],
+    )
+    if confirm != "確認刪除":
+        ctx.renderer.message("已取消清理歷史對話。")
+        return
+
+    deleted, freed = prune_sessions([c["id"] for c in candidates], exclude_session_id=current_sid)
+    ctx.renderer.message(
+        f"✓ 已清理 {deleted} 筆歷史對話，釋放 {_format_bytes_human(freed)} 磁碟空間。",
+        "green",
+    )
+
+
+class PruneCommand(CliCommand):
+    """手動清理過期或過多的歷史對話（/prune [<天數> | --keep <筆數>]）。"""
+
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        await _run_prune_flow(ctx, args)
         return CommandResult()
 
 

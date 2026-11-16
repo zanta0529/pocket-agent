@@ -130,6 +130,10 @@ class CleanCommand(CliCommand):
                 f"（門檻：暫存 {ttl_days} 天／日誌 {log_ttl_days} 天）。",
                 "green",
             )
+        ctx.renderer.message(
+            "💡 提示：/clean 僅清理日誌、暫存與備份；若要清理歷史對話紀錄，請使用 /prune。",
+            "dim",
+        )
         return CommandResult()
 
 
