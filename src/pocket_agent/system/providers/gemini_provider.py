@@ -1,69 +1,39 @@
 import logging
 from typing import Any, List
 
-import httpx
-from openai import AsyncOpenAI
-
 from pocket_agent.system.config import config
-from pocket_agent.system.providers.base import BaseProvider
+from pocket_agent.system.constants import PROVIDER_GEMINI_OAUTH
+from pocket_agent.system.providers.base import OpenAICompatibleProvider
 
 log = logging.getLogger("pocket-agent")
 
 GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 
-class GeminiProvider(BaseProvider):
+class _GeminiBaseProvider(OpenAICompatibleProvider):
+    base_url = GEMINI_OPENAI_BASE_URL
+    fallback_models = ("gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash")
+    fail_on_auth_error = True
+
+    def _build_extra_headers(self) -> dict[str, str] | None:
+        project_id = config.get("providers.gemini.project_id")
+        return {"x-goog-user-project": str(project_id)} if project_id else None
+
+    def _parse_models_payload(self, data: dict[str, Any]) -> List[str]:
+        items = data.get("models", data.get("data", []))
+        return [m["id"] for m in items if "id" in m]
+
+
+class GeminiProvider(_GeminiBaseProvider):
     display_name = "Google Gemini API"
-
-    @classmethod
-    def setup_wizard(cls, config) -> None:
-        cls.prompt_api_key("providers.gemini.api_key", "Gemini", config)
-
-    def get_client(self) -> Any:
-        api_key = config.get("providers.gemini.api_key")
-        if not api_key:
-            raise ValueError(
-                "未設定 Gemini API Key。請設定 `providers.gemini.api_key` 或切換至 `gemini-oauth` 供應商。"
-            )
-
-        project_id = config.get("providers.gemini.project_id")
-        extra_headers = {"x-goog-user-project": str(project_id)} if project_id else None
-
-        return AsyncOpenAI(
-            api_key=api_key,
-            base_url=GEMINI_OPENAI_BASE_URL,
-            default_headers=extra_headers,
-            http_client=None,
-            timeout=httpx.Timeout(timeout=180.0, connect=10.0),
-        )
-
-    def fetch_models(self) -> List[str]:
-        api_key = config.get("providers.gemini.api_key")
-        if not api_key:
-            return []
-
-        headers = {"Authorization": f"Bearer {api_key}"}
-        project_id = config.get("providers.gemini.project_id")
-        if project_id:
-            headers["x-goog-user-project"] = str(project_id)
-
-        try:
-            with httpx.Client() as client:
-                resp = client.get(f"{GEMINI_OPENAI_BASE_URL}models", headers=headers, timeout=10)
-            if resp.status_code in (401, 403):
-                log.error(f"Gemini API auth error ({resp.status_code}): {resp.text}")
-                return []
-            resp.raise_for_status()
-            data = resp.json()
-            items = data.get("models", data.get("data", []))
-            return [m["id"] for m in items if "id" in m]
-        except Exception as e:
-            log.error(f"Gemini fetch models error: {e}")
-            return ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"]
+    config_key = "providers.gemini.api_key"
+    api_key_label = "Gemini"
+    missing_key_message = "未設定 Gemini API Key。請設定 `providers.gemini.api_key` 或切換至 `gemini-oauth` 供應商。"
 
 
-class GeminiOAuthProvider(BaseProvider):
+class GeminiOAuthProvider(_GeminiBaseProvider):
     display_name = "Google Gemini OAuth (no API key needed)"
+    missing_key_message = "無法取得 Gemini OAuth Token。"
 
     @classmethod
     def setup_wizard(cls, config) -> None:
@@ -87,13 +57,13 @@ class GeminiOAuthProvider(BaseProvider):
         if new_client_secret.strip():
             config.set("providers.gemini.client_secret", new_client_secret.strip())
 
-        token = _load_token("gemini-oauth")
+        token = _load_token(PROVIDER_GEMINI_OAUTH)
         if token and not _is_expired(token):
             console.print("[green]✓ 已登入 GEMINI-OAUTH（token 有效）[/green]")
             if not Confirm.ask("要重新登入嗎？", default=False):
                 console.print()
                 return
-            logout("gemini-oauth")
+            logout(PROVIDER_GEMINI_OAUTH)
 
         client_id_check = config.get("providers.gemini.client_id")
         if not client_id_check:
@@ -102,58 +72,22 @@ class GeminiOAuthProvider(BaseProvider):
 
         console.print("即將開啟瀏覽器，請用你的 [bold]Google 帳號[/bold] 登入並授權…\n")
         input("按 Enter 繼續…")
-        get_access_token(provider="gemini-oauth")
+        get_access_token(provider=PROVIDER_GEMINI_OAUTH)
         console.print()
 
-    def get_client(self) -> Any:
+    def _resolve_api_key(self) -> str | None:
         from pocket_agent.system.auth import get_access_token
 
-        api_key = get_access_token(provider="gemini-oauth")
-        if not api_key:
-            raise ValueError("無法取得 Gemini OAuth Token。")
+        return get_access_token(provider=PROVIDER_GEMINI_OAUTH)
 
-        project_id = config.get("providers.gemini.project_id")
-        extra_headers = {"x-goog-user-project": str(project_id)} if project_id else None
-
-        return AsyncOpenAI(
-            api_key=api_key,
-            base_url=GEMINI_OPENAI_BASE_URL,
-            default_headers=extra_headers,
-            http_client=None,
-            timeout=httpx.Timeout(timeout=180.0, connect=10.0),
-        )
-
-    def fetch_models(self) -> List[str]:
+    def _resolve_fetch_token(self) -> str | None:
         from pocket_agent.system.auth import _is_expired, _load_token, _try_refresh
 
-        token = _load_token("gemini-oauth")
+        token = _load_token(PROVIDER_GEMINI_OAUTH)
         if token and _is_expired(token):
             client_id = config.get("providers.gemini.client_id")
             client_secret = config.get("providers.gemini.client_secret", "")
-            token = _try_refresh("gemini-oauth", token, client_id, client_secret)
-
+            token = _try_refresh(PROVIDER_GEMINI_OAUTH, token, client_id, client_secret)
         if not token:
-            return []
-
-        access_token = token.get("access_token")
-        if not access_token:
-            return []
-
-        headers = {"Authorization": f"Bearer {access_token}"}
-        project_id = config.get("providers.gemini.project_id")
-        if project_id:
-            headers["x-goog-user-project"] = str(project_id)
-
-        try:
-            with httpx.Client() as client:
-                resp = client.get(f"{GEMINI_OPENAI_BASE_URL}models", headers=headers, timeout=10)
-            if resp.status_code in (401, 403):
-                log.error(f"Gemini OAuth auth error ({resp.status_code}): {resp.text}")
-                return []
-            resp.raise_for_status()
-            data = resp.json()
-            items = data.get("models", data.get("data", []))
-            return [m["id"] for m in items if "id" in m]
-        except Exception as e:
-            log.error(f"Gemini OAuth fetch models error: {e}")
-            return ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"]
+            return None
+        return token.get("access_token")

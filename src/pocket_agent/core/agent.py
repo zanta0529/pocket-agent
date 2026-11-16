@@ -19,7 +19,7 @@ from pocket_agent.core.context_budget import (
     resolve_context_window,
 )
 from pocket_agent.core.files import FileUploader
-from pocket_agent.core.subagents import get_subagent, is_subagent_tool, subagent_tools
+from pocket_agent.core.subagents import get_subagent, subagent_tools
 from pocket_agent.core.tool_registry import default_tool_registry
 from pocket_agent.engines.base import BaseEngine
 from pocket_agent.extensions.hooks import run_hooks
@@ -37,7 +37,6 @@ from pocket_agent.system.constants import (
     DEFAULT_STREAM_RETRY_BASE_SEC,
     LOG_BACKUP_COUNT,
     LOG_FILE_MAX_BYTES,
-    WEB_RESEARCH_CHECKPOINT_INTERVAL,
 )
 from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool  # noqa: F401
 from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool  # noqa: F401
@@ -219,14 +218,7 @@ class Agent:
 
         # 背景非同步預載模型視窗快取（若為主代理且使用者未手動指定設定值）
         if not self._is_subagent and not config.get("system.context_window"):
-            try:
-                loop = asyncio.get_running_loop()
-                if loop.is_running():
-                    task = loop.create_task(self.engine.fetch_context_window())
-                    self._bg_tasks.add(task)
-                    task.add_done_callback(self._bg_tasks.discard)
-            except RuntimeError:
-                pass
+            self.spawn_background_task(self.engine.fetch_context_window())
 
     @property
     def engine(self) -> BaseEngine:
@@ -238,6 +230,21 @@ class Agent:
         if self._engine_cache is None or self._engine_cache[0] != key:
             self._engine_cache = (key, EngineFactory.create(provider, self.client, self.model))
         return self._engine_cache[1]
+
+    def spawn_background_task(self, coro) -> asyncio.Task | None:
+        """建立並追蹤背景非同步任務，於結束時自動從集合移除。"""
+        try:
+            loop = asyncio.get_running_loop()
+            if not loop.is_running():
+                coro.close()
+                return None
+            task = loop.create_task(coro)
+        except RuntimeError:
+            coro.close()
+            return None
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return task
 
     def _emit(self, kind: str, data="") -> None:
         callback = self.on_stream
@@ -346,40 +353,12 @@ class Agent:
         self.history.append({"role": "assistant", "content": reply})
 
         if not self._is_subagent:
-            # --- Auto-Learn Mechanism ---
+            from pocket_agent.core.auto_learn import AutoLearnService
             from pocket_agent.system.config import config
 
-            if config.get("system.auto_learn") is True:
-                # 簡單判定：如果最後的回覆帶有成功或修復等正面字眼，或者沒有連續錯誤
-                if "成功" in reply or "修復" in reply or "完成" in reply:
-                    log.info("Auto-Learn 觸發：背景進行知識萃取...")
-                    try:
-                        # 不 await 阻塞主流程，直接丟入背景 task
-                        async def background_learn():
-                            skill_md = await self.extract_skill()
-                            if skill_md and "對話歷史不足" not in skill_md:
-                                import re
-                                import time
-
-                                from pocket_agent.extensions.skills import save_skill, sync_index
-                                from pocket_agent.system.registry import parse_frontmatter
-
-                                meta, body = parse_frontmatter(skill_md)
-                                raw_name = str(meta.get("name") or f"auto-skill-{int(time.time())}")
-                                safe_name = re.sub(r"[^a-zA-Z0-9_-]", "-", raw_name).strip("-")
-                                if not safe_name:
-                                    safe_name = f"auto-skill-{int(time.time())}"
-                                desc = str(meta.get("description") or "自動從對話歷史萃取之經驗技能")
-                                skill_path = save_skill(safe_name, desc, body.strip() or skill_md, scope="global")
-                                log.info(f"Auto-Learn 完成：已寫入 {skill_path}")
-                                if self.workspace_dirs:
-                                    sync_index(self.workspace_dirs)
-
-                        task = asyncio.create_task(background_learn())
-                        self._bg_tasks.add(task)
-                        task.add_done_callback(self._bg_tasks.discard)
-                    except Exception as e:
-                        log.warning(f"Auto-Learn 背景作業失敗: {e}")
+            if config.get("system.auto_learn") is True and AutoLearnService.should_trigger(reply):
+                log.info("Auto-Learn 觸發：背景進行知識萃取...")
+                self.spawn_background_task(AutoLearnService.learn_from_history(self))
 
             await run_sync(
                 run_hooks,
@@ -565,38 +544,38 @@ class Agent:
             return True, f"已從額外授權目錄中移除：{target}"
         return False, f"找不到該授權目錄：{target}"
 
-    async def extract_skill(self) -> str:
-        """非同步呼叫 LLM 總結對話為 Skill Markdown。"""
-        if len(self.history) < 2:
-            return "對話歷史不足，無法萃取 Skill。"
-
-        history_text = "\n".join(f"[{m['role']}] {str(m.get('content', ''))[:500]}" for m in self.history[-10:])
-        summary_prompt = (
-            "請將以下最近的對話內容，萃取出可重用的行為或知識，撰寫成符合 Skill 格式的 Markdown 內容。\n"
-            "不用加上額外的開場白，直接輸出內容。不要包含 ```markdown 等標籤。\n\n"
-            f"{history_text}"
-        )
-
-        extractor = Agent(
+    def create_ephemeral_subagent(
+        self,
+        system_prompt: str,
+        *,
+        reasoning_effort: str = "none",
+        model: str | None = None,
+        allowed_tools: list[str] | None = None,
+        max_tool_rounds: int | None = None,
+    ) -> "Agent":
+        """建立臨時子代理實例，統一繼承連線、工作區與權限設定（Factory）。"""
+        sub = Agent(
             client=self.client,
             mcp=self.mcp,
-            model=self.model,
-            system_prompt="你是一個擅長知識萃取與歸納的軟體架構師，專門撰寫精準、具體的 Markdown 技能教學指南。",
+            provider=self.provider or self.engine.provider_name,
+            model=model or self.model,
+            system_prompt=system_prompt,
             is_subagent=True,
-            reasoning_effort="none",
+            allowed_tools=allowed_tools,
+            reasoning_effort=reasoning_effort,
+            max_tool_rounds=max_tool_rounds or self.max_tool_rounds,
         )
+        sub.workspace_dirs = list(self.workspace_dirs)
+        sub.on_confirm = self.on_confirm
+        sub.accept_edits = self.accept_edits
+        sub.user_instructions = list(self.user_instructions)
+        return sub
 
-        _, summary, _ = await extractor.chat(summary_prompt)
+    async def extract_skill(self) -> str:
+        """非同步呼叫 LLM 總結對話為 Skill Markdown。"""
+        from pocket_agent.core.auto_learn import AutoLearnService
 
-        summary = summary.strip()
-        if summary.startswith("```markdown"):
-            summary = summary[11:]
-        elif summary.startswith("```"):
-            summary = summary[3:]
-        if summary.endswith("```"):
-            summary = summary[:-3]
-
-        return summary.strip()
+        return await AutoLearnService.extract_skill(self)
 
     def _needs_mcp_confirm(self, name: str, args: dict) -> bool:
         """判斷 MCP 工具是否需要人工確認；路徑型 safe_read 工具僅在工作區內才免確認。
@@ -819,21 +798,13 @@ class Agent:
         if not sub_config:
             raise ValueError(f"Unknown subagent: {name}")
 
-        sub = Agent(
-            client=self.client,
-            mcp=self.mcp,
-            provider=self.provider or self.engine.provider_name,
-            model=sub_config.get("model") or self.model,
+        sub = self.create_ephemeral_subagent(
             system_prompt=sub_config.get("system_prompt") or sub_config.get("prompt", "You are a helpful assistant."),
-            is_subagent=True,
+            model=sub_config.get("model"),
             allowed_tools=sub_config.get("allowed_tools"),
             reasoning_effort=sub_config.get("reasoning_effort") or self.reasoning_effort,
-            max_tool_rounds=sub_config.get("max_tool_rounds") or self.max_tool_rounds,
+            max_tool_rounds=sub_config.get("max_tool_rounds"),
         )
-        sub.workspace_dirs = list(self.workspace_dirs)
-        sub.on_confirm = self.on_confirm
-        sub.accept_edits = self.accept_edits
-        sub.user_instructions = list(self.user_instructions)
 
         text_buffer = []
 
@@ -1043,16 +1014,11 @@ class Agent:
         if callable(on_summarizing):
             on_summarizing()
 
-        summarizer = Agent(
-            client=self.client,
-            mcp=self.mcp,
-            model=self.model,
-            provider=self.provider,
+        summarizer = self.create_ephemeral_subagent(
             system_prompt=(
                 "你是一個專業的報告彙整助手。請閱讀以下由多個平行子代理回傳的獨立原始報告，"
                 "並為使用者彙整成一份結構清晰、去蕪存菁的最終總結報告。請直接輸出報告內容，不需多餘的問候語。"
             ),
-            is_subagent=True,
             reasoning_effort="none",
         )
         try:
@@ -1154,8 +1120,10 @@ class Agent:
 
         cached_repo_map, cached_skills_prompt = await run_sync(_compute_static_context)
 
-        web_tool_call_count = 0
-        web_convergence_warned = False
+        from pocket_agent.core.context_pipeline import ContextPipeline
+        from pocket_agent.core.tool_registry import WebResearchGuard
+
+        pipeline = ContextPipeline(budget, engine)
         try:
             s_lim = getattr(self, "web_research_soft_limit", None)
             web_soft_limit = int(s_lim if s_lim is not None else config.get("agent.web_research_soft_limit", 5))
@@ -1163,6 +1131,7 @@ class Agent:
             web_hard_limit = int(h_lim if h_lim is not None else config.get("agent.web_research_hard_limit", 10))
         except TypeError, ValueError:
             web_soft_limit, web_hard_limit = 5, 10
+        web_guard = WebResearchGuard(web_soft_limit, web_hard_limit)
 
         max_rounds = self.max_tool_rounds
         round_idx = 0
@@ -1214,68 +1183,17 @@ class Agent:
                     )
 
             # ── 統一送出前上下文管理流程 ─────────────────────────────────
-            # 1. 優先嘗試清除較舊的工具輸出 (Tool Compact)，並直接複用該次估算結果
-            cleared_outputs, estimated_tokens = budget.compact_and_estimate(input_items, instructions, tools)
-            if cleared_outputs > 0:
-                compacted_by_call_id = {
-                    m["call_id"]: m["output"]
-                    for m in input_items
-                    if isinstance(m, dict)
-                    and m.get("type") == "function_call_output"
-                    and isinstance(m.get("output"), str)
-                    and m["output"].startswith("[舊工具輸出已清除")
-                }
-                for hist_item in self.history:
-                    if (
-                        isinstance(hist_item, dict)
-                        and hist_item.get("type") == "function_call_output"
-                        and hist_item.get("call_id") in compacted_by_call_id
-                    ):
-                        hist_item["output"] = compacted_by_call_id[hist_item["call_id"]]
-
-            # 2. 若清除工具輸出後仍超限，嘗試以專用 Compactor 進行 LLM 歷史摘要
-            if estimated_tokens > budget.compact_threshold and len(input_items) > 8:
-                from pocket_agent.core.compaction import HistoryCompactor
-
-                compactor = HistoryCompactor(engine)
-                new_items, compacted = await compactor.compact_history(
-                    input_items, cancel_check=lambda: self.cancel_requested
-                )
-                if compacted:
-                    input_items = new_items
-                    self.history = list(new_items)
-                    estimated_tokens = budget.estimate_items(input_items, instructions, tools)
-
-            # 4. 若摘要後仍超限且歷史輪次過長，才安全滑動視窗裁減中間對話
-            if estimated_tokens > budget.compact_threshold and len(input_items) > 14:
-                log.warning(f"Context overflow predicted (est. {estimated_tokens} tokens). Truncating history safely.")
-                from pocket_agent.core.compaction import ensure_paired_tool_calls
-
-                # 保留初始使用者目標，避免遺失任務核心條件
-                head_msgs = [m for m in input_items[:2] if m.get("role") == "user"]
-                notice = {
-                    "role": "system",
-                    "content": "[System] 中間的對話歷史已被系統自動截斷以避免 Context Overflow。",
-                }
-                tail_msgs = input_items[-10:]
-                # 確保保留之尾端工具呼叫嚴格閉合成對，避免拋出 400 No tool output found 錯誤
-                input_items = head_msgs + [notice] + ensure_paired_tool_calls(tail_msgs)
-                self.history = list(input_items)
-                estimated_tokens = budget.estimate_items(input_items, instructions, tools)
-
-            # 5. 若經過上述所有縮減策略後，Payload 總量依然超過可用輸入預算，明確終止送出
-            if estimated_tokens > budget.effective_input_budget:
-                log.error(
-                    "Payload 估算 tokens (%d) 仍超出可用輸入預算 (%d)，終止當輪送出。",
-                    estimated_tokens,
-                    budget.effective_input_budget,
-                )
-                return "", self._stopped_reply(
-                    f"【上下文預算防護】當前對話與工具定義總量 (約 {estimated_tokens:,} tokens) "
-                    f"已超過可用輸入預算 ({budget.effective_input_budget:,} tokens)。\n\n"
-                    "系統已自動攔截此請求以防止 API 崩潰。建議作法：請縮減 System Prompt、使用 `/clear` 清除對話，"
-                    "或利用 `run_subagents_parallel` 將任務分拆給子代理處理。"
-                )
+            prep = await pipeline.prepare(
+                input_items,
+                self.history,
+                instructions,
+                tools,
+                cancel_check=lambda: self.cancel_requested,
+            )
+            input_items = prep.input_items
+            estimated_tokens = prep.estimated_tokens
+            if prep.overflow_error is not None:
+                return "", self._stopped_reply(prep.overflow_error)
 
             self.context_usage = budget.snapshot(
                 input_items,
@@ -1430,15 +1348,13 @@ class Agent:
             parallel_results: dict[str, tuple[str | None, BaseException | None]] = {}
             if len(fc_list) > 1:
                 parallel_batch: list[tuple[dict, dict, str]] = []
-                projected_web = web_tool_call_count
+                web_guard.reset_projection()
                 for p_fc in fc_list:
                     p_name = p_fc["name"]
                     if self.allowed_tools is not None and p_name not in self.allowed_tools:
                         break
-                    if is_web_tool(p_name):
-                        projected_web += 1
-                        if projected_web > web_hard_limit:
-                            break
+                    if not web_guard.allow_parallel_batch(p_name):
+                        break
                     p_raw = p_fc["arguments"].strip()
                     try:
                         p_args = json.loads(p_raw) if p_raw else {}
@@ -1494,31 +1410,26 @@ class Agent:
                     self._append_tool_pair(input_items, fc, result)
                     continue
 
-                if is_web_tool(fc["name"]):
-                    web_tool_call_count += 1
-                    if web_tool_call_count > web_hard_limit:
-                        result = (
-                            f"[調研上限攔截] 本輪網路檢索次數已達上限（{web_hard_limit} 次）。"
-                            "系統已暫停執行新的網路調研，請立即根據目前累積之資訊完成回答或寫入檔案。"
-                        )
-                        try:
-                            blocked_args = json.loads(fc["arguments"].strip() or "{}")
-                            if isinstance(blocked_args, dict):
-                                self.activity.record_tool_result(fc["name"], blocked_args, result)
-                        except Exception:
-                            pass
-                        self._emit(
-                            "tool_done",
-                            {
-                                "call_id": fc["call_id"],
-                                "name": fc["name"],
-                                "result": result,
-                                "ok": True,
-                            },
-                        )
-                        self._append_tool_pair(input_items, fc, result)
-                        all_errors = False
-                        continue
+                blocked_result = web_guard.check_limit(fc["name"])
+                if blocked_result is not None:
+                    try:
+                        blocked_args = json.loads(fc["arguments"].strip() or "{}")
+                        if isinstance(blocked_args, dict):
+                            self.activity.record_tool_result(fc["name"], blocked_args, blocked_result)
+                    except Exception:
+                        pass
+                    self._emit(
+                        "tool_done",
+                        {
+                            "call_id": fc["call_id"],
+                            "name": fc["name"],
+                            "result": blocked_result,
+                            "ok": True,
+                        },
+                    )
+                    self._append_tool_pair(input_items, fc, blocked_result)
+                    all_errors = False
+                    continue
 
                 self._emit(
                     "tool_start",
@@ -1538,6 +1449,7 @@ class Agent:
                 args: dict = {}
                 existed_before: bool | None = None
                 generated_fpath: Path | None = None
+                handler = default_tool_registry.resolve(fc["name"])
 
                 try:
                     raw = fc["arguments"].strip()
@@ -1587,7 +1499,6 @@ class Agent:
                         if self.cancel_requested:
                             return thinking, self._stopped_reply(text)
 
-                        handler = default_tool_registry.resolve(fc["name"])
                         exec_res = await handler.execute(fc["name"], args, fc["call_id"], self)
                         existed_before = exec_res.existed_before
                         generated_fpath = exec_res.generated_path
@@ -1624,28 +1535,9 @@ class Agent:
                     else:
                         ok_status = True
                         all_errors = False
-                        if (
-                            is_web_tool(fc["name"])
-                            and web_tool_call_count >= web_soft_limit
-                            and not web_convergence_warned
-                        ):
-                            web_convergence_warned = True
-                            result += (
-                                f"\n\n[系統提醒：調研收斂] 你已執行多次網路檢索（累計 {web_tool_call_count} 次）。"
-                                "請檢視現有資訊是否充足，優先開始產出解答或建立檔案，避免無休止調研。"
-                            )
                 except asyncio.CancelledError:
                     log.warning("TOOL cancelled during execution: name=%s", fc["name"])
-                    if is_shell_tool(fc["name"]):
-                        from pocket_agent.tools.shell import interrupt_active_shell_processes
-
-                        killed = interrupt_active_shell_processes()
-                        if killed > 0:
-                            result = f"[操作已由使用者取消中斷，進行中之 {killed} 個 Shell 子進程樹已嘗試強制終止]"
-                        else:
-                            result = "[操作已由使用者取消中斷，Shell 指令未執行或已終止]"
-                    else:
-                        result = "[操作已由使用者取消中斷，工作可能仍在非同步執行緒中收尾，未產出後續回應]"
+                    result = handler.on_cancel(fc["name"], self)
                     self._emit(
                         "tool_done",
                         {
@@ -1658,12 +1550,7 @@ class Agent:
                     self._append_tool_pair(input_items, fc, result)
                     raise
                 except Exception as e:
-                    is_sensitive = False
-                    if hasattr(self, "mcp") and hasattr(self.mcp, "is_sensitive_tool"):
-                        is_sensitive = self.mcp.is_sensitive_tool(fc["name"])
-                    else:
-                        is_sensitive = fc["name"].startswith("rhel_") or fc["name"].startswith("win_rdp_")
-                    if is_sensitive:
+                    if handler.is_sensitive(fc["name"], self):
                         self.is_sensitive_session = True
                         log.error("TOOL error name=%s type=%s", fc["name"], type(e).__name__)
                         result = "[ERROR] 敏感診斷工具執行失敗，未回傳原始例外內容。"
@@ -1680,6 +1567,13 @@ class Agent:
                     generated_path=generated_fpath,
                 )
 
+                result = web_guard.decorate_result(
+                    fc["name"],
+                    result,
+                    ok_status=ok_status,
+                    is_sensitive_session=self.is_sensitive_session,
+                )
+
                 self._emit(
                     "tool_done",
                     {
@@ -1690,25 +1584,8 @@ class Agent:
                     },
                 )
 
-                if not ok_status and is_web_tool(fc["name"]) and is_soft_web_error(result):
+                if not ok_status and web_guard.is_soft_error(fc["name"], result):
                     all_errors = False
-                elif (
-                    ok_status
-                    and is_web_tool(fc["name"])
-                    and web_tool_call_count < web_soft_limit
-                    and web_tool_call_count > 0
-                    and web_tool_call_count % WEB_RESEARCH_CHECKPOINT_INTERVAL == 0
-                    and not self.is_sensitive_session
-                ):
-                    from pocket_agent.system.paths import scratch_dir
-
-                    notes_path = scratch_dir() / "notes.md"
-                    result += (
-                        f"\n\n[系統提醒：階段性筆記] 已完成 {web_tool_call_count} 次網路檢索。"
-                        "若研究仍需多步探索，建議適時使用 `write_to_file` "
-                        f"將已確認的重點與有效網址記錄至 `{notes_path}`，"
-                        "以防範長對話壓縮或網路瞬斷造成資訊遺失。"
-                    )
                 self._append_tool_pair(input_items, fc, result)
 
             # 連續兩輪全部都是錯誤 → 強制讓模型直接回報給使用者
@@ -1738,65 +1615,9 @@ class Agent:
         return "", "（已達工具呼叫上限）"
 
     async def _execute_core_tool(self, name: str, args: dict, call_id: str) -> str:
-        """處理由 Agent Core 內建負責的特化工具邏輯，避免 _run_loop 過度肥大。"""
-        import json
-
-        from pocket_agent.tools.fs import wrap_external_content
-
-        if name == "run_subagents_parallel":
-            tasks = args.get("tasks", [])
-            if not tasks:
-                return "[ERROR] 未提供任何子代理任務。"
-            coros = [self._run_subagent(t) for t in tasks]
-            results = await asyncio.gather(*coros, return_exceptions=True)
-
-            combined = []
-            require_save_prompt = False
-            for idx, res in enumerate(results):
-                t_name = tasks[idx].get("name", f"Subagent-{idx}")
-                sa_def = get_subagent(t_name)
-                if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
-                    require_save_prompt = True
-
-                if isinstance(res, asyncio.CancelledError):
-                    combined.append(f"【子代理 {t_name} 已取消】")
-                elif isinstance(res, BaseException):
-                    combined.append(f"【子代理 {t_name} 錯誤】\n{res}")
-                else:
-                    combined.append(str(res))
-
-            result = wrap_external_content("\n\n".join(combined))
-            if require_save_prompt:
-                result += self._build_save_report_prompt(is_parallel=True)
-            return result
-
-        if name == "ask_question":
-            loop = asyncio.get_running_loop()
-            fut = loop.create_future()
-
-            def set_result_threadsafe(res):
-                loop.call_soon_threadsafe(fut.set_result, res)
-
-            self._emit(
-                "ask_question",
-                {
-                    "call_id": call_id,
-                    "questions": args.get("questions", []),
-                    "callback": set_result_threadsafe,
-                },
-            )
-            result_dict = await fut
-            return json.dumps(result_dict, ensure_ascii=False)
-
-        if is_subagent_tool(name):
-            result = await self._run_subagent(args)
-            result = wrap_external_content(result)
-            sa_def = get_subagent(args.get("name", ""))
-            if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
-                result += self._build_save_report_prompt(is_parallel=False)
-            return result
-
-        return f"[ERROR] 未知的核心工具: {name}"
+        """向下相容介面：委派給 ToolRegistry 對應之核心工具 Handler。"""
+        res = await default_tool_registry.resolve(name).execute(name, args, call_id, self)
+        return res.output
 
     # ── Helpers ───────────────────────────────────
 

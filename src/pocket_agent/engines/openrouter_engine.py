@@ -31,21 +31,10 @@ class OpenRouterEngine(StandardChatCompletionsEngine):
     async def fetch_context_window(self) -> int | None:
         import time
 
-        import httpx
-
         try:
             api_key = getattr(self.client, "api_key", None)
             headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-            existing = getattr(self.client, "_client", None)
-            if (
-                isinstance(httpx.AsyncClient, type)
-                and isinstance(existing, httpx.AsyncClient)
-                and not existing.is_closed
-            ):
-                resp = await existing.get("https://openrouter.ai/api/v1/models", headers=headers, timeout=10.0)
-            else:
-                async with httpx.AsyncClient(timeout=10.0) as http_client:
-                    resp = await http_client.get("https://openrouter.ai/api/v1/models", headers=headers)
+            resp = await self._http_get("https://openrouter.ai/api/v1/models", headers=headers, timeout=10.0)
             if resp.status_code != 200:
                 return None
             data = resp.json().get("data", [])
@@ -61,32 +50,17 @@ class OpenRouterEngine(StandardChatCompletionsEngine):
         return None
 
     async def get_quota(self) -> QuotaInfo:
-        import httpx
-
         try:
             api_key = self.client.api_key
         except AttributeError:
             return QuotaInfo(is_supported=False, message="無法取得 API Key")
 
         try:
-            existing = getattr(self.client, "_client", None)
-            if (
-                isinstance(httpx.AsyncClient, type)
-                and isinstance(existing, httpx.AsyncClient)
-                and not existing.is_closed
-            ):
-                response = await existing.get(
-                    "https://openrouter.ai/api/v1/key",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    timeout=10.0,
-                )
-            else:
-                async with httpx.AsyncClient() as http_client:
-                    response = await http_client.get(
-                        "https://openrouter.ai/api/v1/key",
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        timeout=10.0,
-                    )
+            response = await self._http_get(
+                "https://openrouter.ai/api/v1/key",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10.0,
+            )
             response.raise_for_status()
             data = response.json().get("data", {})
 

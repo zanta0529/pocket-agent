@@ -30,12 +30,9 @@ async def switch_model(
     from pocket_agent.system.config import config
 
     if not config.get("system.context_window"):
-        import asyncio
-
         try:
-            task = asyncio.create_task(agent.engine.fetch_context_window())
-            agent._bg_tasks.add(task)
-            task.add_done_callback(agent._bg_tasks.discard)
+            if hasattr(agent, "spawn_background_task"):
+                agent.spawn_background_task(agent.engine.fetch_context_window())
         except Exception:
             pass
 

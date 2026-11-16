@@ -15,6 +15,51 @@ from pocket_agent.engines.base import (
 log = logging.getLogger("pocket-agent")
 
 
+class ThinkTagStreamParser:
+    """串流 `<think>` / `</think>` 標籤狀態機（State Pattern），支援跨 chunk 部分匹配。"""
+
+    def __init__(self) -> None:
+        self.in_think_block = False
+        self.buffer = ""
+
+    def feed(self, delta: str) -> list[EventText | EventThinking]:
+        events: list[EventText | EventThinking] = []
+        self.buffer += delta
+        while self.buffer:
+            tag = "</think>" if self.in_think_block else "<think>"
+            event_cls = EventThinking if self.in_think_block else EventText
+            pos = self.buffer.find(tag)
+            if pos != -1:
+                if pos > 0:
+                    events.append(event_cls(self.buffer[:pos]))
+                self.in_think_block = not self.in_think_block
+                self.buffer = self.buffer[pos + len(tag) :]
+                continue
+
+            partial_len = 0
+            for i in range(len(tag) - 1, 0, -1):
+                if self.buffer.endswith(tag[:i]):
+                    partial_len = i
+                    break
+            if partial_len:
+                if len(self.buffer) > partial_len:
+                    events.append(event_cls(self.buffer[:-partial_len]))
+                self.buffer = self.buffer[-partial_len:]
+            else:
+                events.append(event_cls(self.buffer))
+                self.buffer = ""
+            break
+        return events
+
+    def flush(self) -> list[EventText | EventThinking]:
+        if not self.buffer:
+            return []
+        event_cls = EventThinking if self.in_think_block else EventText
+        evt = event_cls(self.buffer)
+        self.buffer = ""
+        return [evt]
+
+
 class StandardChatCompletionsEngine(BaseEngine):
     """
     Standard Engine that uses the standard OpenAI /v1/chat/completions API.
@@ -132,9 +177,8 @@ class StandardChatCompletionsEngine(BaseEngine):
             log.info(f"Standard chat completion failed: {e}")
             raise
 
-        in_think_block = False
         tool_calls_buffer = {}
-        content_buffer = ""
+        think_parser = ThinkTagStreamParser()
 
         try:
             async for chunk in stream:
@@ -178,50 +222,8 @@ class StandardChatCompletionsEngine(BaseEngine):
                     yield EventThinking(delta.reasoning_content)
 
                 if delta and delta.content:
-                    content_buffer += delta.content
-                    while content_buffer:
-                        if not in_think_block:
-                            start_pos = content_buffer.find("<think>")
-                            if start_pos != -1:
-                                if start_pos > 0:
-                                    yield EventText(content_buffer[:start_pos])
-                                in_think_block = True
-                                content_buffer = content_buffer[start_pos + 7 :]
-                                continue
-                            else:
-                                partial_match = False
-                                for i in range(len("<think>") - 1, 0, -1):
-                                    if content_buffer.endswith("<think>"[:i]):
-                                        if len(content_buffer) > i:
-                                            yield EventText(content_buffer[:-i])
-                                        content_buffer = content_buffer[-i:]
-                                        partial_match = True
-                                        break
-                                if not partial_match:
-                                    yield EventText(content_buffer)
-                                    content_buffer = ""
-                                break
-                        else:
-                            end_pos = content_buffer.find("</think>")
-                            if end_pos != -1:
-                                if end_pos > 0:
-                                    yield EventThinking(content_buffer[:end_pos])
-                                in_think_block = False
-                                content_buffer = content_buffer[end_pos + 8 :]
-                                continue
-                            else:
-                                partial_match = False
-                                for i in range(len("</think>") - 1, 0, -1):
-                                    if content_buffer.endswith("</think>"[:i]):
-                                        if len(content_buffer) > i:
-                                            yield EventThinking(content_buffer[:-i])
-                                        content_buffer = content_buffer[-i:]
-                                        partial_match = True
-                                        break
-                                if not partial_match:
-                                    yield EventThinking(content_buffer)
-                                    content_buffer = ""
-                                break
+                    for evt in think_parser.feed(delta.content):
+                        yield evt
 
                 if usage:
                     total_tokens = (
@@ -230,11 +232,8 @@ class StandardChatCompletionsEngine(BaseEngine):
                     if total_tokens > 0:
                         yield EventUsage(total_tokens, usage_field(usage, "prompt_tokens"))
 
-            if content_buffer:
-                if not in_think_block:
-                    yield EventText(content_buffer)
-                else:
-                    yield EventThinking(content_buffer)
+            for evt in think_parser.flush():
+                yield evt
 
         finally:
             if stream:
