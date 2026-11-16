@@ -101,7 +101,7 @@ def update():
 
 @main.command()
 @click.argument("prompt")
-@click.option("-o", "--output", default="image.png", help="輸出檔名（存在時自動加 -v2）")
+@click.option("-o", "--output", default="image.png", help="輸出檔名（自動附加 yyyyMMdd_hhmmss 時間戳記）")
 @click.option("-i", "--input", "inputs", multiple=True, help="參考圖（可多個，圖生圖/編輯用）")
 @click.option("--size", default="auto", type=click.Choice(["auto", "1024x1024", "1536x1024", "1024x1536"]))
 @click.option("--quality", default="auto", type=click.Choice(["auto", "low", "medium", "high"]))

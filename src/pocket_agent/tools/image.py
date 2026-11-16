@@ -9,6 +9,7 @@ item 就帶有 base64 PNG。計費走 ChatGPT Plus/Pro 訂閱配額，不吃 API
 
 import base64
 import inspect
+from datetime import datetime
 from pathlib import Path
 
 from pocket_agent.system.auth import get_model, get_provider_client
@@ -58,7 +59,7 @@ def disable_model_param() -> None:
 
 
 def save_image_b64(b64_png: str, output_path: str | Path = "generated_images/image.png") -> Path:
-    """base64 PNG 存檔（自動避開既有檔名），回傳實際路徑。"""
+    """base64 PNG 存檔（自動加上 yyyyMMdd_hhmmss 時間戳記並避開既有檔名），回傳實際路徑。"""
     out = _next_available(Path(output_path).expanduser().resolve())
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(base64.b64decode(b64_png))
@@ -109,12 +110,15 @@ def _image_part(path: str | Path, workspace_dirs: list[str] | None = None) -> di
 
 
 def _next_available(path: Path) -> Path:
-    """避免覆蓋：存在時自動加 -v2、-v3 後綴。"""
-    if not path.exists():
-        return path
+    """加上本地時間戳記（yyyyMMdd_hhmmss），同秒碰撞時附加 -2、-3 後綴避免覆蓋。"""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = f"{path.stem}-{ts}"
+    candidate = path.with_name(f"{base_name}{path.suffix}")
+    if not candidate.exists():
+        return candidate
     n = 2
     while True:
-        candidate = path.with_name(f"{path.stem}-v{n}{path.suffix}")
+        candidate = path.with_name(f"{base_name}-{n}{path.suffix}")
         if not candidate.exists():
             return candidate
         n += 1
