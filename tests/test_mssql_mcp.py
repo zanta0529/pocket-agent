@@ -448,3 +448,77 @@ def test_mssql_describe_schema_includes_length_precision_default_indexes_and_fks
     assert "- UQ_Orders_Email: UNIQUE (email)" in out
     assert "[Foreign Keys]" in out
     assert "- user_id -> Users.id" in out
+
+
+def test_mssql_inspect_health_detects_heap_missing_pk_disabled_index_and_untrusted_fk(monkeypatch):
+    """驗證 mssql_inspect_health 能偵測 Heap 表、缺少主鍵、未用空間碎片、停用索引、未信任約束與 Identity 水位。"""
+    _set_full_mssql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    mb = 1024 * 1024
+    table_rows = [
+        # (schema, table, has_pk, is_heap, row_count, reserved_bytes, used_bytes)
+        ("dbo", "Orders", 1, 0, 12000, 100 * mb, 70 * mb),
+        ("sales", "StagingLogs", 0, 1, 500, 2 * mb, 2 * mb),
+    ]
+    idx_rows = [
+        ("dbo", "Orders", "IX_Orders_Cust", 0, 0, "CustomerId"),
+        ("dbo", "Orders", "IX_Orders_Cust_Date", 0, 0, "CustomerId"),
+        ("dbo", "Orders", "IX_Orders_Cust_Date", 0, 0, "OrderDate"),
+        ("dbo", "Orders", "IX_Orders_OldDisabled", 0, 1, "LegacyCode"),
+    ]
+    cons_rows = [
+        ("dbo", "Orders", "FK_Orders_Customers", "FOREIGN KEY", 0, 1),
+    ]
+    ident_rows = [
+        ("dbo", "Orders", "OrderTypeId", "tinyint", 220),
+    ]
+    cursor.fetchall.side_effect = [table_rows, idx_rows, cons_rows, ident_rows]
+
+    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+        out = mssql_mcp.mssql_inspect_health()
+
+    assert "[MSSQL Health Summary]" in out
+    assert "[Missing PK] sales.StagingLogs 缺少主鍵" in out
+    assert "[Heap Table] sales.StagingLogs 為堆積表" in out
+    assert "[Unused Space] Orders 未用保留空間達 30.00 MB (30.0%)" in out
+    assert "[Redundant Index] Orders: IX_Orders_Cust (CustomerId) 為 IX_Orders_Cust_Date" in out
+    assert "[Disabled Index] Orders.IX_Orders_OldDisabled 處於停用狀態" in out
+    assert "[Constraint] Orders 的 FOREIGN KEY 約束 FK_Orders_Customers 處於 未受信任" in out
+    assert "[Identity] Orders.OrderTypeId (TINYINT) 水位已達 86.3% (220/255)" in out
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+
+
+def test_mssql_inspect_health_dmv_permission_degradation_and_identifier_guard(monkeypatch):
+    """驗證當無 VIEW DATABASE STATE 權限時自動降級至基本目錄查詢，並攔截非法識別字。"""
+    _set_full_mssql_env(monkeypatch)
+
+    # 1. 攔截非法識別字
+    with patch("mcp_servers.mssql_mcp._get_readonly_connection") as mock_conn:
+        bad_out = mssql_mcp.mssql_inspect_health(table_name="Orders; DROP TABLE Users")
+        assert bad_out.startswith("[ERROR]")
+        mock_conn.assert_not_called()
+
+    # 2. 模擬第一次查詢 sys.dm_db_partition_stats 拋出權限錯誤，自動降級第二次查詢
+    conn, cursor = _make_fake_conn()
+    call_idx = 0
+
+    def fake_execute(sql, params=()):
+        nonlocal call_idx
+        call_idx += 1
+        if call_idx == 1 and "dm_db_partition_stats" in sql:
+            raise RuntimeError("VIEW DATABASE STATE permission was denied")
+
+    cursor.execute.side_effect = fake_execute
+    cursor.fetchall.side_effect = [
+        [("dbo", "Customers", 1, 0, None, 0, 0)],
+        [],
+        [],
+        [],
+    ]
+
+    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+        out = mssql_mcp.mssql_inspect_health(table_name="dbo.Customers")
+
+    assert "VIEW DATABASE STATE 權限，已自動降級" in out
+    assert "- Customers: Structure=Clustered, PK=Yes" in out

@@ -106,10 +106,18 @@ def test_module_aliases_backward_compatibility():
 
 
 def test_mcp_servers_output_chars_aligned():
-    """驗證獨立 MCP 伺服器模組亦同步採用 12,000 字元上限。"""
-    from mcp_servers import browser_mcp, rhel_mcp, sqlite_mcp, win_rdp_mcp
+    """驗證獨立 MCP 伺服器模組亦同步採用 12,000 字元上限與資料庫健康檢查安全閾值。"""
+    from mcp_servers import _db_common, browser_mcp, mssql_mcp, mysql_mcp, rhel_mcp, sqlite_mcp, win_rdp_mcp
 
     assert rhel_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert win_rdp_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert browser_mcp.MAX_TEXT == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert sqlite_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
+    assert mysql_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
+    assert mssql_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
+    assert _db_common.DB_HEALTH_MAX_TABLES == constants.DB_HEALTH_MAX_TABLES == 200
+    assert mysql_mcp.MYSQL_CHECK_TABLE_MAX_BYTES == constants.MYSQL_CHECK_TABLE_MAX_BYTES == 2 * 1024**3
+    assert sqlite_mcp.SQLITE_QUICK_CHECK_MAX_BYTES == constants.SQLITE_QUICK_CHECK_MAX_BYTES == 500 * 1024**2
+    assert _db_common.DB_FRAGMENTATION_WARN_RATIO == constants.DB_FRAGMENTATION_WARN_RATIO == 0.20
+    assert _db_common.DB_FRAGMENTATION_MIN_FREE_BYTES == constants.DB_FRAGMENTATION_MIN_FREE_BYTES == 10 * 1024**2
+    assert _db_common.DB_AUTOINC_WARN_RATIO == constants.DB_AUTOINC_WARN_RATIO == 0.75

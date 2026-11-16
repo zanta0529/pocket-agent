@@ -73,7 +73,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 - **關鍵安全不變量**：
   - **確認回呼契約（`on_confirm`）**：檔案寫入工具（`fs.py`）與敏感操作僅在 `decision is True` 時放行；若回傳非空字串（使用者自訂指示）或 `(False, str)` 等任何非 `True` 值，一律視為拒絕且不得執行寫入或建立備份。CLI 端透過 `ConfirmationBridge` 統一橋接同步／非同步確認流程，啟用 `Accept-edits` 時須同步套用至主代理與所有 `active_subagents`。
   - **指令白名單邊界（`permissions.py`）**：自訂命令白名單必須完整保留外層 `strip()` 後之參數與引號邊界（大小寫敏感），且 `shlex` 分詞失敗（如未閉合引號）時強制 fail-closed 拒絕。
-  - **唯讀資料庫與 RDP 隔離**：資料庫 MCP 強制單一唯讀查詢；`mysql_mcp.py` 採用引號感知之註解正規化（拒絕 `/*!` 可執行註解與引號內反斜線跳脫）與串流游標（`SSCursor`／`buffered=False`，截斷時直接中斷連線不排空剩餘資料）；`win_rdp_mcp.py` 嚴格綁定本工具啟動之系統可信 `mstsc.exe` PID、映像路徑與 `TscShellContainerClass` 視窗類別，截圖強制使用 `ImageGrab.grab(window=hwnd)` 且失焦時立即中止。
+  - **唯讀資料庫與 RDP 隔離**：資料庫 MCP 強制單一唯讀查詢與受控健康診斷（`*_inspect_health` 採零鎖定詮釋資料／DMV／受限 `PRAGMA` 巡檢；`mysql_check_table` 限定單表 `QUICK`／`FAST` 模式與 `2 GB` 容量熔斷；`sqlite_inspect_health` 之 `PRAGMA quick_check` 具 `500 MB` 檔案大小熔斷）；`mysql_mcp.py` 採用引號感知之註解正規化（拒絕 `/*!` 可執行註解與引號內反斜線跳脫）與串流游標（`SSCursor`／`buffered=False`，截斷時直接中斷連線不排空剩餘資料）；`win_rdp_mcp.py` 嚴格綁定本工具啟動之系統可信 `mstsc.exe` PID、映像路徑與 `TscShellContainerClass` 視窗類別，截圖強制使用 `ImageGrab.grab(window=hwnd)` 且失焦時立即中止。
   - **引擎工具集邊界**：Chat Completions 串流僅在 `finish_reason == "tool_calls"` 時派發工具呼叫；OpenAI 引擎對 `image_generation` 的參數回退重試僅限移除當輪 `tools` 副本中的 `model` 欄位，嚴禁在 `tools=[]`（如最後一輪禁用工具）時透過回呼重新注入工具。
 - **原生工具優先**：進行檔案讀寫或搜尋時，必須優先使用內建原生工具（如 `search_files`、`read_file`）。**嚴禁**使用 shell 指令包裝 `echo`、`sed`、`grep`、`Get-ChildItem` 或 `python -c` 處理檔案讀寫與搜尋操作。
 - **環境限制與隔離**：
