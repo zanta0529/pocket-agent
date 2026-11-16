@@ -14,7 +14,7 @@ from pocket_agent.core.subagents import is_subagent_tool
 from pocket_agent.extensions.skills import call_skill_tool, is_skill_tool
 from pocket_agent.tools.doc import call_doc_tool, is_doc_tool
 from pocket_agent.tools.document import call_document_tool, is_document_tool
-from pocket_agent.tools.fs import call_fs_tool, is_fs_tool
+from pocket_agent.tools.fs import call_fs_tool, call_scratch_tool, is_fs_tool, is_scratch_tool
 from pocket_agent.tools.shell import call_shell_tool, is_shell_tool
 from pocket_agent.tools.web import call_web_tool, is_web_tool
 
@@ -87,6 +87,27 @@ class ShellToolHandler(ToolHandler):
         result = await run_sync(fn, name, args, agent.on_confirm)
         if not isinstance(result, str) or not result.startswith(("[使用者拒絕", "[操作已由使用者取消", "[ERROR]")):
             agent.activity.apply_workspace_diff(before_snap, agent.workspace_dirs)
+        return ToolExecutionResult(output=result)
+
+
+class ScratchToolHandler(ToolHandler):
+    """沙盒專用筆記工具轉接器（免確認、非平行安全、敏感會話阻斷）。"""
+
+    def matches(self, name: str) -> bool:
+        return is_scratch_tool(name)
+
+    async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
+        if getattr(agent, "is_sensitive_session", False):
+            return ToolExecutionResult(
+                output="[ERROR] 敏感會話期間基於資安政策，禁止將內容寫入沙盒筆記。",
+            )
+        fn = _resolve_callable("call_scratch_tool", call_scratch_tool)
+        result = await run_sync(fn, name, args)
+        if isinstance(result, str) and result.startswith("[SUCCESS]") and "：" in result:
+            note_path = result.split("：", 1)[-1].strip()
+            paths = getattr(agent, "scratch_note_paths", None)
+            if isinstance(paths, list) and note_path and note_path not in paths:
+                paths.append(note_path)
         return ToolExecutionResult(output=result)
 
 
@@ -222,6 +243,7 @@ default_tool_registry = ToolRegistry(
         SkillToolHandler(),
         CoreSubagentToolHandler(),
         ShellToolHandler(),
+        ScratchToolHandler(),
         FsToolHandler(),
         DocumentToolHandler(),
         WebToolHandler(),

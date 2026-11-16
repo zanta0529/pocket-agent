@@ -314,21 +314,39 @@ class Housekeeper:
             label="截圖暫存",
         )
 
-    def clean_scratch_checkpoints(self, ttl_days: int | None = None) -> tuple[int, int]:
-        """清理 `scratch/` 下超過 TTL 的研究檢查點暫存檔（保護 notes.md／todo.md）。"""
-        ckpt = self.scratch_dir / "research_checkpoint.md"
-        if not ckpt.is_file():
-            return (0, 0)
-        effective_ttl = ttl_days if ttl_days is not None else self.ttl_days
-        ttl_threshold = time.time() - (effective_ttl * 86400)
-        try:
-            st = ckpt.stat()
-            if st.st_mtime < ttl_threshold:
-                ckpt.unlink()
-                return (1, st.st_size)
-        except OSError as e:
-            log.warning("刪除過期研究檢查點失敗: %s: %s", ckpt, e)
-        return (0, 0)
+    def clean_scratch_notes(
+        self,
+        ttl_days: int | None = None,
+        max_files: int | None = None,
+        max_size_mb: int | None = None,
+    ) -> tuple[int, int]:
+        """清理 `scratch/notes/` 下的過期研究筆記暫存檔（保護 notes.md／todo.md）。"""
+        return self._clean_dir_with_quota(
+            self.scratch_dir / "notes",
+            "*.md",
+            protected_names=_PROTECTED_SCRATCH_FILES,
+            ttl_days=ttl_days,
+            max_files=max_files,
+            max_size_mb=max_size_mb,
+            label="研究筆記",
+        )
+
+    def clean_scratch_checkpoints(
+        self,
+        ttl_days: int | None = None,
+        max_files: int | None = None,
+        max_size_mb: int | None = None,
+    ) -> tuple[int, int]:
+        """清理 `scratch/` 下超過 TTL 或配額的研究檢查點暫存檔（保護 notes.md／todo.md）。"""
+        return self._clean_dir_with_quota(
+            self.scratch_dir,
+            "research_checkpoint*.md",
+            protected_names=_PROTECTED_SCRATCH_FILES,
+            ttl_days=ttl_days,
+            max_files=max_files,
+            max_size_mb=max_size_mb,
+            label="研究檢查點",
+        )
 
     def clean_logs(self, ttl_days: int | None = None) -> tuple[int, int]:
         """清理 `logs/` 下的過期舊日誌（保護當日按日日誌與向下相容的 agent.log）。
@@ -533,9 +551,10 @@ class Housekeeper:
             c1, b1 = sub_hk.clean_scratch_outputs(ttl_days, max_files, max_size_mb)
             c2, b2 = sub_hk.clean_scratch_clipboard(ttl_days, max_files, max_size_mb)
             c3, b3 = sub_hk.clean_logs(ttl_days)
-            c4, b4 = sub_hk.clean_scratch_checkpoints(ttl_days)
-            total_cleaned += c1 + c2 + c3 + c4
-            total_freed += b1 + b2 + b3 + b4
+            c4, b4 = sub_hk.clean_scratch_checkpoints(ttl_days, max_files, max_size_mb)
+            c5, b5 = sub_hk.clean_scratch_notes(ttl_days, max_files, max_size_mb)
+            total_cleaned += c1 + c2 + c3 + c4 + c5
+            total_freed += b1 + b2 + b3 + b4 + b5
 
             # 若該非當前工作區清理後已完全不含任何檔案，移除空工作區骨架
             try:
@@ -574,8 +593,9 @@ class Housekeeper:
         c1, b1 = sub_hk.clean_scratch_outputs(ttl_days, max_files, max_size_mb)
         c2, b2 = sub_hk.clean_scratch_clipboard(ttl_days, max_files, max_size_mb)
         c3, b3 = sub_hk.clean_logs(ttl_days)
-        c4, b4 = sub_hk.clean_scratch_checkpoints(ttl_days)
-        return (c1 + c2 + c3 + c4, b1 + b2 + b3 + b4)
+        c4, b4 = sub_hk.clean_scratch_checkpoints(ttl_days, max_files, max_size_mb)
+        c5, b5 = sub_hk.clean_scratch_notes(ttl_days, max_files, max_size_mb)
+        return (c1 + c2 + c3 + c4 + c5, b1 + b2 + b3 + b4 + b5)
 
     def _collect_managed_stats(self) -> tuple[int, int]:
         """統計目前受管目錄（工作區暫存／日誌與全域備份）中現存的檔案數與總位元組數。"""
@@ -584,6 +604,8 @@ class Housekeeper:
         targets: list[tuple[Path, str | None]] = [
             (self.scratch_dir / "outputs", "*.log"),
             (self.scratch_dir / "clipboard", "screenshot_*.png"),
+            (self.scratch_dir / "notes", "*.md"),
+            (self.scratch_dir, "research_checkpoint*.md"),
             (self.log_dir, None),
         ]
         for directory, pattern in targets:
@@ -598,14 +620,6 @@ class Housekeeper:
                     file_count += 1
                 except OSError:
                     continue
-
-        ckpt = self.scratch_dir / "research_checkpoint.md"
-        if ckpt.is_file():
-            try:
-                total_bytes += ckpt.stat().st_size
-                file_count += 1
-            except OSError:
-                pass
 
         backups_dir = user_dir() / "backups"
         if backups_dir.is_dir():
@@ -638,6 +652,7 @@ class Housekeeper:
             scratch_count, scratch_bytes = self.clean_scratch_outputs()
             clipboard_count, clipboard_bytes = self.clean_scratch_clipboard()
             ckpt_count, ckpt_bytes = self.clean_scratch_checkpoints()
+            notes_count, notes_bytes = self.clean_scratch_notes()
             log_count, log_bytes = self.clean_logs()
             backup_count, backup_bytes = self.clean_backups()
             other_ws_count, other_ws_bytes = self.clean_all_workspaces()
@@ -648,6 +663,7 @@ class Housekeeper:
                 + scratch_count
                 + clipboard_count
                 + ckpt_count
+                + notes_count
                 + log_count
                 + backup_count
                 + other_ws_count
@@ -658,6 +674,7 @@ class Housekeeper:
                 + scratch_bytes
                 + clipboard_bytes
                 + ckpt_bytes
+                + notes_bytes
                 + log_bytes
                 + backup_bytes
                 + other_ws_bytes

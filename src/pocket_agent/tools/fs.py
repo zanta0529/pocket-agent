@@ -187,6 +187,88 @@ def is_fs_tool(name: str) -> bool:
     return any(t["name"] == name for t in FS_TOOLS)
 
 
+SCRATCH_TOOLS = [
+    {
+        "type": "function",
+        "name": "write_scratch_note",
+        "description": (
+            "Write or append research notes to the isolated sandbox scratch directory "
+            "(never modifies workspace files and requires no confirmation)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filename": {
+                    "type": "string",
+                    "description": "Relative filename under scratch/notes/ (e.g., 'research_123.md').",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Markdown or plain text note content.",
+                },
+                "append": {
+                    "type": "boolean",
+                    "description": "If true, append to existing note instead of overwriting.",
+                },
+            },
+            "required": ["filename", "content"],
+        },
+    }
+]
+
+
+def is_scratch_tool(name: str) -> bool:
+    return any(t["name"] == name for t in SCRATCH_TOOLS)
+
+
+def _resolve_scratch_note_path(filename: str) -> Path:
+    """解析並驗證沙盒筆記路徑，強制隔離於 scratch_dir()/notes 之下。"""
+    from pocket_agent.system.paths import scratch_dir
+
+    cleaned = str(filename or "").strip().strip("'\"")
+    if not cleaned:
+        raise ValueError("filename 不可為空")
+    rel = Path(cleaned)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise ValueError("安全限制：僅允許相對於沙盒筆記目錄的檔案路徑")
+    for part in rel.parts:
+        if part.lower().startswith(".env") or part.lower() == ".git":
+            raise ValueError(f"安全限制：禁止使用敏感檔名 ({part})")
+
+    notes_root = (scratch_dir() / "notes").resolve(strict=False)
+    target = (notes_root / rel).resolve(strict=False)
+    if not target.is_relative_to(notes_root) or target == notes_root:
+        raise ValueError("安全限制：路徑超出沙盒筆記目錄範圍")
+    return target
+
+
+def call_scratch_tool(name: str, args: dict) -> str:
+    """執行沙盒專用筆記工具（僅寫入 scratch_dir()/notes，不碰觸工作區）。"""
+    if name != "write_scratch_note":
+        return f"[ERROR] 未知的沙盒工具名稱: {name}"
+    try:
+        filename = args.get("filename", "")
+        content = args.get("content")
+        if content is None:
+            return "[ERROR] 缺少必填參數: content"
+        append = bool(args.get("append", False))
+        target = _resolve_scratch_note_path(str(filename))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        text = str(content)
+        if append and target.exists():
+            with open(target, "a", encoding="utf-8") as f:
+                f.write(text)
+            return f"[SUCCESS] 已附加沙盒研究筆記至：{target}"
+        target.write_text(text, encoding="utf-8")
+        return f"[SUCCESS] 已將沙盒研究筆記寫入：{target}"
+    except ValueError as e:
+        log.warning("Scratch Tool %s 執行失敗: %s", name, e)
+        return f"[ERROR] 沙盒筆記寫入失敗: {e}"
+    except Exception as e:
+        log.exception("Scratch Tool %s 執行發生未預期錯誤", name)
+        return f"[ERROR] 沙盒筆記寫入發生未預期錯誤: {e}"
+
+
 def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = None) -> Path:
     """解析路徑並驗證是否在安全的工作區內，同時阻擋敏感檔案。"""
     try:
