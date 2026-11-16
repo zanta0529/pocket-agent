@@ -1,8 +1,12 @@
 """Housekeeper 自動管家維護單元測試。"""
 
+import asyncio
 import os
 import time
+from unittest.mock import Mock, patch
 
+from pocket_agent.frontend.cli.commands import CommandHandler
+from pocket_agent.frontend.cli.state import CliState
 from pocket_agent.system.housekeeping import Housekeeper
 
 
@@ -139,3 +143,146 @@ def test_housekeeper_cooldown_mechanism(tmp_path):
     hk.mark_executed()
     # 剛執行完畢應在冷卻期
     assert hk.is_in_cooldown() is True
+
+
+def test_housekeeper_env_config_parsing(tmp_path, monkeypatch):
+    hk = Housekeeper(
+        target_log_dir=tmp_path / "logs",
+        target_scratch_dir=tmp_path / "scratch",
+    )
+    monkeypatch.setenv("POCKET_AGENT_HOUSEKEEPING_ENABLED", "false")
+    assert hk.is_enabled is False
+    monkeypatch.setenv("POCKET_AGENT_HOUSEKEEPING_ENABLED", "0")
+    assert hk.is_enabled is False
+    monkeypatch.setenv("POCKET_AGENT_HOUSEKEEPING_ENABLED", "true")
+    assert hk.is_enabled is True
+
+    monkeypatch.setenv("POCKET_AGENT_HOUSEKEEPING_TTL_DAYS", "not_a_number")
+    assert hk.ttl_days == 7
+    monkeypatch.setenv("POCKET_AGENT_HOUSEKEEPING_TTL_DAYS", "-5")
+    assert hk.ttl_days == 1
+    monkeypatch.setenv("POCKET_AGENT_HOUSEKEEPING_MAX_FILES", "0")
+    assert hk.max_files == 1
+    monkeypatch.setenv("POCKET_AGENT_HOUSEKEEPING_MAX_SIZE_MB", "0")
+    assert hk.max_size_mb == 1
+
+
+def test_housekeeper_clean_scratch_clipboard_and_checkpoints(tmp_path):
+    scratch_dir = tmp_path / "scratch"
+    clip_dir = scratch_dir / "clipboard"
+    clip_dir.mkdir(parents=True)
+
+    now = time.time()
+    ten_days_ago = now - (10 * 86400)
+
+    old_shot = clip_dir / "screenshot_20260101_000000_abcd1234.png"
+    old_shot.write_bytes(b"old png")
+    os.utime(old_shot, (ten_days_ago, ten_days_ago))
+
+    new_shot = clip_dir / "screenshot_20261116_000000_efgh5678.png"
+    new_shot.write_bytes(b"new png")
+
+    ckpt = scratch_dir / "research_checkpoint.md"
+    ckpt.write_text("old checkpoint", encoding="utf-8")
+    os.utime(ckpt, (ten_days_ago, ten_days_ago))
+
+    hk = Housekeeper(
+        target_log_dir=tmp_path / "logs",
+        target_scratch_dir=scratch_dir,
+    )
+    c1, _ = hk.clean_scratch_clipboard(ttl_days=7)
+    c2, _ = hk.clean_scratch_checkpoints(ttl_days=7)
+
+    assert c1 == 1
+    assert not old_shot.exists()
+    assert new_shot.exists()
+    assert c2 == 1
+    assert not ckpt.exists()
+
+
+def test_housekeeper_clean_all_workspaces(tmp_path, monkeypatch):
+    fake_user_dir = tmp_path / "user"
+    ws_other = fake_user_dir / "workspaces" / "other-ws"
+    (ws_other / "scratch" / "outputs").mkdir(parents=True)
+    old_out = ws_other / "scratch" / "outputs" / "tool_1.log"
+    old_out.write_text("stale", encoding="utf-8")
+    ten_days_ago = time.time() - (10 * 86400)
+    os.utime(old_out, (ten_days_ago, ten_days_ago))
+
+    cur_ws = fake_user_dir / "workspaces" / "current-ws"
+    (cur_ws / "logs").mkdir(parents=True)
+    (cur_ws / "scratch").mkdir(parents=True)
+
+    monkeypatch.setattr("pocket_agent.system.housekeeping.user_dir", lambda: fake_user_dir)
+
+    hk = Housekeeper(
+        target_log_dir=cur_ws / "logs",
+        target_scratch_dir=cur_ws / "scratch",
+    )
+    cleaned, freed = hk.clean_all_workspaces(ttl_days=7)
+    assert cleaned == 1
+    assert freed > 0
+    assert not old_out.exists()
+
+
+def test_housekeeper_run_cleanup_returns_stats_and_respects_cooldown(tmp_path, monkeypatch):
+    fake_user_dir = tmp_path / "user"
+    ws_dir = fake_user_dir / "workspaces" / "ws"
+    log_d = ws_dir / "logs"
+    scratch_d = ws_dir / "scratch"
+    (scratch_d / "outputs").mkdir(parents=True)
+    log_d.mkdir(parents=True)
+
+    active_log = log_d / "agent.log"
+    active_log.write_text("active", encoding="utf-8")
+    fresh_out = scratch_d / "outputs" / "fresh.log"
+    fresh_out.write_text("fresh", encoding="utf-8")
+
+    monkeypatch.setattr("pocket_agent.system.housekeeping.user_dir", lambda: fake_user_dir)
+
+    hk = Housekeeper(
+        target_log_dir=log_d,
+        target_scratch_dir=scratch_d,
+        cwd=tmp_path,
+        timestamp_file=tmp_path / "ts",
+    )
+    res1 = hk.run_cleanup(force=False)
+    assert res1["status"] == "success"
+    assert res1["cleaned_files"] == 0
+    assert res1["remaining_files"] == 2
+    assert res1["ttl_days"] == 7
+    assert res1["log_ttl_days"] == 14
+
+    res2 = hk.run_cleanup(force=False)
+    assert res2["status"] == "cooldown"
+
+    res3 = hk.run_cleanup(force=True)
+    assert res3["status"] == "success"
+    assert res3["remaining_files"] == 2
+
+
+def test_cli_clean_command_output():
+    renderer = Mock()
+    agent = Mock()
+    agent.workspace_dirs = []
+    handler = CommandHandler(agent, CliState("openai", "model"), Mock(), renderer, [])
+
+    with patch(
+        "pocket_agent.system.housekeeping.default_housekeeper.run_cleanup",
+        return_value={
+            "status": "success",
+            "cleaned_files": 0,
+            "freed_bytes": 0,
+            "freed_mb": 0.0,
+            "remaining_files": 3,
+            "remaining_mb": 0.12,
+            "ttl_days": 7,
+            "log_ttl_days": 14,
+        },
+    ):
+        asyncio.run(handler.dispatch("/clean"))
+
+    msg = renderer.message.call_args.args[0]
+    assert "保留 3 個未過期或受保護檔案" in msg
+    assert "0.12 MB" in msg
+    assert "暫存 7 天／日誌 14 天" in msg

@@ -6,6 +6,7 @@
 """
 
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,40 @@ DEFAULT_MAX_SIZE_MB = 50
 COOLDOWN_SECONDS = 86400  # 24 小時冷卻期
 
 _PROTECTED_SCRATCH_FILES = {"notes.md", "todo.md"}
+_TRUE_STRINGS = {"1", "true", "yes", "on"}
+_FALSE_STRINGS = {"0", "false", "no", "off"}
+
+
+def _parse_bool_config(val: Any, default: bool = True) -> bool:
+    """解析設定值為布林值，正確處理環境變數常見的文字型態。"""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        normalized = val.strip().lower()
+        if normalized in _TRUE_STRINGS:
+            return True
+        if normalized in _FALSE_STRINGS:
+            return False
+        log.warning("無效的布林設定值 '%s'，退回預設值 %s", val, default)
+        return default
+    return bool(val)
+
+
+def _parse_int_config(val: Any, default: int, min_value: int = 1, name: str = "") -> int:
+    """解析設定值為整數，無效時退回預設值並套用下限保護。"""
+    if val is None:
+        return default
+    try:
+        parsed = int(val)
+    except ValueError, TypeError:
+        log.warning("無效的整數設定值 %s='%s'，退回預設值 %d", name or "config", val, default)
+        return default
+    if parsed < min_value:
+        log.warning("設定值 %s=%d 低於下限 %d，已自動調整為 %d", name or "config", parsed, min_value, min_value)
+        return min_value
+    return parsed
 
 
 class Housekeeper:
@@ -33,31 +68,55 @@ class Housekeeper:
         cwd: Path | None = None,
         timestamp_file: Path | None = None,
     ):
-        self.log_dir = target_log_dir or log_dir()
-        self.scratch_dir = target_scratch_dir or scratch_dir()
-        self.cwd = cwd or Path.cwd()
+        self._custom_log_dir = target_log_dir
+        self._custom_scratch_dir = target_scratch_dir
+        self._custom_cwd = cwd
         self._custom_timestamp_file = timestamp_file
         self._is_custom_scratch = target_scratch_dir is not None
+        self._lock = threading.Lock()
+
+    @property
+    def log_dir(self) -> Path:
+        return self._custom_log_dir if self._custom_log_dir is not None else log_dir()
+
+    @property
+    def scratch_dir(self) -> Path:
+        return self._custom_scratch_dir if self._custom_scratch_dir is not None else scratch_dir()
+
+    @property
+    def cwd(self) -> Path:
+        return self._custom_cwd if self._custom_cwd is not None else Path.cwd()
 
     @property
     def is_enabled(self) -> bool:
-        cfg = config.get("system.housekeeping_enabled")
-        return bool(cfg) if cfg is not None else True
+        return _parse_bool_config(config.get("system.housekeeping_enabled"), True)
 
     @property
     def ttl_days(self) -> int:
-        cfg = config.get("system.housekeeping_ttl_days")
-        return int(cfg) if cfg is not None else DEFAULT_TTL_DAYS
+        return _parse_int_config(
+            config.get("system.housekeeping_ttl_days"),
+            DEFAULT_TTL_DAYS,
+            min_value=1,
+            name="housekeeping_ttl_days",
+        )
 
     @property
     def max_files(self) -> int:
-        cfg = config.get("system.housekeeping_max_files")
-        return int(cfg) if cfg is not None else DEFAULT_MAX_FILES
+        return _parse_int_config(
+            config.get("system.housekeeping_max_files"),
+            DEFAULT_MAX_FILES,
+            min_value=1,
+            name="housekeeping_max_files",
+        )
 
     @property
     def max_size_mb(self) -> int:
-        cfg = config.get("system.housekeeping_max_size_mb")
-        return int(cfg) if cfg is not None else DEFAULT_MAX_SIZE_MB
+        return _parse_int_config(
+            config.get("system.housekeeping_max_size_mb"),
+            DEFAULT_MAX_SIZE_MB,
+            min_value=1,
+            name="housekeeping_max_size_mb",
+        )
 
     def _get_timestamp_file(self) -> Path:
         if self._custom_timestamp_file is not None:
@@ -324,6 +383,69 @@ class Housekeeper:
 
         return (total_cleaned, total_freed)
 
+    def _clean_fallback_dirs(
+        self,
+        ttl_days: int | None = None,
+        max_files: int | None = None,
+        max_size_mb: int | None = None,
+    ) -> tuple[int, int]:
+        """清理 paths.py 在 OSError 時的 fallback 全域目錄（~/.pocket-agent/logs 與 scratch）。"""
+        fallback_log = user_dir() / "logs"
+        fallback_scratch = user_dir() / "scratch"
+        if not fallback_log.exists() and not fallback_scratch.exists():
+            return (0, 0)
+
+        try:
+            cur_log = self.log_dir.resolve()
+            cur_scratch = self.scratch_dir.resolve()
+            if fallback_log.resolve() == cur_log and fallback_scratch.resolve() == cur_scratch:
+                return (0, 0)
+        except OSError:
+            pass
+
+        sub_hk = Housekeeper(
+            target_log_dir=fallback_log,
+            target_scratch_dir=fallback_scratch,
+            cwd=self.cwd,
+        )
+        c1, b1 = sub_hk.clean_scratch_outputs(ttl_days, max_files, max_size_mb)
+        c2, b2 = sub_hk.clean_scratch_clipboard(ttl_days, max_files, max_size_mb)
+        c3, b3 = sub_hk.clean_logs(ttl_days)
+        c4, b4 = sub_hk.clean_scratch_checkpoints(ttl_days)
+        return (c1 + c2 + c3 + c4, b1 + b2 + b3 + b4)
+
+    def _collect_managed_stats(self) -> tuple[int, int]:
+        """統計目前工作區受管目錄中現存的檔案數與總位元組數。"""
+        file_count = 0
+        total_bytes = 0
+        targets: list[tuple[Path, str | None]] = [
+            (self.scratch_dir / "outputs", "*.log"),
+            (self.scratch_dir / "clipboard", "screenshot_*.png"),
+            (self.log_dir, None),
+        ]
+        for directory, pattern in targets:
+            if not directory.is_dir():
+                continue
+            entries = directory.glob(pattern) if pattern else directory.iterdir()
+            for p in entries:
+                if not p.is_file():
+                    continue
+                try:
+                    total_bytes += p.stat().st_size
+                    file_count += 1
+                except OSError:
+                    continue
+
+        ckpt = self.scratch_dir / "research_checkpoint.md"
+        if ckpt.is_file():
+            try:
+                total_bytes += ckpt.stat().st_size
+                file_count += 1
+            except OSError:
+                pass
+
+        return (file_count, total_bytes)
+
     def run_cleanup(self, force: bool = False) -> dict[str, Any]:
         """執行完整 Housekeeping 維護。
 
@@ -332,26 +454,39 @@ class Housekeeper:
         if not force and not self.is_enabled:
             return {"status": "disabled", "cleaned_files": 0, "freed_bytes": 0}
 
-        if not force and self.is_in_cooldown():
-            return {"status": "cooldown", "cleaned_files": 0, "freed_bytes": 0}
+        with self._lock:
+            if not force and self.is_in_cooldown():
+                return {"status": "cooldown", "cleaned_files": 0, "freed_bytes": 0}
 
-        cleaned_root, root_bytes = self._clean_legacy_root_logs_with_bytes()
-        scratch_count, scratch_bytes = self.clean_scratch_outputs()
-        clipboard_count, clipboard_bytes = self.clean_scratch_clipboard()
-        ckpt_count, ckpt_bytes = self.clean_scratch_checkpoints()
-        log_count, log_bytes = self.clean_logs()
-        other_ws_count, other_ws_bytes = self.clean_all_workspaces()
+            cleaned_root, root_bytes = self._clean_legacy_root_logs_with_bytes()
+            scratch_count, scratch_bytes = self.clean_scratch_outputs()
+            clipboard_count, clipboard_bytes = self.clean_scratch_clipboard()
+            ckpt_count, ckpt_bytes = self.clean_scratch_checkpoints()
+            log_count, log_bytes = self.clean_logs()
+            other_ws_count, other_ws_bytes = self.clean_all_workspaces()
+            fb_count, fb_bytes = self._clean_fallback_dirs()
 
-        total_files = cleaned_root + scratch_count + clipboard_count + ckpt_count + log_count + other_ws_count
-        total_bytes = root_bytes + scratch_bytes + clipboard_bytes + ckpt_bytes + log_bytes + other_ws_bytes
+            total_files = (
+                cleaned_root + scratch_count + clipboard_count + ckpt_count + log_count + other_ws_count + fb_count
+            )
+            total_bytes = (
+                root_bytes + scratch_bytes + clipboard_bytes + ckpt_bytes + log_bytes + other_ws_bytes + fb_bytes
+            )
 
-        self.mark_executed()
+            self.mark_executed()
+            remaining_files, remaining_bytes = self._collect_managed_stats()
+            eff_ttl = self.ttl_days
 
         res = {
             "status": "success",
             "cleaned_files": total_files,
             "freed_bytes": total_bytes,
             "freed_mb": round(total_bytes / (1024 * 1024), 2),
+            "remaining_files": remaining_files,
+            "remaining_bytes": remaining_bytes,
+            "remaining_mb": round(remaining_bytes / (1024 * 1024), 2),
+            "ttl_days": eff_ttl,
+            "log_ttl_days": eff_ttl * 2,
         }
         if total_files > 0:
             log.info("Housekeeping 完成：清理 %d 個檔案，釋放 %.2f MB", total_files, res["freed_mb"])
