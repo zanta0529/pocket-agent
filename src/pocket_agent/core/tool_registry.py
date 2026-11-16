@@ -17,7 +17,13 @@ from pocket_agent.extensions.skills import call_skill_tool, is_skill_tool
 from pocket_agent.system.constants import WEB_RESEARCH_CHECKPOINT_INTERVAL
 from pocket_agent.tools.doc import call_doc_tool, is_doc_tool
 from pocket_agent.tools.document import call_document_tool, is_document_tool
-from pocket_agent.tools.fs import call_fs_tool, is_fs_tool, wrap_external_content
+from pocket_agent.tools.fs import (
+    call_fs_tool,
+    call_scratch_tool,
+    is_fs_tool,
+    is_scratch_tool,
+    wrap_external_content,
+)
 from pocket_agent.tools.shell import call_shell_tool, is_shell_tool
 from pocket_agent.tools.web import call_web_tool, is_soft_web_error, is_web_tool
 
@@ -174,6 +180,27 @@ class ShellToolHandler(ToolHandler):
         return ToolExecutionResult(output=result)
 
 
+class ScratchToolHandler(ToolHandler):
+    """沙盒專用筆記工具轉接器（免確認、非平行安全、敏感會話阻斷）。"""
+
+    def matches(self, name: str) -> bool:
+        return is_scratch_tool(name)
+
+    async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
+        if getattr(agent, "is_sensitive_session", False):
+            return ToolExecutionResult(
+                output="[ERROR] 敏感會話期間基於資安政策，禁止將內容寫入沙盒筆記。",
+            )
+        fn = _resolve_callable("call_scratch_tool", call_scratch_tool)
+        result = await run_sync(fn, name, args)
+        if isinstance(result, str) and result.startswith("[SUCCESS]") and "：" in result:
+            note_path = result.split("：", 1)[-1].strip()
+            paths = getattr(agent, "scratch_note_paths", None)
+            if isinstance(paths, list) and note_path and note_path not in paths:
+                paths.append(note_path)
+        return ToolExecutionResult(output=result)
+
+
 class FsToolHandler(ToolHandler):
     def matches(self, name: str) -> bool:
         return is_fs_tool(name)
@@ -313,6 +340,7 @@ default_tool_registry = ToolRegistry(
         AskQuestionToolHandler(),
         SubagentToolHandler(),
         ShellToolHandler(),
+        ScratchToolHandler(),
         FsToolHandler(),
         DocumentToolHandler(),
         WebToolHandler(),
@@ -353,7 +381,15 @@ class WebResearchGuard:
             )
         return None
 
-    def decorate_result(self, name: str, result: str, *, ok_status: bool, is_sensitive_session: bool) -> str:
+    def decorate_result(
+        self,
+        name: str,
+        result: str,
+        *,
+        ok_status: bool,
+        is_sensitive_session: bool,
+        scratch_note_filename: str | None = None,
+    ) -> str:
         if not is_web_tool(name):
             return result
         if ok_status and self.call_count >= self.soft_limit and not self.convergence_warned:
@@ -369,6 +405,13 @@ class WebResearchGuard:
             and self.call_count % WEB_RESEARCH_CHECKPOINT_INTERVAL == 0
             and not is_sensitive_session
         ):
+            if scratch_note_filename:
+                return result + (
+                    f"\n\n[系統提醒：階段性筆記] 已完成 {self.call_count} 次網路檢索。"
+                    "若研究仍需多步探索，建議適時使用 `write_scratch_note`"
+                    f"（檔名 `{scratch_note_filename}`）將已確認的重點與有效網址記錄至沙盒筆記，"
+                    "以防範長對話壓縮或網路瞬斷造成資訊遺失。"
+                )
             from pocket_agent.system.paths import scratch_dir
 
             notes_path = scratch_dir() / "notes.md"

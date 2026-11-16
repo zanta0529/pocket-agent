@@ -5,6 +5,8 @@ import json
 import logging
 import random
 import sys
+import time
+import uuid
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -40,7 +42,12 @@ from pocket_agent.system.constants import (
 )
 from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool  # noqa: F401
 from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool  # noqa: F401
-from pocket_agent.tools.fs import FS_TOOLS, _validate_safe_path, call_fs_tool  # noqa: F401
+from pocket_agent.tools.fs import (  # noqa: F401
+    FS_TOOLS,
+    SCRATCH_TOOLS,
+    _validate_safe_path,
+    call_fs_tool,
+)
 from pocket_agent.tools.image import image_tool, save_image_b64
 from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: F401
 from pocket_agent.tools.web import WEB_TOOLS, call_web_tool, is_soft_web_error, is_web_tool  # noqa: F401
@@ -193,6 +200,8 @@ class Agent:
         self.last_files: list[Path] = []  # 本輪 chat 產生的文件路徑（GUI 顯示用）
         self.workspace_dirs: list[str] = []  # CLI 與 GUI 共用的工作區路徑清單（使用者透過 /add-dir 明確授權）
         self.is_sensitive_session: bool = False  # 敏感工具呼叫後設為 True，防止對話內容與衍生內容落盤
+        self.scratch_note_filename: str | None = None
+        self.scratch_note_paths: list[str] = []
 
         self.active_subagents: list["Agent"] = []  # 追蹤執行中的子代理，用於連動取消與狀態監控
         self._subagent_tasks: dict["Agent", asyncio.Task] = {}  # 追蹤子代理非同步 Task 以便立即中斷
@@ -609,6 +618,7 @@ class Agent:
             + DOC_TOOLS
             + DOCUMENT_TOOLS
             + SHELL_TOOLS
+            + SCRATCH_TOOLS
             + FS_TOOLS
             + WEB_TOOLS
             + [INDEXED_SEARCH_TOOL]
@@ -753,16 +763,36 @@ class Agent:
         # --- 資源與上下文管理 ---
         from pocket_agent.system.paths import scratch_dir
 
-        notes_path = scratch_dir() / "notes.md"
+        use_scratch_note_only = (
+            self.allowed_tools is not None
+            and "write_scratch_note" in self.allowed_tools
+            and "write_to_file" not in self.allowed_tools
+        )
+        if use_scratch_note_only:
+            suggested_note = self.scratch_note_filename or "research_notes.md"
+            note_dest = scratch_dir() / "notes" / suggested_note
+            scratch_guidance = (
+                "\n2. 若檢索與分析過程冗長，請務必善用 `write_scratch_note` 工具"
+                f"（建議檔名 `{suggested_note}`，對應沙盒路徑 `{note_dest}`），"
+                "將已確認的重點、來源 URL 與待查項目增量寫入全域沙盒暫存區，"
+                "確保資訊不受 Context Overflow 截斷或中斷影響，且絕不污染專案工作區。"
+            )
+        else:
+            notes_path = scratch_dir() / "notes.md"
+            scratch_guidance = (
+                "\n2. 若檢索與分析過程冗長，請務必善用 `write_to_file` 工具，"
+                "將關鍵資訊、變數名稱與待辦事項 (TODO) "
+                f"整理並寫入 `{notes_path}` 等全域沙盒暫存檔中（建立外部草稿區/Scratchpad）。"
+                "這樣能確保重要資訊不受 Context Overflow 截斷影響，且不污染專案工作區。"
+            )
+
         base += (
             "\n\n[資源管理] 在處理需閱讀大量原始碼或進行深度網路研究的大型任務時："
             "\n1. 請優先使用 `search_web` 取得真實存在的網址後再呼叫 `read_url_content`，"
             "切勿憑記憶猜測深層文件 URL 以免頻繁觸發 HTTP 404。"
             "\n1. 請優先使用 `search_files` 或帶有 `start_line`/`end_line` 的 `read_file` "
             "進行精準檢索，避免一次性讀取過大檔案或目錄。"
-            "\n2. 若檢索與分析過程冗長，請務必善用 `write_to_file` 工具，將關鍵資訊、變數名稱與待辦事項 (TODO) "
-            f"整理並寫入 `{notes_path}` 等全域沙盒暫存檔中（建立外部草稿區/Scratchpad）。"
-            "這樣能確保重要資訊不受 Context Overflow 截斷影響，且不污染專案工作區。"
+            f"{scratch_guidance}"
         )
 
         # 加入動態預算之專案結構鳥瞰圖 (Repo Map)
@@ -843,18 +873,43 @@ class Agent:
 
         sub.on_stream = subagent_stream_forwarder
 
-        log.info("SUBAGENT run %s task=%r", name, task[:80])
+        run_id = f"{name}_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        sub.scratch_note_filename = f"{run_id}.md"
+
+        log.info("SUBAGENT run %s run_id=%s task=%r", name, run_id, task[:80])
 
         sub_task = asyncio.create_task(sub.chat(task))
         self._subagent_tasks[sub] = sub_task
         self.active_subagents.append(sub)
         try:
             _thinking, reply, _usage_str = await sub_task
+            if "已達工具呼叫上限" in (reply or ""):
+                handoff = self._build_subagent_handoff_notice(
+                    sub,
+                    run_id=run_id,
+                    reason="已達子代理工具呼叫輪次上限",
+                )
+                if handoff:
+                    reply = f"{reply}\n\n{handoff}"
         except asyncio.CancelledError:
             log.info("SUBAGENT %s task 已由取消要求中斷", name)
+            handoff = self._build_subagent_handoff_notice(
+                sub,
+                run_id=run_id,
+                reason="使用者取消中斷",
+            )
             reply = f"（子代理 {name} 執行已被使用者停止）"
+            if handoff:
+                reply = f"{reply}\n\n{handoff}"
         except Exception as e:
             log.debug("子代理「%s」執行失敗：%s", name, e, exc_info=True)
+            handoff = self._build_subagent_handoff_notice(
+                sub,
+                run_id=run_id,
+                reason=f"{type(e).__name__}: {e}",
+            )
+            if handoff:
+                raise RuntimeError(f"{e}\n\n{handoff}") from e
             raise  # Let the caller handle the exception for proper CLI rendering
         finally:
             self._subagent_tasks.pop(sub, None)
@@ -924,46 +979,92 @@ class Agent:
             return
         await asyncio.sleep(seconds)
 
+    @staticmethod
+    def _write_research_checkpoint(
+        items: list[dict],
+        error_reason: str,
+        *,
+        filename: str = "research_checkpoint.md",
+        is_sensitive: bool = False,
+        extra_note_paths: list[str] | None = None,
+    ) -> tuple[Path | None, int]:
+        """將已完成的工具檢索紀錄寫入沙盒檢查點檔案，回傳 (檔案路徑, 工具呼叫數)。"""
+        tool_calls = [m for m in items if isinstance(m, dict) and m.get("type") == "function_call"]
+        if not tool_calls and not extra_note_paths:
+            return None, 0
+        if is_sensitive:
+            return None, len(tool_calls)
+        outputs_by_id = {
+            m.get("call_id"): str(m.get("output", ""))
+            for m in items
+            if isinstance(m, dict) and m.get("type") == "function_call_output"
+        }
+        try:
+            from pocket_agent.system.paths import scratch_dir
+
+            ckpt_path = scratch_dir() / filename
+            lines = [
+                "# 研究中斷自動檢查點 (Research Checkpoint)",
+                "",
+                f"- 中斷原因：{error_reason}",
+                f"- 已完成工具呼叫數：{len(tool_calls)}",
+            ]
+            if extra_note_paths:
+                lines.append("- 已保存之沙盒筆記：")
+                for np in extra_note_paths:
+                    lines.append(f"  - `{np}`")
+            lines.extend(["", "## 已完成之檢索與工具紀錄", ""])
+            for idx, tc in enumerate(tool_calls, 1):
+                t_name = tc.get("name", "unknown")
+                t_args = " ".join(str(tc.get("arguments", "")).split())[:160]
+                t_out = outputs_by_id.get(tc.get("call_id"), "")
+                snippet = " ".join(t_out.split())[:400]
+                lines.append(f"### {idx}. `{t_name}` ({t_args})")
+                lines.append(f"{snippet}")
+                lines.append("")
+            ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+            ckpt_path.write_text("\n".join(lines), encoding="utf-8")
+            return ckpt_path, len(tool_calls)
+        except Exception as ckpt_err:
+            log.debug("寫入 %s 失敗：%s", filename, ckpt_err)
+            return None, len(tool_calls)
+
+    def _build_subagent_handoff_notice(self, sub: "Agent", *, run_id: str, reason: str) -> str:
+        """子代理中斷或達上限時，統一落盤檢查點並組裝交接提示給主代理。"""
+        note_paths = list(getattr(sub, "scratch_note_paths", []) or [])
+        ckpt_path, tool_count = self._write_research_checkpoint(
+            sub.history,
+            reason,
+            filename=f"research_checkpoint_{run_id}.md",
+            is_sensitive=bool(getattr(sub, "is_sensitive_session", False)),
+            extra_note_paths=note_paths,
+        )
+        if not ckpt_path and not note_paths and tool_count == 0:
+            return ""
+        parts = [f"💾 **子代理進度保護**（已完成 {tool_count} 次工具呼叫）："]
+        if note_paths:
+            joined_notes = "、".join(f"`{p}`" for p in note_paths)
+            parts.append(f"- 沙盒研究筆記：{joined_notes}")
+        if ckpt_path:
+            parts.append(f"- 系統檢查點：`{ckpt_path}`")
+        parts.append("主代理可使用 `read_file` 讀取上述檔案進行彙整，或重派子代理從斷點接續研究。")
+        return "\n".join(parts)
+
     def _build_interrupted_checkpoint_notice(self, initial_hist_len: int, error_reason: str) -> str:
         """當串流連線重試耗盡中斷時，將本輪已完成的工具檢索寫入檢查點檔案並回傳續跑提示。"""
         new_items = self.history[initial_hist_len:]
-        tool_calls = [m for m in new_items if isinstance(m, dict) and m.get("type") == "function_call"]
-        if not tool_calls:
+        ckpt_path, tool_count = self._write_research_checkpoint(
+            new_items,
+            error_reason,
+            filename="research_checkpoint.md",
+            is_sensitive=bool(self.is_sensitive_session),
+            extra_note_paths=list(self.scratch_note_paths) if self.scratch_note_paths else None,
+        )
+        if tool_count == 0:
             return ""
-        outputs_by_id = {
-            m.get("call_id"): str(m.get("output", ""))
-            for m in new_items
-            if isinstance(m, dict) and m.get("type") == "function_call_output"
-        }
-        ckpt_path_str = ""
-        if not self.is_sensitive_session:
-            try:
-                from pocket_agent.system.paths import scratch_dir
-
-                ckpt_path = scratch_dir() / "research_checkpoint.md"
-                lines = [
-                    "# 研究中斷自動檢查點 (Research Checkpoint)",
-                    "",
-                    f"- 中斷原因：{error_reason}",
-                    f"- 已完成工具呼叫數：{len(tool_calls)}",
-                    "",
-                    "## 已完成之檢索與工具紀錄",
-                    "",
-                ]
-                for idx, tc in enumerate(tool_calls, 1):
-                    t_name = tc.get("name", "unknown")
-                    t_args = " ".join(str(tc.get("arguments", "")).split())[:160]
-                    t_out = outputs_by_id.get(tc.get("call_id"), "")
-                    snippet = " ".join(t_out.split())[:400]
-                    lines.append(f"### {idx}. `{t_name}` ({t_args})")
-                    lines.append(f"{snippet}")
-                    lines.append("")
-                ckpt_path.write_text("\n".join(lines), encoding="utf-8")
-                ckpt_path_str = f"，並已寫入階段性檢查點 `{ckpt_path}`"
-            except Exception as ckpt_err:
-                log.debug("寫入 research_checkpoint.md 失敗：%s", ckpt_err)
+        ckpt_path_str = f"，並已寫入階段性檢查點 `{ckpt_path}`" if ckpt_path else ""
         return (
-            f"\n\n💾 **研究進度已自動保護**：本輪已完成的 {len(tool_calls)} 次工具檢索結果"
+            f"\n\n💾 **研究進度已自動保護**：本輪已完成的 {tool_count} 次工具檢索結果"
             f"已完整保留於對話歷史中{ckpt_path_str}。"
             "請待網路穩定後直接輸入「繼續」即可接續產出報告，無須重新搜尋。"
         )
@@ -1567,11 +1668,19 @@ class Agent:
                     generated_path=generated_fpath,
                 )
 
+                use_scratch_note_only = (
+                    self.allowed_tools is not None
+                    and "write_scratch_note" in self.allowed_tools
+                    and "write_to_file" not in self.allowed_tools
+                )
                 result = web_guard.decorate_result(
                     fc["name"],
                     result,
                     ok_status=ok_status,
                     is_sensitive_session=self.is_sensitive_session,
+                    scratch_note_filename=(
+                        (self.scratch_note_filename or "research_notes.md") if use_scratch_note_only else None
+                    ),
                 )
 
                 self._emit(
