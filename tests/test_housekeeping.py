@@ -1,6 +1,7 @@
 """Housekeeper 自動管家維護單元測試。"""
 
 import asyncio
+import json
 import os
 import time
 from unittest.mock import Mock, patch
@@ -286,3 +287,80 @@ def test_cli_clean_command_output():
     assert "保留 3 個未過期或受保護檔案" in msg
     assert "0.12 MB" in msg
     assert "暫存 7 天／日誌 14 天" in msg
+
+
+def test_housekeeper_clean_logs_preserves_today_daily_log(tmp_path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
+
+    now = time.time()
+    twenty_days_ago = now - (20 * 86400)
+
+    today_log = log_dir / f"agent_{time.strftime('%Y-%m-%d')}.log"
+    today_log.write_text("today log", encoding="utf-8")
+    os.utime(today_log, (twenty_days_ago, twenty_days_ago))
+
+    old_daily_log = log_dir / "agent_2025-01-01.log"
+    old_daily_log.write_text("stale daily log", encoding="utf-8")
+    os.utime(old_daily_log, (twenty_days_ago, twenty_days_ago))
+
+    hk = Housekeeper(
+        target_log_dir=log_dir,
+        target_scratch_dir=tmp_path / "scratch",
+    )
+    count, _ = hk.clean_logs(ttl_days=7)
+
+    assert count == 1
+    assert today_log.exists()
+    assert not old_daily_log.exists()
+
+
+def test_housekeeper_clean_backups_tiered_ttl_and_map_sync(tmp_path):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(parents=True)
+
+    now = time.time()
+    ten_days_ago = now - (10 * 86400)
+    thirty_days_ago = now - (30 * 86400)
+
+    # 1. 孤兒備份（10 天，超過 7 天應刪除）
+    old_orphan = backup_dir / "20260101_000000_aaaa1111_deadbeef_orphan.py"
+    old_orphan.write_text("old orphan", encoding="utf-8")
+    os.utime(old_orphan, (ten_days_ago, ten_days_ago))
+
+    # 2. 活躍備份（10 天，未達 28 天應保留）
+    fresh_active = backup_dir / "20260101_000000_bbbb2222_deadbeef_keep.py"
+    fresh_active.write_text("fresh active", encoding="utf-8")
+    os.utime(fresh_active, (ten_days_ago, ten_days_ago))
+
+    # 3. 過期活躍備份（30 天，超過 28 天應刪除並從映射表移除）
+    stale_active = backup_dir / "20251201_000000_cccc3333_deadbeef_stale.py"
+    stale_active.write_text("stale active", encoding="utf-8")
+    os.utime(stale_active, (thirty_days_ago, thirty_days_ago))
+
+    map_file = backup_dir / "latest_backup_map.json"
+    map_file.write_text(
+        json.dumps(
+            {
+                "/repo/keep.py": str(fresh_active),
+                "/repo/stale.py": str(stale_active),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hk = Housekeeper(
+        target_log_dir=tmp_path / "logs",
+        target_scratch_dir=tmp_path / "scratch",
+    )
+    count, freed = hk.clean_backups(ttl_days=7, max_size_mb=200, backup_dir=backup_dir)
+
+    assert count == 2
+    assert freed > 0
+    assert not old_orphan.exists()
+    assert fresh_active.exists()
+    assert not stale_active.exists()
+
+    updated_map = json.loads(map_file.read_text(encoding="utf-8"))
+    assert "/repo/keep.py" in updated_map
+    assert "/repo/stale.py" not in updated_map

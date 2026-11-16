@@ -1,7 +1,9 @@
 import datetime
 import hashlib
 import logging
+import os
 import re
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -293,6 +295,29 @@ def _get_ignore_spec(target_dir: Path):
     return None
 
 
+_BACKUP_MAP_LOCK = threading.Lock()
+
+
+def _write_backup_map_atomic(mapping_file: Path, mapping: dict[str, str]) -> None:
+    """以原子替換方式寫入備份映射檔，避免讀寫競爭導致 JSON 損毀。"""
+    import json
+    import tempfile
+
+    mapping_file.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".latest_backup_map_", suffix=".tmp", dir=str(mapping_file.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, ensure_ascii=False)
+        os.replace(tmp_path, mapping_file)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def _backup_file(target: Path) -> None:
     """時光機機制：在修改檔案前進行無感備份 (Native I/O)，不觸發 Shell 子行程。"""
     check_cancelled()
@@ -330,16 +355,18 @@ def _backup_file(target: Path) -> None:
 
         # 記錄最新的備份映射以便 /undo 指令還原
         mapping_file = backup_dir / "latest_backup_map.json"
+        with _BACKUP_MAP_LOCK:
+            mapping: dict[str, str] = {}
+            if mapping_file.exists():
+                try:
+                    loaded = json.loads(mapping_file.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        mapping = loaded
+                except Exception:
+                    mapping = {}
 
-        mapping = {}
-        if mapping_file.exists():
-            try:
-                mapping = json.loads(mapping_file.read_text(encoding="utf-8"))
-            except Exception:
-                mapping = {}
-
-        mapping[str(target.resolve())] = str(backup_path.resolve())
-        mapping_file.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+            mapping[str(target.resolve())] = str(backup_path.resolve())
+            _write_backup_map_atomic(mapping_file, mapping)
 
     except Exception as e:
         log.warning(f"Time Machine: 備份檔案失敗 ({target}): {e}")
