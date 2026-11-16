@@ -65,7 +65,7 @@ servers:
   #      BROWSER_CDP_URL: 'http://localhost:9222'  # 告訴 MCP 直接連接已經在背景跑著的瀏覽器
   #      BROWSER_HEADLESS: "0"                     # 1：強制無頭模式
 
-  # GitHub 整合（提供 PR 與 Issue 查詢、留言新增；GITHUB_TOKEN 留空或省略時將於執行時隱藏詢問）
+  # GitHub 整合（提供 PR/Issue 檢索、Diff/Review/CI 檢視與 Issue/留言新增；GITHUB_TOKEN 留空時於執行期隱藏詢問）
   # github:
   #   transport: stdio
   #   command: python
@@ -74,6 +74,12 @@ servers:
   #   safe_read_tools:
   #     - github_list_prs
   #     - github_read_issue
+  #     - github_read_comments
+  #     - github_get_pr_files
+  #     - github_list_issues
+  #     - github_search_issues
+  #     - github_get_pr_reviews
+  #     - github_get_pr_checks
   #   env:
   #     GITHUB_TOKEN: ""                    # 選填：Personal Access Token（建議留空，於對話執行時安全輸入）
   #     GITHUB_ALLOWED_REPOS: ""            # 選填：允許存取之 owner/repo 白名單（逗號分隔，如 "org/repo1,org/repo2"）
