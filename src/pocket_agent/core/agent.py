@@ -35,6 +35,8 @@ from pocket_agent.system.constants import (
     DEFAULT_MAX_TOOL_ROUNDS,
     DEFAULT_REASONING_EFFORT,
     DEFAULT_STREAM_RETRY_BASE_SEC,
+    LOG_BACKUP_COUNT,
+    LOG_FILE_MAX_BYTES,
     WEB_RESEARCH_CHECKPOINT_INTERVAL,
 )
 from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool  # noqa: F401
@@ -100,16 +102,18 @@ def setup_logging():
         return
     _logging_setup_done = True
 
+    import time
     from logging.handlers import RotatingFileHandler
 
     from pocket_agent.system.paths import log_dir
 
-    _log_path = log_dir() / "agent.log"
+    _log_name = f"agent_{time.strftime('%Y-%m-%d')}.log"
+    _log_path = log_dir() / _log_name
 
     _file_handler = RotatingFileHandler(
         _log_path,
-        maxBytes=10 * 1024 * 1024,  # 10 MB 自動輪轉
-        backupCount=3,
+        maxBytes=LOG_FILE_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
         encoding="utf-8",
     )
     _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))

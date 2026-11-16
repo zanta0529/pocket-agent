@@ -270,3 +270,55 @@ def test_mcp_command():
     handler.context.tools = []
     asyncio.run(handler.dispatch("/mcp"))
     renderer.message.assert_called_with("目前未掛載任何 MCP 工具。")
+
+
+def test_prune_sessions_and_cli_command(tmp_path, monkeypatch):
+    import time
+
+    from pocket_agent.core import sessions as sess_mod
+
+    fake_sessions_dir = tmp_path / "sessions"
+    monkeypatch.setattr(sess_mod, "SESSIONS_DIR", fake_sessions_dir)
+    monkeypatch.setattr("pocket_agent.core.sessions._CACHED_HMAC_KEY", b"test-key-32-bytes-long-enough-1234")
+
+    # 建立三筆測試 session（透過 save_session 並調整 updated_at）
+    sess_mod.save_session("cur-sess", [{"role": "user", "content": "current"}], title="目前對話")
+    sess_mod.save_session("old-sess", [{"role": "user", "content": "old"}], title="舊對話")
+    sess_mod.save_session("mid-sess", [{"role": "user", "content": "mid"}], title="近期對話")
+
+    # 將 old-sess 的 payload updated_at 改為 40 天前並重簽
+    old_data = sess_mod.load_session("old-sess")
+    old_data["updated_at"] = time.time() - (40 * 86400)
+    payload_str = __import__("json").dumps(old_data, ensure_ascii=False)
+    sig = sess_mod._sign_data(payload_str)
+    sess_mod._path("old-sess").write_text(
+        __import__("json").dumps(
+            {
+                "signature": sig,
+                "meta": {"id": "old-sess", "title": "舊對話", "updated_at": old_data["updated_at"]},
+                "payload": payload_str,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    state = CliState("openai", "model")
+    state.session_id = "cur-sess"
+    renderer = Mock()
+    reader = SimpleNamespace(choose=AsyncMock(return_value="確認刪除"))
+    handler = CommandHandler(Mock(), state, reader, renderer, [])
+
+    # 測試 /prune 30 應只清理 old-sess，保護 cur-sess 與 mid-sess
+    asyncio.run(handler.dispatch("/prune 30"))
+    assert sess_mod.load_session("old-sess") is None
+    assert sess_mod.load_session("cur-sess") is not None
+    assert sess_mod.load_session("mid-sess") is not None
+    assert "已清理 1 筆歷史對話" in renderer.message.call_args.args[0]
+
+    # 測試 --keep 0 仍必須保護當前進行中的 cur-sess
+    reader.choose = AsyncMock(return_value="確認刪除")
+    renderer.message.reset_mock()
+    asyncio.run(handler.dispatch("/prune --keep 0"))
+    assert sess_mod.load_session("cur-sess") is not None
+    assert sess_mod.load_session("mid-sess") is None

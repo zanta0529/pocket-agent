@@ -100,9 +100,20 @@ MAX_CLI_TIMEOUT_SEC = 600  # 本機 run_command 最長允許超時秒數 (10 分
 WEB_RESEARCH_CHECKPOINT_INTERVAL = 3  # 網路檢索觸發 Scratchpad 階段性筆記提醒之間隔次數
 WEB_RESEARCH_SOFT_LIMIT = 5  # 網路檢索軟性收斂提醒閾值 (累計次數)
 WEB_RESEARCH_HARD_LIMIT = 10  # 網路檢索硬性攔截上限 (累計次數)
-LOG_FILE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB: agent.log 滾動備份上限
-LOG_BACKUP_COUNT = 3  # agent.log 保留歷史份數
+LOG_FILE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB: 單日日誌滾動備份上限
+LOG_BACKUP_COUNT = 3  # 單日日誌保留滾動備份份數
 CLI_MAX_AUTH_RETRIES = 3  # CLI 金鑰密碼解鎖重試次數上限
+
+# Housekeeping 與日誌／暫存／備份生命週期管理常數
+DEFAULT_HOUSEKEEPING_TTL_DAYS = 7  # 暫存輸出、剪貼簿截圖、研究檢查點與孤兒備份預設保留天數
+DEFAULT_HOUSEKEEPING_LOG_TTL_MULTIPLIER = 2  # 系統日誌 TTL 倍率（預設 14 天）
+DEFAULT_HOUSEKEEPING_ACTIVE_BACKUP_TTL_MULTIPLIER = 4  # 時光機活躍備份 TTL 倍率（預設 28 天）
+DEFAULT_HOUSEKEEPING_MAX_FILES = 100  # 單一暫存目錄允許保留的最大檔案數
+DEFAULT_HOUSEKEEPING_MAX_SIZE_MB = 50  # 單一暫存目錄容量配額上限 (MB)
+DEFAULT_HOUSEKEEPING_BACKUP_MAX_SIZE_MB = 200  # 時光機備份目錄總容量配額上限 (MB)
+DEFAULT_HOUSEKEEPING_COOLDOWN_SECONDS = 86400  # 自動 Housekeeping 冷卻期 (24 小時)
+DEFAULT_SESSION_PRUNE_DAYS = 30  # /prune 手動清理歷史對話預設天數門檻
+DEFAULT_SESSION_PRUNE_KEEP = 20  # /prune 手動清理歷史對話預設保留最新筆數
 
 
 # ==============================================================================

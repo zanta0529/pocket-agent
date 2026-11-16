@@ -149,6 +149,28 @@ class RepoMapGenerator:
             db_cache[str_path] = (current_mtime, skeleton)
         return skeleton
 
+    def prune_stale_entries(self, *, vacuum: bool = False) -> int:
+        """清除快取資料庫中已不存在於磁碟之孤兒路徑紀錄，回傳已刪除筆數。"""
+        if not self.db_path.is_file():
+            return 0
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                rows = conn.execute("SELECT path FROM file_ast_cache").fetchall()
+                stale_paths = [(r[0],) for r in rows if not Path(r[0]).exists()]
+                if not stale_paths:
+                    return 0
+                conn.executemany("DELETE FROM file_ast_cache WHERE path = ?", stale_paths)
+                conn.commit()
+                deleted = len(stale_paths)
+                if vacuum or deleted >= 100:
+                    conn.execute("VACUUM")
+            self._map_cache.clear()
+            log.info("Repo Map 已清除 %d 筆孤兒快取紀錄", deleted)
+            return deleted
+        except sqlite3.OperationalError as e:
+            log.warning("Repo Map 孤兒快取清理失敗: %s", e)
+            return 0
+
     def build_repo_map(self, root_dirs: list[Path | str], budget_tokens: int | None = None) -> str:
         """掃描目標目錄產生動態預算之 Repo Map Markdown 字串。"""
         if budget_tokens is None:
@@ -201,7 +223,13 @@ class RepoMapGenerator:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 rows = conn.execute("SELECT path, mtime, skeleton FROM file_ast_cache").fetchall()
-                db_cache: dict[str, tuple[float, str]] = {r[0]: (r[1], r[2]) for r in rows}
+                stale_paths = [(r[0],) for r in rows if not Path(r[0]).exists()]
+                if stale_paths:
+                    conn.executemany("DELETE FROM file_ast_cache WHERE path = ?", stale_paths)
+                    stale_set = {p[0] for p in stale_paths}
+                    db_cache = {r[0]: (r[1], r[2]) for r in rows if r[0] not in stale_set}
+                else:
+                    db_cache = {r[0]: (r[1], r[2]) for r in rows}
                 for f, mt in file_mtimes:
                     skeleton = self._get_cached_or_parse(f, conn, db_cache=db_cache, current_mtime=mt)
                     if skeleton.strip():

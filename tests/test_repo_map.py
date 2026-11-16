@@ -1,5 +1,7 @@
 """RepoMapGenerator 專案結構地圖單元測試。"""
 
+import sqlite3
+
 from pocket_agent.tools.repo_map import RepoMapGenerator, extract_file_skeleton
 
 
@@ -56,3 +58,44 @@ def test_repo_map_generator_caching_and_budget(tmp_path):
     tight_res = generator.build_repo_map([tmp_path], budget_tokens=30)
     # 預算極小時可能只放下開頭或截斷第二個檔案
     assert len(tight_res) < len(res1)
+
+
+def test_repo_map_prune_stale_entries(tmp_path):
+    db_file = tmp_path / "test_prune.db"
+    generator = RepoMapGenerator(db_path=db_file)
+
+    live_file = tmp_path / "live.py"
+    live_file.write_text("def keep_me(): pass\n", encoding="utf-8")
+    dead_file = tmp_path / "dead.py"
+    dead_file.write_text("def remove_me(): pass\n", encoding="utf-8")
+
+    generator.build_repo_map([tmp_path], budget_tokens=500)
+    dead_file.unlink()
+
+    removed = generator.prune_stale_entries(vacuum=True)
+    assert removed == 1
+
+    with sqlite3.connect(db_file) as conn:
+        paths = [r[0] for r in conn.execute("SELECT path FROM file_ast_cache").fetchall()]
+    assert str(live_file.resolve()) in paths
+    assert str(dead_file.resolve()) not in paths
+
+
+def test_repo_map_build_auto_prunes_stale_entries(tmp_path):
+    db_file = tmp_path / "test_auto_prune.db"
+    generator = RepoMapGenerator(db_path=db_file)
+
+    live_file = tmp_path / "live.py"
+    live_file.write_text("def keep_me(): pass\n", encoding="utf-8")
+    dead_file = tmp_path / "dead.py"
+    dead_file.write_text("def remove_me(): pass\n", encoding="utf-8")
+
+    generator.build_repo_map([tmp_path], budget_tokens=500)
+    dead_file.unlink()
+
+    # 重新建置時應自動清除已不存在路徑的快取
+    generator.build_repo_map([tmp_path], budget_tokens=500)
+    with sqlite3.connect(db_file) as conn:
+        paths = [r[0] for r in conn.execute("SELECT path FROM file_ast_cache").fetchall()]
+    assert str(live_file.resolve()) in paths
+    assert str(dead_file.resolve()) not in paths

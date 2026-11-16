@@ -107,13 +107,33 @@ class CleanCommand(CliCommand):
         res = await run_sync(default_housekeeper.run_cleanup, force=True)
         files = res.get("cleaned_files", 0)
         mb = res.get("freed_mb", 0.0)
+        remaining = res.get("remaining_files", 0)
+        rem_mb = res.get("remaining_mb", 0.0)
+        ttl_days = res.get("ttl_days", default_housekeeper.ttl_days)
+        log_ttl_days = res.get("log_ttl_days", ttl_days * 2)
+
         if files > 0:
             ctx.renderer.message(
                 f"✓ Housekeeping 完成：已清理 {files} 個過期檔案，釋放 {mb:.2f} MB 磁碟空間。",
                 "green",
             )
+        elif remaining > 0:
+            ctx.renderer.message(
+                f"✓ 日誌與暫存目錄狀態良好，無過期檔案需清理"
+                f"（保留 {remaining} 個未過期或受保護檔案，共 {rem_mb:.2f} MB；"
+                f"門檻：暫存 {ttl_days} 天／日誌 {log_ttl_days} 天）。",
+                "green",
+            )
         else:
-            ctx.renderer.message("✓ 日誌與暫存目錄狀態良好，無過期檔案需清理。", "green")
+            ctx.renderer.message(
+                f"✓ 日誌與暫存目錄狀態良好，目前無任何日誌或暫存檔"
+                f"（門檻：暫存 {ttl_days} 天／日誌 {log_ttl_days} 天）。",
+                "green",
+            )
+        ctx.renderer.message(
+            "💡 提示：/clean 僅清理日誌、暫存與備份；若要清理歷史對話紀錄，請使用 /prune。",
+            "dim",
+        )
         return CommandResult()
 
 
