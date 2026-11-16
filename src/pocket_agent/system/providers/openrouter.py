@@ -28,7 +28,7 @@ class OpenRouterProvider(BaseProvider):
     def get_client(self) -> Any:
         base_url = config.get("providers.openrouter.base_url")
         if not base_url:
-            raise ValueError("未設定 OpenRouter Base URL。請先透過 `agent setup` 或 GUI 設定。")
+            raise ValueError("未設定 OpenRouter Base URL。請先透過 `agent setup` 進行設定。")
         base_url = base_url.rstrip("/")
         api_key = config.get("providers.openrouter.api_key") or ""
 

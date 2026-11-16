@@ -7,11 +7,25 @@ import time
 from pathlib import Path
 
 try:
-    from pocket_agent.system.constants import DEFAULT_TOOL_OUTPUT_CHARS
+    from pocket_agent.system.constants import (
+        DB_AUTOINC_WARN_RATIO,
+        DB_FRAGMENTATION_MIN_FREE_BYTES,
+        DB_FRAGMENTATION_WARN_RATIO,
+        DB_HEALTH_MAX_TABLES,
+        DEFAULT_TOOL_OUTPUT_CHARS,
+        MYSQL_CHECK_TABLE_MAX_BYTES,
+        SQLITE_QUICK_CHECK_MAX_BYTES,
+    )
 
     MAX_OUTPUT_CHARS = DEFAULT_TOOL_OUTPUT_CHARS
 except ImportError:
     MAX_OUTPUT_CHARS = 12000
+    DB_HEALTH_MAX_TABLES = 200
+    MYSQL_CHECK_TABLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+    SQLITE_QUICK_CHECK_MAX_BYTES = 500 * 1024 * 1024
+    DB_FRAGMENTATION_WARN_RATIO = 0.20
+    DB_FRAGMENTATION_MIN_FREE_BYTES = 10 * 1024 * 1024
+    DB_AUTOINC_WARN_RATIO = 0.75
 
 _IDENT_RE = re.compile(r"^[a-zA-Z0-9_.@$\-]+$")
 
@@ -160,3 +174,67 @@ def validate_identifier(value: str, field_name: str) -> str:
             f"非法的 {field_name} 參數格式（僅允許英數字、點、底線、連字號、@ 與 $，且不得以連字號開頭）。"
         )
     return clean
+
+
+def format_bytes(num_bytes: int | float | None) -> str:
+    """將位元組數轉換為易讀之容量單位字串（B / KB / MB / GB）。"""
+    if num_bytes is None:
+        return "0 B"
+    try:
+        val = max(0.0, float(num_bytes))
+    except TypeError, ValueError:
+        return "0 B"
+    if val < 1024:
+        return f"{int(val)} B"
+    if val < 1024 * 1024:
+        return f"{val / 1024:.2f} KB"
+    if val < 1024 * 1024 * 1024:
+        return f"{val / (1024 * 1024):.2f} MB"
+    return f"{val / (1024 * 1024 * 1024):.2f} GB"
+
+
+def find_redundant_prefix_indexes(
+    index_map: dict[str, tuple[bool, list[str]]],
+) -> list[str]:
+    """偵測單一資料表內具有相同前導欄位序列的冗餘／重複索引。
+
+    index_map 格式：{index_name: (is_unique, [col1, col2, ...])}
+    回傳人類易讀的冗餘索引描述清單。
+    """
+    items = [(name, is_uniq, cols) for name, (is_uniq, cols) in index_map.items() if cols]
+    findings: list[str] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for i, (name_a, uniq_a, cols_a) in enumerate(items):
+        norm_a = [c.lower() for c in cols_a]
+        for j, (name_b, uniq_b, cols_b) in enumerate(items):
+            if i == j:
+                continue
+            norm_b = [c.lower() for c in cols_b]
+            if len(norm_a) > len(norm_b):
+                continue
+            if norm_b[: len(norm_a)] != norm_a:
+                continue
+            # 若兩者完全相同，僅回報一次；若 A 為唯一索引且為 B 的真前綴，A 仍具唯一約束價值不視為冗餘
+            if len(norm_a) == len(norm_b):
+                pair_key = (min(name_a, name_b), max(name_a, name_b))
+                if pair_key in seen_pairs:
+                    continue
+                if uniq_a and not uniq_b:
+                    continue
+                seen_pairs.add(pair_key)
+                findings.append(f"{name_a} ({', '.join(cols_a)}) 與 {name_b} ({', '.join(cols_b)}) 欄位完全重複")
+            elif not uniq_a:
+                findings.append(f"{name_a} ({', '.join(cols_a)}) 為 {name_b} ({', '.join(cols_b)}) 的冗餘前導索引")
+    return findings
+
+
+def truncate_health_report(lines: list[str], max_chars: int = MAX_OUTPUT_CHARS) -> str:
+    """將健康檢查報告行清單合併並套用機密遮罩與字元上限截斷保護。"""
+    text = redact_output("\n".join(lines))
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rsplit("\n", 1)[0]
+    return (
+        f"{clipped}\n\n... (健康檢查報告已截斷，達單次上限 {max_chars} 字元；"
+        "建議指定 table_name 或 database 縮小巡檢範圍)"
+    )

@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Any, Dict
 
 
@@ -21,89 +20,6 @@ class SysCommand(ABC):
     @abstractmethod
     def execute(self, args_str: str, agent: Any) -> CommandResult:
         pass
-
-
-class AddDirCommand(SysCommand):
-    @property
-    def name(self) -> str:
-        return "add-dir"
-
-    def execute(self, args_str: str, agent: Any) -> CommandResult:
-        if not args_str.strip():
-            return CommandResult("error", "⚠ 用法：/add-dir <目錄路徑>")
-
-        status, msg, target_dir = agent.check_new_workspace_dir(args_str.strip())
-
-        if status in ("invalid", "not_found"):
-            return CommandResult("error", f"⚠ {msg}")
-        elif status in ("in_default", "already_authorized"):
-            return CommandResult("success", f"✓ {msg}")
-        else:
-            return CommandResult("needs_auth", msg, {"target_dir": target_dir})
-
-
-class RmDirCommand(SysCommand):
-    @property
-    def name(self) -> str:
-        return "rm-dir"
-
-    def execute(self, args_str: str, agent: Any) -> CommandResult:
-        if not args_str.strip():
-            return CommandResult("interactive_rm_dir", "", payload={"dirs": agent.workspace_dirs})
-
-        success, msg = agent.remove_workspace_dir(args_str.strip())
-        if success:
-            return CommandResult("success", f"✓ {msg}")
-        else:
-            return CommandResult("error", f"⚠ {msg}")
-
-
-class WorkspaceCommand(SysCommand):
-    @property
-    def name(self) -> str:
-        return "workspace"
-
-    def execute(self, args_str: str, agent: Any) -> CommandResult:
-        lines = ["【預設工作區】", f"  {Path.cwd().resolve()}"]
-        if agent.workspace_dirs:
-            lines.append("\n【額外授權目錄】")
-            for wd in agent.workspace_dirs:
-                lines.append(f"  {wd}")
-        else:
-            lines.append("\n【額外授權目錄】無")
-        return CommandResult("success", "\n".join(lines))
-
-
-class ModelCommand(SysCommand):
-    @property
-    def name(self) -> str:
-        return "model"
-
-    def execute(self, args_str: str, agent: Any) -> CommandResult:
-        parts = args_str.split()
-        if len(parts) >= 2:
-            provider = parts[0].lower()
-            model_name = parts[1]
-            # 將參數交還給前端處理，以確保 UI 狀態同步與連線清理
-            return CommandResult("interactive_menu", "", payload={"args": args_str})
-        elif len(parts) == 1:
-            from pocket_agent.system.config import config
-
-            provider = config.get("active_provider", "openai")
-            model_name = parts[0]
-            return CommandResult("interactive_menu", "", payload={"args": f"{provider} {model_name}"})
-        else:
-            return CommandResult("interactive_menu", "請選擇模型")
-
-
-class LearnCommand(SysCommand):
-    @property
-    def name(self) -> str:
-        return "learn"
-
-    def execute(self, args_str: str, agent: Any) -> CommandResult:
-        # CLI / GUI 透過狀態標記 "learn_interactive" 決定進入非同步與對話框流程
-        return CommandResult("learn_interactive", "請等待萃取...")
 
 
 class UndoCommand(SysCommand):
@@ -171,7 +87,7 @@ class ConfigCommand(SysCommand):
         parts = args_str.split()
         if not parts:
             # 交由前端 CLI 渲染互動式選單
-            data = config.json_provider._data
+            data = config.to_dict()
             return CommandResult("interactive_config", "", payload={"data": data})
 
         if len(parts) >= 3 and parts[0].lower() == "set":
@@ -226,10 +142,5 @@ class SysCommandRegistry:
 
 # 全域單例
 sys_registry = SysCommandRegistry()
-sys_registry.register(AddDirCommand())
-sys_registry.register(RmDirCommand())
-sys_registry.register(WorkspaceCommand())
-sys_registry.register(ModelCommand())
-sys_registry.register(LearnCommand())
 sys_registry.register(UndoCommand())
 sys_registry.register(ConfigCommand())

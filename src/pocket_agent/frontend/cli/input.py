@@ -18,6 +18,7 @@ from prompt_toolkit.output import ColorDepth
 
 from pocket_agent.frontend.cli.render import plain, toolbar
 from pocket_agent.frontend.cli.state import CliState
+from pocket_agent.system.constants import PROVIDER_OPENAI
 
 BUILTINS = {
     "activity": "列出本次會話新增／修改／刪除的檔案與上網查詢網址清單",
@@ -74,9 +75,24 @@ def references(text: str) -> list[str]:
     return [m.group(1) or m.group(2) for m in matches]
 
 
+def is_image_command_supported(state: CliState | None, agent: object = None) -> bool:
+    """查詢 Agent 能力旗標判斷是否支援 /image 指令；無 Agent 實例時後備參考 state。"""
+    if agent is not None:
+        flag = getattr(agent, "supports_image_command", None)
+        if isinstance(flag, bool):
+            return flag
+        gen_flag = getattr(agent, "supports_image_generation", None)
+        if isinstance(gen_flag, bool) and not gen_flag:
+            return False
+    if state is not None:
+        return str(getattr(state, "provider", "")).lower() == PROVIDER_OPENAI
+    return False
+
+
 class SlashCommandCompleter(Completer):
-    def __init__(self, state: CliState) -> None:
+    def __init__(self, state: CliState, agent: "Agent | None" = None) -> None:
         self.state = state
+        self.agent = agent
 
     def paths(self, prefix: str) -> Iterator[Completion]:
         quoted = prefix.startswith(QUOTE)
@@ -119,7 +135,7 @@ class SlashCommandCompleter(Completer):
         from pocket_agent.system.paths import is_portable
 
         commands = dict(BUILTINS)
-        if self.state.provider == "openai":
+        if is_image_command_supported(self.state, self.agent):
             commands["image"] = "產生圖片（待送附件作參考圖）"
         if is_portable():
             commands["update"] = "檢查並套用最新發佈版更新（自動儲存並重啟）"
@@ -374,7 +390,7 @@ def key_bindings(
 class CliInput:
     def __init__(self, state: CliState, agent: "Agent", on_clear_screen: Callable[[], None] | None = None) -> None:
         self.selecting = False
-        self.completer = SlashCommandCompleter(state)
+        self.completer = SlashCommandCompleter(state, agent=agent)
         self.session = PromptSession(
             multiline=True,
             completer=self.completer,

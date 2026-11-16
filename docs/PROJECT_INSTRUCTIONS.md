@@ -21,9 +21,9 @@
 | `src/pocket_agent/main.py`     | 啟動、模式選擇、內建 MCP 轉發（`--internal-mcp-server`）與 Click 命令（`setup`、`logout`、`update`、`image`）；保留 Windows asyncio 相容處理。                                                                                |
 | `src/pocket_agent/core/`       | 核心業務邏輯：Agent 主迴圈（`agent`）、工具派發註冊表（`tool_registry`）、上下文縮減管線（`context_pipeline`）、啟動規範載入（`instructions`）、會話紀錄（`sessions`）、活動追蹤（`activity`）、非同步取消與同步橋接（`cancellation`）、附件上傳（`files`）、動態預算（`context_budget`）、歷史摘要壓縮（`compaction`）、巨量輸出落盤（`spillover`）、知識萃取（`auto_learn`）與子代理（`subagents`）。 |
 | `src/pocket_agent/engines/`    | LLM 引擎實作：`BaseEngine`（`base`）、`OpenAIResponsesEngine` 與配額策略（`openai_engine`）、`OpenRouterEngine`（`openrouter_engine`）、`OllamaChatEngine`（`ollama_engine`）、`StandardChatCompletionsEngine`（`chat_engine`）與 `EngineFactory`（`factory`）。 |
-| `src/pocket_agent/frontend/`   | 使用者介面策略：實作 `cli/`（包含 `main`、`input`、`render`、`state`、`confirmation`、`interrupts`、`commands/`、`completer`、`menus` 等模組）。 |
+| `src/pocket_agent/frontend/`   | 使用者介面策略：實作 `cli/`（包含 `main`、`input`、`render`、`state`、`confirmation`、`interrupts`、`clipboard`、`commands/` 等模組）。 |
 | `src/pocket_agent/system/`     | 系統基礎設施：全域常數（`constants`）、認證（`auth`）、供應商策略（`providers/`）、路徑解析（`paths`）、設定（`config`）、指令白名單（`permissions`）、Markdown 註冊表（`registry`）、巨集與系統指令（`commands`、`sys_commands`）、設定精靈（`wizard`）、自動清理（`housekeeping`）、相容處理（`compat`）與線上更新（`updater`）。 |
-| `src/pocket_agent/extensions/` | 擴充功能：MCP 伺服器生命週期、白名單授權與動態連線參數注入管理（`mcp`）、漸進式技能載入與遮蔽（`skills`）、生命週期事件鉤子（`hooks`）。                                                                                      |
+| `src/pocket_agent/extensions/` | 擴充功能：MCP 伺服器生命週期、白名單授權與動態連線參數注入管理（`mcp`）、漸進式技能載入與遮蔽（`skills`）、生命週期事件鉤子（`hooks`）與外掛封裝管理（`plugins`）。                                                                                      |
 | `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行（`shell`）、原生檔案操作（`fs`）、網路請求（`web`）、圖片生成（`image`）、文件產出（`doc`）、文件讀取（`document`）、FTS5 檢索（`rag`）與 AST 結構圖（`repo_map`）。 |
 | `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器腳本（`browser_mcp.py`、`github_mcp.py`、`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`memory_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`）與資料庫共用基礎設施（`_db_common.py`，以 `--internal-mcp-server` 獨立啟動時須確保目錄在 `sys.path`）。 |
 | `subagents/`                   | 隨附之內建子代理人設定義檔（`.md`）。                                                                                                                                                                                         |
@@ -73,7 +73,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 - **關鍵安全不變量**：
   - **確認回呼契約（`on_confirm`）**：檔案寫入工具（`fs.py`）與敏感操作僅在 `decision is True` 時放行；若回傳非空字串（使用者自訂指示）或 `(False, str)` 等任何非 `True` 值，一律視為拒絕且不得執行寫入或建立備份。CLI 端透過 `ConfirmationBridge` 統一橋接同步／非同步確認流程，啟用 `Accept-edits` 時須同步套用至主代理與所有 `active_subagents`。
   - **指令白名單邊界（`permissions.py`）**：自訂命令白名單必須完整保留外層 `strip()` 後之參數與引號邊界（大小寫敏感），且 `shlex` 分詞失敗（如未閉合引號）時強制 fail-closed 拒絕。
-  - **唯讀資料庫與 RDP 隔離**：資料庫 MCP 強制單一唯讀查詢；`mysql_mcp.py` 採用引號感知之註解正規化（拒絕 `/*!` 可執行註解與引號內反斜線跳脫）與串流游標（`SSCursor`／`buffered=False`，截斷時直接中斷連線不排空剩餘資料）；`win_rdp_mcp.py` 嚴格綁定本工具啟動之系統可信 `mstsc.exe` PID、映像路徑與 `TscShellContainerClass` 視窗類別，截圖強制使用 `ImageGrab.grab(window=hwnd)` 且失焦時立即中止。
+  - **唯讀資料庫與 RDP 隔離**：資料庫 MCP 強制單一唯讀查詢與受控健康診斷（`*_inspect_health` 採零鎖定詮釋資料／DMV／受限 `PRAGMA` 巡檢；`mysql_check_table` 限定單表 `QUICK`／`FAST` 模式與 `2 GB` 容量熔斷；`sqlite_inspect_health` 之 `PRAGMA quick_check` 具 `500 MB` 檔案大小熔斷）；`mysql_mcp.py` 採用引號感知之註解正規化（拒絕 `/*!` 可執行註解與引號內反斜線跳脫）與串流游標（`SSCursor`／`buffered=False`，截斷時直接中斷連線不排空剩餘資料）；`win_rdp_mcp.py` 嚴格綁定本工具啟動之系統可信 `mstsc.exe` PID、映像路徑與 `TscShellContainerClass` 視窗類別，截圖強制使用 `ImageGrab.grab(window=hwnd)` 且失焦時立即中止。
   - **引擎工具集邊界**：Chat Completions 串流僅在 `finish_reason == "tool_calls"` 時派發工具呼叫；OpenAI 引擎對 `image_generation` 的參數回退重試僅限移除當輪 `tools` 副本中的 `model` 欄位，嚴禁在 `tools=[]`（如最後一輪禁用工具）時透過回呼重新注入工具。
 - **原生工具優先**：進行檔案讀寫或搜尋時，必須優先使用內建原生工具（如 `search_files`、`read_file`）。**嚴禁**使用 shell 指令包裝 `echo`、`sed`、`grep`、`Get-ChildItem` 或 `python -c` 處理檔案讀寫與搜尋操作。
 - **環境限制與隔離**：

@@ -364,3 +364,73 @@ def test_agent_switch_gate_respects_safe_read_membership(tmp_path):
     assert agent._needs_mcp_confirm("sqlite_switch_database", {"target_db_path": str(workspace / "a.db")}) is True
     assert agent._needs_mcp_confirm("sqlite_list_tables", {}) is False
     assert agent._needs_mcp_confirm("unknown_tool", {}) is True
+
+
+def test_sqlite_inspect_health_detects_missing_pk_redundant_index_fk_violation_and_quick_check(tmp_path):
+    """驗證 sqlite_inspect_health 檢查缺少主鍵、冗餘前綴索引、外鍵違規與 PRAGMA quick_check。"""
+    db_file = tmp_path / "health_test.db"
+    conn = sqlite3.connect(str(db_file))
+    try:
+        conn.executescript(
+            """
+            PRAGMA foreign_keys = OFF;
+            CREATE TABLE parents (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+            CREATE TABLE child_events (
+                parent_id INTEGER,
+                event_type TEXT,
+                created_at TEXT,
+                FOREIGN KEY (parent_id) REFERENCES parents(id)
+            );
+            CREATE INDEX idx_child_parent ON child_events(parent_id);
+            CREATE INDEX idx_child_parent_type ON child_events(parent_id, event_type);
+            INSERT INTO child_events (parent_id, event_type, created_at) VALUES (999, 'login', '2026-01-01');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    out = sqlite_mcp.sqlite_inspect_health(db_path=str(db_file))
+    assert "[SQLite Health Summary]" in out
+    assert "快速實體檢查: OK (PRAGMA quick_check 通過)" in out
+    assert "[Missing PK] 資料表 child_events 缺少顯式主鍵" in out
+    assert "[Redundant Index] child_events: idx_child_parent (parent_id) 為 idx_child_parent_type" in out
+    assert "[Foreign Key Violation] child_events (rowid=1) -> 參照目標表 parents" in out
+
+
+def test_sqlite_inspect_health_size_guard_and_authorizer_isolation(tmp_path, monkeypatch):
+    """驗證超過檔案大小上限時自動略過 quick_check，且一般連線仍封鎖 PRAGMA quick_check。"""
+    db_file = _create_sample_db(tmp_path / "sample.db")
+
+    # 1. 一般連線仍嚴格封鎖 PRAGMA quick_check 與 database_list
+    conn_normal = sqlite_mcp._get_readonly_connection("test", "PRAGMA quick_check", db_path=str(db_file))
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            conn_normal.execute("PRAGMA quick_check;")
+    finally:
+        conn_normal.close()
+
+    # 2. 診斷連線仍封鎖 database_list 等敏感 PRAGMA
+    conn_diag = sqlite_mcp._get_readonly_connection(
+        "test",
+        "PRAGMA database_list",
+        db_path=str(db_file),
+        allow_diagnostic_pragmas=True,
+    )
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            conn_diag.execute("PRAGMA database_list;")
+    finally:
+        conn_diag.close()
+
+    # 3. 檔案大小超過安全上限時自動略過實體頁掃描
+    monkeypatch.setattr(sqlite_mcp, "SQLITE_QUICK_CHECK_MAX_BYTES", 10)
+    out_guarded = sqlite_mcp.sqlite_inspect_health(db_path=str(db_file))
+    assert "超過安全門檻" in out_guarded
+
+    # 4. 非法 table_name 參數攔截
+    bad_out = sqlite_mcp.sqlite_inspect_health(table_name="users; DROP TABLE users", db_path=str(db_file))
+    assert bad_out.startswith("[ERROR]")

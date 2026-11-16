@@ -376,3 +376,109 @@ def test_mysql_run_select_query_fail_closed_on_missing_sscursor(monkeypatch):
 
     assert out.startswith("[ERROR]")
     assert "缺少 SSCursor" in out
+
+
+def test_mysql_inspect_health_detects_missing_pk_fragmentation_autoinc_and_redundant_index(monkeypatch):
+    """驗證 mysql_inspect_health 能偵測缺少主鍵、高碎片率、非 InnoDB、AUTO_INCREMENT 溢位與冗餘前綴索引。"""
+    _set_full_mysql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    mb = 1024 * 1024
+    table_rows = [
+        # (SCHEMA, NAME, TYPE, ENGINE, ROW_FORMAT, ROWS, DATA_LEN, IDX_LEN, DATA_FREE, AUTOINC, COLLATION, CHECK_TIME)
+        (
+            "app_db",
+            "orders",
+            "BASE TABLE",
+            "InnoDB",
+            "Dynamic",
+            50000,
+            40 * mb,
+            10 * mb,
+            20 * mb,
+            110,
+            "utf8mb4_0900",
+            None,
+        ),
+        (
+            "app_db",
+            "legacy_logs",
+            "BASE TABLE",
+            "MyISAM",
+            "Fixed",
+            1000,
+            2 * mb,
+            1 * mb,
+            0,
+            None,
+            "utf8mb4_0900",
+            None,
+        ),
+        ("app_db", "v_orders", "VIEW", None, None, None, None, None, None, None, "utf8mb4_0900", None),
+    ]
+    col_rows = [
+        # orders 有 PRI 與 tinyint (上限 127，110/127 = 86.6% > 75%)，legacy_logs 無 PRI
+        ("app_db", "orders", "id", "tinyint(4)", "PRI", "auto_increment"),
+        ("app_db", "legacy_logs", "msg", "varchar(255)", "", ""),
+    ]
+    idx_rows = [
+        # idx_user (user_id) 為 idx_user_created (user_id, created_at) 的冗餘前導索引
+        ("app_db", "orders", "idx_user", 1, "user_id"),
+        ("app_db", "orders", "idx_user_created", 1, "user_id"),
+        ("app_db", "orders", "idx_user_created", 1, "created_at"),
+    ]
+    cursor.fetchall.side_effect = [table_rows, col_rows, idx_rows]
+
+    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn):
+        out = mysql_mcp.mysql_inspect_health()
+
+    assert "[MySQL Health Summary]" in out
+    assert "2 張實體表, 1 個檢視表" in out
+    assert "[Engine] legacy_logs 使用 MYISAM 引擎" in out
+    assert "[Missing PK] legacy_logs 缺少主鍵" in out
+    assert "[Fragmentation] orders 碎片空間達 20.00 MB" in out
+    assert "[AutoIncrement] orders.id (tinyint(4)) 水位已達 86.6% (110/127)" in out
+    assert (
+        "[Redundant Index] orders: idx_user (user_id) 為 idx_user_created (user_id, created_at) 的冗餘前導索引" in out
+    )
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+
+
+def test_mysql_check_table_quick_and_size_or_mode_guards(monkeypatch):
+    """驗證 mysql_check_table 支援 QUICK/FAST，並攔截非法模式、VIEW 與超過 2GB 的大型資料表。"""
+    _set_full_mysql_env(monkeypatch)
+
+    # 1. 攔截危險或非白名單 check_mode（連線前即阻擋）
+    with patch("mcp_servers.mysql_mcp._get_readonly_connection") as mock_conn:
+        for bad_mode in ("EXTENDED", "MEDIUM", "FOR UPGRADE", "QUICK; DROP TABLE users"):
+            bad_out = mysql_mcp.mysql_check_table("orders", check_mode=bad_mode)
+            assert bad_out.startswith("[ERROR]")
+            mock_conn.assert_not_called()
+
+    # 2. 攔截 VIEW（不執行 CHECK TABLE）
+    conn_view, cursor_view = _make_fake_conn()
+    cursor_view.fetchone.return_value = ("VIEW", 0)
+    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn_view):
+        out_view = mysql_mcp.mysql_check_table("v_orders")
+    assert out_view.startswith("[SKIPPED]")
+    assert cursor_view.execute.call_count == 1
+
+    # 3. 攔截超過 2GB 的巨型資料表
+    conn_huge, cursor_huge = _make_fake_conn()
+    cursor_huge.fetchone.return_value = ("BASE TABLE", 3 * 1024 * 1024 * 1024)
+    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn_huge):
+        out_huge = mysql_mcp.mysql_check_table("huge_events")
+    assert out_huge.startswith("[BLOCKED]")
+    assert "3.00 GB" in out_huge
+    assert cursor_huge.execute.call_count == 1
+
+    # 4. 正常執行 QUICK 模式
+    conn_ok, cursor_ok = _make_fake_conn()
+    cursor_ok.fetchone.return_value = ("BASE TABLE", 5 * 1024 * 1024)
+    cursor_ok.fetchall.return_value = [("app_db.orders", "check", "status", "OK")]
+    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn_ok):
+        out_ok = mysql_mcp.mysql_check_table("orders", check_mode="fast")
+    assert "[MySQL CHECK TABLE Result (FAST)]" in out_ok
+    assert "- [status] app_db.orders (check): OK" in out_ok
+    executed_sqls = [c.args[0] for c in cursor_ok.execute.call_args_list]
+    assert "CHECK TABLE `app_db`.`orders` FAST;" in executed_sqls

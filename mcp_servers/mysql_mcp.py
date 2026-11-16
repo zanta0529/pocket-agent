@@ -35,13 +35,21 @@ if _MCP_DIR not in sys.path:
 import _db_common  # noqa: E402
 
 MAX_OUTPUT_CHARS = _db_common.MAX_OUTPUT_CHARS
+DB_HEALTH_MAX_TABLES = _db_common.DB_HEALTH_MAX_TABLES
+MYSQL_CHECK_TABLE_MAX_BYTES = _db_common.MYSQL_CHECK_TABLE_MAX_BYTES
+DB_FRAGMENTATION_WARN_RATIO = _db_common.DB_FRAGMENTATION_WARN_RATIO
+DB_FRAGMENTATION_MIN_FREE_BYTES = _db_common.DB_FRAGMENTATION_MIN_FREE_BYTES
+DB_AUTOINC_WARN_RATIO = _db_common.DB_AUTOINC_WARN_RATIO
 _SENSITIVE_COL_RE = _db_common.SENSITIVE_COL_RE
 _ConnAuthError = _db_common.ConnAuthError
 _clean_param = _db_common.clean_param
+_find_redundant_prefix_indexes = _db_common.find_redundant_prefix_indexes
+_format_bytes = _db_common.format_bytes
 _format_cell_value = _db_common.format_cell_value
 _get_audit_log_path = _db_common.get_audit_log_path
 _is_empty_or_null = _db_common.is_empty_or_null
 _redact_output = _db_common.redact_output
+_truncate_health_report = _db_common.truncate_health_report
 _validate_identifier = _db_common.validate_identifier
 
 mcp = MCPServer("mysql")
@@ -954,6 +962,443 @@ def mysql_run_select_query(
             _close_safely(conn)
         else:
             _abort_unbuffered_connection(conn, cursor)
+
+
+def _mysql_int_type_max(column_type: str) -> int | None:
+    """根據 MySQL 整數欄位型別字串（含 unsigned）回傳理論最大正整數值。"""
+    t = (column_type or "").strip().lower()
+    unsigned = "unsigned" in t
+    if t.startswith("tinyint"):
+        return 255 if unsigned else 127
+    if t.startswith("smallint"):
+        return 65535 if unsigned else 32767
+    if t.startswith("mediumint"):
+        return 16777215 if unsigned else 8388607
+    if t.startswith(("int", "integer")):
+        return 4294967295 if unsigned else 2147483647
+    if t.startswith("bigint"):
+        return 18446744073709551615 if unsigned else 9223372036854775807
+    return None
+
+
+def _parse_mysql_target(table_name: str, database: str) -> tuple[str, str]:
+    """解析並驗證選填或必填之 database 與 table_name（支援 schema.table 格式）。"""
+    clean_tbl = (table_name or "").strip().strip("'\"`")
+    clean_db = _clean_param(database)
+    if clean_tbl and "." in clean_tbl:
+        schema_part, tbl_part = clean_tbl.split(".", 1)
+        validated_schema = _validate_identifier(schema_part.strip("`'\""), "schema_name")
+        validated_tbl = _validate_identifier(tbl_part.strip("`'\""), "table_name")
+        return validated_schema, validated_tbl
+    validated_schema = _validate_identifier(clean_db, "database") if clean_db else ""
+    validated_tbl = _validate_identifier(clean_tbl, "table_name") if clean_tbl else ""
+    return validated_schema, validated_tbl
+
+
+@mcp.tool()
+def mysql_inspect_health(
+    database: str = "",
+    table_name: str = "",
+    mysql_host: str = "",
+    mysql_port: str = "",
+    mysql_user: str = "",
+    mysql_password: str = "",
+    mysql_database: str = "",
+) -> str:
+    """檢視遠端 MySQL/MariaDB 資料庫或指定資料表的結構與空間健康狀態（零鎖表 INFORMATION_SCHEMA 巡檢）"""
+    conn = None
+    sql_executed = "SELECT ... FROM INFORMATION_SCHEMA.TABLES"
+    try:
+        try:
+            explicit_schema, target_table = _parse_mysql_target(table_name, database)
+        except ValueError as e:
+            _audit_log(
+                "mysql_inspect_health",
+                f"database={database!r} table_name={table_name!r}",
+                target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+                status="BLOCKED",
+                detail=str(e),
+            )
+            return f"[ERROR] {e}"
+
+        conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
+        target_schema = (
+            explicit_schema
+            or _clean_param(mysql_database)
+            or _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
+            or _clean_param(os.getenv("MYSQL_DATABASE"))
+        )
+        target = _format_audit_target(mysql_host, mysql_port, mysql_user, target_schema)
+
+        where_clauses = ["TABLE_TYPE IN ('BASE TABLE', 'VIEW')"]
+        params: list[Any] = []
+        if target_schema:
+            where_clauses.append("TABLE_SCHEMA = %s")
+            params.append(target_schema)
+        else:
+            where_clauses.append("TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')")
+        if target_table:
+            where_clauses.append("TABLE_NAME = %s")
+            params.append(target_table)
+
+        where_sql = " AND ".join(where_clauses)
+        limit_n = int(DB_HEALTH_MAX_TABLES)
+        sql_executed = (
+            "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, ENGINE, ROW_FORMAT, "
+            "TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, DATA_FREE, "
+            "AUTO_INCREMENT, TABLE_COLLATION, CHECK_TIME "
+            f"FROM INFORMATION_SCHEMA.TABLES WHERE {where_sql} "
+            "ORDER BY (COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0)) DESC, "
+            f"TABLE_SCHEMA, TABLE_NAME LIMIT {limit_n};"
+        )
+
+        cursor = conn.cursor()
+        col_rows: list[Any] = []
+        idx_rows: list[Any] = []
+        try:
+            cursor.execute(sql_executed, tuple(params))
+            tables = cursor.fetchall()
+            if tables:
+                try:
+                    col_where = [c for c in where_clauses if not c.startswith("TABLE_TYPE")]
+                    col_where_sql = " AND ".join(col_where) if col_where else "1=1"
+                    col_sql = (
+                        "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, COLUMN_KEY, EXTRA "
+                        f"FROM INFORMATION_SCHEMA.COLUMNS WHERE {col_where_sql};"
+                    )
+                    cursor.execute(col_sql, tuple(params))
+                    fetched_cols = cursor.fetchall()
+                    if fetched_cols and fetched_cols != tables:
+                        col_rows = list(fetched_cols)
+
+                    idx_sql = (
+                        "SELECT TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME "
+                        f"FROM INFORMATION_SCHEMA.STATISTICS WHERE {col_where_sql} "
+                        "ORDER BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;"
+                    )
+                    cursor.execute(idx_sql, tuple(params))
+                    fetched_idx = cursor.fetchall()
+                    if fetched_idx and fetched_idx != tables:
+                        idx_rows = list(fetched_idx)
+                except Exception:
+                    pass
+        finally:
+            cursor.close()
+
+        if not tables:
+            _audit_log(
+                "mysql_inspect_health",
+                sql_executed,
+                target=target,
+                status="NOT_FOUND",
+                detail="查無符合條件的資料表",
+            )
+            return "查無符合條件的資料表。"
+
+        _audit_log(
+            "mysql_inspect_health",
+            sql_executed,
+            target=target,
+            status="OK",
+            detail=f"tables={len(tables)}",
+        )
+
+        # 彙整欄位 PK 與自增型別
+        pk_tables: set[tuple[str, str]] = set()
+        autoinc_col_types: dict[tuple[str, str], tuple[str, str]] = {}
+        for c in col_rows:
+            if len(c) >= 6:
+                key_pair = (str(c[0]), str(c[1]))
+                col_name = str(c[2])
+                col_type = str(c[3] or "")
+                col_key = str(c[4] or "").upper()
+                extra = str(c[5] or "").lower()
+                if col_key == "PRI":
+                    pk_tables.add(key_pair)
+                if "auto_increment" in extra:
+                    autoinc_col_types[key_pair] = (col_name, col_type)
+
+        # 彙整索引結構供冗餘前綴分析
+        table_idx_map: dict[tuple[str, str], dict[str, tuple[bool, list[str]]]] = {}
+        for r in idx_rows:
+            if len(r) >= 5:
+                key_pair = (str(r[0]), str(r[1]))
+                iname = str(r[2])
+                is_uniq = not bool(int(r[3])) if str(r[3]).isdigit() else not bool(r[3])
+                cname = str(r[4])
+                t_map = table_idx_map.setdefault(key_pair, {})
+                if iname not in t_map:
+                    t_map[iname] = (is_uniq, [])
+                t_map[iname][1].append(cname)
+
+        base_count = 0
+        view_count = 0
+        total_used_bytes = 0
+        total_free_bytes = 0
+        overview_lines: list[str] = []
+        warnings_list: list[str] = []
+
+        for t in tables:
+            t_schema = str(t[0])
+            t_name = str(t[1])
+            t_type = str(t[2] or "BASE TABLE").upper()
+            engine = str(t[3] or "-").upper()
+            row_fmt = str(t[4] or "-")
+            est_rows = int(t[5] or 0)
+            data_len = int(t[6] or 0)
+            idx_len = int(t[7] or 0)
+            data_free = int(t[8] or 0)
+            auto_inc = t[9]
+            collation = str(t[10] or "-")
+            key_pair = (t_schema, t_name)
+            display_name = t_name if target_schema else f"{t_schema}.{t_name}"
+
+            if t_type == "VIEW":
+                view_count += 1
+                overview_lines.append(f"- {display_name}: VIEW (Collation={collation})")
+                continue
+
+            base_count += 1
+            used_b = data_len + idx_len
+            total_used_bytes += used_b
+            total_free_bytes += data_free
+            overview_lines.append(
+                f"- {display_name}: Engine={engine}, Format={row_fmt}, "
+                f"Rows~{est_rows}, Size={_format_bytes(used_b)} "
+                f"(Data={_format_bytes(data_len)}, Index={_format_bytes(idx_len)}), "
+                f"Free={_format_bytes(data_free)}"
+            )
+
+            if engine not in ("INNODB", "-"):
+                warnings_list.append(f"[Engine] {display_name} 使用 {engine} 引擎（非 InnoDB，留意交易與表級鎖限制）")
+            if col_rows and key_pair not in pk_tables:
+                warnings_list.append(
+                    f"[Missing PK] {display_name} 缺少主鍵 (Primary Key)，可能影響 InnoDB 叢集索引效能與複製穩定度"
+                )
+            if data_free >= DB_FRAGMENTATION_MIN_FREE_BYTES and (used_b + data_free) > 0:
+                frag_ratio = data_free / (used_b + data_free)
+                if frag_ratio >= DB_FRAGMENTATION_WARN_RATIO:
+                    warnings_list.append(
+                        f"[Fragmentation] {display_name} 碎片空間達 {_format_bytes(data_free)} "
+                        f"({frag_ratio * 100:.1f}%)，建議於離峰評估 OPTIMIZE TABLE"
+                    )
+            if auto_inc is not None and int(auto_inc) > 0:
+                col_info = autoinc_col_types.get(key_pair)
+                max_val = _mysql_int_type_max(col_info[1]) if col_info else None
+                if max_val:
+                    ratio = int(auto_inc) / max_val
+                    if ratio >= DB_AUTOINC_WARN_RATIO:
+                        warnings_list.append(
+                            f"[AutoIncrement] {display_name}.{col_info[0]} ({col_info[1]}) "
+                            f"水位已達 {ratio * 100:.1f}% ({auto_inc}/{max_val})，有溢位風險"
+                        )
+            if key_pair in table_idx_map:
+                for red_msg in _find_redundant_prefix_indexes(table_idx_map[key_pair]):
+                    warnings_list.append(f"[Redundant Index] {display_name}: {red_msg}")
+
+        report: list[str] = [
+            "[MySQL Health Summary]",
+            f"巡檢範圍: {target_schema or '所有使用者資料庫'}" + (f" / 資料表: {target_table}" if target_table else ""),
+            f"資料表數: {base_count} 張實體表, {view_count} 個檢視表",
+            f"總占用空間 (Data + Index): {_format_bytes(total_used_bytes)}",
+            f"總未釋放碎片空間 (Data Free): {_format_bytes(total_free_bytes)}",
+            "",
+            "[Health Warnings]",
+        ]
+        if warnings_list:
+            report.extend(f"⚠️ {w}" for w in warnings_list)
+        else:
+            report.append("✓ 未發現明顯結構、主鍵、碎片或索引健康風險。")
+
+        report.append("")
+        report.append("[Table Overview]")
+        report.extend(overview_lines)
+        return _truncate_health_report(report, MAX_OUTPUT_CHARS)
+    except _ConnAuthError as e:
+        _audit_log(
+            "mysql_inspect_health",
+            sql_executed,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
+        return f"[ERROR] {e}"
+    except Exception as e:
+        _audit_log(
+            "mysql_inspect_health",
+            sql_executed,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+            status="ERROR",
+            detail=str(e),
+        )
+        return f"[ERROR] 健康檢查失敗: {e}"
+    finally:
+        _close_safely(conn)
+
+
+@mcp.tool()
+def mysql_check_table(
+    table_name: str,
+    database: str = "",
+    check_mode: str = "QUICK",
+    mysql_host: str = "",
+    mysql_port: str = "",
+    mysql_user: str = "",
+    mysql_password: str = "",
+    mysql_database: str = "",
+) -> str:
+    """對指定 MySQL/MariaDB 單一資料表執行輕量級 CHECK TABLE 檢查（僅限 QUICK/FAST，具 2GB 容量保護）"""
+    conn = None
+    sql_executed = f"CHECK TABLE {table_name}"
+    try:
+        clean_name = (table_name or "").strip().strip("'\"`")
+        if not clean_name:
+            _audit_log(
+                "mysql_check_table",
+                "table_name=''",
+                target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+                status="BLOCKED",
+                detail="缺少 table_name 參數",
+            )
+            return "[ERROR] 缺少 table_name 參數。"
+
+        mode_upper = (check_mode or "QUICK").strip().upper()
+        if mode_upper not in ("QUICK", "FAST"):
+            msg = "基於正式環境穩定度考量，check_mode 僅允許 'QUICK' 或 'FAST'（禁止 EXTENDED、MEDIUM、FOR UPGRADE）。"
+            _audit_log(
+                "mysql_check_table",
+                f"table_name={table_name!r} check_mode={check_mode!r}",
+                target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+                status="BLOCKED",
+                detail=msg,
+            )
+            return f"[ERROR] {msg}"
+
+        try:
+            explicit_schema, target_table = _parse_mysql_target(clean_name, database)
+        except ValueError as e:
+            _audit_log(
+                "mysql_check_table",
+                f"table_name={table_name!r} database={database!r}",
+                target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+                status="BLOCKED",
+                detail=str(e),
+            )
+            return f"[ERROR] {e}"
+
+        conn = _get_readonly_connection(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
+        target_schema = (
+            explicit_schema
+            or _clean_param(mysql_database)
+            or _RUNTIME_CREDS.get("MYSQL_DATABASE", "")
+            or _clean_param(os.getenv("MYSQL_DATABASE"))
+        )
+        if not target_schema:
+            _audit_log(
+                "mysql_check_table",
+                f"table_name={target_table!r}",
+                target=_format_audit_target(mysql_host, mysql_port, mysql_user, ""),
+                status="BLOCKED",
+                detail="未指定 database 或 MYSQL_DATABASE",
+            )
+            return "[ERROR] 執行 CHECK TABLE 必須指定目標資料庫（請傳入 database 參數或設定 schema.table）。"
+
+        target = _format_audit_target(mysql_host, mysql_port, mysql_user, target_schema)
+        qualified_display = f"{target_schema}.{target_table}"
+        qualified_sql = f"`{target_schema}`.`{target_table}`"
+
+        cursor = conn.cursor()
+        try:
+            # 1. 事前查詢詮釋資料，攔截 VIEW 與超過 2GB 的大型資料表
+            meta_sql = (
+                "SELECT TABLE_TYPE, COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) "
+                "FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s;"
+            )
+            cursor.execute(meta_sql, (target_schema, target_table))
+            meta_row = cursor.fetchone()
+            if not meta_row:
+                _audit_log(
+                    "mysql_check_table",
+                    f"{meta_sql} [table={qualified_display}]",
+                    target=target,
+                    status="NOT_FOUND",
+                    detail=f"找不到資料表 {qualified_display}",
+                )
+                return f"找不到資料表 {qualified_display}。"
+
+            tbl_type = str(meta_row[0] or "BASE TABLE").upper()
+            total_bytes = int(meta_row[1] or 0)
+            if tbl_type == "VIEW":
+                _audit_log(
+                    "mysql_check_table",
+                    f"SKIP VIEW {qualified_display}",
+                    target=target,
+                    status="SKIPPED",
+                    detail="VIEW 不適用實體頁檢查",
+                )
+                return f"[SKIPPED] {qualified_display} 為 VIEW（檢視表），不適用實體資料頁 CHECK TABLE 檢查。"
+
+            if total_bytes > MYSQL_CHECK_TABLE_MAX_BYTES:
+                limit_str = _format_bytes(MYSQL_CHECK_TABLE_MAX_BYTES)
+                size_str = _format_bytes(total_bytes)
+                _audit_log(
+                    "mysql_check_table",
+                    f"SIZE_GUARD {qualified_display} ({size_str} > {limit_str})",
+                    target=target,
+                    status="BLOCKED",
+                    detail=f"size={total_bytes} exceeds limit={MYSQL_CHECK_TABLE_MAX_BYTES}",
+                )
+                return (
+                    f"[BLOCKED] 資料表 {qualified_display} 總容量 ({size_str}) 超過安全檢查上限 ({limit_str})；"
+                    "為防止正式環境磁碟 I/O 尖峰與讀取鎖阻塞，已拒絕執行 CHECK TABLE。"
+                    "請改用 mysql_inspect_health 進行零鎖表健康巡檢。"
+                )
+
+            # 2. 執行受控之輕量級 CHECK TABLE（注意：CHECK TABLE 會觸發 MySQL 隱式提交，完成後立即關閉連線）
+            sql_executed = f"CHECK TABLE {qualified_sql} {mode_upper};"
+            cursor.execute(sql_executed)
+            check_rows = cursor.fetchall()
+        finally:
+            cursor.close()
+
+        _audit_log(
+            "mysql_check_table",
+            sql_executed,
+            target=target,
+            status="OK",
+            detail=f"mode={mode_upper} rows={len(check_rows)}",
+        )
+        lines = [
+            f"[MySQL CHECK TABLE Result ({mode_upper})]",
+            f"目標資料表: {qualified_display} (容量: {_format_bytes(total_bytes)})",
+        ]
+        for r in check_rows:
+            if len(r) >= 4:
+                lines.append(f"- [{r[2]}] {r[0]} ({r[1]}): {_redact_output(str(r[3]))}")
+            else:
+                lines.append("- " + ", ".join(_redact_output(str(c)) for c in r))
+        return "\n".join(lines)
+    except _ConnAuthError as e:
+        _audit_log(
+            "mysql_check_table",
+            sql_executed,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+            status="AUTH_FAIL",
+            detail=str(e),
+        )
+        return f"[ERROR] {e}"
+    except Exception as e:
+        _audit_log(
+            "mysql_check_table",
+            sql_executed,
+            target=_format_audit_target(mysql_host, mysql_port, mysql_user, database or mysql_database),
+            status="ERROR",
+            detail=str(e),
+        )
+        return f"[ERROR] CHECK TABLE 執行失敗: {e}"
+    finally:
+        _close_safely(conn)
 
 
 if __name__ == "__main__":

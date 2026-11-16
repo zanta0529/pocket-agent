@@ -36,6 +36,14 @@ MAX_IMAGE_INPUT_COUNT = 10  # /image 單次請求最多允許的參考圖數量
 MAX_FILE_SEARCH_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB: search_files 全文檢索時跳過的大檔閾值
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024  # 2 MB: Web 工具爬取網頁時的最大 HTTP 接收大小
 
+# 資料庫 MCP 健康檢查與安全熔斷限制 (Database MCP Health & Safety Guardrails)
+DB_HEALTH_MAX_TABLES = 200  # 單次資料庫健康巡檢最多分析的資料表數量上限
+MYSQL_CHECK_TABLE_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB: MySQL CHECK TABLE 允許的最大單表容量上限
+SQLITE_QUICK_CHECK_MAX_BYTES = 500 * 1024 * 1024  # 500 MB: SQLite PRAGMA quick_check 允許的最大檔案大小上限
+DB_FRAGMENTATION_WARN_RATIO = 0.20  # 資料表空間碎片率預警水位 (20%)
+DB_FRAGMENTATION_MIN_FREE_BYTES = 10 * 1024 * 1024  # 10 MB: 觸發資料表碎片率預警的最小閒置空間門檻
+DB_AUTOINC_WARN_RATIO = 0.75  # 自動遞增 (AUTO_INCREMENT / IDENTITY) 欄位溢位預警水位 (75%)
+
 
 # ==============================================================================
 # 3. 原生檔案系統操作限制 (File System Limits)

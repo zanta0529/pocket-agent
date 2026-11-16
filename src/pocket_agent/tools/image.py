@@ -9,11 +9,13 @@ item 就帶有 base64 PNG。計費走 ChatGPT Plus/Pro 訂閱配額，不吃 API
 
 import base64
 import inspect
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
+from pocket_agent.core.cancellation import check_cancelled, run_sync
 from pocket_agent.system.auth import get_model, get_provider_client
-from pocket_agent.system.constants import MAX_IMAGE_INPUT_BYTES, MAX_IMAGE_INPUT_COUNT
+from pocket_agent.system.constants import MAX_IMAGE_INPUT_BYTES, MAX_IMAGE_INPUT_COUNT, PROVIDER_OPENAI
 
 # gpt-image-2 支援的參數
 VALID_SIZES = {"auto", "1024x1024", "1536x1024", "1024x1536"}
@@ -58,12 +60,56 @@ def disable_model_param() -> None:
     _model_param_ok = False
 
 
+def _prepare_output_path(output_path: str | Path) -> Path:
+    """於遠端生圖或寫檔前預先驗證輸出目標路徑並確保父目錄存在。"""
+    raw = str(output_path if output_path is not None else "").strip()
+    if not raw or raw.startswith(("\\\\", "//")):
+        raise ValueError("無效或不安全的輸出路徑（禁止空白或 UNC／網路路徑）。")
+
+    resolved = Path(raw).expanduser().resolve(strict=False)
+    if resolved.exists() and resolved.is_dir():
+        raise ValueError(f"輸出路徑不能是資料夾（請指定完整檔名，例如 {resolved / 'image.png'}）：{resolved}")
+
+    for parent in resolved.parents:
+        if parent.exists():
+            if not parent.is_dir():
+                raise ValueError(f"輸出路徑的父路徑不是資料夾：{parent}")
+            break
+
+    try:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ValueError(f"無法建立輸出目錄 {resolved.parent}：{exc}") from exc
+
+    return resolved
+
+
+def _iter_candidates(path: Path) -> Iterator[Path]:
+    """依本地時間戳記（yyyyMMdd_hhmmss）依序產生候選路徑（-2、-3…）。"""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = f"{path.stem}-{ts}"
+    yield path.with_name(f"{base_name}{path.suffix}")
+    n = 2
+    while True:
+        yield path.with_name(f"{base_name}-{n}{path.suffix}")
+        n += 1
+
+
 def save_image_b64(b64_png: str, output_path: str | Path = "generated_images/image.png") -> Path:
-    """base64 PNG 存檔（自動加上 yyyyMMdd_hhmmss 時間戳記並避開既有檔名），回傳實際路徑。"""
-    out = _next_available(Path(output_path).expanduser().resolve())
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(base64.b64decode(b64_png))
-    return out
+    """base64 PNG 原子存檔（自動加上 yyyyMMdd_hhmmss 時間戳記並避開既有檔名），回傳實際路徑。"""
+    raw_bytes = base64.b64decode(b64_png)
+    target = _prepare_output_path(output_path)
+    for candidate in _iter_candidates(target):
+        try:
+            with candidate.open("xb") as fh:
+                fh.write(raw_bytes)
+            return candidate
+        except FileExistsError:
+            continue
+        except BaseException:
+            candidate.unlink(missing_ok=True)
+            raise
+    raise RuntimeError("無法寫入圖片檔案")
 
 
 def _has_valid_image_header(path: Path, ext: str) -> bool:
@@ -111,17 +157,10 @@ def _image_part(path: str | Path, workspace_dirs: list[str] | None = None) -> di
 
 def _next_available(path: Path) -> Path:
     """加上本地時間戳記（yyyyMMdd_hhmmss），同秒碰撞時附加 -2、-3 後綴避免覆蓋。"""
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name = f"{path.stem}-{ts}"
-    candidate = path.with_name(f"{base_name}{path.suffix}")
-    if not candidate.exists():
-        return candidate
-    n = 2
-    while True:
-        candidate = path.with_name(f"{base_name}-{n}{path.suffix}")
+    for candidate in _iter_candidates(path):
         if not candidate.exists():
             return candidate
-        n += 1
+    raise RuntimeError("無法取得可用輸出路徑")
 
 
 async def generate_image(
@@ -142,12 +181,13 @@ async def generate_image(
     if len(imgs) > MAX_IMAGE_INPUT_COUNT:
         raise ValueError(f"參考圖數量超過上限（最多 {MAX_IMAGE_INPUT_COUNT} 張），請先移除多餘附件。")
 
-    # 送出網路請求前先整批驗證參考圖並轉為 input_image
+    # 送出網路請求前先預檢輸出目的地並整批驗證參考圖
+    target_output = _prepare_output_path(output_path)
     content: list[dict] = [{"type": "input_text", "text": prompt}]
     for img in imgs:
         content.append(_image_part(img, workspace_dirs=workspace_dirs))
 
-    client = get_provider_client(provider="openai")
+    client = await run_sync(get_provider_client, PROVIDER_OPENAI)
     from pocket_agent.system.config import config
 
     wrapper_model = config.get("providers.openai.image_wrapper_model") or get_model()
@@ -165,7 +205,19 @@ async def generate_image(
             except Exception:
                 pass
 
-    return save_image_b64(b64_png, output_path)
+    try:
+        return save_image_b64(b64_png, target_output)
+    except OSError as exc:
+        from pocket_agent.system.paths import scratch_dir
+
+        try:
+            rescue_target = scratch_dir() / "generated_images" / target_output.name
+            rescued = save_image_b64(b64_png, rescue_target)
+        except Exception:
+            raise exc
+        raise RuntimeError(
+            f"無法寫入目標路徑 {target_output}（{exc}）；已將生成的圖片緊急保存至沙盒暫存區：{rescued}"
+        ) from exc
 
 
 async def _request(client, model: str, content: list[dict], tool: dict) -> str:
@@ -184,6 +236,7 @@ async def _request(client, model: str, content: list[dict], tool: dict) -> str:
         )
     except Exception as exc:
         if OpenAIResponsesEngine._is_recoverable_image_tool_model_error(exc, [tool]):
+            disable_model_param()
             retry_tool = {k: v for k, v in tool.items() if k != "model"}
             stream = await client.responses.create(
                 model=model,
@@ -199,20 +252,26 @@ async def _request(client, model: str, content: list[dict], tool: dict) -> str:
 
     result: str | None = None
     error_msg: str | None = None
+    incomplete_reason: str | None = None
 
     try:
         async for event in stream:
+            check_cancelled()
             etype = getattr(event, "type", "")
             if etype == "response.output_item.done":
                 item = getattr(event, "item", None)
                 if item and getattr(item, "type", "") == "image_generation_call":
                     result = getattr(item, "result", None)
             elif etype in ("error", "response.failed"):
+                err_obj = getattr(event, "error", None) or getattr(getattr(event, "response", None), "error", None)
                 error_msg = str(
-                    getattr(event, "message", None)
-                    or getattr(getattr(event, "response", None), "error", None)
-                    or "unknown error"
+                    getattr(event, "message", None) or getattr(err_obj, "message", None) or err_obj or "unknown error"
                 )
+            elif etype == "response.incomplete":
+                resp_obj = getattr(event, "response", None)
+                details = getattr(resp_obj, "incomplete_details", None)
+                reason = getattr(details, "reason", None) or details or "incomplete"
+                incomplete_reason = str(reason)
     finally:
         close_fn = getattr(stream, "close", None)
         if callable(close_fn):
@@ -225,6 +284,8 @@ async def _request(client, model: str, content: list[dict], tool: dict) -> str:
 
     if error_msg:
         raise RuntimeError(f"生圖失敗：{error_msg}")
+    if incomplete_reason:
+        raise RuntimeError(f"生圖未完成 (incomplete)：{incomplete_reason}")
     if not result:
         raise RuntimeError("生圖失敗：後端沒有回傳圖片資料")
     return result

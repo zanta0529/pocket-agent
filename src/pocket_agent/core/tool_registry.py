@@ -13,6 +13,7 @@ from typing import Any
 
 from pocket_agent.core.cancellation import run_sync
 from pocket_agent.core.subagents import get_subagent, is_subagent_tool
+from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.extensions.skills import call_skill_tool, is_skill_tool
 from pocket_agent.system.constants import WEB_RESEARCH_CHECKPOINT_INTERVAL
 from pocket_agent.tools.doc import call_doc_tool, is_doc_tool
@@ -115,7 +116,7 @@ class ParallelSubagentsToolHandler(ToolHandler):
 
         result = wrap_external_content("\n\n".join(combined))
         if require_save_prompt:
-            result += agent._build_save_report_prompt(is_parallel=True)
+            result += agent.build_save_report_prompt(is_parallel=True)
         return ToolExecutionResult(output=result)
 
 
@@ -155,7 +156,7 @@ class SubagentToolHandler(ToolHandler):
         result = wrap_external_content(result)
         sa_def = get_subagent(args.get("name", ""))
         if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
-            result += agent._build_save_report_prompt(is_parallel=False)
+            result += agent.build_save_report_prompt(is_parallel=False)
         return ToolExecutionResult(output=result)
 
 
@@ -291,7 +292,8 @@ class McpToolHandler(ToolHandler):
     def is_sensitive(self, name: str, agent: Any) -> bool:
         if hasattr(agent, "mcp") and hasattr(agent.mcp, "is_sensitive_tool"):
             return bool(agent.mcp.is_sensitive_tool(name))
-        return name.startswith("rhel_") or name.startswith("win_rdp_")
+        _, raw_name = parse_mcp_tool_name(name)
+        return raw_name.startswith(("rhel_", "win_rdp_", "mysql_", "mssql_"))
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
         if agent._needs_mcp_confirm(name, args):

@@ -112,3 +112,32 @@ def test_mcp_command_compact_display_and_dynamic_columns():
     rendered = out.getvalue()
     assert "search_skills" in rendered
     assert "mcp__agensi__search_skills" not in rendered
+
+
+def test_activity_tracker_and_tool_handler_strip_mcp_prefix():
+    from pocket_agent.core.activity import SessionActivityTracker
+    from pocket_agent.core.tool_registry import McpToolHandler
+
+    tracker = SessionActivityTracker()
+    tracker.record_tool_result(
+        "mcp__browser__browser_navigate",
+        {"url": "https://example.org/docs"},
+        "<external_content>\nNavigated\n</external_content>",
+    )
+    urls = tracker.get_url_activities()
+    assert len(urls) == 1
+    assert urls[0].url == "https://example.org/docs"
+    assert urls[0].status == "success"
+
+    handler = McpToolHandler()
+    dummy_agent = SimpleNamespace()
+    assert handler.is_sensitive("mcp__mysql__mysql_run_select_query", dummy_agent) is True
+    assert handler.is_sensitive("mcp__rhel_ops__rhel_system_overview", dummy_agent) is True
+    assert handler.is_sensitive("mcp__sqlite__sqlite_list_tables", dummy_agent) is False
+
+
+def test_engine_factory_preserves_explicit_provider_name():
+    from pocket_agent.engines.factory import EngineFactory
+
+    engine = EngineFactory.create("ollamacloud", MagicMock(), "llama3")
+    assert engine.provider_name == "ollamacloud"
