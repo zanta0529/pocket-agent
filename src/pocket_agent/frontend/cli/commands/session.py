@@ -23,7 +23,7 @@ def _load_session_into_context(ctx: CommandContext, session_id: str) -> None:
     if callable(getattr(type(ctx.agent), "load_session_history", None)):
         ctx.agent.load_session_history(data["history"])
     else:
-        ctx.agent.history = data["history"]
+        ctx.agent.history = list(data["history"])
         ctx.agent.is_sensitive_session = False
         ctx.agent.context_usage = None
         if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:

@@ -28,12 +28,21 @@ try:
 except ImportError:
     from mcp.server.fastmcp import FastMCP as MCPServer
 
-try:
-    from pocket_agent.system.constants import DEFAULT_TOOL_OUTPUT_CHARS
+_MCP_DIR = str(Path(__file__).resolve().parent)
+if _MCP_DIR not in sys.path:
+    sys.path.insert(0, _MCP_DIR)
 
-    MAX_OUTPUT_CHARS = DEFAULT_TOOL_OUTPUT_CHARS
-except ImportError:
-    MAX_OUTPUT_CHARS = 12000
+import _db_common  # noqa: E402
+
+MAX_OUTPUT_CHARS = _db_common.MAX_OUTPUT_CHARS
+_SENSITIVE_COL_RE = _db_common.SENSITIVE_COL_RE
+_ConnAuthError = _db_common.ConnAuthError
+_clean_param = _db_common.clean_param
+_format_cell_value = _db_common.format_cell_value
+_get_audit_log_path = _db_common.get_audit_log_path
+_is_empty_or_null = _db_common.is_empty_or_null
+_redact_output = _db_common.redact_output
+_validate_identifier = _db_common.validate_identifier
 
 mcp = MCPServer("mssql")
 
@@ -44,23 +53,7 @@ _CREDS_TTL_SECONDS: float = 600.0  # 10 分鐘閒置清除
 
 _HOST_RE = re.compile(r"^[a-zA-Z0-9_.\-\\]+$")
 _USER_RE = re.compile(r"^[a-zA-Z0-9_.@$\-\\]+$")
-_IDENT_RE = re.compile(r"^[a-zA-Z0-9_.@$\-]+$")
 _DRIVER_RE = re.compile(r"^[a-zA-Z0-9_.\- ]+$")
-
-_REDACT_SECRET_RE = re.compile(
-    r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
-    r"|authorization|private_key|preshared_key|connectionstring)\b[^\r\n\x00]*"
-)
-_REDACT_URL_RE = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@\"']+:[^\s/@\"']+@")
-_REDACT_PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
-_REDACT_KV_RE = re.compile(
-    r"(?i)(\b(?:password|passwd|secret|token|api_key|apikey|client_secret|passphrase|connectionstring)\b"
-    r"\s*[:=]\s*)([^\s#;\"',)]+|\"[^\"]*\"|'[^']*')"
-)
-_SENSITIVE_COL_RE = re.compile(
-    r"(?i)(?:password|passwd|secret|token|passphrase|api[_-]?key"
-    r"|private[_-]?key|preshared[_-]?key|credential|connectionstring)"
-)
 _FORBIDDEN_MSSQL_RE = re.compile(
     r"(?i)\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|MERGE"
     r"|GRANT|REVOKE|DENY|EXEC|EXECUTE|DECLARE|SET|USE"
@@ -70,32 +63,6 @@ _FORBIDDEN_MSSQL_RE = re.compile(
     r"|NEXT\s+VALUE\s+FOR|SEQUENCE"
     r"|XP_[\w]+|SP_OA[\w]*|SP_CONFIGURE|SP_ADD[\w]*)\b"
 )
-
-
-class _ConnAuthError(Exception):
-    """表示連線參數驗證失敗、網路無法連線或資料庫帳號密碼認證失敗。"""
-
-
-def _get_audit_log_path() -> Path:
-    """解析集中化稽核日誌 (agent.log) 路徑。"""
-    env_log = (os.getenv("POCKET_AGENT_LOG_FILE") or "").strip()
-    if env_log:
-        return Path(env_log).expanduser().resolve()
-    try:
-        from pocket_agent.system.paths import log_dir
-
-        return log_dir() / "agent.log"
-    except ImportError:
-        src_dir = Path(__file__).resolve().parent.parent / "src"
-        if src_dir.is_dir() and str(src_dir) not in sys.path:
-            sys.path.insert(0, str(src_dir))
-            try:
-                from pocket_agent.system.paths import log_dir
-
-                return log_dir() / "agent.log"
-            except ImportError:
-                pass
-        return Path.home() / ".pocket-agent" / "logs" / "agent.log"
 
 
 def _format_audit_target(host: str = "", port: str = "", user: str = "", db: str = "") -> str:
@@ -114,28 +81,7 @@ def _audit_log(
     status: str = "OK",
     detail: str = "",
 ) -> None:
-    """將 MCP 工具執行的 T-SQL 指令與敏感操作寫入 Pocket Agent 集中化日誌 (agent.log) 供稽核使用。"""
-    try:
-        log_path = _get_audit_log_path()
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        now_t = time.time()
-        lt = time.localtime(now_t)
-        ms = int((now_t - int(now_t)) * 1000)
-        ts = f"{time.strftime('%Y-%m-%d %H:%M:%S', lt)},{ms:03d}"
-        safe_cmd = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", command).splitlines()).strip()
-        safe_target = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", target).splitlines()).strip()
-        safe_detail = " ".join(_REDACT_KV_RE.sub(r"\1[REDACTED]", detail).splitlines()).strip()
-        parts = [f"{ts} [AUDIT] [MCP:mssql] tool={tool_name} status={status}"]
-        if safe_target:
-            parts.append(f"target={safe_target}")
-        if safe_cmd:
-            parts.append(f"command={safe_cmd!r}")
-        if safe_detail:
-            parts.append(f"detail={safe_detail!r}")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(" ".join(parts) + "\n")
-    except Exception:
-        pass
+    _db_common.audit_log("mssql", tool_name, command, target=target, status=status, detail=detail)
 
 
 def _check_creds_ttl() -> None:
@@ -150,40 +96,6 @@ def _clear_creds_cache() -> None:
     global _CREDS_UPDATED_AT
     _RUNTIME_CREDS.clear()
     _CREDS_UPDATED_AT = 0.0
-
-
-def _redact_output(text: str) -> str:
-    """自動遮罩查詢結果中的敏感機密欄位、連線 URI 帳密與私鑰。"""
-    if not text:
-        return text
-    out = _REDACT_PEM_RE.sub("[REDACTED_PRIVATE_KEY]", text)
-    out = _REDACT_URL_RE.sub(r"\1[REDACTED]@", out)
-    return _REDACT_SECRET_RE.sub("[REDACTED]", out)
-
-
-def _format_cell_value(val: object, *, is_sensitive: bool = False) -> str:
-    """格式化單一欄位值：敏感欄強制遮罩、None 轉為 NULL、多行文字遮罩後單行化。"""
-    if is_sensitive:
-        return "[REDACTED]"
-    if val is None:
-        return "NULL"
-    redacted = _redact_output(str(val))
-    return redacted.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
-
-
-def _is_empty_or_null(val: str | None) -> bool:
-    """檢查字串是否為空值、空白、null 或無效預留值。"""
-    if val is None:
-        return True
-    cleaned = str(val).strip()
-    return not cleaned or cleaned.lower() in ("null", "none", "~")
-
-
-def _clean_param(val: str | None) -> str:
-    """清理並移除外層引號；若為空或無效預留值則回傳空字串。"""
-    if _is_empty_or_null(val):
-        return ""
-    return str(val).strip().strip("'\"")
 
 
 def _validate_host(value: str) -> str:
@@ -202,25 +114,13 @@ def _validate_host(value: str) -> str:
 
 
 def _validate_port(value: str) -> str:
-    clean = value.strip()
-    if not clean.isdigit() or not (1 <= int(clean) <= 65535):
-        raise ValueError("非法的 MSSQL_PORT 連接埠數值（必須為 1~65535 之間的整數）。")
-    return str(int(clean))
+    return _db_common.validate_port(value, "MSSQL_PORT")
 
 
 def _validate_user(value: str) -> str:
     clean = value.strip()
     if not clean or clean.startswith("-") or not _USER_RE.match(clean):
         raise ValueError("非法的 MSSQL_USER 參數格式（僅允許英數字、點、底線、連字號、@、$ 與 \\）。")
-    return clean
-
-
-def _validate_identifier(value: str, field_name: str) -> str:
-    clean = value.strip()
-    if not clean or clean.startswith("-") or not _IDENT_RE.match(clean):
-        raise ValueError(
-            f"非法的 {field_name} 參數格式（僅允許英數字、點、底線、連字號、@ 與 $，且不得以連字號開頭）。"
-        )
     return clean
 
 

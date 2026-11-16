@@ -87,3 +87,85 @@ class BaseProvider(ABC):
     def fetch_models(self) -> List[str]:
         """回傳該 Provider 支援的模型清單"""
         pass
+
+
+class OpenAICompatibleProvider(BaseProvider):
+    """OpenAI 相容 API 供應商之共用樣板基底（Template Method）。"""
+
+    config_key: str = ""
+    api_key_label: str = ""
+    base_url: str = ""
+    fallback_models: tuple[str, ...] = ()
+    missing_key_message: str = ""
+    timeout_seconds: float = 180.0
+    fail_on_auth_error: bool = False
+
+    @classmethod
+    def setup_wizard(cls, config) -> None:
+        if cls.config_key:
+            cls.prompt_api_key(cls.config_key, cls.api_key_label or cls.display_name, config)
+
+    def _resolve_api_key(self) -> str | None:
+        from pocket_agent.system.config import config
+
+        return config.get(self.config_key) if self.config_key else None
+
+    def _resolve_fetch_token(self) -> str | None:
+        return self._resolve_api_key()
+
+    def _build_extra_headers(self) -> dict[str, str] | None:
+        return None
+
+    def _models_url(self) -> str:
+        return f"{self.base_url.rstrip('/')}/models"
+
+    def _parse_models_payload(self, data: dict[str, Any]) -> List[str]:
+        items = data.get("data", [])
+        return [m["id"] for m in items if "id" in m]
+
+    def get_client(self) -> Any:
+        from openai import AsyncOpenAI
+
+        api_key = self._resolve_api_key()
+        if not api_key:
+            label = self.api_key_label or self.display_name
+            msg = self.missing_key_message or (
+                f"未設定 {label} API Key。請設定 `{self.config_key}` 或透過 `agent setup` 進行設定。"
+            )
+            raise ValueError(msg)
+
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": self.base_url,
+            "http_client": None,
+            "timeout": httpx.Timeout(timeout=self.timeout_seconds, connect=10.0),
+        }
+        extra_headers = self._build_extra_headers()
+        if extra_headers:
+            kwargs["default_headers"] = extra_headers
+        return AsyncOpenAI(**kwargs)
+
+    def fetch_models(self) -> List[str]:
+        token = self._resolve_fetch_token()
+        if not token:
+            return []
+
+        headers = {"Authorization": f"Bearer {token}"}
+        extra_headers = self._build_extra_headers()
+        if extra_headers:
+            headers.update(extra_headers)
+
+        try:
+            with httpx.Client() as client:
+                resp = client.get(self._models_url(), headers=headers, timeout=10)
+            if self.fail_on_auth_error and resp.status_code in (401, 403):
+                log.error("%s auth error (%s): %s", self.display_name, resp.status_code, resp.text)
+                return []
+            if resp.status_code == 200:
+                return self._parse_models_payload(resp.json())
+            if self.fail_on_auth_error:
+                resp.raise_for_status()
+            return list(self.fallback_models)
+        except Exception as e:
+            log.error("%s fetch models error: %s", self.display_name, e)
+            return list(self.fallback_models)

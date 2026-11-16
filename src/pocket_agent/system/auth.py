@@ -39,7 +39,17 @@ from pocket_agent.system.constants import (
     DEFAULT_OPENAI_AUTH_URL,
     DEFAULT_OPENAI_TOKEN_URL,
     OAUTH_TOKEN_URLS,
+    PROVIDER_GEMINI_OAUTH,
 )
+
+
+def _normalize_oauth_provider(provider: str) -> str:
+    """正規化 OAuth provider 名稱，將歷史別名統一對應至標準常數。"""
+    p = (provider or "").strip().lower()
+    if p == "gemini-oauth":
+        return PROVIDER_GEMINI_OAUTH
+    return p
+
 
 DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
@@ -163,8 +173,7 @@ def _save_token(provider: str, token: dict) -> None:
         )
 
 
-def _load_token(provider: str) -> dict | None:
-    key = f"{provider}-token"
+def _load_token_by_key(key: str) -> dict | None:
     try:
         meta_raw = keyring.get_password(KEYCHAIN_SERVICE, f"{key}-meta")
         if meta_raw:
@@ -184,6 +193,15 @@ def _load_token(provider: str) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def _load_token(provider: str) -> dict | None:
+    norm = _normalize_oauth_provider(provider)
+    token = _load_token_by_key(f"{norm}-token")
+    if token is None and norm == PROVIDER_GEMINI_OAUTH:
+        # 向下相容歷史拼字鍵名
+        token = _load_token_by_key("gemini-oauth-token")
+    return token
 
 
 def _is_expired(token: dict) -> bool:
@@ -220,8 +238,9 @@ def _try_refresh(provider: str, token: dict, client_id: str, client_secret: str 
 def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_auth_url=None, cancel_event=None) -> dict:
     verifier, challenge = _pkce_pair()
     expected_state = secrets.token_urlsafe(16)
+    norm_provider = _normalize_oauth_provider(provider)
 
-    if provider in ("gemini-oauth", "gemini_oauth"):
+    if norm_provider == PROVIDER_GEMINI_OAUTH:
         auth_url_base = config.get("providers.gemini.auth_url", DEFAULT_GEMINI_AUTH_URL)
         token_url = config.get("providers.gemini.token_url", DEFAULT_GEMINI_TOKEN_URL)
         scope = config.get("providers.gemini.scope", "https://www.googleapis.com/auth/generative-language")
@@ -240,7 +259,7 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
         "code_challenge_method": "S256",
     }
 
-    if provider not in ("gemini-oauth", "gemini_oauth"):
+    if norm_provider != PROVIDER_GEMINI_OAUTH:
         params["originator"] = ORIGINATOR
         if ADD_ORGANIZATIONS:
             params["id_token_add_organizations"] = "true"
@@ -362,7 +381,8 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
 
 
 def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=None) -> str:
-    if provider in ("gemini-oauth", "gemini_oauth"):
+    norm_provider = _normalize_oauth_provider(provider)
+    if norm_provider == PROVIDER_GEMINI_OAUTH:
         client_id = config.get("providers.gemini.client_id")
         client_secret = config.get("providers.gemini.client_secret", "")
         if not client_id:
@@ -371,19 +391,20 @@ def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=No
         client_id = config.get("openai_client_id") or DEFAULT_CLIENT_ID
         client_secret = ""
 
-    token = _load_token(provider)
+    token = _load_token(norm_provider)
 
     if token and not _is_expired(token):
         return token["access_token"]
 
     if token:
-        refreshed = _try_refresh(provider, token, client_id, client_secret)
+        refreshed = _try_refresh(norm_provider, token, client_id, client_secret)
         if refreshed:
             return refreshed["access_token"]
 
-    token = _browser_oauth(provider, client_id, client_secret, on_auth_url, cancel_event)
-    _save_token(provider, token)
-    print(f"[Auth] ✓ {provider.upper()} 登入成功！\n")
+    token = _browser_oauth(norm_provider, client_id, client_secret, on_auth_url, cancel_event)
+    _save_token(norm_provider, token)
+    display_label = "GEMINI-OAUTH" if norm_provider == PROVIDER_GEMINI_OAUTH else "OPENAI"
+    print(f"[Auth] ✓ {display_label} 登入成功！\n")
     return token["access_token"]
 
 
@@ -419,38 +440,43 @@ def fetch_available_models(provider: str = "openai") -> list[str]:
 
 
 def logout(provider: str = "openai") -> None:
+    norm_provider = _normalize_oauth_provider(provider)
+    keys_to_clear = [f"{norm_provider}-token"]
+    if norm_provider == PROVIDER_GEMINI_OAUTH:
+        keys_to_clear.append("gemini-oauth-token")
+
     cleared = False
-    key = f"{provider}-token"
-    try:
-        keyring.delete_password(KEYCHAIN_SERVICE, key)
-        cleared = True
-    except Exception:
-        pass
-
-    try:
-        meta_raw = keyring.get_password(KEYCHAIN_SERVICE, f"{key}-meta")
-        if meta_raw:
-            meta = json.loads(meta_raw)
-            prefix = meta.get("prefix", key)
-            for i in range(meta.get("chunks", 0)):
-                try:
-                    keyring.delete_password(KEYCHAIN_SERVICE, f"{prefix}-{i}")
-                except Exception:
-                    pass
-            keyring.delete_password(KEYCHAIN_SERVICE, f"{key}-meta")
-            cleared = True
-    except Exception:
-        pass
-
-    if TOKEN_FILE.exists():
+    for key in keys_to_clear:
         try:
-            tokens = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
-            if key in tokens:
-                del tokens[key]
-                TOKEN_FILE.write_text(json.dumps(tokens), encoding="utf-8")
+            keyring.delete_password(KEYCHAIN_SERVICE, key)
+            cleared = True
+        except Exception:
+            pass
+
+        try:
+            meta_raw = keyring.get_password(KEYCHAIN_SERVICE, f"{key}-meta")
+            if meta_raw:
+                meta = json.loads(meta_raw)
+                prefix = meta.get("prefix", key)
+                for i in range(meta.get("chunks", 0)):
+                    try:
+                        keyring.delete_password(KEYCHAIN_SERVICE, f"{prefix}-{i}")
+                    except Exception:
+                        pass
+                keyring.delete_password(KEYCHAIN_SERVICE, f"{key}-meta")
                 cleared = True
         except Exception:
             pass
+
+        if TOKEN_FILE.exists():
+            try:
+                tokens = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+                if key in tokens:
+                    del tokens[key]
+                    TOKEN_FILE.write_text(json.dumps(tokens), encoding="utf-8")
+                    cleared = True
+            except Exception:
+                pass
     print("✓ 已登出。" if cleared else "（沒有找到已儲存的登入資訊）")
 
 
