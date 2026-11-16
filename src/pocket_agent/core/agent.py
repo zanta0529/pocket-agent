@@ -25,7 +25,7 @@ from pocket_agent.core.subagents import get_subagent, subagent_tools
 from pocket_agent.core.tool_registry import default_tool_registry
 from pocket_agent.engines.base import BaseEngine
 from pocket_agent.extensions.hooks import run_hooks
-from pocket_agent.extensions.mcp import MCPManager
+from pocket_agent.extensions.mcp import MCPManager, parse_mcp_tool_name
 from pocket_agent.extensions.skills import (
     call_skill_tool,  # noqa: F401
     skill_tools,
@@ -33,12 +33,18 @@ from pocket_agent.extensions.skills import (
 )
 from pocket_agent.system.config import config
 from pocket_agent.system.constants import (
+    DEFAULT_COMPACT_TARGET_RATIO,
     DEFAULT_MAX_STREAM_RETRIES,
     DEFAULT_MAX_TOOL_ROUNDS,
     DEFAULT_REASONING_EFFORT,
+    DEFAULT_RESERVE_OUTPUT_TOKENS,
+    DEFAULT_SAFETY_MARGIN_TOKENS,
     DEFAULT_STREAM_RETRY_BASE_SEC,
     LOG_BACKUP_COUNT,
     LOG_FILE_MAX_BYTES,
+    PROVIDER_OPENAI,
+    WEB_RESEARCH_HARD_LIMIT,
+    WEB_RESEARCH_SOFT_LIMIT,
 )
 from pocket_agent.tools.doc import DOC_TOOLS, call_doc_tool  # noqa: F401
 from pocket_agent.tools.document import DOCUMENT_TOOLS, call_document_tool  # noqa: F401
@@ -433,7 +439,7 @@ class Agent:
     def supports_image_command(self) -> bool:
         """/image 獨立指令目前僅限使用 ChatGPT OAuth (openai) 訂閱配額。"""
         provider = self.provider or getattr(self.engine, "provider_name", "")
-        return str(provider).lower() == "openai" and self.supports_image_generation
+        return str(provider).lower() == PROVIDER_OPENAI and self.supports_image_generation
 
     async def get_quota(self):
         return await self.engine.get_quota()
@@ -593,7 +599,7 @@ class Agent:
         """
         if name not in getattr(self, "_safe_read_tools", set()):
             return True
-        raw_name = name.split("__")[-1]
+        _, raw_name = parse_mcp_tool_name(name)
         arg_key = _PATH_GATED_SAFE_TOOLS.get(name) or _PATH_GATED_SAFE_TOOLS.get(raw_name)
         if arg_key is None:
             return False
@@ -928,9 +934,9 @@ class Agent:
         window, source = resolve_context_window(cfg_window, engine_window)
         if source == SOURCE_DEFAULT:
             log.debug("Context window unknown for %s; using fallback %d.", self.model, window)
-        reserve_output = config.get("system.context_reserve_output") or 4096
-        safety_margin = config.get("system.context_safety_margin") or 1024
-        target_ratio = config.get("system.context_compact_target_ratio") or 0.6
+        reserve_output = config.get("system.context_reserve_output") or DEFAULT_RESERVE_OUTPUT_TOKENS
+        safety_margin = config.get("system.context_safety_margin") or DEFAULT_SAFETY_MARGIN_TOKENS
+        target_ratio = config.get("system.context_compact_target_ratio") or DEFAULT_COMPACT_TARGET_RATIO
         self._budget = ContextBudget(
             window,
             source,
@@ -1070,7 +1076,7 @@ class Agent:
         )
 
     @staticmethod
-    def _build_save_report_prompt(*, is_parallel: bool = False) -> str:
+    def build_save_report_prompt(*, is_parallel: bool = False) -> str:
         intro = "上述平行子任務已完成並彙整。" if is_parallel else "上述子任務已完成。"
         return (
             "\n\n[系統指示 (System Instruction)]\n"
@@ -1078,6 +1084,22 @@ class Agent:
             "為這份報告想一個最合適的動態檔名（例如 docs/xxx-analysis.md），"
             "並立刻呼叫 `ask_question` 詢問使用者是否要將這份報告存檔。"
             "選項請提供：「(Recommended) 存檔至建議路徑」與「不存檔，僅保留於對話」。"
+        )
+
+    _build_save_report_prompt = build_save_report_prompt
+
+    def inject_code_search_context(self, query: str, clean_result: str) -> None:
+        """公開介面：將程式碼檢索結果寫入對話歷史供後續回合參照。"""
+        context_msg = (
+            f"【系統提示】使用者剛剛使用了程式碼檢索功能，找到了以下關於 `{query}` 的片段。\n"
+            "請在後續的回答、分析或修改中，將這些片段作為可信的參考資料：\n\n" + clean_result
+        )
+        self.history.append({"role": "user", "content": context_msg})
+        self.history.append(
+            {
+                "role": "assistant",
+                "content": "好的，我已經將這些程式碼片段載入記憶中。請告訴我接下來需要怎麼分析或處理它們？",
+            }
         )
 
     async def run_subagent_turn(self, name: str, task: str) -> tuple[str, bool]:
@@ -1097,8 +1119,11 @@ class Agent:
         tasks: list[dict],
         *,
         on_summarizing: object = None,
+        user_prompt: str | None = None,
     ) -> tuple[str, bool]:
         """公開介面：平行執行多個子代理並彙整報告，寫入主對話歷史。"""
+        if user_prompt is not None:
+            self.history.append({"role": "user", "content": user_prompt})
         coros = [self._run_subagent(t) for t in tasks]
         results = await asyncio.gather(*coros, return_exceptions=True)
 
@@ -1227,11 +1252,15 @@ class Agent:
         pipeline = ContextPipeline(budget, engine)
         try:
             s_lim = getattr(self, "web_research_soft_limit", None)
-            web_soft_limit = int(s_lim if s_lim is not None else config.get("agent.web_research_soft_limit", 5))
+            web_soft_limit = int(
+                s_lim if s_lim is not None else config.get("agent.web_research_soft_limit", WEB_RESEARCH_SOFT_LIMIT)
+            )
             h_lim = getattr(self, "web_research_hard_limit", None)
-            web_hard_limit = int(h_lim if h_lim is not None else config.get("agent.web_research_hard_limit", 10))
+            web_hard_limit = int(
+                h_lim if h_lim is not None else config.get("agent.web_research_hard_limit", WEB_RESEARCH_HARD_LIMIT)
+            )
         except TypeError, ValueError:
-            web_soft_limit, web_hard_limit = 5, 10
+            web_soft_limit, web_hard_limit = WEB_RESEARCH_SOFT_LIMIT, WEB_RESEARCH_HARD_LIMIT
         web_guard = WebResearchGuard(web_soft_limit, web_hard_limit)
 
         max_rounds = self.max_tool_rounds
@@ -1542,7 +1571,7 @@ class Agent:
                         "is_safe_read": (
                             fc["name"] in getattr(self, "_safe_read_tools", set())
                             and fc["name"] not in _PATH_GATED_SAFE_TOOLS
-                            and fc["name"].split("__")[-1] not in _PATH_GATED_SAFE_TOOLS
+                            and parse_mcp_tool_name(fc["name"])[1] not in _PATH_GATED_SAFE_TOOLS
                         ),
                     },
                 )

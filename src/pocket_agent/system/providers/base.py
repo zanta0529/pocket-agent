@@ -98,6 +98,9 @@ class OpenAICompatibleProvider(BaseProvider):
     fallback_models: tuple[str, ...] = ()
     missing_key_message: str = ""
     timeout_seconds: float = 180.0
+    connect_timeout_seconds: float = 10.0
+    read_timeout_seconds: float | None = None
+    use_shared_http_client: bool = False
     fail_on_auth_error: bool = False
 
     @classmethod
@@ -120,11 +123,13 @@ class OpenAICompatibleProvider(BaseProvider):
         return f"{self.base_url.rstrip('/')}/models"
 
     def _parse_models_payload(self, data: dict[str, Any]) -> List[str]:
-        items = data.get("data", [])
+        items = data.get("models", data.get("data", []))
         return [m["id"] for m in items if "id" in m]
 
     def get_client(self) -> Any:
-        from openai import AsyncOpenAI
+        import sys
+
+        from openai import AsyncOpenAI as _DefaultAsyncOpenAI
 
         api_key = self._resolve_api_key()
         if not api_key:
@@ -134,16 +139,28 @@ class OpenAICompatibleProvider(BaseProvider):
             )
             raise ValueError(msg)
 
+        if self.read_timeout_seconds is not None:
+            timeout = httpx.Timeout(
+                timeout=self.timeout_seconds,
+                connect=self.connect_timeout_seconds,
+                read=self.read_timeout_seconds,
+            )
+        else:
+            timeout = httpx.Timeout(timeout=self.timeout_seconds, connect=self.connect_timeout_seconds)
+
         kwargs: dict[str, Any] = {
             "api_key": api_key,
-            "base_url": self.base_url,
-            "http_client": None,
-            "timeout": httpx.Timeout(timeout=self.timeout_seconds, connect=10.0),
+            "http_client": self.build_async_http_client(timeout) if self.use_shared_http_client else None,
+            "timeout": timeout,
         }
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
         extra_headers = self._build_extra_headers()
         if extra_headers:
             kwargs["default_headers"] = extra_headers
-        return AsyncOpenAI(**kwargs)
+        mod = sys.modules.get(self.__class__.__module__)
+        client_cls = getattr(mod, "AsyncOpenAI", _DefaultAsyncOpenAI)
+        return client_cls(**kwargs)
 
     def fetch_models(self) -> List[str]:
         token = self._resolve_fetch_token()

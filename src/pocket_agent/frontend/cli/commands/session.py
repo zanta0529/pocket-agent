@@ -350,22 +350,25 @@ class NewCommand(CliCommand):
             saved_msg = ""
 
         # 徹底清空當前上下文與會話狀態
-        ctx.agent.clear_history()
-        ctx.agent.is_sensitive_session = False
-        ctx.agent.accept_edits = False
+        if callable(getattr(type(ctx.agent), "reset_session", None)):
+            ctx.agent.reset_session()
+        else:
+            ctx.agent.clear_history()
+            ctx.agent.is_sensitive_session = False
+            ctx.agent.accept_edits = False
+            ctx.agent.context_usage = None
+            ctx.agent.last_images.clear()
+            ctx.agent.last_files.clear()
+            if hasattr(ctx.agent, "user_instructions") and isinstance(ctx.agent.user_instructions, list):
+                ctx.agent.user_instructions.clear()
+            if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
+                ctx.agent.activity.clear()
         ctx.state.session_id = new_session_id()
         ctx.state.pending_files.clear()
         ctx.state.last_failed_input = ""
         ctx.state.session_tokens = 0
         ctx.state.session_approved_commands.clear()
         ctx.state.accept_edits = False
-        ctx.agent.context_usage = None
-        ctx.agent.last_images.clear()
-        ctx.agent.last_files.clear()
-        if hasattr(ctx.agent, "user_instructions") and isinstance(ctx.agent.user_instructions, list):
-            ctx.agent.user_instructions.clear()
-        if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
-            ctx.agent.activity.clear()
 
         info = f"✓ 已開啟全新對話（Session ID: {ctx.state.session_id}）· 上下文與暫存已完整清空。"
         if saved_msg:
@@ -419,8 +422,8 @@ class ActivityCommand(CliCommand):
             tracker = SessionActivityTracker()
             ctx.agent.activity = tracker
 
-        if not tracker._display_paths and not tracker._urls and getattr(ctx.agent, "history", None):
-            tracker.rebuild_from_history(ctx.agent.history)
+        if hasattr(tracker, "ensure_rebuilt"):
+            tracker.ensure_rebuilt(getattr(ctx.agent, "history", None))
 
         file_changes = tracker.get_file_changes(sync_disk=True)
         url_items = tracker.get_url_activities()

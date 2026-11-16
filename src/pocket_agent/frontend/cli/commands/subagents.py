@@ -82,7 +82,7 @@ async def execute_subagent_flow(ctx: CommandContext, subagent_name: str, task: s
         ctx.renderer.reply(reply, 0, 0, streamed=False)
 
         if require_save:
-            auto_prompt = ctx.agent._build_save_report_prompt(is_parallel=False).lstrip()
+            auto_prompt = ctx.agent.build_save_report_prompt(is_parallel=False).lstrip()
             from pocket_agent.frontend.cli.main import send_turn
 
             await send_turn(
@@ -145,7 +145,6 @@ class ParallelCommand(CliCommand):
 
         display_text = f"/parallel {args}"
         ctx.renderer.user(display_text)
-        ctx.agent.history.append({"role": "user", "content": display_text})
 
         try:
             from pocket_agent.frontend.cli.render import MultiStatus
@@ -164,14 +163,18 @@ class ParallelCommand(CliCommand):
                 sum_status.start()
 
             try:
-                reply, require_save = await ctx.agent.run_parallel_subagents(tasks, on_summarizing=_on_summarizing)
+                reply, require_save = await ctx.agent.run_parallel_subagents(
+                    tasks,
+                    on_summarizing=_on_summarizing,
+                    user_prompt=display_text,
+                )
             finally:
                 ctx.renderer._stop_status()
 
             ctx.renderer.reply(reply, 0, 0, streamed=False)
 
             if require_save:
-                auto_prompt = ctx.agent._build_save_report_prompt(is_parallel=True).lstrip()
+                auto_prompt = ctx.agent.build_save_report_prompt(is_parallel=True).lstrip()
                 from pocket_agent.frontend.cli.main import send_turn
 
                 await send_turn(

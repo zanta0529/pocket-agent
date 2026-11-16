@@ -18,6 +18,7 @@ from pocket_agent.engines.base import (
     QuotaInfo,
     usage_field,
 )
+from pocket_agent.system.constants import PROVIDER_OPENAI, PROVIDER_OPENAI_API
 from pocket_agent.tools.image import disable_model_param
 
 log = logging.getLogger("pocket-agent")
@@ -308,7 +309,7 @@ class CodexOAuthQuotaStrategy(OpenAIErrorQuotaStrategy):
         base_url = str(getattr(self.client, "base_url", ""))
         if "chatgpt.com" in base_url:
             try:
-                info = get_user_info("openai")
+                info = get_user_info(PROVIDER_OPENAI)
                 plan = info.get("plan") if isinstance(info, dict) else None
                 if plan:
                     return format_plan_name(str(plan))
@@ -467,7 +468,7 @@ class OpenAIResponsesEngine(BaseEngine):
             api_key = getattr(self.client, "api_key", None)
             is_jwt = isinstance(api_key, str) and api_key.count(".") >= 2
 
-            if provider == "openai-api" or ("api.openai.com" in base_url and not is_jwt):
+            if provider == PROVIDER_OPENAI_API or ("api.openai.com" in base_url and not is_jwt):
                 self._quota_strategy = OpenAIApiQuotaStrategy(self.client, self.model)
             else:
                 self._quota_strategy = CodexOAuthQuotaStrategy(self.client, self.model)

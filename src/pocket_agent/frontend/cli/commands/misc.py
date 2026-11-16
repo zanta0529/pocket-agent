@@ -6,7 +6,7 @@ from rich.text import Text
 
 from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
-from pocket_agent.frontend.cli.input import BUILTINS, file_argument
+from pocket_agent.frontend.cli.input import BUILTINS, file_argument, is_image_command_supported
 
 # /mcp sqlite <db_path> 所呼叫的 SQLite MCP 切換工具名稱
 _SQLITE_SWITCH_TOOL = "sqlite_switch_database"
@@ -568,8 +568,7 @@ class HelpCommand(CliCommand):
 
         for command, description in BUILTINS.items():
             ctx.renderer.message(f"/{command}  {description}")
-        supports_img = ctx.state.provider == "openai" and bool(getattr(ctx.agent, "supports_image_command", True))
-        if supports_img:
+        if is_image_command_supported(ctx.state, ctx.agent):
             ctx.renderer.message("/image <描述>  生圖，待送附件作參考圖")
         from pocket_agent.system.paths import is_portable
 
@@ -603,8 +602,7 @@ class ImageCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if not args:
             raise ValueError("用法：/image <描述>")
-        supports_img = ctx.state.provider == "openai" and bool(getattr(ctx.agent, "supports_image_command", True))
-        if not supports_img:
+        if not is_image_command_supported(ctx.state, ctx.agent):
             raise ValueError("產生圖片功能目前僅限使用 openai (ChatGPT OAuth 訂閱配額) 引擎時支援")
         return CommandResult("image", args)
 
@@ -648,17 +646,20 @@ class CodeSearchCommand(CliCommand):
                 Panel(clean_result, title="🔎 程式碼搜尋結果", title_align="left", border_style="bold green")
             )
 
-            context_msg = (
-                f"【系統提示】使用者剛剛使用了程式碼檢索功能，找到了以下關於 `{query}` 的片段。\n"
-                "請在後續的回答、分析或修改中，將這些片段作為可信的參考資料：\n\n" + clean_result
-            )
-            ctx.agent.history.append({"role": "user", "content": context_msg})
-            ctx.agent.history.append(
-                {
-                    "role": "assistant",
-                    "content": "好的，我已經將這些程式碼片段載入記憶中。請告訴我接下來需要怎麼分析或處理它們？",
-                }
-            )
+            if callable(getattr(type(ctx.agent), "inject_code_search_context", None)):
+                ctx.agent.inject_code_search_context(query, clean_result)
+            elif hasattr(ctx.agent, "history") and isinstance(ctx.agent.history, list):
+                context_msg = (
+                    f"【系統提示】使用者剛剛使用了程式碼檢索功能，找到了以下關於 `{query}` 的片段。\n"
+                    "請在後續的回答、分析或修改中，將這些片段作為可信的參考資料：\n\n" + clean_result
+                )
+                ctx.agent.history.append({"role": "user", "content": context_msg})
+                ctx.agent.history.append(
+                    {
+                        "role": "assistant",
+                        "content": "好的，我已經將這些程式碼片段載入記憶中。請告訴我接下來需要怎麼分析或處理它們？",
+                    }
+                )
 
             ctx.renderer.message(
                 "💡 (提示) 搜尋結果已自動加入上下文，您可以直接請 AI 對這些片段進行分析或修改。", "cyan"

@@ -330,7 +330,7 @@ class ConfigCommand(CliCommand):
             return CommandResult()
 
         while True:
-            flat_data = self._flatten(config.json_provider._data)
+            flat_data = self._flatten(config.to_dict())
             choices = []
             keys_list = []
             for k, v in flat_data.items():

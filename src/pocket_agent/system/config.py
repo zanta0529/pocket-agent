@@ -451,6 +451,10 @@ class ConfigManager:
         """重新載入 JSON 檔案"""
         self.json_provider.load()
 
+    def to_dict(self) -> Dict[str, Any]:
+        """回傳目前 JSON 設定檔之淺拷貝字典，避免外部直接存取私有欄位。"""
+        return dict(self.json_provider._data)
+
     def unlock(self, password: str) -> bool:
         """
         驗證並解鎖加密金鑰庫 (Portable 模式)。

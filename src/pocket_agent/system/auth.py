@@ -508,7 +508,7 @@ def get_model() -> str:
 def load_config() -> dict:
     from pocket_agent.system.config import config
 
-    return dict(config.json_provider._data)
+    return config.to_dict()
 
 
 def save_config(cfg: dict) -> None:

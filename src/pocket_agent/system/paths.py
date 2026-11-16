@@ -169,3 +169,27 @@ def scratch_dir(cwd: Path | str | None = None) -> Path:
         d = user_dir() / "scratch"
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+
+def format_display_path(path_str: str, base_dir: Path | None = None) -> str:
+    """將檔案路徑轉為相對於工作目錄的簡短路徑，無法相對化時安全保留原路徑。"""
+    if not path_str or not isinstance(path_str, str):
+        return ""
+    raw = Path(path_str.strip())
+    base = (base_dir or Path.cwd()).resolve()
+    try:
+        if raw.is_absolute():
+            rel = raw.resolve().relative_to(base)
+            return rel.as_posix()
+    except ValueError, RuntimeError:
+        pass
+
+    try:
+        home = Path.home().resolve()
+        if raw.is_absolute():
+            rel_home = raw.resolve().relative_to(home)
+            return f"~/{rel_home.as_posix()}"
+    except ValueError, RuntimeError:
+        pass
+
+    return raw.as_posix() if hasattr(raw, "as_posix") else str(path_str)

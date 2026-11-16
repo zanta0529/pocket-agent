@@ -12,6 +12,8 @@ from rich.text import Text
 
 from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.frontend.cli.state import CliState
+from pocket_agent.system.constants import DEFAULT_CONTEXT_WINDOW
+from pocket_agent.system.paths import format_display_path
 
 
 class MultiStatus:
@@ -78,30 +80,6 @@ def plain(value: object) -> str:
     return "".join(c if c.isprintable() else " " for c in str(value))
 
 
-def format_display_path(path_str: str, base_dir: Path | None = None) -> str:
-    """將檔案路徑轉為相對於工作目錄的簡短路徑，無法相對化時安全保留原路徑。"""
-    if not path_str or not isinstance(path_str, str):
-        return ""
-    raw = Path(path_str.strip())
-    base = (base_dir or Path.cwd()).resolve()
-    try:
-        if raw.is_absolute():
-            rel = raw.resolve().relative_to(base)
-            return rel.as_posix()
-    except ValueError, RuntimeError:
-        pass
-
-    try:
-        home = Path.home().resolve()
-        if raw.is_absolute():
-            rel_home = raw.resolve().relative_to(home)
-            return f"~/{rel_home.as_posix()}"
-    except ValueError, RuntimeError:
-        pass
-
-    return raw.as_posix() if hasattr(raw, "as_posix") else str(path_str)
-
-
 def middle_truncate(value: str, max_width: int) -> str:
     """中段智慧截斷：保留開頭與結尾關鍵資訊，中間以 ... 省略，保證末端檔名/副檔名不遺失。"""
     if max_width <= 0:
@@ -156,7 +134,7 @@ def toolbar(state: CliState, width: int) -> FormattedText:
         count = f"待送 {len(state.pending_files)}"
 
     if state.session_tokens > 0:
-        max_tokens = max(1, getattr(state, "context_window", 128000) or 128000)
+        max_tokens = max(1, getattr(state, "context_window", DEFAULT_CONTEXT_WINDOW) or DEFAULT_CONTEXT_WINDOW)
         ratio = min(1.0, state.session_tokens / max_tokens)
         filled = int(ratio * 10)
         bar = "█" * filled + "░" * (10 - filled)

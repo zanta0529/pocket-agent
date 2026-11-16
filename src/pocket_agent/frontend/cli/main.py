@@ -314,8 +314,9 @@ class CliFrontend(FrontendStrategy):
             from rich.prompt import Prompt
 
             from pocket_agent.system.config import AuthException, MissingKeyException, config
+            from pocket_agent.system.constants import CLI_MAX_AUTH_RETRIES
 
-            max_retries = int(config.get("cli.max_retries", 3))
+            max_retries = int(config.get("cli.max_retries", CLI_MAX_AUTH_RETRIES))
             retry_count = 0
             while retry_count < max_retries:
                 try:
@@ -396,7 +397,10 @@ class CliFrontend(FrontendStrategy):
                 if sessions:
                     latest = load_session(sessions[0]["id"])
                     if latest and latest.get("history"):
-                        agent.history = latest["history"]
+                        if callable(getattr(type(agent), "load_session_history", None)):
+                            agent.load_session_history(latest["history"])
+                        else:
+                            agent.history = list(latest["history"])
                         state.session_id = latest["id"]
                         renderer.message(
                             f"已恢復：{latest.get('title', '（無標題）')} · {len(agent.history)} 則訊息",

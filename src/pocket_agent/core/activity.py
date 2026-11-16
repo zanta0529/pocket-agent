@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from pocket_agent.frontend.cli.render import format_display_path
+from pocket_agent.extensions.mcp import parse_mcp_tool_name
+from pocket_agent.system.paths import format_display_path
 
 _SNAPSHOT_EXCLUDES = {
     ".git",
@@ -137,6 +138,7 @@ class SessionActivityTracker:
     ) -> None:
         """根據工具名稱、參數與執行結果自動記錄檔案異動或網址查詢。"""
         real_name = tool_name.split("::")[-1] if "::" in tool_name else tool_name
+        _, real_name = parse_mcp_tool_name(real_name)
 
         # 1. 網路查詢工具（無論成功或失敗皆需記錄完整網址與狀態）
         if real_name == "read_url_content":
@@ -288,9 +290,15 @@ class SessionActivityTracker:
                 continue
             out = outputs_by_id.get(cid, "")
             existed_hint: bool | None = None
-            if name.split("::")[-1] == "write_to_file":
+            _, raw_tool_name = parse_mcp_tool_name(name.split("::")[-1])
+            if raw_tool_name == "write_to_file":
                 existed_hint = bool(args.get("overwrite", False))
             self.record_tool_result(name, args, out, existed_before=existed_hint)
+
+    def ensure_rebuilt(self, history: list[dict] | None) -> None:
+        """若目前無任何檔案或網址紀錄且歷史對話非空，自動從歷史重建活動紀錄。"""
+        if not self._display_paths and not self._urls and history:
+            self.rebuild_from_history(history)
 
     def get_file_changes(self, *, sync_disk: bool = True) -> dict[str, list[str]]:
         """回傳分類後的檔案清單 {'added': [...], 'modified': [...], 'deleted': [...]}。"""

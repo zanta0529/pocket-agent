@@ -70,7 +70,6 @@ class EngineFactory:
             raise ValueError(f"EngineFactory 不支援此 Provider: {provider}")
 
         log.debug("Using %s for %s", engine_cls.__name__, model)
-        engine = engine_cls(client=client, model=model)
-        if not getattr(engine, "provider_name", None):
-            engine.provider_name = p
+        engine = engine_cls(client=client, model=model, provider=p)
+        engine.provider_name = p
         return engine
