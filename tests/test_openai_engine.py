@@ -238,6 +238,20 @@ def test_openai_strategy_selection_and_factory_mapping():
     assert isinstance(eng_api, OpenAIResponsesEngine)
     assert isinstance(eng_api.quota_strategy, OpenAIApiQuotaStrategy)
 
+    # 驗證嚴格 hostname 比對，防止惡意路徑或偽造後綴網域觸發不完整 URL 子字串比對漏洞
+    spoof_path_client = SimpleNamespace(
+        api_key="sk-proj-123456",
+        base_url="https://evil.example.com/api.openai.com/v1",
+    )
+    spoof_suffix_client = SimpleNamespace(
+        api_key="sk-proj-123456",
+        base_url="https://api.openai.com.evil.example.com/v1",
+    )
+    eng_spoof_path = OpenAIResponsesEngine(client=spoof_path_client, model="gpt-4o", provider=PROVIDER_OPENAI)
+    eng_spoof_suffix = OpenAIResponsesEngine(client=spoof_suffix_client, model="gpt-4o", provider=PROVIDER_OPENAI)
+    assert isinstance(eng_spoof_path.quota_strategy, CodexOAuthQuotaStrategy)
+    assert isinstance(eng_spoof_suffix.quota_strategy, CodexOAuthQuotaStrategy)
+
 
 def test_openai_engine_fallback_preserves_empty_tools_and_does_not_call_callback():
     """驗證當輪 tools=[] 時，即使發生 model 相關錯誤也不重試、不呼叫 callback。"""

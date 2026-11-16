@@ -3,6 +3,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Callable, Optional
+from urllib.parse import urlparse
 
 from openai import NOT_GIVEN
 
@@ -34,6 +35,12 @@ _PLAN_DISPLAY_NAMES: dict[str, str] = {
     "enterprise": "Enterprise",
     "edu": "Edu",
 }
+
+
+def _url_matches_domain(url_str: str, domain: str) -> bool:
+    """解析 URL 的 hostname 並嚴格比對網域或其子網域，防範不完整 URL 子字串比對漏洞。"""
+    host = (urlparse(url_str.strip()).hostname or "").lower()
+    return host == domain or host.endswith(f".{domain}")
 
 
 def format_plan_name(raw_plan: str | None) -> str | None:
@@ -307,7 +314,7 @@ class CodexOAuthQuotaStrategy(OpenAIErrorQuotaStrategy):
                     return format_plan_name(str(plan))
 
         base_url = str(getattr(self.client, "base_url", ""))
-        if "chatgpt.com" in base_url:
+        if _url_matches_domain(base_url, "chatgpt.com"):
             try:
                 info = get_user_info(PROVIDER_OPENAI)
                 plan = info.get("plan") if isinstance(info, dict) else None
@@ -468,7 +475,7 @@ class OpenAIResponsesEngine(BaseEngine):
             api_key = getattr(self.client, "api_key", None)
             is_jwt = isinstance(api_key, str) and api_key.count(".") >= 2
 
-            if provider == PROVIDER_OPENAI_API or ("api.openai.com" in base_url and not is_jwt):
+            if provider == PROVIDER_OPENAI_API or (_url_matches_domain(base_url, "api.openai.com") and not is_jwt):
                 self._quota_strategy = OpenAIApiQuotaStrategy(self.client, self.model)
             else:
                 self._quota_strategy = CodexOAuthQuotaStrategy(self.client, self.model)
