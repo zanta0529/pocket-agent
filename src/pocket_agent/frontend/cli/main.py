@@ -16,6 +16,39 @@ if TYPE_CHECKING:
     from pocket_agent.frontend.cli.state import CliState
 
 
+def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_keys: list[str]) -> dict[str, str]:
+    """依核心註冊之 ConnParamSpec 規格向使用者收集缺少的 MCP 連線參數。"""
+    from rich.prompt import Prompt
+
+    from pocket_agent.extensions.mcp import get_conn_param_spec
+
+    status = renderer._active_status
+    if status:
+        status.stop()
+
+    renderer._ensure_newline()
+    renderer.console.print()
+    renderer.message(
+        f"🔐 [{server_name}] 請補充未設定的遠端連線資訊（僅存於本機記憶體，不會傳送給 AI 模型）：",
+        "bold cyan",
+    )
+    collected: dict[str, str] = {}
+    try:
+        for key in missing_keys:
+            spec = get_conn_param_spec(key)
+            ask_kwargs: dict = {"password": spec.is_secret, "console": renderer.console}
+            if spec.default is not None:
+                ask_kwargs["default"] = spec.default
+            val = Prompt.ask(f"[bold yellow]  {spec.label}[/bold yellow]", **ask_kwargs)
+            collected[key] = val if spec.is_secret else val.strip()
+        return collected
+    except EOFError, KeyboardInterrupt:
+        return collected
+    finally:
+        if status:
+            status.start()
+
+
 def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer", silent: bool = False) -> None:
     """對話結束或每輪完成時自動存檔（失敗不中斷流程）。"""
     from pocket_agent.core.sessions import save_session
@@ -150,11 +183,14 @@ async def send_turn(
                 except Exception:
                     pass
 
-            bg_task = asyncio.create_task(_refresh_quota())
-            bg_tasks = getattr(agent, "_bg_tasks", None)
-            if isinstance(bg_tasks, set):
-                bg_tasks.add(bg_task)
-                bg_task.add_done_callback(bg_tasks.discard)
+            if hasattr(agent, "spawn_background_task"):
+                agent.spawn_background_task(_refresh_quota())
+            else:
+                bg_task = asyncio.create_task(_refresh_quota())
+                bg_tasks = getattr(agent, "_bg_tasks", None)
+                if isinstance(bg_tasks, set):
+                    bg_tasks.add(bg_task)
+                    bg_task.add_done_callback(bg_tasks.discard)
 
 
 async def conversation(
@@ -345,64 +381,9 @@ class CliFrontend(FrontendStrategy):
 
             agent.on_confirm = ConfirmationBridge(agent, state, renderer)
 
-            def _cli_prompt_mcp_conn(server_name: str, missing_keys: list[str]) -> dict[str, str]:
-                status = renderer._active_status
-                if status:
-                    status.stop()
-
-                renderer._ensure_newline()
-                renderer.console.print()
-                renderer.message(
-                    f"🔐 [{server_name}] 請補充未設定的遠端連線資訊（僅存於本機記憶體，不會傳送給 AI 模型）：",
-                    "bold cyan",
-                )
-                collected: dict[str, str] = {}
-                labels = {
-                    "RHEL_HOST": ("RHEL 主機位址 (IP / Host)", None, False),
-                    "RHEL_SSH_PORT": ("SSH 連接埠 (Port)", "22", False),
-                    "RHEL_SSH_USER": ("SSH 登入帳號 (Username)", None, False),
-                    "RHEL_SSH_PASSWORD": ("SSH 登入密碼 (Password)", None, True),
-                    "WIN_HOST": ("Windows 主機位址 (IP / Host)", None, False),
-                    "WIN_RDP_PORT": ("RDP 遠端桌面連接埠 (Port)", "3389", False),
-                    "WIN_RDP_USER": ("Windows 登入帳號 (Username / Domain\\User)", None, False),
-                    "WIN_RDP_PASSWORD": ("Windows 登入密碼 (Password)", None, True),
-                    "MYSQL_HOST": ("MySQL/MariaDB 主機位址 (IP / Host)", None, False),
-                    "MYSQL_PORT": ("MySQL 連接埠 (Port)", "3306", False),
-                    "MYSQL_USER": ("MySQL 登入帳號 (Username)", None, False),
-                    "MYSQL_PASSWORD": ("MySQL 登入密碼 (Password)", None, True),
-                    "MYSQL_DATABASE": ("MySQL 資料庫名稱 (Database)", None, False),
-                    "MSSQL_HOST": ("SQL Server 主機位址 (IP / Host)", None, False),
-                    "MSSQL_PORT": ("SQL Server 連接埠 (Port)", "1433", False),
-                    "MSSQL_USER": ("SQL Server 登入帳號 (Username)", None, False),
-                    "MSSQL_PASSWORD": ("SQL Server 登入密碼 (Password)", None, True),
-                    "MSSQL_DATABASE": ("SQL Server 資料庫名稱 (Database)", None, False),
-                    "GITHUB_TOKEN": ("GitHub Personal Access Token (GITHUB_TOKEN)", None, True),
-                }
-                try:
-                    for key in missing_keys:
-                        label, default_val, is_pw = labels.get(key, (key, None, "PASSWORD" in key))
-                        if default_val is not None:
-                            val = Prompt.ask(
-                                f"[bold yellow]  {label}[/bold yellow]",
-                                default=default_val,
-                                password=is_pw,
-                                console=renderer.console,
-                            )
-                        else:
-                            val = Prompt.ask(
-                                f"[bold yellow]  {label}[/bold yellow]",
-                                password=is_pw,
-                                console=renderer.console,
-                            )
-                        collected[key] = val if is_pw else val.strip()
-                    return collected
-                except EOFError, KeyboardInterrupt:
-                    return collected
-                finally:
-                    if status:
-                        status.start()
-
-            mcp.on_prompt_conn = _cli_prompt_mcp_conn
+            mcp.on_prompt_conn = lambda server_name, missing_keys: _prompt_mcp_conn_params(
+                renderer, server_name, missing_keys
+            )
 
             tools = list(mcp.list_tools())
             renderer.welcome(state, tools)

@@ -433,3 +433,19 @@ class BaseEngine:
         預設委派給同步的 format_api_error(exc)；子類別可覆寫以在例外缺乏重置時間時進行非同步補齊。
         """
         return self.format_api_error(exc)
+
+    async def _http_get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        timeout: float = 10.0,
+    ) -> Any:
+        """優先複用既有的 httpx.AsyncClient 連線池發送 GET 請求，否則建立暫時連線。"""
+        import httpx
+
+        existing = getattr(self.client, "_client", None)
+        if isinstance(httpx.AsyncClient, type) and isinstance(existing, httpx.AsyncClient) and not existing.is_closed:
+            return await existing.get(url, headers=headers, timeout=timeout)
+        async with httpx.AsyncClient(timeout=timeout) as http_client:
+            return await http_client.get(url, headers=headers)

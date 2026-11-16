@@ -59,29 +59,51 @@ except ImportError:
     HAS_MCP_OAUTH = False
 
 
-_CONN_PARAM_MAP = {
-    "ssh_host": "RHEL_HOST",
-    "ssh_port": "RHEL_SSH_PORT",
-    "ssh_user": "RHEL_SSH_USER",
-    "ssh_password": "RHEL_SSH_PASSWORD",
-    "ssh_key_path": "RHEL_SSH_KEY_PATH",
-    "rdp_host": "WIN_HOST",
-    "rdp_port": "WIN_RDP_PORT",
-    "rdp_user": "WIN_RDP_USER",
-    "rdp_password": "WIN_RDP_PASSWORD",
-    "mysql_host": "MYSQL_HOST",
-    "mysql_port": "MYSQL_PORT",
-    "mysql_user": "MYSQL_USER",
-    "mysql_password": "MYSQL_PASSWORD",
-    "mysql_database": "MYSQL_DATABASE",
-    "mssql_host": "MSSQL_HOST",
-    "mssql_port": "MSSQL_PORT",
-    "mssql_user": "MSSQL_USER",
-    "mssql_password": "MSSQL_PASSWORD",
-    "mssql_database": "MSSQL_DATABASE",
-    "db_path": "DB_PATH",
-    "github_token": "GITHUB_TOKEN",
+@dataclass(frozen=True)
+class ConnParamSpec:
+    """MCP 動態連線參數規格，集中維護環境變數名稱與互動提示元資料。"""
+
+    env_key: str
+    label: str
+    default: str | None = None
+    is_secret: bool = False
+
+
+CONN_PARAM_SPECS: dict[str, ConnParamSpec] = {
+    "ssh_host": ConnParamSpec("RHEL_HOST", "RHEL 主機位址 (IP / Host)"),
+    "ssh_port": ConnParamSpec("RHEL_SSH_PORT", "SSH 連接埠 (Port)", "22"),
+    "ssh_user": ConnParamSpec("RHEL_SSH_USER", "SSH 登入帳號 (Username)"),
+    "ssh_password": ConnParamSpec("RHEL_SSH_PASSWORD", "SSH 登入密碼 (Password)", is_secret=True),
+    "ssh_key_path": ConnParamSpec("RHEL_SSH_KEY_PATH", "SSH 私鑰路徑 (Key Path)"),
+    "rdp_host": ConnParamSpec("WIN_HOST", "Windows 主機位址 (IP / Host)"),
+    "rdp_port": ConnParamSpec("WIN_RDP_PORT", "RDP 遠端桌面連接埠 (Port)", "3389"),
+    "rdp_user": ConnParamSpec("WIN_RDP_USER", "Windows 登入帳號 (Username / Domain\\User)"),
+    "rdp_password": ConnParamSpec("WIN_RDP_PASSWORD", "Windows 登入密碼 (Password)", is_secret=True),
+    "mysql_host": ConnParamSpec("MYSQL_HOST", "MySQL/MariaDB 主機位址 (IP / Host)"),
+    "mysql_port": ConnParamSpec("MYSQL_PORT", "MySQL 連接埠 (Port)", "3306"),
+    "mysql_user": ConnParamSpec("MYSQL_USER", "MySQL 登入帳號 (Username)"),
+    "mysql_password": ConnParamSpec("MYSQL_PASSWORD", "MySQL 登入密碼 (Password)", is_secret=True),
+    "mysql_database": ConnParamSpec("MYSQL_DATABASE", "MySQL 資料庫名稱 (Database)"),
+    "mssql_host": ConnParamSpec("MSSQL_HOST", "SQL Server 主機位址 (IP / Host)"),
+    "mssql_port": ConnParamSpec("MSSQL_PORT", "SQL Server 連接埠 (Port)", "1433"),
+    "mssql_user": ConnParamSpec("MSSQL_USER", "SQL Server 登入帳號 (Username)"),
+    "mssql_password": ConnParamSpec("MSSQL_PASSWORD", "SQL Server 登入密碼 (Password)", is_secret=True),
+    "mssql_database": ConnParamSpec("MSSQL_DATABASE", "SQL Server 資料庫名稱 (Database)"),
+    "db_path": ConnParamSpec("DB_PATH", "SQLite 資料庫路徑 (DB_PATH)"),
+    "github_token": ConnParamSpec("GITHUB_TOKEN", "GitHub Personal Access Token (GITHUB_TOKEN)", is_secret=True),
 }
+
+_CONN_PARAM_MAP: dict[str, str] = {param: spec.env_key for param, spec in CONN_PARAM_SPECS.items()}
+_SPEC_BY_ENV_KEY: dict[str, ConnParamSpec] = {spec.env_key: spec for spec in CONN_PARAM_SPECS.values()}
+
+
+def get_conn_param_spec(env_key: str) -> ConnParamSpec:
+    """依環境變數名稱取得對應的連線參數規格，未知鍵值提供合理預設。"""
+    spec = _SPEC_BY_ENV_KEY.get(env_key)
+    if spec is not None:
+        return spec
+    return ConnParamSpec(env_key=env_key, label=env_key, is_secret="PASSWORD" in env_key or "TOKEN" in env_key)
+
 
 # 切換 SQLite 資料庫的工具；成功後需同步 _runtime_conn_cache 的 DB_PATH
 _DB_SWITCH_TOOLS = frozenset({"sqlite_switch_database", "db_switch_database"})

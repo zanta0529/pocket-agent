@@ -19,13 +19,13 @@
 | 路徑                           | 用途與修改原則                                                                                                                                                                                                                |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/pocket_agent/main.py`     | 啟動、模式選擇、內建 MCP 轉發（`--internal-mcp-server`）與 Click 命令（`setup`、`logout`、`update`、`image`）；保留 Windows asyncio 相容處理。                                                                                |
-| `src/pocket_agent/core/`       | 核心業務邏輯：Agent 主迴圈（`agent`）、工具派發註冊表（`tool_registry`）、啟動規範載入（`instructions`）、會話紀錄（`sessions`）、活動追蹤（`activity`）、非同步取消與同步橋接（`cancellation`）、附件上傳（`files`）、動態預算（`context_budget`）、歷史摘要壓縮（`compaction`）、巨量輸出落盤（`spillover`）與子代理（`subagents`）。 |
+| `src/pocket_agent/core/`       | 核心業務邏輯：Agent 主迴圈（`agent`）、工具派發註冊表（`tool_registry`）、上下文縮減管線（`context_pipeline`）、啟動規範載入（`instructions`）、會話紀錄（`sessions`）、活動追蹤（`activity`）、非同步取消與同步橋接（`cancellation`）、附件上傳（`files`）、動態預算（`context_budget`）、歷史摘要壓縮（`compaction`）、巨量輸出落盤（`spillover`）、知識萃取（`auto_learn`）與子代理（`subagents`）。 |
 | `src/pocket_agent/engines/`    | LLM 引擎實作：`BaseEngine`（`base`）、`OpenAIResponsesEngine` 與配額策略（`openai_engine`）、`OpenRouterEngine`（`openrouter_engine`）、`OllamaChatEngine`（`ollama_engine`）、`StandardChatCompletionsEngine`（`chat_engine`）與 `EngineFactory`（`factory`）。 |
 | `src/pocket_agent/frontend/`   | 使用者介面策略：實作 `cli/`（包含 `main`、`input`、`render`、`state`、`confirmation`、`interrupts`、`commands/`、`completer`、`menus` 等模組）。 |
 | `src/pocket_agent/system/`     | 系統基礎設施：全域常數（`constants`）、認證（`auth`）、供應商策略（`providers/`）、路徑解析（`paths`）、設定（`config`）、指令白名單（`permissions`）、Markdown 註冊表（`registry`）、巨集與系統指令（`commands`、`sys_commands`）、設定精靈（`wizard`）、自動清理（`housekeeping`）、相容處理（`compat`）與線上更新（`updater`）。 |
 | `src/pocket_agent/extensions/` | 擴充功能：MCP 伺服器生命週期、白名單授權與動態連線參數注入管理（`mcp`）、漸進式技能載入與遮蔽（`skills`）、生命週期事件鉤子（`hooks`）。                                                                                      |
 | `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行（`shell`）、原生檔案操作（`fs`）、網路請求（`web`）、圖片生成（`image`）、文件產出（`doc`）、文件讀取（`document`）、FTS5 檢索（`rag`）與 AST 結構圖（`repo_map`）。 |
-| `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器腳本（`browser_mcp.py`、`github_mcp.py`、`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`memory_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`）。                                                     |
+| `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器腳本（`browser_mcp.py`、`github_mcp.py`、`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`memory_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`）與資料庫共用基礎設施（`_db_common.py`，以 `--internal-mcp-server` 獨立啟動時須確保目錄在 `sys.path`）。 |
 | `subagents/`                   | 隨附之內建子代理人設定義檔（`.md`）。                                                                                                                                                                                         |
 | `build_scripts/`、`scripts/`   | 可攜版打包腳本（`build_scripts/build_portable.py`）與依賴完整性檢查工具（`scripts/check_imports.py`）。                                                                                                                       |
 
@@ -37,11 +37,12 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 
 - **Adapter（轉接器）**：
   - 引擎層：`OpenAIResponsesEngine`、`OpenRouterEngine`、`OllamaChatEngine`、`StandardChatCompletionsEngine`，將各家 SDK 與串流格式轉換為統一的 `stream_chat` 契約；特定 API 協定輔助方法（如 `format_chat_tools`、`format_chat_messages`）應保留於對應協定基底類別（`StandardChatCompletionsEngine`），不得污染通用 `BaseEngine`。
-  - 工具層：核心工具派發統一透過 `core/tool_registry.py`（`ToolHandler` 與 `ToolRegistry`）擴充，禁止在 `Agent._run_loop` 或 `_is_parallel_safe_tool` 散落硬編碼工具分類 `if/elif` 分支。
+  - 工具層：核心工具派發統一透過 `core/tool_registry.py`（`ToolHandler` 與 `ToolRegistry`）擴充，工具取消收尾（`on_cancel`）、敏感工具判定（`is_sensitive`）與調研上限（`WebResearchGuard`）亦集中於此；禁止在 `Agent._run_loop` 或 `_is_parallel_safe_tool` 散落 `is_web_tool`、`is_shell_tool` 或硬編碼工具分類 `if/elif` 分支。
 - **Strategy（策略）**：
-  - `CliFrontend` 僅封裝前端的啟動與互動渲染；共同業務流程（包含全域 `instructions.md`／工作區 `AGENTS.md` 載入與連結展開、`<external_content>` 防禦聲明、錯誤格式化與子代理彙整）必須集中於核心層處理。
+  - 供應商層：新增 OpenAI 相容供應商時應優先繼承 `system/providers/base.py` 的 `OpenAICompatibleProvider` 樣板類別，避免重複實作 `get_client` 與 `fetch_models`；OAuth 名稱正規化統一使用 `system/constants.py` 之 `PROVIDER_*` 常數。
+  - `CliFrontend` 僅封裝前端的啟動與互動渲染；共同業務流程（包含全域 `instructions.md`／工作區 `AGENTS.md` 載入與連結展開、`<external_content>` 防禦聲明、錯誤格式化與子代理彙整）必須集中於核心層處理；MCP 動態連線參數與提示元資料集中註冊於 `extensions/mcp.py` 的 `CONN_PARAM_SPECS`，禁止在 CLI 啟動流程硬編碼提示字典。
   - 前端判斷功能支援度（如 `/image`）應查詢 `Agent`／引擎能力旗標（例如 `supports_image_generation`），禁止硬編碼 `provider == "openai"`。
-  - 前端指令不得繞過 `Agent` 公開介面直接讀寫 `agent.history`、呼叫私有方法（如 `_run_subagent`）或重複實作連線／限流錯誤提示。
+  - 前端指令不得繞過 `Agent` 公開介面直接讀寫 `agent.history`、操作私有 `_bg_tasks`（應透過 `Agent.spawn_background_task()`）、呼叫私有方法（如 `_run_subagent`）或重複實作連線／限流錯誤提示。
 - **Factory（工廠）**：`EngineFactory` 集中選擇及建立引擎；呼叫端應顯式傳入 `provider`，避免依賴 `resolve_provider` 的 URL 推論後備。
 - **Command（指令）**：前端斜線指令應透過 `CliCommandRegistry` 註冊各自獨立的 `CliCommand` 實作，禁止以單一巨型 `if/elif` 狀態路由器集中處理多個互動指令。
 - **狀態同步**：當指令變更了 Agent 存取權限或全域狀態時，應透過 `Agent._instructions()` 動態注入狀態摘要；業務規則必須統一實作於共用層，前端僅負責接收狀態並渲染。
@@ -96,7 +97,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 
 ## 7. 驗證方式與手動命令
 
-提交與發布前應通過 Ruff 排版與語法檢查、第三方套件依賴完整性掃描（`scripts/check_imports.py`）以及 pytest 自動化測試。新增測試沿用 pytest 既有模式，確保隔離網路、OAuth 與使用者資料；重構核心工具派發路徑時，須留意既有韌性測試（如 `test_agent_resilience.py`、`test_web_resilience.py`）對 `pocket_agent.core.agent.call_*` 之 monkeypatch 相容性，或同步更新測試注入點。
+提交與發布前應通過 Ruff 排版與語法檢查、第三方套件依賴完整性掃描（`scripts/check_imports.py`）以及 pytest 自動化測試。新增測試沿用 pytest 既有模式，確保隔離網路、OAuth 與使用者資料；重構核心工具派發路徑時，須留意既有韌性測試（如 `test_agent_resilience.py`、`test_web_resilience.py`）對 `pocket_agent.core.agent.call_*` 之 monkeypatch 相容性，並維持 `Agent._execute_core_tool`（供 `test_sensitive_session.py` 呼叫）與 `session.py` 對 `Mock()` Agent（供 `test_cli_commands.py` 使用）之向下相容。
 
 以下命令僅供使用者手動執行（前提為 `venv` 已建立並安裝 `requirements-dev.txt`）：
 
