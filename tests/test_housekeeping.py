@@ -366,3 +366,43 @@ def test_housekeeper_clean_backups_tiered_ttl_and_map_sync(tmp_path):
     updated_map = json.loads(map_file.read_text(encoding="utf-8"))
     assert "/repo/keep.py" in updated_map
     assert "/repo/stale.py" not in updated_map
+
+
+def test_housekeeper_clean_all_workspaces_removes_empty_dirs(tmp_path, monkeypatch):
+    fake_user_dir = tmp_path / "user"
+    ws_root = fake_user_dir / "workspaces"
+
+    # 1. 僅含過期檔案的非當前工作區：清理後應連同空目錄一起移除
+    empty_ws = ws_root / "stale-empty-ws"
+    (empty_ws / "scratch" / "outputs").mkdir(parents=True)
+    (empty_ws / "logs").mkdir(parents=True)
+    expired_file = empty_ws / "scratch" / "outputs" / "old.log"
+    expired_file.write_text("old", encoding="utf-8")
+    ten_days_ago = time.time() - (10 * 86400)
+    os.utime(expired_file, (ten_days_ago, ten_days_ago))
+
+    # 2. 含受保護筆記之工作區：目錄必須保留
+    protected_ws = ws_root / "protected-ws"
+    (protected_ws / "scratch" / "outputs").mkdir(parents=True)
+    notes = protected_ws / "scratch" / "outputs" / "notes.md"
+    notes.write_text("important", encoding="utf-8")
+    os.utime(notes, (ten_days_ago, ten_days_ago))
+
+    # 3. 當前使用中工作區：即使為空也不可移除
+    cur_ws = ws_root / "current-ws"
+    (cur_ws / "logs").mkdir(parents=True)
+    (cur_ws / "scratch").mkdir(parents=True)
+
+    monkeypatch.setattr("pocket_agent.system.housekeeping.user_dir", lambda: fake_user_dir)
+
+    hk = Housekeeper(
+        target_log_dir=cur_ws / "logs",
+        target_scratch_dir=cur_ws / "scratch",
+    )
+    cleaned, _ = hk.clean_all_workspaces(ttl_days=7)
+
+    assert cleaned == 1
+    assert not empty_ws.exists()
+    assert protected_ws.exists()
+    assert notes.exists()
+    assert cur_ws.exists()

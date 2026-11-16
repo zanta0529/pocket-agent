@@ -7,6 +7,7 @@
 
 import json
 import logging
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -535,6 +536,13 @@ class Housekeeper:
             c4, b4 = sub_hk.clean_scratch_checkpoints(ttl_days)
             total_cleaned += c1 + c2 + c3 + c4
             total_freed += b1 + b2 + b3 + b4
+
+            # 若該非當前工作區清理後已完全不含任何檔案，移除空工作區骨架
+            try:
+                if not any(p.is_file() for p in ws.rglob("*")):
+                    shutil.rmtree(ws, ignore_errors=True)
+            except OSError:
+                pass
 
         return (total_cleaned, total_freed)
 
