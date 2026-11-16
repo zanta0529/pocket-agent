@@ -342,7 +342,7 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
         if cancel_event is not None and cancel_event.is_set():
             server.should_exit = True
             raise RuntimeError("登入已取消。")
-        if i == 15 and not opened and sys.stdin is not None:
+        if i == 15 and not opened and sys.stdin is not None and cancel_event is None:
             redirect_url = input("\n[Auth] 登入後請貼上瀏覽器跳轉的完整 redirect URL：\n> ").strip()
             from urllib.parse import parse_qs, urlparse
 
@@ -356,7 +356,12 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
                 bucket["code"] = parsed["code"][0]
                 server.should_exit = True
                 break
-        time.sleep(1)
+        if cancel_event is not None:
+            if cancel_event.wait(timeout=1.0):
+                server.should_exit = True
+                raise RuntimeError("登入已取消。")
+        else:
+            time.sleep(1)
     else:
         server.should_exit = True
         raise TimeoutError("OAuth 認證逾時（5 分鐘）")
@@ -381,6 +386,13 @@ def _browser_oauth(provider: str, client_id: str, client_secret: str = "", on_au
 
 
 def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=None) -> str:
+    if cancel_event is None:
+        from pocket_agent.core.cancellation import current_scope
+
+        scope = current_scope.get()
+        if scope is not None:
+            cancel_event = scope.cancelled
+
     norm_provider = _normalize_oauth_provider(provider)
     if norm_provider == PROVIDER_GEMINI_OAUTH:
         client_id = config.get("providers.gemini.client_id")
@@ -396,10 +408,16 @@ def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=No
     if token and not _is_expired(token):
         return token["access_token"]
 
+    if cancel_event is not None and cancel_event.is_set():
+        raise RuntimeError("登入已取消。")
+
     if token:
         refreshed = _try_refresh(norm_provider, token, client_id, client_secret)
         if refreshed:
             return refreshed["access_token"]
+
+    if cancel_event is not None and cancel_event.is_set():
+        raise RuntimeError("登入已取消。")
 
     token = _browser_oauth(norm_provider, client_id, client_secret, on_auth_url, cancel_event)
     _save_token(norm_provider, token)
