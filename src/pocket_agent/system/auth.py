@@ -403,7 +403,8 @@ def get_access_token(provider: str = "openai", on_auth_url=None, cancel_event=No
 
     token = _browser_oauth(norm_provider, client_id, client_secret, on_auth_url, cancel_event)
     _save_token(norm_provider, token)
-    print(f"[Auth] ✓ {norm_provider.upper()} 登入成功！\n")
+    display_label = "GEMINI-OAUTH" if norm_provider == PROVIDER_GEMINI_OAUTH else "OPENAI"
+    print(f"[Auth] ✓ {display_label} 登入成功！\n")
     return token["access_token"]
 
 
