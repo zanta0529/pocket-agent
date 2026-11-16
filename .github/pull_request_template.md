@@ -4,6 +4,8 @@
 
 <!-- A short description of the change and why. Link the issue it addresses. -->
 
+<!-- Link the issue it addresses (e.g., Closes #123), or remove if N/A. -->
+
 Closes #
 
 ## Base branch
@@ -46,9 +48,9 @@ Closes #
 
 - [ ] Preserves layered boundaries: tools dispatched via `core/tool_registry.py`, CLI commands registered via `CliCommandRegistry`, and constants centralized in `system/constants.py`.
 - [ ] Preserves security invariants: `on_confirm` allows writes only when `decision is True`, command allowlist remains fail-closed, and MCP tools keep `mcp__<server>__<tool>` isolation and read-only boundaries.
-- [ ] Keeps the workspace clean (no temporary files in the repo, and no `.env`, tokens, sessions, or `agent.log` committed).
+- [ ] Keeps the workspace clean (no temporary files in the repo, and no `.env`, tokens, sessions, or `agent*.log` committed).
 - [ ] If resource or execution paths changed, verified compatibility across source, Modern Portable (`build_scripts/build_portable.py`), and PyInstaller modes.
-- [ ] Confirmed this contribution complies with the project's [MIT License](../blob/main/LICENSE).
+- [ ] Confirmed this contribution complies with the project's `LICENSE` (MIT License).
 
 ## Notes for the reviewer
 
