@@ -19,39 +19,48 @@ from prompt_toolkit.output import ColorDepth
 from pocket_agent.frontend.cli.render import plain, toolbar
 from pocket_agent.frontend.cli.state import CliState
 from pocket_agent.system.constants import PROVIDER_OPENAI
+from pocket_agent.system.i18n import t
 
-BUILTINS = {
-    "activity": "列出本次會話新增／修改／刪除的檔案與上網查詢網址清單",
-    "add-dir": "單次會話內，將外部資料夾加入工作範圍",
-    "agents": "列出目前所有可用的子代理清單與能力",
-    "attachments": "查看／移除待送附件",
-    "clean": "手動清理過期日誌與暫存檔 (Housekeeping)",
-    "clear": "清除對話，保留附件",
-    "codesearch": "搜尋程式碼片段並加入對話上下文",
-    "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
-    "config": "顯示或更改全域設定檔 (/config set <key> <value>)",
-    "exit": "離開",
-    "file": "附加一般檔案",
-    "goal": "設定長期目標，Agent 會持續嘗試完成任務不輕易中斷",
-    "help": "指令說明",
-    "learn": "從近期對話萃取為共用技能",
-    "logout": "登出",
-    "mcp": "MCP 工具清單（/mcp sqlite <路徑> 可切換 SQLite 資料庫）",
-    "model": "切換當次提供者與模型",
-    "new": "開啟全新乾淨對話（自動儲存既有對話，完整清空上下文）",
-    "parallel": "手動平行啟動多個子代理 (用法: /parallel <name>:<task> | <name>:<task>)",
-    "prune": "手動清理過期或過多的歷史對話 (/prune [<天數> | --keep <筆數>])",
-    "reasoning": "調整推理強度 (auto / high / medium / low / none)",
-    "rename": "重新命名目前的對話標題，方便日後識別與載入 (/rename <新標題>)",
-    "rm-dir": "單次會話內，將外部資料夾從工作範圍移除",
-    "rm-file": "從待送區移除附件檔案",
-    "session": "查看／載入歷史對話",
-    "skills": "列出目前所有可用的全域與專案技能",
-    "subagent": "強制委派任務給指定的子代理",
-    "undo": "時光機：還原上一次被 AI 修改的檔案",
-    "usage": "顯示當前對話累計 Token 用量",
-    "workspace": "顯示目前的工作區路徑清單",
-}
+BUILTIN_COMMAND_NAMES = (
+    "activity",
+    "add-dir",
+    "agents",
+    "attachments",
+    "clean",
+    "clear",
+    "codesearch",
+    "compact",
+    "config",
+    "exit",
+    "file",
+    "goal",
+    "help",
+    "learn",
+    "logout",
+    "mcp",
+    "model",
+    "new",
+    "parallel",
+    "prune",
+    "reasoning",
+    "rename",
+    "rm-dir",
+    "rm-file",
+    "session",
+    "skills",
+    "subagent",
+    "undo",
+    "usage",
+    "workspace",
+)
+
+
+def get_builtin_commands() -> dict[str, str]:
+    """依目前語系動態取得內建斜線指令與說明。"""
+    return {name: t(f"commands.{name}") for name in BUILTIN_COMMAND_NAMES}
+
+
+BUILTINS = {name: f"commands.{name}" for name in BUILTIN_COMMAND_NAMES}
 QUOTE = chr(34)
 REFERENCE = re.compile(r"(?:^|\s)@(?:" + QUOTE + "([^" + QUOTE + "]+)" + QUOTE + r"(?=\s|$)|([^\s" + QUOTE + "]+))")
 
@@ -60,10 +69,10 @@ def file_argument(value: str) -> str:
     value = value.strip()
     if value.startswith(QUOTE):
         if not value.endswith(QUOTE) or len(value) < 3:
-            raise ValueError("路徑雙引號未成對或路徑為空")
+            raise ValueError(t("cli.file_arg_unclosed"))
         value = value[1:-1]
     if not value or QUOTE in value:
-        raise ValueError("用法：/file <路徑>（含空白可加雙引號）")
+        raise ValueError(t("cli.file_arg_usage"))
     return value
 
 
@@ -71,7 +80,7 @@ def references(text: str) -> list[str]:
     matches = list(REFERENCE.finditer(text))
     for start in re.finditer(r"(?:^|\s)@" + QUOTE, text):
         if not any(m.start() == start.start() for m in matches):
-            raise ValueError("@ 路徑雙引號未成對，或結尾缺少空白")
+            raise ValueError(t("cli.at_ref_unclosed"))
     return [m.group(1) or m.group(2) for m in matches]
 
 
@@ -113,7 +122,7 @@ class SlashCommandCompleter(Completer):
                         candidate,
                         start_position=-len(prefix),
                         display=plain(entry.name),
-                        display_meta="目錄" if directory else "檔案",
+                        display_meta=t("cli.completion_dir") if directory else t("cli.completion_file"),
                     )
         except OSError:
             return
@@ -134,11 +143,11 @@ class SlashCommandCompleter(Completer):
         from pocket_agent.system.commands import list_commands
         from pocket_agent.system.paths import is_portable
 
-        commands = dict(BUILTINS)
+        commands = get_builtin_commands()
         if is_image_command_supported(self.state, self.agent):
-            commands["image"] = "產生圖片（待送附件作參考圖）"
+            commands["image"] = t("commands.image")
         if is_portable():
-            commands["update"] = "檢查並套用最新發佈版更新（自動儲存並重啟）"
+            commands["update"] = t("commands.update")
         for command in list_commands():
             commands.setdefault(command["name"], command["description"])
 
@@ -228,13 +237,13 @@ def key_bindings(
                 from rich.text import Text
 
                 console = Console()
-                content = "以下貼上的檔案不在目前工作區內：\n"
+                content = t("cli.paste_outside_ws") + "\n"
                 for p, _ in unauthorized_paths:
                     content += f"  📄 {p}\n"
 
                 panel = Panel(
                     Text(content.strip(), style="yellow"),
-                    title="【安全警告】工作區權限請求",
+                    title=t("misc_cmd.file_ws_warning_title"),
                     title_align="left",
                     border_style="bold red",
                     expand=False,
@@ -243,26 +252,24 @@ def key_bindings(
                 console.print(panel)
 
                 try:
-                    ans = input("是否將它們所在的資料夾加入工作區並掛載？[y/N] ").strip().lower()
+                    ans = input(t("cli.paste_ws_confirm")).strip().lower()
                     if ans == "y":
                         for p, t_dir in unauthorized_paths:
                             if t_dir:
                                 agent.add_workspace_dir(t_dir)
                                 authorized_paths.append(p)
-                        console.print("[green]✓ 已授權並加入附件。[/green]")
+                        console.print(f"[green]{t('misc_cmd.file_ws_authorized')}[/green]")
                     else:
-                        console.print("[red]✗ 已取消加入這些檔案。[/red]")
-                except KeyboardInterrupt:
-                    console.print("\n[red]✗ 已取消操作。[/red]")
-                except EOFError:
-                    console.print("\n[red]✗ 已取消操作。[/red]")
+                        console.print(f"[red]{t('cli.paste_ws_cancelled')}[/red]")
+                except KeyboardInterrupt, EOFError:
+                    console.print(f"\n[red]{t('cli.op_cancelled')}[/red]")
 
                 # 在回呼函式內（取得授權後）才執行加入，避免非同步時序問題
                 if authorized_paths:
                     try:
                         added = state.add_files(authorized_paths)
                         for added_path in added:
-                            console.print(f"已加入待送：{added_path}")
+                            console.print(t("misc_cmd.file_added", path=added_path))
                     except Exception:
                         pass
 
@@ -278,7 +285,7 @@ def key_bindings(
                 try:
                     added = state.add_files(authorized_paths)
                     for added_path in added:
-                        console.print(f"已加入待送：{added_path}")
+                        console.print(t("misc_cmd.file_added", path=added_path))
                 except Exception:
                     pass
 

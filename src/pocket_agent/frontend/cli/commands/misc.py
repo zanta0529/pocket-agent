@@ -6,7 +6,8 @@ from rich.text import Text
 
 from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
-from pocket_agent.frontend.cli.input import BUILTINS, file_argument, is_image_command_supported
+from pocket_agent.frontend.cli.input import file_argument, get_builtin_commands, is_image_command_supported
+from pocket_agent.system.i18n import t
 
 # /mcp sqlite <db_path> 所呼叫的 SQLite MCP 切換工具名稱
 _SQLITE_SWITCH_TOOL = "sqlite_switch_database"
@@ -38,19 +39,19 @@ def _compute_mcp_grid_layout(grouped: dict[str, list[dict[str, str]]], term_widt
 class QuitCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("此指令不接受參數")
+            raise ValueError(t("misc_cmd.no_args_generic"))
         return CommandResult("quit")
 
 
 class UsageCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/usage 不接受參數")
-        ctx.renderer.message(f"目前對話累計 Token 用量: {ctx.state.session_tokens}", "cyan")
+            raise ValueError(t("misc_cmd.usage_no_args"))
+        ctx.renderer.message(t("misc_cmd.usage_tokens", tokens=ctx.state.session_tokens), "cyan")
 
         usage = getattr(ctx.agent, "context_usage", None)
         if usage is None:
-            ctx.renderer.message("上下文：尚無資料（送出第一則訊息後即可顯示）。", "yellow")
+            ctx.renderer.message(t("misc_cmd.usage_no_context"), "yellow")
         else:
             level_style = {"ok": "green", "warn": "yellow", "critical": "red"}[usage.level]
             for line in usage.display_lines():
@@ -69,11 +70,11 @@ class UsageCommand(CliCommand):
                     ctx.state.quota_remaining = quota.remaining
                 else:
                     msg = getattr(quota, "message", None) if quota else None
-                    ctx.renderer.message(msg or "此 Provider 不支援透過 API 查詢額度。", "yellow")
+                    ctx.renderer.message(msg or t("misc_cmd.usage_quota_unsupported"), "yellow")
             except Exception as e:
-                ctx.renderer.message(f"查詢額度失敗: {e}", "red")
+                ctx.renderer.message(t("misc_cmd.usage_quota_failed", error=e), "red")
         else:
-            ctx.renderer.message("此 Provider 或引擎尚未支援額度查詢。", "yellow")
+            ctx.renderer.message(t("misc_cmd.usage_quota_unavailable"), "yellow")
 
         return CommandResult()
 
@@ -81,7 +82,7 @@ class UsageCommand(CliCommand):
 class LogoutCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/logout 不接受參數")
+            raise ValueError(t("misc_cmd.logout_no_args"))
         from pocket_agent.system.auth import logout
 
         logout()
@@ -91,16 +92,16 @@ class LogoutCommand(CliCommand):
 class ClearCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/clear 不接受參數")
+            raise ValueError(t("misc_cmd.clear_no_args"))
         ctx.agent.clear_history()
-        ctx.renderer.message("已清除對話；待送附件保留。")
+        ctx.renderer.message(t("misc_cmd.clear_done"))
         return CommandResult()
 
 
 class CleanCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/clean 不接受參數")
+            raise ValueError(t("misc_cmd.clean_no_args"))
         from pocket_agent.core.cancellation import run_sync
         from pocket_agent.system.housekeeping import default_housekeeper
 
@@ -113,41 +114,35 @@ class CleanCommand(CliCommand):
         log_ttl_days = res.get("log_ttl_days", ttl_days * 2)
 
         if files > 0:
-            ctx.renderer.message(
-                f"✓ Housekeeping 完成：已清理 {files} 個過期檔案，釋放 {mb:.2f} MB 磁碟空間。",
-                "green",
-            )
+            ctx.renderer.message(t("misc_cmd.clean_freed", files=files, mb=mb), "green")
         elif remaining > 0:
             ctx.renderer.message(
-                f"✓ 日誌與暫存目錄狀態良好，無過期檔案需清理"
-                f"（保留 {remaining} 個未過期或受保護檔案，共 {rem_mb:.2f} MB；"
-                f"門檻：暫存 {ttl_days} 天／日誌 {log_ttl_days} 天）。",
+                t(
+                    "misc_cmd.clean_ok_remaining",
+                    remaining=remaining,
+                    rem_mb=rem_mb,
+                    ttl=ttl_days,
+                    log_ttl=log_ttl_days,
+                ),
                 "green",
             )
         else:
             ctx.renderer.message(
-                f"✓ 日誌與暫存目錄狀態良好，目前無任何日誌或暫存檔"
-                f"（門檻：暫存 {ttl_days} 天／日誌 {log_ttl_days} 天）。",
+                t("misc_cmd.clean_ok_empty", ttl=ttl_days, log_ttl=log_ttl_days),
                 "green",
             )
-        ctx.renderer.message(
-            "💡 提示：/clean 僅清理日誌、暫存與備份；若要清理歷史對話紀錄，請使用 /prune。",
-            "dim",
-        )
+        ctx.renderer.message(t("misc_cmd.clean_tip"), "dim")
         return CommandResult()
 
 
 class UpdateCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args.strip():
-            raise ValueError("/update 不接受參數")
+            raise ValueError(t("misc_cmd.update_no_args"))
         from pocket_agent.system.updater import get_current_build_info, update_manager
 
         if not update_manager.is_supported():
-            ctx.renderer.message(
-                "線上更新僅支援 Modern Portable 打包版；開發環境請直接使用 git pull 更新。",
-                "yellow",
-            )
+            ctx.renderer.message(t("misc_cmd.update_unsupported"), "yellow")
             return CommandResult()
 
         staged = await update_manager.download_and_stage(
@@ -156,15 +151,12 @@ class UpdateCommand(CliCommand):
         if staged is None:
             curr = get_current_build_info()
             label = curr.commit[:7] or curr.version
-            ctx.renderer.message(f"✓ 目前已是最新版本 ({label})。", "green")
+            ctx.renderer.message(t("misc_cmd.update_latest", label=label), "green")
             return CommandResult()
 
         ctx.state.staged_update_version = staged.short_sha
         ctx.state.pending_update_restart = True
-        ctx.renderer.message(
-            f"✓ 最新更新 ({staged.short_sha}) 已準備就緒，正在自動儲存對話並重啟套用…",
-            "green",
-        )
+        ctx.renderer.message(t("misc_cmd.update_ready", sha=staged.short_sha), "green")
         return CommandResult("quit")
 
 
@@ -177,10 +169,10 @@ class FileCommand(CliCommand):
         try:
             resolved_path = Path(path_str).expanduser().resolve(strict=True)
         except Exception:
-            raise ValueError(f"找不到檔案：{path_str}")
+            raise ValueError(t("misc_cmd.file_not_found", path=path_str))
 
         if not resolved_path.is_file():
-            raise ValueError(f"不是一般檔案：{path_str}")
+            raise ValueError(t("misc_cmd.file_not_regular", path=path_str))
 
         status, msg, target_dir = ctx.agent.check_new_workspace_dir(str(resolved_path.parent))
 
@@ -190,31 +182,28 @@ class FileCommand(CliCommand):
 
             ctx.renderer._ensure_newline()
             panel = Panel(
-                Text(f"檔案不在目前工作區內：\n  📄 {resolved_path}", style="yellow"),
-                title="【安全警告】工作區權限請求",
+                Text(t("misc_cmd.file_outside_ws", path=resolved_path), style="yellow"),
+                title=t("misc_cmd.file_ws_warning_title"),
                 title_align="left",
                 border_style="bold red",
                 expand=False,
             )
             ctx.renderer.console.print(panel)
             try:
-                ans = input("\n是否將它所在的資料夾加入工作區並掛載？[y/N] ").strip().lower()
+                ans = input(t("misc_cmd.file_ws_confirm")).strip().lower()
                 if ans == "y":
                     if target_dir:
                         ctx.agent.add_workspace_dir(target_dir)
-                    ctx.renderer.message("✓ 已授權並加入附件。")
+                    ctx.renderer.message(t("misc_cmd.file_ws_authorized"))
                 else:
-                    ctx.renderer.message("✗ 已取消加入。")
+                    ctx.renderer.message(t("misc_cmd.file_ws_cancelled"))
                     return CommandResult()
-            except KeyboardInterrupt:
-                ctx.renderer.message("\n✗ 已取消操作。")
-                return CommandResult()
-            except EOFError:
-                ctx.renderer.message("\n✗ 已取消操作。")
+            except KeyboardInterrupt, EOFError:
+                ctx.renderer.message(t("misc_cmd.op_cancelled"))
                 return CommandResult()
 
         for path in ctx.state.add_files([str(resolved_path)]):
-            ctx.renderer.message(f"已加入待送：{path}")
+            ctx.renderer.message(t("misc_cmd.file_added", path=path))
         return CommandResult()
 
 
@@ -222,22 +211,23 @@ class RmFileCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if not args.strip():
             if not ctx.state.pending_files:
-                ctx.renderer.message("待送區沒有任何附件可移除。")
+                ctx.renderer.message(t("misc_cmd.rm_file_empty"))
                 return CommandResult()
 
+            cancel_label = t("session_cmd.cancel")
             choices = []
             for i, p in enumerate(ctx.state.pending_files, 1):
                 choices.append(f"{i}. {p}")
-            choices.append("取消")
+            choices.append(cancel_label)
 
-            selected = await ctx.reader.choose("選擇要移除的待送附件", choices)
-            if not selected or selected == "取消":
-                ctx.renderer.message("已取消移除。")
+            selected = await ctx.reader.choose(t("misc_cmd.rm_file_choose"), choices)
+            if not selected or selected == cancel_label:
+                ctx.renderer.message(t("misc_cmd.rm_file_cancelled"))
                 return CommandResult()
 
             idx = choices.index(selected) + 1
             removed = ctx.state.remove(idx)
-            ctx.renderer.message(f"已移除待送附件：{removed}")
+            ctx.renderer.message(t("misc_cmd.rm_file_removed", path=removed))
             return CommandResult()
 
         arg = args.strip()
@@ -245,7 +235,7 @@ class RmFileCommand(CliCommand):
             # 嘗試作為編號移除
             number = int(arg)
             removed = ctx.state.remove(number)
-            ctx.renderer.message(f"已移除待送附件：{removed}")
+            ctx.renderer.message(t("misc_cmd.rm_file_removed", path=removed))
             return CommandResult()
         except ValueError:
             pass
@@ -256,15 +246,15 @@ class RmFileCommand(CliCommand):
         try:
             target = str(Path(arg).expanduser().resolve(strict=False))
         except Exception:
-            raise ValueError(f"無效的路徑格式：{arg}")
+            raise ValueError(t("misc_cmd.rm_file_invalid_path", path=arg))
 
         for i, p in enumerate(ctx.state.pending_files, 1):
             if str(Path(p).expanduser().resolve(strict=False)) == target:
                 removed = ctx.state.remove(i)
-                ctx.renderer.message(f"已移除待送附件：{removed}")
+                ctx.renderer.message(t("misc_cmd.rm_file_removed", path=removed))
                 return CommandResult()
 
-        raise ValueError(f"在待送區中找不到該檔案：{arg}")
+        raise ValueError(t("misc_cmd.rm_file_not_found", path=arg))
 
 
 class AttachmentsCommand(CliCommand):
@@ -272,20 +262,20 @@ class AttachmentsCommand(CliCommand):
         parts = args.split()
         if not parts:
             if not ctx.state.pending_files:
-                ctx.renderer.message("沒有待送附件。")
+                ctx.renderer.message(t("misc_cmd.attachments_empty"))
             for i, path in enumerate(ctx.state.pending_files, 1):
                 ctx.renderer.message(f"{i}. {path}")
         elif parts == ["clear"]:
             ctx.state.pending_files.clear()
-            ctx.renderer.message("已清空待送佇列，未刪除實體檔案。")
+            ctx.renderer.message(t("misc_cmd.attachments_cleared"))
         elif len(parts) == 2 and parts[0] == "remove":
             try:
                 number = int(parts[1])
             except ValueError as exc:
-                raise ValueError("附件編號必須是整數") from exc
-            ctx.renderer.message(f"已移除待送附件：{ctx.state.remove(number)}")
+                raise ValueError(t("misc_cmd.attachments_invalid_num")) from exc
+            ctx.renderer.message(t("misc_cmd.rm_file_removed", path=ctx.state.remove(number)))
         else:
-            raise ValueError("用法：/attachments [clear|remove <編號>]")
+            raise ValueError(t("misc_cmd.attachments_usage"))
         return CommandResult()
 
 
@@ -325,7 +315,7 @@ class McpCommand(CliCommand):
                 )
 
         if not grouped:
-            ctx.renderer.message("目前未掛載任何 MCP 工具。")
+            ctx.renderer.message(t("misc_cmd.mcp_none"))
             return CommandResult()
 
         arg = args.strip()
@@ -343,7 +333,7 @@ class McpCommand(CliCommand):
                     break
             if not matched_server:
                 ctx.renderer.message(
-                    f"找不到 MCP 工具「{arg}」。目前啟用的工具：{', '.join(grouped.keys())}",
+                    t("misc_cmd.mcp_not_found", name=arg, tools=", ".join(grouped.keys())),
                     "yellow",
                 )
                 return CommandResult()
@@ -351,12 +341,12 @@ class McpCommand(CliCommand):
             tools = grouped[matched_server]
             ctx.renderer.console.print()
             header = Text(f"📦 {matched_server}", style="bold cyan")
-            header.append(f" (共 {len(tools)} 個功能)\n", style="dim")
+            header.append(t("misc_cmd.mcp_server_count", count=len(tools)), style="dim")
             ctx.renderer.console.print(header)
 
-            for t in tools:
-                line = Text(f"  • {_mcp_display_name(t)}", style="bold green")
-                desc = t.get("description")
+            for tool_info in tools:
+                line = Text(f"  • {_mcp_display_name(tool_info)}", style="bold green")
+                desc = tool_info.get("description")
                 if desc:
                     first_line = desc.split("\n")[0].strip()
                     line.append(f"\n    {first_line}", style="dim")
@@ -368,8 +358,8 @@ class McpCommand(CliCommand):
         # 預設無參數：以分組方式清晰呈現啟用的 MCP 工具與功能清單
         total_tools = sum(len(t) for t in grouped.values())
         ctx.renderer.console.print()
-        header = Text("🔌 已啟用的 MCP 工具\n", style="bold magenta")
-        header.append(f"{len(grouped)} 個服務已連線，共提供 {total_tools} 個功能", style="dim")
+        header = Text(t("mcp_cmd.header"), style="bold magenta")
+        header.append(t("mcp_cmd.summary", servers=len(grouped), tools=total_tools), style="dim")
         ctx.renderer.console.print(header)
         ctx.renderer.console.print()
 
@@ -379,14 +369,14 @@ class McpCommand(CliCommand):
 
         for server_name, tools in grouped.items():
             title = Text(f"📦 {server_name} ", style="bold cyan")
-            title.append(f"({len(tools)} 個功能)", style="bold yellow")
+            title.append(t("mcp_cmd.server_tools_count", count=len(tools)), style="bold yellow")
             ctx.renderer.console.print(title)
 
             for i in range(0, len(tools), num_cols):
                 row_tools = tools[i : i + num_cols]
                 line = Text("   ")
-                for j, t in enumerate(row_tools):
-                    tool_text = f"• {_mcp_display_name(t)}"
+                for j, tool_item in enumerate(row_tools):
+                    tool_text = f"• {_mcp_display_name(tool_item)}"
                     if j < len(row_tools) - 1:
                         pad = max(1, col_width - cell_len(tool_text))
                         tool_text = tool_text + (" " * pad)
@@ -394,18 +384,18 @@ class McpCommand(CliCommand):
                 ctx.renderer.console.print(line)
             ctx.renderer.console.print()
 
-        tip = Text("💡 提示：輸入 ", style="dim")
-        tip.append("/mcp <工具名稱>", style="bold yellow")
-        tip.append(" 可查看該 MCP 工具的詳細功能說明（例如 ", style="dim")
+        tip = Text(t("mcp_cmd.tip_prefix"), style="dim")
+        tip.append(t("mcp_cmd.tip_cmd"), style="bold yellow")
+        tip.append(t("mcp_cmd.tip_mid"), style="dim")
         sample_server = next(iter(grouped.keys()))
         tip.append(f"/mcp {sample_server}", style="cyan")
-        tip.append("）", style="dim")
+        tip.append(t("mcp_cmd.tip_suffix"), style="dim")
         ctx.renderer.console.print(tip)
         if mcp_manager is not None and hasattr(mcp_manager, "find_server_for_tool"):
             if isinstance(mcp_manager.find_server_for_tool(_SQLITE_SWITCH_TOOL), str):
-                sqlite_tip = Text("💡 提示：輸入 ", style="dim")
-                sqlite_tip.append("/mcp sqlite <資料庫路徑>", style="bold yellow")
-                sqlite_tip.append(" 可直接切換 SQLite 資料庫檔案", style="dim")
+                sqlite_tip = Text(t("mcp_cmd.tip_prefix"), style="dim")
+                sqlite_tip.append(t("mcp_cmd.sqlite_tip_cmd"), style="bold yellow")
+                sqlite_tip.append(t("mcp_cmd.sqlite_tip_desc"), style="dim")
                 ctx.renderer.console.print(sqlite_tip)
         ctx.renderer.console.print()
 
@@ -419,8 +409,11 @@ class McpCommand(CliCommand):
         if mcp_manager.find_server_for_tool(_SQLITE_SWITCH_TOOL) != server_name:
             return
         current = mcp_manager.get_runtime_conn_param(server_name, "DB_PATH")
-        ctx.renderer.message(f"目前 SQLite 資料庫：{current or '（尚未設定，首次查詢時詢問）'}", "cyan")
-        ctx.renderer.message("提示：輸入 /mcp sqlite <資料庫路徑> 可切換資料庫檔案", "dim")
+        ctx.renderer.message(
+            t("misc_cmd.mcp_sqlite_current", path=current or t("misc_cmd.mcp_sqlite_unset")),
+            "cyan",
+        )
+        ctx.renderer.message(t("misc_cmd.mcp_sqlite_tip"), "dim")
 
     @staticmethod
     async def _switch_sqlite(ctx: CommandContext, mcp_manager, raw_path: str) -> CommandResult:
@@ -429,13 +422,13 @@ class McpCommand(CliCommand):
         if mcp_manager is not None and hasattr(mcp_manager, "find_server_for_tool"):
             server_name = mcp_manager.find_server_for_tool(_SQLITE_SWITCH_TOOL)
         if not isinstance(server_name, str) or not server_name:
-            ctx.renderer.message("目前未掛載支援切換資料庫的 SQLite MCP 服務。", "yellow")
+            ctx.renderer.message(t("misc_cmd.mcp_sqlite_no_server"), "yellow")
             return CommandResult()
 
         clean = raw_path.strip().strip("'\"")
         # 必須早於任何 Path 解析，避免 UNC 路徑觸發 SMB 認證外洩
         if not clean or clean.startswith(("\\\\", "//")):
-            ctx.renderer.message("✗ 安全限制：不接受空白或 UNC／網路路徑，請先將資料庫複製到本機。", "red")
+            ctx.renderer.message(t("misc_cmd.mcp_sqlite_unc_rejected"), "red")
             return CommandResult()
 
         from pocket_agent.tools.fs import _validate_safe_path
@@ -443,7 +436,7 @@ class McpCommand(CliCommand):
         try:
             target = Path(clean).expanduser().resolve(strict=False)
         except OSError, RuntimeError, ValueError:
-            ctx.renderer.message(f"✗ 無效的路徑格式：{clean}", "red")
+            ctx.renderer.message(t("misc_cmd.mcp_sqlite_invalid_path", path=clean), "red")
             return CommandResult()
 
         try:
@@ -454,25 +447,25 @@ class McpCommand(CliCommand):
             ctx.renderer._ensure_newline()
             ctx.renderer.console.print(
                 Panel(
-                    Text(f"資料庫不在目前工作區內或位於受保護路徑：\n  🗄 {target}", style="yellow"),
-                    title="【安全警告】SQLite 資料庫切換確認",
+                    Text(t("misc_cmd.mcp_sqlite_outside_ws", path=target), style="yellow"),
+                    title=t("misc_cmd.mcp_sqlite_ws_title"),
                     title_align="left",
                     border_style="bold red",
                     expand=False,
                 )
             )
             try:
-                ans = input("\n確定要切換到此資料庫嗎？[y/N] ").strip().lower()
+                ans = input(t("misc_cmd.mcp_sqlite_confirm")).strip().lower()
             except KeyboardInterrupt, EOFError:
                 ans = ""
             if ans != "y":
-                ctx.renderer.message("✗ 已取消切換。")
+                ctx.renderer.message(t("misc_cmd.mcp_sqlite_cancelled"))
                 return CommandResult()
 
         try:
             result = await mcp_manager.call(_SQLITE_SWITCH_TOOL, {"target_db_path": str(target)})
         except Exception as e:
-            ctx.renderer.message(f"✗ 切換 SQLite 資料庫失敗：{e}", "red")
+            ctx.renderer.message(t("misc_cmd.mcp_sqlite_failed", error=e), "red")
             return CommandResult()
         clean_result = result.replace("<external_content>\n", "").replace("\n</external_content>", "").strip()
         style = "green" if clean_result.startswith("[SUCCESS]") else "red"
@@ -486,7 +479,7 @@ ToolsCommand = McpCommand
 class SkillsCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args and args.strip() == "":
-            raise ValueError("/skills 參數錯誤")
+            raise ValueError(t("misc_cmd.skills_bad_args"))
 
         from pocket_agent.extensions.skills import list_skills, load_skill
         from pocket_agent.system.paths import bundle_dir, user_dir
@@ -498,12 +491,12 @@ class SkillsCommand(CliCommand):
                 ctx.renderer.console.print(f"\n[bold white]Skill: {skill_name}[/bold white]")
                 ctx.renderer.console.print(Markdown(body))
             else:
-                ctx.renderer.message(f"無法載入技能 {skill_name}")
+                ctx.renderer.message(t("skills_cmd.load_failed", name=skill_name))
             return CommandResult()
 
         skills = list_skills(ctx.agent.workspace_dirs)
         if not skills:
-            ctx.renderer.message("目前沒有可用的全域或專案技能。")
+            ctx.renderer.message(t("skills_cmd.empty"))
             return CommandResult()
 
         ctx.renderer.console.print()
@@ -556,30 +549,27 @@ class SkillsCommand(CliCommand):
         print_group("Global skills", "Global config", global_skills)
         print_group("Built-in skills", "Built-in", builtin_skills)
 
-        ctx.renderer.message("提示：若要檢視某個技能的完整內容，請輸入 /skills <skill_name>", "dim")
+        ctx.renderer.message(t("skills_cmd.hint"), "dim")
         return CommandResult()
 
 
 class HelpCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/help 不接受參數")
+            raise ValueError(t("misc_cmd.help_no_args"))
         from pocket_agent.system.commands import list_commands
 
-        for command, description in BUILTINS.items():
+        for command, description in get_builtin_commands().items():
             ctx.renderer.message(f"/{command}  {description}")
         if is_image_command_supported(ctx.state, ctx.agent):
-            ctx.renderer.message("/image <描述>  生圖，待送附件作參考圖")
+            ctx.renderer.message(t("misc_cmd.help_image_line"))
         from pocket_agent.system.paths import is_portable
 
         if is_portable():
-            ctx.renderer.message("/update  檢查並套用 GitHub 最新更新（自動儲存並重啟）")
+            ctx.renderer.message(t("misc_cmd.help_update_line"))
 
-        ctx.renderer.message("/attachments remove <編號> · /attachments clear")
-        ctx.renderer.message(
-            "Shift+Tab 切換自動編輯 (Accept-edits) · Enter 送出 · Esc 後 Enter 換行 · "
-            "Ctrl+C 清空輸入 · 空輸入 Ctrl+D 離開"
-        )
+        ctx.renderer.message(t("misc_cmd.help_attachments_line"))
+        ctx.renderer.message(t("misc_cmd.help_shortcuts_line"))
         for command in list_commands():
             ctx.renderer.message("/" + command["name"] + "  " + command["description"])
         return CommandResult()
@@ -588,7 +578,7 @@ class HelpCommand(CliCommand):
 class GoalCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if not args:
-            raise ValueError("用法：/goal <長期目標描述>")
+            raise ValueError(t("misc_cmd.goal_usage"))
         goal_prompt = (
             f"[System] 使用者啟動了 /goal 指令。這是一個長期且可能包含多個步驟的目標。\n"
             f"請你獨立作業，持續使用工具直到達成目標為止。期間若遇到錯誤，請自行嘗試修復，"
@@ -601,9 +591,9 @@ class GoalCommand(CliCommand):
 class ImageCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if not args:
-            raise ValueError("用法：/image <描述>")
+            raise ValueError(t("misc_cmd.image_usage"))
         if not is_image_command_supported(ctx.state, ctx.agent):
-            raise ValueError("產生圖片功能目前僅限使用 openai (ChatGPT OAuth 訂閱配額) 引擎時支援")
+            raise ValueError(t("misc_cmd.image_unsupported"))
         return CommandResult("image", args)
 
 
@@ -616,16 +606,14 @@ class CodeSearchCommand(CliCommand):
         query = args.strip()
         if not query:
             try:
-                query = await ctx.reader.read("請輸入搜尋關鍵字（或按 Ctrl+C 取消）：")
+                query = await ctx.reader.read(t("misc_cmd.codesearch_prompt"))
                 query = query.strip()
-            except KeyboardInterrupt:
-                return CommandResult()
-            except EOFError:
+            except KeyboardInterrupt, EOFError:
                 return CommandResult()
             if not query:
                 return CommandResult()
 
-        ctx.renderer.message(f"正在搜尋工作區：'{query}'...", "yellow")
+        ctx.renderer.message(t("misc_cmd.codesearch_searching", query=query), "yellow")
 
         from pocket_agent.core.cancellation import run_sync
 
@@ -638,12 +626,22 @@ class CodeSearchCommand(CliCommand):
         if "[ERROR]" in clean_result:
             ctx.renderer.console.print()
             ctx.renderer.console.print(
-                Panel(clean_result, title="搜尋失敗", title_align="left", border_style="bold red")
+                Panel(
+                    clean_result,
+                    title=t("misc_cmd.codesearch_failed_title"),
+                    title_align="left",
+                    border_style="bold red",
+                )
             )
         else:
             ctx.renderer.console.print()
             ctx.renderer.console.print(
-                Panel(clean_result, title="🔎 程式碼搜尋結果", title_align="left", border_style="bold green")
+                Panel(
+                    clean_result,
+                    title=t("misc_cmd.codesearch_result_title"),
+                    title_align="left",
+                    border_style="bold green",
+                )
             )
 
             if callable(getattr(type(ctx.agent), "inject_code_search_context", None)):
@@ -661,8 +659,6 @@ class CodeSearchCommand(CliCommand):
                     }
                 )
 
-            ctx.renderer.message(
-                "💡 (提示) 搜尋結果已自動加入上下文，您可以直接請 AI 對這些片段進行分析或修改。", "cyan"
-            )
+            ctx.renderer.message(t("misc_cmd.codesearch_tip"), "cyan")
 
         return CommandResult()

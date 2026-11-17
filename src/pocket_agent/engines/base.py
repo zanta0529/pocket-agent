@@ -73,18 +73,27 @@ class QuotaInfo:
         將額度資訊格式化為多行字串，供前端一致性呼叫與顯示。
         設計模式：開放給主程式統一呼叫的介面，將格式化邏輯封裝在此。
         """
+        from pocket_agent.system.i18n import t
+
         if not self.is_supported:
-            return [self.message or "此 Provider 不支援透過 API 查詢額度。"]
+            return [self.message or t("quota.unsupported")]
 
         lines = []
         if self.plan_type:
-            lines.append(f"目前訂閱方案: {self.plan_type}")
+            lines.append(t("quota.plan_type", plan=self.plan_type))
 
         if self.limit is not None and self.remaining is not None and self.used is not None:
-            lines.append(f"API 帳戶額度: 已用 ${self.used:.4f} / 上限 ${self.limit:.4f} (剩餘 ${self.remaining:.4f})")
+            lines.append(
+                t(
+                    "quota.api_balance",
+                    used=self.used,
+                    limit=self.limit,
+                    remaining=self.remaining,
+                )
+            )
 
         if self.daily_used is not None:
-            lines.append(f"今日花費: ${self.daily_used:.4f}")
+            lines.append(t("quota.daily_used", daily_used=self.daily_used))
 
         if self.free_requests_limit is not None and self.free_requests_remaining is not None:
             used = (
@@ -93,8 +102,12 @@ class QuotaInfo:
                 else (self.free_requests_limit - self.free_requests_remaining)
             )
             lines.append(
-                f"免費模型今日請求次數: 已用 {used} 次 / "
-                f"上限 {self.free_requests_limit} 次 (剩餘 {self.free_requests_remaining} 次)"
+                t(
+                    "quota.free_requests",
+                    used=used,
+                    limit=self.free_requests_limit,
+                    remaining=self.free_requests_remaining,
+                )
             )
 
         if self.extra_lines:

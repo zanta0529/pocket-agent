@@ -52,6 +52,14 @@ except ImportError:
     MAX_REDIRECTS = 5
     MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
+try:
+    from pocket_agent.system.i18n import t
+except ImportError:
+
+    def t(key: str, default: str | None = None, **kwargs: Any) -> str:
+        return default if default is not None else key
+
+
 mcp = MCPServer("github")
 
 GITHUB_API_BASE = "https://api.github.com"
@@ -1438,7 +1446,13 @@ async def github_prepare_pr_context(
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_prepare_pr_context", cmd_desc, target, exc, "無法準備 PR 上下文")
+        return _handle_tool_error(
+            "github_prepare_pr_context",
+            cmd_desc,
+            target,
+            exc,
+            t("github_mcp.pr_ctx_failed"),
+        )
 
 
 @mcp.tool()
@@ -1462,10 +1476,10 @@ async def github_create_pr(
         target = f"{clean_owner}/{clean_repo}"
 
         if not isinstance(title, str) or not title.strip():
-            raise ValueError("PR 標題 (title) 不可為空白。")
+            raise ValueError(t("github_mcp.pr_title_empty"))
         clean_title = title.strip()
         if any(ch in clean_title for ch in ("\r", "\n", "\x00")):
-            raise ValueError("PR 標題 (title) 包含無效的換行或控制字元。")
+            raise ValueError(t("github_mcp.pr_title_invalid_chars"))
 
         clean_body = body if isinstance(body, str) else ""
         headers = get_headers(github_token)
@@ -1481,7 +1495,7 @@ async def github_create_pr(
                 status="BLOCKED",
                 detail="outbound_policy_blocked",
             )
-            return f"[ERROR] 安全攔截：PR 內容疑似包含機密（{block_reason}），已阻斷外發以防外洩。"
+            return t("github_mcp.pr_outbound_blocked", reason=block_reason)
 
         safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
         async with _create_http_client() as client:
@@ -1515,7 +1529,13 @@ async def github_create_pr(
             "（本工具僅建立 PR 單，不會自動執行 Merge；請前往 GitHub 網站確認並執行合併。）"
         )
     except Exception as exc:
-        return _handle_tool_error("github_create_pr", cmd_desc, target, exc, "無法建立 Pull Request")
+        return _handle_tool_error(
+            "github_create_pr",
+            cmd_desc,
+            target,
+            exc,
+            t("github_mcp.pr_create_failed"),
+        )
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@
 | `src/pocket_agent/core/`       | 核心業務邏輯：Agent 主迴圈（`agent`）、工具派發註冊表（`tool_registry`）、上下文縮減管線（`context_pipeline`）、啟動規範載入（`instructions`）、會話紀錄（`sessions`）、活動追蹤（`activity`）、非同步取消與同步橋接（`cancellation`）、附件上傳（`files`）、動態預算（`context_budget`）、歷史摘要壓縮（`compaction`）、巨量輸出落盤（`spillover`）、知識萃取（`auto_learn`）與子代理（`subagents`）。 |
 | `src/pocket_agent/engines/`    | LLM 引擎實作：`BaseEngine`（`base`）、`OpenAIResponsesEngine` 與配額策略（`openai_engine`）、`OpenRouterEngine`（`openrouter_engine`）、`OllamaChatEngine`（`ollama_engine`）、`StandardChatCompletionsEngine`（`chat_engine`）與 `EngineFactory`（`factory`）。 |
 | `src/pocket_agent/frontend/`   | 使用者介面策略：實作 `cli/`（包含 `main`、`input`、`render`、`state`、`confirmation`、`interrupts`、`clipboard`、`commands/` 等模組）。 |
-| `src/pocket_agent/system/`     | 系統基礎設施：全域常數（`constants`）、認證（`auth`）、供應商策略（`providers/`）、路徑解析（`paths`）、設定（`config`）、指令白名單（`permissions`）、Markdown 註冊表（`registry`）、巨集與系統指令（`commands`、`sys_commands`）、設定精靈（`wizard`）、自動清理（`housekeeping`）、相容處理（`compat`）與線上更新（`updater`）。 |
+| `src/pocket_agent/system/`     | 系統基礎設施：全域常數（`constants`）、多語系（`i18n` 與 `locales/`）、認證（`auth`）、供應商策略（`providers/`）、路徑解析（`paths`）、設定（`config`）、指令白名單（`permissions`）、Markdown 註冊表（`registry`）、巨集與系統指令（`commands`、`sys_commands`）、設定精靈（`wizard`）、自動清理（`housekeeping`）、相容處理（`compat`）與線上更新（`updater`）。 |
 | `src/pocket_agent/extensions/` | 擴充功能：MCP 伺服器生命週期、白名單授權與動態連線參數注入管理（`mcp`）、漸進式技能載入與遮蔽（`skills`）、生命週期事件鉤子（`hooks`）與外掛封裝管理（`plugins`）。                                                                                      |
 | `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行（`shell`）、原生檔案操作（`fs`）、網路請求（`web`）、圖片生成（`image`）、文件產出（`doc`）、文件讀取（`document`）、FTS5 檢索（`rag`）與 AST 結構圖（`repo_map`）。 |
 | `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器腳本（`browser_mcp.py`、`github_mcp.py`、`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`memory_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`）與資料庫共用基礎設施（`_db_common.py`，以 `--internal-mcp-server` 獨立啟動時須確保目錄在 `sys.path`）。 |
@@ -65,6 +65,14 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
   - 使用者可透過 `system.context_window`、`system.context_reserve_output`、`system.context_safety_margin` 與 `system.context_compact_target_ratio` 微調設定。
   - `read_file` 具備 500 行與 12,000 字元雙重限制，並支援 `char_offset` 單行行內字元游標續讀；讀取大型檔案應優先使用 `search_files` 或搭配精準範圍閱讀。
   - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入集中式暫存區**（PocketAgent 執行期沙盒 `~/.pocket-agent/workspaces/<slug>/scratch/notes.md` 或外部開發代理專屬暫存區 `<artifact_dir>`）以建立外部長期記憶；**嚴禁在工作目錄建立 `.agents/scratch`** 避免污染版本庫。詳見 [context-management-architecture.md](architecture/context-management-architecture.md) 與 [configuration-specification.md](guides/configuration-specification.md)。
+
+### 3.1 多語系（i18n）開發規範
+
+- **語系檔維護**：所有使用者可見之顯示文字（CLI 提示、選單、設定精靈、錯誤訊息、狀態與額度顯示）必須維護於 `src/pocket_agent/locales/*.json`（目前包含 `zh_TW.json` 與 `en_US.json`），透過 `pocket_agent.system.i18n.t(key, **kwargs)` 讀取，**嚴禁在程式碼中寫死顯示文字**或傳入冗餘的 `default` 硬編碼文案；當語系檔與預設基準 `zh_TW` 皆查無鍵值時，直接回傳該 `key` 名稱以利開發與測試人員辨識遺漏。
+- **語系解析順序**：執行期由 `get_locale()` 依序解析：`set_locale()` 顯式設定 ＞ 環境變數 `POCKET_AGENT_LANG` ＞ `config.json` 之 `locale` ＞ 預設 `zh_TW`（`setup` 精靈啟動時若 `config.json` 未明確設定 `locale` 則預設使用 `en_US`）。
+- **不可翻譯之邊界不變量**：內部工具名稱（`read_file`、`mcp__<server>__<tool>`）、送往 LLM 的 System Prompt／Instructions、內部前綴比對邏輯（如 `ConfirmationBridge._is_fs_edit`、安全標記 `[CONN_AUTH]` / `[ERROR]`）及後台 `logging` 訊息不得納入 UI 多語系替換。
+- **獨立模組與 MCP 伺服器相容性**：`mcp_servers/` 腳本須保留獨立執行的能力，匯入 `pocket_agent.system.i18n.t` 時應搭配 `try / except ImportError` 提供純鍵值降級函式；既有獨立 MCP 伺服器若尚未全面多語系化，新增或修改工具時應優先遵循本規範。
+- **測試語系隔離**：`tests/conftest.py` 透過 `autouse=True` fixture 固定測試執行期語系為 `zh_TW` 並清除 `POCKET_AGENT_LANG`，防止本機 `~/.pocket-agent/config.json` 設定干擾自動化測試。
 
 ## 4. 資料、擴充與安全邊界
 

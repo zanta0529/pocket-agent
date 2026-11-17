@@ -21,6 +21,7 @@ def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_k
     from rich.prompt import Prompt
 
     from pocket_agent.extensions.mcp import get_conn_param_spec
+    from pocket_agent.system.i18n import t
 
     status = renderer._active_status
     if status:
@@ -29,7 +30,7 @@ def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_k
     renderer._ensure_newline()
     renderer.console.print()
     renderer.message(
-        f"🔐 [{server_name}] 請補充未設定的遠端連線資訊（僅存於本機記憶體，不會傳送給 AI 模型）：",
+        t("cli.mcp_conn_prompt", server_name=server_name),
         "bold cyan",
     )
     collected: dict[str, str] = {}
@@ -52,12 +53,13 @@ def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_k
 def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer", silent: bool = False) -> None:
     """對話結束或每輪完成時自動存檔（失敗不中斷流程）。"""
     from pocket_agent.core.sessions import save_session
+    from pocket_agent.system.i18n import t
 
     if not getattr(agent, "history", None):
         return
     if getattr(agent, "is_sensitive_session", False) is True:
         if not silent:
-            renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
+            renderer.message(t("cli.sensitive_session_warning"), "yellow")
         return
     try:
         save_session(state.session_id, agent.history)
@@ -85,16 +87,21 @@ async def send_turn(
         started = monotonic()
 
         from pocket_agent.frontend.cli.interrupts import OperationInterrupted, run_operation
+        from pocket_agent.system.i18n import t
 
         def stopping() -> None:
             agent.request_stop()
             renderer._stop_status()
-            renderer.message("⏸ 停止要求已送出，等待進行中的工作收尾…", "yellow")
+            renderer.message(t("cli.stopping"), "yellow")
 
         if result.action == "image":
             from rich.status import Status
 
-            status = Status("生圖中（可能需要 1-2 分鐘）…", spinner="dots", console=renderer.console)
+            status = Status(
+                t("cli.generating_image"),
+                spinner="dots",
+                console=renderer.console,
+            )
             renderer._active_status = status
             status.start()
             try:
@@ -112,7 +119,7 @@ async def send_turn(
             # 串流模式：啟動思考中 spinner，等第一個 text 事件停止它
             from rich.status import Status
 
-            status = Status("思考中…", spinner="dots", console=renderer.console)
+            status = Status(t("cli.status_thinking"), spinner="dots", console=renderer.console)
             renderer._active_status = status
             status.start()
 
@@ -128,7 +135,7 @@ async def send_turn(
         agent.on_stream = None
         renderer._stop_status()
         state.last_failed_input = raw
-        renderer.message("⏹ 已停止主代理", "yellow")
+        renderer.message(t("cli.stopped_main"), "yellow")
         return
     except Exception as exc:
         agent.on_stream = None
@@ -143,14 +150,14 @@ async def send_turn(
 
         panel = Panel(
             Markdown(err_text),
-            title="⚠️ 本輪未完成 (錯誤)",
+            title=t("subagent_cmd.error_title"),
             title_align="left",
             border_style="bold red",
             expand=False,
         )
         renderer.console.print()
         renderer.console.print(panel)
-        renderer.message("待送附件保留；本輪可能部分完成，重送前請檢查結果。未自動重試。", "yellow")
+        renderer.message(t("subagent_cmd.partial_warning"), "yellow")
         await asyncio.to_thread(_autosave_session, agent, state, renderer, True)
         return
 
@@ -160,7 +167,7 @@ async def send_turn(
     if result.action == "image":
         if not hasattr(agent, "generate_image") and hasattr(agent, "activity") and getattr(agent, "activity", None):
             agent.activity.record_file_change(reply, "added", existed_before=False)
-        renderer.message(f"已存檔：{reply}", "green")
+        renderer.message(t("session_cmd.saved", id=reply), "green")
     else:
         turn_tokens = getattr(agent, "total_tokens", 0)
         state.session_tokens += turn_tokens
@@ -204,9 +211,11 @@ async def conversation(
     from pocket_agent.frontend.cli.interrupts import OperationInterrupted, run_operation
 
     def stopping() -> None:
+        from pocket_agent.system.i18n import t
+
         agent.request_stop()
         renderer._stop_status()
-        renderer.message("⏸ 停止要求已送出，等待進行中的工作收尾…", "yellow")
+        renderer.message(t("cli.stopping"), "yellow")
 
     handler = CommandHandler(agent, state, reader, renderer, tools)
     agent.on_stream = renderer.event
@@ -219,11 +228,15 @@ async def conversation(
         except KeyboardInterrupt:
             now = monotonic()
             if now - last_sigint_time < 1.5:
-                renderer.message("收到中斷訊號，正在離開…", "yellow")
+                from pocket_agent.system.i18n import t
+
+                renderer.message(t("cli.exiting_on_sigint"), "yellow")
                 break
             last_sigint_time = now
             state.last_failed_input = ""
-            renderer.message("再按一次 Ctrl+C 離開，或輸入 /exit（待送附件保留）。", "yellow")
+            from pocket_agent.system.i18n import t
+
+            renderer.message(t("cli.ctrl_c_exit_hint"), "yellow")
             continue
         state.last_failed_input = ""
         last_sigint_time = 0.0
@@ -233,10 +246,14 @@ async def conversation(
             result = await run_operation(handler.dispatch(raw), stopping)
         except OperationInterrupted:
             renderer._stop_status()
-            renderer.message("⏹ 操作已收尾，未自動重送", "yellow")
+            from pocket_agent.system.i18n import t
+
+            renderer.message(t("cli.operation_interrupted"), "yellow")
             continue
         except Exception as exc:
-            renderer.message(f"指令未執行：{exc}", "red")
+            from pocket_agent.system.i18n import t
+
+            renderer.message(t("cli.command_not_executed", error=exc), "red")
             continue
         if result.action == "quit":
             break
@@ -249,7 +266,9 @@ async def conversation(
                 agent.on_stream = None
                 renderer._stop_status()
                 state.last_failed_input = raw
-                renderer.message("⏹ 已停止", "yellow")
+                from pocket_agent.system.i18n import t
+
+                renderer.message(t("cli.stopped"), "yellow")
 
     # 對話結束，自動存檔
     _autosave_session(agent, state, renderer)
@@ -306,10 +325,17 @@ class CliFrontend(FrontendStrategy):
         update_task: asyncio.Task | None = None
         update_exit_code = 0
         try:
+            from pocket_agent.system.i18n import t
+
             renderer.banner()
 
+            label_map = {
+                "全域規範": t("cli.instruction_label_global"),
+                "工作區規範": t("cli.instruction_label_workspace"),
+            }
             for label, src_path in loaded_sources:
-                renderer.message(f"已載入{label}：{src_path}")
+                display_label = label_map.get(label, label)
+                renderer.message(t("cli.loaded_instruction", label=display_label, path=src_path))
 
             from rich.prompt import Prompt
 
@@ -328,47 +354,55 @@ class CliFrontend(FrontendStrategy):
                         available = []
 
                     if available and state.model not in available:
-                        renderer.message(f"設定模型 {state.model} 不在清單；改用 {available[0]}。", "yellow")
+                        renderer.message(
+                            t("cli.model_not_in_list", current=state.model, fallback=available[0]),
+                            "yellow",
+                        )
                         state.model = available[0]
                     elif not available:
-                        renderer.message("無法取得模型清單，使用目前設定。", "yellow")
+                        renderer.message(t("cli.model_list_unavailable"), "yellow")
                     break  # 成功取得 client 與模型，跳出重試迴圈
                 except MissingKeyException as e:
-                    renderer.message(f"【尚未設定金鑰】{e}", "yellow")
-                    renderer.message("請先離開，並在終端機執行 `pocket-agent setup` 完成 API Key 設定。")
+                    renderer.message(t("cli.missing_key_title", error=e), "yellow")
+                    renderer.message(t("cli.missing_key_hint"))
                     return 0
                 except AuthException as e:
                     retry_count += 1
-                    renderer.message(f"【安全鎖】{e}", "yellow")
-                    password = Prompt.ask("[bold cyan]請輸入主密碼解鎖[/bold cyan]", password=True)
+                    renderer.message(t("cli.auth_locked", error=e), "yellow")
+                    password = Prompt.ask(f"[bold cyan]{t('cli.master_password_prompt')}[/bold cyan]", password=True)
                     if config.unlock(password):
-                        renderer.message("解鎖成功，重新連線中...", "green")
+                        renderer.message(t("cli.unlock_success"), "green")
                     else:
-                        renderer.message(f"密碼錯誤或解鎖失敗。剩餘重試次數：{max_retries - retry_count}", "red")
+                        renderer.message(
+                            t("cli.unlock_failed", remaining=max_retries - retry_count),
+                            "red",
+                        )
 
                     if retry_count >= max_retries:
-                        renderer.message("重試次數過多，啟動中止。", "red")
+                        renderer.message(t("cli.unlock_too_many_retries"), "red")
                         return 0
 
             mcp = MCPManager()
-            startup = await mcp.start(on_start=lambda count: renderer.message("正在初始化 MCP 服務…"))
+            startup = await mcp.start(on_start=lambda count: renderer.message(t("cli.mcp_initializing")))
             if startup.configured_servers == 0:
-                renderer.message("未設定 MCP 服務，略過初始化。")
+                renderer.message(t("cli.mcp_skipped"))
             elif startup.failed_servers == 0:
                 if startup.tool_count > 0:
-                    renderer.message(
-                        f"MCP 已就緒：已連線 {startup.ready_servers} 個服務，載入 {startup.tool_count} 個工具。"
-                    )
+                    renderer.message(t("cli.mcp_ready", ready=startup.ready_servers, tools=startup.tool_count))
                 else:
-                    renderer.message(f"MCP 已連線 {startup.ready_servers} 個服務，目前無可用工具。")
+                    renderer.message(t("cli.mcp_ready_no_tools", ready=startup.ready_servers))
             elif startup.ready_servers > 0:
                 renderer.message(
-                    f"MCP 部分就緒：{startup.ready_servers} 個服務初始化成功，載入 {startup.tool_count} 個工具；"
-                    f"{startup.failed_servers} 個服務初始化失敗。",
+                    t(
+                        "cli.mcp_partial_ready",
+                        ready=startup.ready_servers,
+                        tools=startup.tool_count,
+                        failed=startup.failed_servers,
+                    ),
                     "yellow",
                 )
             else:
-                renderer.message("MCP 初始化失敗，請檢查設定或上述錯誤訊息。", "red")
+                renderer.message(t("cli.mcp_init_failed"), "red")
 
             agent = Agent(
                 client=client, mcp=mcp, model=state.model, system_prompt=system_prompt, provider=state.provider
@@ -403,11 +437,15 @@ class CliFrontend(FrontendStrategy):
                             agent.history = list(latest["history"])
                         state.session_id = latest["id"]
                         renderer.message(
-                            f"已恢復：{latest.get('title', '（無標題）')} · {len(agent.history)} 則訊息",
+                            t(
+                                "cli.session_resumed",
+                                title=latest.get("title", t("cli.session_untitled")),
+                                count=len(agent.history),
+                            ),
                             "green",
                         )
                 else:
-                    renderer.message("沒有找到歷史 session，以全新對話啟動。", "dim")
+                    renderer.message(t("cli.session_not_found"), "dim")
 
             # 啟動時背景執行自動 Housekeeping (具備 24 小時冷卻期，無感執行)
             from pocket_agent.system.housekeeping import default_housekeeper
@@ -434,7 +472,9 @@ class CliFrontend(FrontendStrategy):
                 agent, state, CliInput(state, agent=agent, on_clear_screen=renderer.banner), renderer, tools
             )
         except Exception as exc:
-            renderer.message(f"CLI 執行失敗：{exc}", "red")
+            from pocket_agent.system.i18n import t
+
+            renderer.message(t("cli.cli_failed", error=exc), "red")
         finally:
             for bg_t in (sigint_task, update_task, housekeeping_task):
                 if bg_t is not None and not bg_t.done():
@@ -463,7 +503,9 @@ class CliFrontend(FrontendStrategy):
                     try:
                         await asyncio.wait_for(active.close(), timeout=2.0)
                     except Exception:
-                        renderer.message("模型連線清理失敗。", "yellow")
+                        from pocket_agent.system.i18n import t
+
+                        renderer.message(t("cli.client_close_failed"), "yellow")
 
             from pocket_agent.system.updater import update_manager as _updater
 

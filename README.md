@@ -132,18 +132,20 @@ run.bat setup       # Windows
 ./run.command setup # macOS
 ```
 
-設定精靈將以互動式選單引導您完成四個步驟：
+設定精靈將以互動式選單引導您完成設定步驟（若尚未設定 `locale` 則預設以英文顯示，若已設定則依 `config.json` 語系顯示）：
 
-1. **選擇服務供應商 (Provider)**：
+1. **選擇語系 (Language)**：
+   - 動態列出 `locales/` 內建可用語系（如 `en_US`、`zh_TW`），選定後即寫入設定檔並即時切換後續步驟介面語系。
+2. **選擇服務供應商 (Provider) 與登入設定**：
    - **ChatGPT Plus/Pro (OpenAI OAuth PKCE)**：【免 API Key】系統將引導開啟瀏覽器，於官方登入頁授權後自動將 Token 回傳至本機 `http://localhost:1455`，直接調用進階模型。
    - **Gemini (Google AI Studio)**：支援 Google OAuth 瀏覽器登入或直接輸入 `GEMINI_API_KEY`。
    - **雲端推理平台 (OpenRouter / Groq / SambaNova / Mistral / Ollama Cloud)**：直接輸入對應的 API Key（敏感資訊將自動透過作業系統 Keyring 加密保護）。
    - **本機端開源模型 (Ollama)**：預設連線 `http://localhost:11434`，離線亦可運行。
-2. **設定預設模型 (Model)**：
+3. **設定預設模型 (Model)**：
    - 精靈會嘗試動態向伺服器查詢可用模型清單供您挑選，亦支援自訂模型名稱。
-3. **選配外部 MCP 工具**：
-   - 詢問是否掛載額外的 Stdio / SSE MCP 伺服器（可直接按 Enter 略過，日後透過設定檔擴充）。
-4. **啟動代理**：
+4. **選配外部 MCP 工具**：
+   - 詢問是否掛載額外的 Stdio / SSE / Streamable HTTP MCP 伺服器（可直接按 Enter 略過，日後透過設定檔擴充）。
+5. **啟動代理**：
    - 完成設定後，直接執行 `pocket-agent`（或執行 `run.bat` / `./run.sh`）即可開始對話！
 
 ---

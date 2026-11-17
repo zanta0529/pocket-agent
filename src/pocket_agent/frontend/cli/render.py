@@ -22,11 +22,13 @@ class MultiStatus:
     def __init__(self, title, task_names, console):
         from rich.live import Live
 
+        from pocket_agent.system.i18n import t
+
         self.title = title
         self.console = console
         self.task_names = task_names
 
-        self._states = {name: "啟動中..." for name in task_names}
+        self._states = {name: t("cli.status_starting") for name in task_names}
         self._live = Live(self._build_table(), console=console, refresh_per_second=10)
         self.is_running = False
 
@@ -36,17 +38,23 @@ class MultiStatus:
         from rich.table import Table
         from rich.text import Text
 
+        from pocket_agent.system.i18n import t
+
         table = Table(show_header=False, show_edge=False, box=None)
         table.add_column("Spinner", width=3)
         table.add_column("Name", style="bold cyan", width=15)
         table.add_column("Status")
 
+        completed_word = t("cli.status_completed")
+        error_word = t("cli.status_error")
+        failed_word = t("cli.status_failed")
+
         for name in self.task_names:
             state = self._states[name]
 
-            if "完成" in state or "✓" in state:
+            if "完成" in state or completed_word in state or "✓" in state:
                 icon = Text("✓", style="bold green")
-            elif "錯誤" in state or "失敗" in state or "✗" in state:
+            elif "錯誤" in state or "失敗" in state or error_word in state or failed_word in state or "✗" in state:
                 icon = Text("✗", style="bold red")
             else:
                 icon = Spinner("dots")
@@ -126,12 +134,11 @@ def clip(value: str, width: int) -> str:
 
 
 def toolbar(state: CliState, width: int) -> FormattedText:
+    from pocket_agent.system.i18n import t
+
     width = max(0, width)
 
-    if not state.pending_files:
-        count = "待送 0"
-    else:
-        count = f"待送 {len(state.pending_files)}"
+    count = t("cli.toolbar_pending", count=len(state.pending_files) if state.pending_files else 0)
 
     if state.session_tokens > 0:
         max_tokens = max(1, getattr(state, "context_window", DEFAULT_CONTEXT_WINDOW) or DEFAULT_CONTEXT_WINDOW)
@@ -148,23 +155,23 @@ def toolbar(state: CliState, width: int) -> FormattedText:
         and getattr(state, "quota_remaining", None) is not None
     ):
         used = state.quota_limit - state.quota_remaining
-        tokens_str += f" · 額度 ${used:.3f}/${state.quota_limit:.3f}"
+        tokens_str += t("cli.toolbar_quota", used=used, limit=state.quota_limit)
 
     accept_status = "ON" if getattr(state, "accept_edits", False) else "OFF"
     reasoning_val = str(getattr(state, "reasoning_effort", "auto") or "auto").strip().capitalize()
-    tokens_str += f" · 推理: {reasoning_val} · Accept-edits: {accept_status}"
+    tokens_str += t("cli.toolbar_reasoning", reasoning=reasoning_val, accept=accept_status)
 
     if getattr(state, "staged_update_version", None):
-        tokens_str += f" · ✨ 新版 ({state.staged_update_version}) 就緒"
+        tokens_str += t("cli.toolbar_update_ready", version=state.staged_update_version)
 
     model = f"[ {state.provider} ] {state.model}"
     budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
     line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
 
     for extra in [
-        " · / 指令  @ 檔案",
-        " · Shift+Tab 自動編輯",
-        " · Enter 送出  Esc+Enter 換行",
+        t("cli.toolbar_hint_cmd"),
+        t("cli.toolbar_hint_accept"),
+        t("cli.toolbar_hint_keys"),
         f" · {Path.cwd().name}",
     ]:
         if cell_len(plain(line + extra)) <= width:
@@ -362,6 +369,7 @@ class CliRenderer:
         self.console.print(Text(plain(value), style=style))
 
     def banner(self) -> None:
+        from pocket_agent.system.i18n import t
         from pocket_agent.system.paths import is_portable
 
         title_text = "Pocket Agent"
@@ -386,7 +394,7 @@ class CliRenderer:
                     ("│ >_   │  ", ""),
                     (f"{title_text}\n", "bold #B8860B"),
                     ("│      │  ", ""),
-                    ("你的終端 AI 工作夥伴\n", ""),
+                    (f"{t('cli.banner_tagline')}\n", ""),
                     ("╰───╲──╯", ""),
                 )
             )
@@ -394,8 +402,17 @@ class CliRenderer:
         self.message("─" * min(width, 80), "")
 
     def welcome(self, state: CliState, tools: list[str]) -> None:
-        self.message(f"[ {state.provider} ] {state.model} · {len(tools)} 個 MCP 工具 · 就緒")
-        self.message("/ 指令 · @ 檔案 · Tab 補全 · Shift+Tab 切換自動編輯 · Enter 送出 · Esc 後 Enter 換行")
+        from pocket_agent.system.i18n import t
+
+        self.message(
+            t(
+                "cli.welcome_status",
+                provider=state.provider,
+                model=state.model,
+                tool_count=len(tools),
+            )
+        )
+        self.message(t("cli.welcome_shortcuts"))
 
     def user(self, raw: str) -> None:
         self.console.print()
@@ -420,7 +437,9 @@ class CliRenderer:
         self._stream_header_printed = False
         self._stream_has_content = False
         self._thinking_buffer = ""
-        self.message(f"本輪已返回 · {seconds:.1f} 秒 · {tokens} tokens")
+        from pocket_agent.system.i18n import t
+
+        self.message(t("cli.reply_footer", seconds=seconds, tokens=tokens))
 
     def event(self, kind: str, data: object) -> None:
         if kind == "system":
@@ -432,7 +451,10 @@ class CliRenderer:
 
             from rich.panel import Panel
 
-            title = data.get("title", "錯誤") if isinstance(data, dict) else "錯誤"
+            from pocket_agent.system.i18n import t
+
+            default_err = t("cli.status_error")
+            title = data.get("title", default_err) if isinstance(data, dict) else default_err
             text = data.get("text", str(data)) if isinstance(data, dict) else str(data)
 
             panel = Panel(
@@ -448,7 +470,9 @@ class CliRenderer:
 
         elif kind in ("image_saved", "file_saved"):
             self._ensure_newline()
-            self.message(f"已儲存檔案：{data}", "green")
+            from pocket_agent.system.i18n import t
+
+            self.message(t("cli.file_saved", path=data), "green")
 
         elif kind == "round_start":
             self._flush_text_buffer()
@@ -507,7 +531,9 @@ class CliRenderer:
                 if len(snippet) > 60:
                     snippet = "..." + snippet[-57:]
                 if type(self._active_status).__name__ in ("Status", "MultiStatus", "Mock", "MagicMock", "AsyncMock"):
-                    self._active_status.update(f"思考中… {snippet}")
+                    from pocket_agent.system.i18n import t
+
+                    self._active_status.update(f"{t('cli.status_thinking')} {snippet}")
 
         elif kind == "read":
             self._ensure_newline()
@@ -515,7 +541,9 @@ class CliRenderer:
 
         elif kind == "tool_stream_start":
             self._ensure_newline()
-            msg = f"準備執行 {data} 工具，正在產生參數..."
+            from pocket_agent.system.i18n import t
+
+            msg = t("cli.tool_preparing", name=data)
             if self._active_status:
                 self._active_status.update(msg)
             else:
@@ -579,8 +607,10 @@ class CliRenderer:
                     from rich.live import Live
                     from rich.spinner import Spinner
 
+                    from pocket_agent.system.i18n import t
+
                     group_items = list(self._format_tool_lines(("  ", ""), self._pending_tools[call_id]))
-                    spinner = Spinner("dots", text=Text("執行工具中…", style="default"))
+                    spinner = Spinner("dots", text=Text(t("cli.tool_running"), style="default"))
                     group_items.append(spinner)
 
                     self._active_status = Live(
@@ -605,16 +635,23 @@ class CliRenderer:
                         options = q.get("options", [])
                         is_multi = q.get("is_multi_select", False)
 
+                        from pocket_agent.system.i18n import t
+
                         self.console.print()
                         self.console.print(
-                            Panel(Text(text), title="🤔 代理提問", title_align="left", border_style="bold blue")
+                            Panel(
+                                Text(text),
+                                title=t("cli.ask_question_title"),
+                                title_align="left",
+                                border_style="bold blue",
+                            )
                         )
                         for i, opt in enumerate(options):
                             self.console.print(f"  [{i + 1}] {opt}")
 
-                        hint = "請輸入選項編號，或自由作答"
+                        hint = t("cli.ask_question_hint")
                         if is_multi:
-                            hint += " (多選可用逗號分隔)"
+                            hint += t("cli.ask_question_multi")
 
                         from prompt_toolkit import prompt
 
@@ -689,11 +726,13 @@ class CliRenderer:
                     else:
                         content = Text(result_text, style="red")
 
+                    from pocket_agent.system.i18n import t
+
                     self.console.print()
                     self.console.print(
                         Panel(
                             content,
-                            title=f"✗ 工具執行失敗：{formatted_name}",
+                            title=t("cli.tool_failed_title", name=formatted_name),
                             title_align="left",
                             border_style="bold red",
                             expand=False,

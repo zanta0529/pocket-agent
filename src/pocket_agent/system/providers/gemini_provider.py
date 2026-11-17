@@ -41,37 +41,38 @@ class GeminiOAuthProvider(_GeminiBaseProvider):
         from rich.prompt import Confirm, Prompt
 
         from pocket_agent.system.auth import _is_expired, _load_token, get_access_token, logout
+        from pocket_agent.system.i18n import t
 
         console = Console()
         current_client_id = config.get("providers.gemini.client_id", "")
-        console.print(f"[dim]目前 Google OAuth Client ID: {current_client_id or '未設定'}[/dim]")
-        new_client_id = Prompt.ask("請輸入 Client ID (直接 Enter 保持原狀)", default="")
+        unset_label = t("provider_setup.unset")
+        console.print(f"[dim]{t('provider_setup.gemini_client_id', val=current_client_id or unset_label)}[/dim]")
+        new_client_id = Prompt.ask(t("provider_setup.enter_client_id"), default="")
         if new_client_id.strip():
             config.set("providers.gemini.client_id", new_client_id.strip())
 
         current_client_secret = config.get("providers.gemini.client_secret", "")
-        console.print(
-            f"[dim]目前 Google OAuth Client Secret (選填): {'***' if current_client_secret else '未設定'}[/dim]"
-        )
-        new_client_secret = Prompt.ask("請輸入 Client Secret (直接 Enter 保持原狀)", default="")
+        secret_display = "***" if current_client_secret else unset_label
+        console.print(f"[dim]{t('provider_setup.gemini_client_secret', val=secret_display)}[/dim]")
+        new_client_secret = Prompt.ask(t("provider_setup.enter_client_secret"), default="")
         if new_client_secret.strip():
             config.set("providers.gemini.client_secret", new_client_secret.strip())
 
         token = _load_token(PROVIDER_GEMINI_OAUTH)
         if token and not _is_expired(token):
-            console.print("[green]✓ 已登入 GEMINI-OAUTH（token 有效）[/green]")
-            if not Confirm.ask("要重新登入嗎？", default=False):
+            console.print(f"[green]{t('provider_setup.oauth_logged_in', provider='GEMINI-OAUTH')}[/green]")
+            if not Confirm.ask(t("provider_setup.oauth_relogin"), default=False):
                 console.print()
                 return
             logout(PROVIDER_GEMINI_OAUTH)
 
         client_id_check = config.get("providers.gemini.client_id")
         if not client_id_check:
-            console.print("[red]✗ 必須提供 Client ID 才能進行 OAuth 授權，請重試。[/red]")
+            console.print(f"[red]{t('provider_setup.gemini_missing_client_id')}[/red]")
             return
 
-        console.print("即將開啟瀏覽器，請用你的 [bold]Google 帳號[/bold] 登入並授權…\n")
-        input("按 Enter 繼續…")
+        console.print(f"{t('provider_setup.oauth_opening_browser', account='Google')}\n")
+        input(t("provider_setup.press_enter"))
         get_access_token(provider=PROVIDER_GEMINI_OAUTH)
         console.print()
 

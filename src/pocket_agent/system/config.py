@@ -51,6 +51,7 @@ def _set_nested(d: dict, key: str, value: Any) -> None:
 DEFAULT_CONFIG = {
     "active_provider": "openai",
     "active_model": "gpt-6-astra",
+    "locale": "zh_TW",
     "system": {
         "max_tool_rounds": DEFAULT_MAX_TOOL_ROUNDS,
         "reasoning_effort": DEFAULT_REASONING_EFFORT,

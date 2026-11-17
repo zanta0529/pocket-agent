@@ -31,6 +31,7 @@ class BaseProvider(ABC):
         from rich.prompt import Prompt
 
         from pocket_agent.system.config import AuthException, MissingKeyException, RequireMasterPasswordException
+        from pocket_agent.system.i18n import t
 
         console = Console()
         current_key = ""
@@ -42,34 +43,34 @@ class BaseProvider(ABC):
                 current_key = ""
                 break
             except AuthException:
-                console.print("\n[yellow]加密庫目前處於鎖定狀態，需先解鎖才能讀取或修改金鑰。[/yellow]")
-                pwd = Prompt.ask("請輸入主密碼", password=True)
+                console.print(f"\n[yellow]{t('provider_setup.vault_locked')}[/yellow]")
+                pwd = Prompt.ask(t("provider_setup.master_password_prompt"), password=True)
                 if config.unlock(pwd):
-                    console.print("[green]✓ 解鎖成功！[/green]\n")
+                    console.print(f"[green]{t('provider_setup.unlock_success')}[/green]\n")
                     continue
                 else:
-                    console.print("[red]密碼錯誤或加密庫損毀，請重試。[/red]")
+                    console.print(f"[red]{t('provider_setup.unlock_failed')}[/red]")
 
-        key_hint = "*" * 10 + current_key[-4:] if current_key and len(current_key) > 4 else "未設定"
-        console.print(f"[dim]目前 API Key: {key_hint}[/dim]")
-        new_key = Prompt.ask(f"請輸入 {display_name} API Key (直接 Enter 保持原狀)", default="")
+        key_hint = "*" * 10 + current_key[-4:] if current_key and len(current_key) > 4 else t("provider_setup.unset")
+        console.print(f"[dim]{t('provider_setup.current_api_key', hint=key_hint)}[/dim]")
+        new_key = Prompt.ask(t("provider_setup.enter_api_key", name=display_name), default="")
 
         if new_key.strip():
             try:
                 config.set(config_key, new_key.strip())
             except RequireMasterPasswordException:
-                console.print("\n[yellow]系統不支援原生憑證，即將為您建立高強度的 JWE 加密庫來保護金鑰。[/yellow]")
+                console.print(f"\n[yellow]{t('provider_setup.vault_creating')}[/yellow]")
                 while True:
-                    pwd1 = Prompt.ask("請設定您的[bold cyan]主密碼[/bold cyan]", password=True)
-                    pwd2 = Prompt.ask("請再次輸入以確認", password=True)
+                    pwd1 = Prompt.ask(t("provider_setup.set_master_password"), password=True)
+                    pwd2 = Prompt.ask(t("provider_setup.confirm_master_password"), password=True)
                     if pwd1 == pwd2 and pwd1:
                         config.encrypted_provider.save_vault(pwd1)
-                        console.print("[green]✓ 加密庫建立成功！[/green]")
+                        console.print(f"[green]{t('provider_setup.vault_created')}[/green]")
                         break
                     else:
-                        console.print("[red]密碼不一致或為空，請重新輸入。[/red]")
+                        console.print(f"[red]{t('provider_setup.password_mismatch')}[/red]")
 
-        console.print(f"[green]✓ {display_name} API Key 設定已更新[/green]\n")
+        console.print(f"[green]{t('provider_setup.api_key_updated', name=display_name)}[/green]\n")
 
     @staticmethod
     def build_async_http_client(timeout: httpx.Timeout) -> httpx.AsyncClient:

@@ -22,19 +22,20 @@ class OpenAIProvider(BaseProvider):
         from rich.prompt import Confirm
 
         from pocket_agent.system.auth import _is_expired, _load_token, get_access_token, logout
+        from pocket_agent.system.i18n import t
 
         console = Console()
-        console.print("[dim]提示：此為官方 ChatGPT/Codex 免費配額，需於瀏覽器完成登入授權。[/dim]\n")
+        console.print(f"[dim]{t('provider_setup.openai_oauth_hint')}[/dim]\n")
 
         token = _load_token(PROVIDER_OPENAI)
         if token and not _is_expired(token):
-            console.print("[green]✓ 已登入 OPENAI（token 有效）[/green]")
-            if not Confirm.ask("要重新登入嗎？", default=False):
+            console.print(f"[green]{t('provider_setup.oauth_logged_in', provider='OPENAI')}[/green]")
+            if not Confirm.ask(t("provider_setup.oauth_relogin"), default=False):
                 console.print()
                 return
             logout(PROVIDER_OPENAI)
-        console.print("即將開啟瀏覽器，請用你的 [bold]OPENAI 帳號[/bold] 登入並授權…\n")
-        input("按 Enter 繼續…")
+        console.print(f"{t('provider_setup.oauth_opening_browser', account='OPENAI')}\n")
+        input(t("provider_setup.press_enter"))
         get_access_token(provider=PROVIDER_OPENAI)
         console.print()
 
