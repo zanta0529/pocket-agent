@@ -424,5 +424,51 @@
     "source_config": "Config",
     "source_engine": "Provider API",
     "source_default": "Fallback default (not configured or provided)"
+  },
+  "github_mcp": {
+    "pr_head_empty": "PR head branch cannot be empty.",
+    "pr_ctx_repo": "Target repository: {owner}/{repo}",
+    "pr_ctx_base": "Suggested base branch: {base}",
+    "pr_ctx_head": "Source branch (head): {head}",
+    "pr_ctx_source": "PR template source: {source}",
+    "pr_ctx_template_header": "--- PR Template Content ---",
+    "pr_ctx_truncated": "Template content truncated due to length limit.",
+    "pr_ctx_failed": "Unable to prepare PR context",
+    "pr_title_empty": "PR title cannot be empty.",
+    "pr_title_invalid_chars": "PR title contains invalid newlines or control characters.",
+    "pr_outbound_blocked": "[ERROR] Security block: PR content may contain secrets ({reason}); outbound request blocked.",
+    "pr_created": "Successfully created PR #{num} in {owner}/{repo} ({head} -> {base}): {title}{url_suffix}",
+    "pr_create_failed": "Unable to create Pull Request"
+  },
+  "memory_mcp": {
+    "stored": "Memory saved: {key} = {value}",
+    "empty": "No long-term memories stored yet.",
+    "invalid_query": "Please provide valid search keywords.",
+    "not_found": "No memories found matching \"{query}\".",
+    "found_header": "Found {count} most relevant memories:"
+  },
+  "browser_mcp": {
+    "playwright_missing": "playwright package is not installed. Run: pip install playwright",
+    "browser_not_found": "No available browser found (Edge/Chrome): {error}",
+    "page_state": "Current page: {title}\nURL: {url}",
+    "userinfo_blocked": "Access denied: URL must not contain userinfo to prevent obfuscation attacks.",
+    "domain_parse_failed": "Access denied: unable to parse valid domain from URL: {url}",
+    "domain_not_allowed": "Access denied: domain {host} is not in BROWSER_ALLOWED_DOMAINS allowlist",
+    "no_interactive_elements": "(No interactive elements on this page)",
+    "elements_truncated": "\n\n... (Too many elements, reached {max_chars} char limit, original length {total:,} chars)",
+    "interactive_elements": "{state}\n\nInteractive elements:\n{elements}",
+    "text_truncated": "\n\n... (Content too long, reached {max_chars} char limit, original length {total:,} chars)",
+    "clicked": "Clicked [{ref}]\n{state}",
+    "filled": "Filled [{ref}]: {text}",
+    "pressed": "Pressed {key}\n{state}",
+    "scrolled_up": "Scrolled up",
+    "scrolled_down": "Scrolled down",
+    "headless_wait_error": "[ERROR] Headless mode (BROWSER_HEADLESS=1) is active; user cannot see or interact with browser. Ask user to disable headless mode and retry.",
+    "wait_dialog_body": "{message}\n\nClick \"OK\" when done so AI can continue; click \"Cancel\" to abort.",
+    "wait_dialog_title": "Pocket Agent — Browser Action Required",
+    "wait_completed": "User completed the action. Use browser_snapshot to verify the current page state and continue.",
+    "wait_cancelled": "User cancelled the action. Abort the current task and ask the user how to proceed.",
+    "closed": "Browser closed",
+    "already_closed": "Browser was not open"
   }
 }

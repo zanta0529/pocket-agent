@@ -434,3 +434,111 @@ def test_github_get_pr_reviews_and_checks_and_create_issue(monkeypatch):
         )
     assert out_create == "成功在 octocat/hello 建立 Issue #55：Bug report"
     client_create.post.assert_awaited_once()
+
+
+def test_github_prepare_pr_context_priority(tmp_path, monkeypatch):
+    import base64
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+
+    # 1. 本機工作區存在 .github/pull_request_template.md
+    tpl_dir = tmp_path / ".github"
+    tpl_dir.mkdir(parents=True)
+    (tpl_dir / "pull_request_template.md").write_text("## Local Template\nCloses #", encoding="utf-8")
+
+    cm_repo, _ = _mock_http_client(json_data={"default_branch": "dev"})
+    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_repo):
+        out_local = asyncio.run(
+            github_mcp.github_prepare_pr_context("octocat", "hello", workspace_root=str(tmp_path)),
+        )
+    assert "PR 範本來源：local:.github/pull_request_template.md" in out_local
+    assert "## Local Template" in out_local
+    assert "建議目標分支 (base)：dev" in out_local
+
+    # 2. 本機無範本 -> 從遠端下載
+    empty_ws = tmp_path / "empty_ws"
+    empty_ws.mkdir()
+    encoded_tpl = base64.b64encode(b"## Remote Template\nDetails").decode("ascii")
+
+    resp_repo = MagicMock()
+    resp_repo.status_code = 200
+    resp_repo.content = b"{}"
+    resp_repo.headers = {}
+    resp_repo.json.return_value = {"default_branch": "main"}
+    resp_repo.raise_for_status = MagicMock()
+
+    resp_tpl = MagicMock()
+    resp_tpl.status_code = 200
+    resp_tpl.content = b"{}"
+    resp_tpl.headers = {}
+    resp_tpl.json.return_value = {"encoding": "base64", "content": encoded_tpl}
+    resp_tpl.raise_for_status = MagicMock()
+
+    client_remote = MagicMock()
+    client_remote.get = AsyncMock(side_effect=[resp_repo, resp_tpl])
+    cm_remote = MagicMock()
+    cm_remote.__aenter__ = AsyncMock(return_value=client_remote)
+    cm_remote.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_remote):
+        out_remote = asyncio.run(
+            github_mcp.github_prepare_pr_context("octocat", "hello", workspace_root=str(empty_ws)),
+        )
+    assert "PR 範本來源：remote:.github/pull_request_template.md" in out_remote
+    assert "## Remote Template" in out_remote
+
+    # 3. 本機與遠端皆無 -> 使用通用範本
+    resp_404 = MagicMock()
+    resp_404.status_code = 404
+    client_fallback = MagicMock()
+    client_fallback.get = AsyncMock(side_effect=[resp_repo, resp_404, resp_404, resp_404, resp_404])
+    cm_fallback = MagicMock()
+    cm_fallback.__aenter__ = AsyncMock(return_value=client_fallback)
+    cm_fallback.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_fallback):
+        out_generic = asyncio.run(
+            github_mcp.github_prepare_pr_context("octocat", "hello", workspace_root=str(empty_ws)),
+        )
+    assert "PR 範本來源：builtin:generic" in out_generic
+    assert "## Summary" in out_generic
+
+
+def test_github_create_pr(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+
+    # 外發機密攔截
+    with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
+        blocked = asyncio.run(
+            github_mcp.github_create_pr(
+                "octocat",
+                "hello",
+                "Add i18n",
+                head="impl_i18n",
+                base="dev",
+                body="token=ghp_123456789012345678901234",
+            )
+        )
+    assert blocked.startswith("[ERROR] 安全攔截")
+    mock_factory.assert_not_called()
+
+    # 成功建立 PR
+    cm_pr, client_pr = _mock_http_client(
+        json_data={"number": 88, "html_url": "https://github.com/octocat/hello/pull/88"},
+        status_code=201,
+    )
+    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_pr):
+        out_pr = asyncio.run(
+            github_mcp.github_create_pr(
+                "octocat",
+                "hello",
+                "feat: add i18n support",
+                head="impl_i18n",
+                base="dev",
+                body="## What does this PR do?",
+            )
+        )
+    assert "成功在 octocat/hello 建立 PR #88（impl_i18n -> dev）：feat: add i18n support" in out_pr
+    assert "https://github.com/octocat/hello/pull/88" in out_pr
+    client_pr.post.assert_awaited_once()

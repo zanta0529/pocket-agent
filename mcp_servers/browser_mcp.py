@@ -19,6 +19,21 @@
 """
 
 import os
+import sys
+from pathlib import Path
+from typing import Any
+
+_SRC_DIR = Path(__file__).resolve().parent.parent / "src"
+if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
+try:
+    from pocket_agent.system.i18n import t
+except ImportError:
+
+    def t(key: str, default: str | None = None, **kwargs: Any) -> str:
+        return default if default is not None else key
+
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -83,7 +98,7 @@ async def _ensure_page():
         return _page
 
     if async_playwright is None:
-        raise RuntimeError("尚未安裝 playwright 套件。請在終端機執行：pip install playwright")
+        raise RuntimeError(t("browser_mcp.playwright_missing"))
 
     if _pw is None:
         _pw = await async_playwright().start()
@@ -103,7 +118,7 @@ async def _ensure_page():
             except Exception as e:
                 last_err = e
         else:
-            raise RuntimeError(f"找不到可用的瀏覽器（Edge/Chrome）：{last_err}")
+            raise RuntimeError(t("browser_mcp.browser_not_found", error=last_err))
         _page = await _browser.new_page()
 
     _page.set_default_timeout(15000)
@@ -142,7 +157,7 @@ async def _page_state(page) -> str:
         except ValueError:
             await page.goto("about:blank")
             raise
-    return f"目前頁面：{await page.title()}\nURL：{page.url}"
+    return t("browser_mcp.page_state", title=await page.title(), url=page.url)
 
 
 def check_url_allowed(url: str):
@@ -153,11 +168,11 @@ def check_url_allowed(url: str):
 
     parsed = urllib.parse.urlsplit(url)
     if parsed.username or parsed.password:
-        raise ValueError("拒絕存取：URL 不得包含使用者資訊 (Userinfo) 以防範混淆攻擊。")
+        raise ValueError(t("browser_mcp.userinfo_blocked"))
 
     hostname = (parsed.hostname or "").lower().strip()
     if not hostname:
-        raise ValueError(f"拒絕存取：無法自 URL 解析有效網域：{url}")
+        raise ValueError(t("browser_mcp.domain_parse_failed", url=url))
 
     allowed_list = [d.strip().lower() for d in allowed.split(",") if d.strip()]
     matched = False
@@ -166,7 +181,7 @@ def check_url_allowed(url: str):
             matched = True
             break
     if not matched:
-        raise ValueError(f"拒絕存取：網域 {hostname} 不在 BROWSER_ALLOWED_DOMAINS 白名單內")
+        raise ValueError(t("browser_mcp.domain_not_allowed", host=hostname))
 
 
 @mcp.tool()
@@ -188,14 +203,15 @@ async def browser_snapshot() -> str:
     elements = await page.evaluate(_SNAPSHOT_JS)
     state = await _page_state(page)
     if not elements:
-        return f"{state}\n\n（頁面上沒有可互動元素）"
+        return f"{state}\n\n{t('browser_mcp.no_interactive_elements')}"
     total_el_len = len(elements)
     if total_el_len > MAX_TEXT:
-        elements = (
-            elements[:MAX_TEXT]
-            + f"\n\n... (元素過多，已達單次輸出上限 {MAX_TEXT} 字元，原始長度共 {total_el_len:,} 字元)"
+        elements = elements[:MAX_TEXT] + t(
+            "browser_mcp.elements_truncated",
+            max_chars=MAX_TEXT,
+            total=total_el_len,
         )
-    return f"{state}\n\n可互動元素：\n{elements}"
+    return t("browser_mcp.interactive_elements", state=state, elements=elements)
 
 
 @mcp.tool()
@@ -206,9 +222,10 @@ async def browser_get_text() -> str:
     text = text.strip()
     total_text_len = len(text)
     if total_text_len > MAX_TEXT:
-        text = (
-            text[:MAX_TEXT]
-            + f"\n\n... (內容過長，已達單次輸出上限 {MAX_TEXT} 字元，原始文字共 {total_text_len:,} 字元)"
+        text = text[:MAX_TEXT] + t(
+            "browser_mcp.text_truncated",
+            max_chars=MAX_TEXT,
+            total=total_text_len,
         )
     return f"{await _page_state(page)}\n\n{text}"
 
@@ -219,7 +236,7 @@ async def browser_click(ref: int) -> str:
     page = await _ensure_page()
     await _ref_locator(page, ref).first.click()
     await page.wait_for_load_state("domcontentloaded")
-    return f"已點擊 [{ref}]\n{await _page_state(page)}"
+    return t("browser_mcp.clicked", ref=ref, state=await _page_state(page))
 
 
 @mcp.tool()
@@ -236,7 +253,7 @@ async def browser_fill(ref: int, text: str) -> str:
         is_password = True
     await locator.fill(text)
     display_text = "********" if is_password else text
-    return f"已在 [{ref}] 填入：{display_text}"
+    return t("browser_mcp.filled", ref=ref, text=display_text)
 
 
 @mcp.tool()
@@ -245,7 +262,7 @@ async def browser_press(key: str) -> str:
     page = await _ensure_page()
     await page.keyboard.press(key)
     await page.wait_for_load_state("domcontentloaded")
-    return f"已按下 {key}\n{await _page_state(page)}"
+    return t("browser_mcp.pressed", key=key, state=await _page_state(page))
 
 
 @mcp.tool()
@@ -254,7 +271,7 @@ async def browser_scroll(direction: str = "down") -> str:
     page = await _ensure_page()
     delta = -600 if direction == "up" else 600
     await page.mouse.wheel(0, delta)
-    return f"已向{'上' if delta < 0 else '下'}捲動"
+    return t("browser_mcp.scrolled_up") if delta < 0 else t("browser_mcp.scrolled_down")
 
 
 @mcp.tool()
@@ -275,10 +292,7 @@ async def browser_wait_for_user(message: str = "請在瀏覽器視窗完成操�
     import ctypes
 
     if os.getenv("BROWSER_HEADLESS", "") in ("1", "true", "yes"):
-        return (
-            "[ERROR] 目前是無頭模式（BROWSER_HEADLESS=1），使用者看不到瀏覽器視窗，"
-            "無法人工操作。請告知使用者關閉無頭模式後重試。"
-        )
+        return t("browser_mcp.headless_wait_error")
 
     page = await _ensure_page()
     try:
@@ -292,16 +306,16 @@ async def browser_wait_for_user(message: str = "請在瀏覽器視窗完成操�
     def show_dialog() -> int:
         return ctypes.windll.user32.MessageBoxW(
             0,
-            f"{message}\n\n完成後按「確定」讓 AI 繼續；按「取消」中止任務。",
-            "Pocket Agent — 需要你操作瀏覽器",
+            t("browser_mcp.wait_dialog_body", message=message),
+            t("browser_mcp.wait_dialog_title"),
             MB_OKCANCEL | MB_ICONINFO | MB_SETFOREGROUND | MB_TOPMOST,
         )
 
     result = await asyncio.to_thread(show_dialog)
 
     if result == 1:  # IDOK
-        return "使用者已完成操作。請用 browser_snapshot 重新確認目前頁面狀態，再從該狀態繼續任務。"
-    return "使用者取消了操作。請中止目前任務，改為詢問使用者下一步怎麼做。"
+        return t("browser_mcp.wait_completed")
+    return t("browser_mcp.wait_cancelled")
 
 
 @mcp.tool()
@@ -314,8 +328,8 @@ async def browser_close() -> str:
     if _pw is not None:
         await _pw.stop()
         _pw = None
-        return "瀏覽器已關閉"
-    return "瀏覽器本來就沒開"
+        return t("browser_mcp.closed")
+    return t("browser_mcp.already_closed")
 
 
 if __name__ == "__main__":

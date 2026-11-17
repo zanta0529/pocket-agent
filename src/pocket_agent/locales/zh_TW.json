@@ -424,5 +424,51 @@
     "source_config": "設定值",
     "source_engine": "供應商查詢",
     "source_default": "保底值（未設定，供應商未提供）"
+  },
+  "github_mcp": {
+    "pr_head_empty": "PR head 分支不可為空白。",
+    "pr_ctx_repo": "目標儲存庫：{owner}/{repo}",
+    "pr_ctx_base": "建議目標分支 (base)：{base}",
+    "pr_ctx_head": "來源分支 (head)：{head}",
+    "pr_ctx_source": "PR 範本來源：{source}",
+    "pr_ctx_template_header": "--- PR 範本內容 ---",
+    "pr_ctx_truncated": "範本內容過長已截斷。",
+    "pr_ctx_failed": "無法準備 PR 上下文",
+    "pr_title_empty": "PR 標題 (title) 不可為空白。",
+    "pr_title_invalid_chars": "PR 標題 (title) 包含無效的換行或控制字元。",
+    "pr_outbound_blocked": "[ERROR] 安全攔截：PR 內容疑似包含機密（{reason}），已阻斷外發以防外洩。",
+    "pr_created": "成功在 {owner}/{repo} 建立 PR #{num}（{head} -> {base}）：{title}{url_suffix}",
+    "pr_create_failed": "無法建立 Pull Request"
+  },
+  "memory_mcp": {
+    "stored": "已成功儲存記憶：{key} = {value}",
+    "empty": "目前沒有任何長期記憶。",
+    "invalid_query": "請提供有效的搜尋關鍵字。",
+    "not_found": "找不到與「{query}」相關的記憶。",
+    "found_header": "找到 {count} 筆最相關的記憶："
+  },
+  "browser_mcp": {
+    "playwright_missing": "尚未安裝 playwright 套件。請在終端機執行：pip install playwright",
+    "browser_not_found": "找不到可用的瀏覽器（Edge/Chrome）：{error}",
+    "page_state": "目前頁面：{title}\nURL：{url}",
+    "userinfo_blocked": "拒絕存取：URL 不得包含使用者資訊 (Userinfo) 以防範混淆攻擊。",
+    "domain_parse_failed": "拒絕存取：無法自 URL 解析有效網域：{url}",
+    "domain_not_allowed": "拒絕存取：網域 {host} 不在 BROWSER_ALLOWED_DOMAINS 白名單內",
+    "no_interactive_elements": "（頁面上沒有可互動元素）",
+    "elements_truncated": "\n\n... (元素過多，已達單次輸出上限 {max_chars} 字元，原始長度共 {total:,} 字元)",
+    "interactive_elements": "{state}\n\n可互動元素：\n{elements}",
+    "text_truncated": "\n\n... (內容過長，已達單次輸出上限 {max_chars} 字元，原始文字共 {total:,} 字元)",
+    "clicked": "已點擊 [{ref}]\n{state}",
+    "filled": "已在 [{ref}] 填入：{text}",
+    "pressed": "已按下 {key}\n{state}",
+    "scrolled_up": "已向上捲動",
+    "scrolled_down": "已向下捲動",
+    "headless_wait_error": "[ERROR] 目前是無頭模式（BROWSER_HEADLESS=1），使用者看不到瀏覽器視窗，無法人工操作。請告知使用者關閉無頭模式後重試。",
+    "wait_dialog_body": "{message}\n\n完成後按「確定」讓 AI 繼續；按「取消」中止任務。",
+    "wait_dialog_title": "Pocket Agent — 需要你操作瀏覽器",
+    "wait_completed": "使用者已完成操作。請用 browser_snapshot 重新確認目前頁面狀態，再從該狀態繼續任務。",
+    "wait_cancelled": "使用者取消了操作。請中止目前任務，改為詢問使用者下一步怎麼做。",
+    "closed": "瀏覽器已關閉",
+    "already_closed": "瀏覽器本來就沒開"
   }
 }

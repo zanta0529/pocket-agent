@@ -1,8 +1,22 @@
 import json
 import os
+import sys
 from pathlib import Path
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+
+_SRC_DIR = Path(__file__).resolve().parent.parent / "src"
+if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
+try:
+    from pocket_agent.system.i18n import t
+except ImportError:
+
+    def t(key: str, default: str | None = None, **kwargs: Any) -> str:
+        return default if default is not None else key
+
 
 mcp = MCPServer("memory")
 
@@ -41,7 +55,7 @@ def memory_store_fact(key: str, value: str) -> str:
     data = load_memory()
     data[key] = value
     save_memory(data)
-    return f"已成功儲存記憶：{key} = {value}"
+    return t("memory_mcp.stored", key=key, value=value)
 
 
 @mcp.tool()
@@ -49,12 +63,12 @@ def memory_search(query: str, top_k: int = 3) -> str:
     """透過關鍵字搜尋相關的長期記憶（強烈建議優先使用此工具以節省 Token）"""
     data = load_memory()
     if not data:
-        return "目前沒有任何長期記憶。"
+        return t("memory_mcp.empty")
 
     # 簡易關鍵字拆分（全小寫）
     keywords = [kw.strip().lower() for kw in query.split() if kw.strip()]
     if not keywords:
-        return "請提供有效的搜尋關鍵字。"
+        return t("memory_mcp.invalid_query")
 
     scored_items = []
     for k, v in data.items():
@@ -67,13 +81,13 @@ def memory_search(query: str, top_k: int = 3) -> str:
             scored_items.append((score, k, v))
 
     if not scored_items:
-        return f"找不到與「{query}」相關的記憶。"
+        return t("memory_mcp.not_found", query=query)
 
     # 依據符合的關鍵字數量排序，取前 top_k 筆
     scored_items.sort(key=lambda x: x[0], reverse=True)
     results = scored_items[:top_k]
 
-    lines = [f"找到 {len(results)} 筆最相關的記憶："]
+    lines = [t("memory_mcp.found_header", count=len(results))]
     for _, k, v in results:
         lines.append(f"- {k}: {v}")
     return "\n".join(lines)
