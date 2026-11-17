@@ -142,3 +142,49 @@ def test_t_accepts_key_in_kwargs():
     assert t("system_cmd.config_edit_normal", key="locale") == "編輯 locale: "
     set_locale("en_US")
     assert t("system_cmd.config_edit_normal", key="locale") == "Edit locale: "
+
+
+def _flatten_locale_keys(data: dict, prefix: str = "") -> dict[str, str]:
+    flat: dict[str, str] = {}
+    for k, v in data.items():
+        full_key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            flat.update(_flatten_locale_keys(v, full_key))
+        else:
+            flat[full_key] = str(v)
+    return flat
+
+
+def _extract_format_fields(template: str) -> set[str]:
+    from string import Formatter
+
+    return {field_name for _, field_name, _, _ in Formatter().parse(template) if field_name is not None}
+
+
+def test_locale_files_keys_and_placeholders_aligned():
+    """驗證所有語系檔與基準語系 zh_TW.json 的鍵值集合及格式化佔位符完全對齊。"""
+    import json
+    from pathlib import Path
+
+    locales_dir = Path(__file__).resolve().parent.parent / "src" / "pocket_agent" / "locales"
+    base_file = locales_dir / "zh_TW.json"
+    assert base_file.is_file()
+
+    base_flat = _flatten_locale_keys(json.loads(base_file.read_text(encoding="utf-8")))
+    locale_files = sorted(p for p in locales_dir.glob("*.json") if p.name != "zh_TW.json")
+    assert locale_files, "Expected at least one secondary locale file"
+
+    for loc_file in locale_files:
+        loc_flat = _flatten_locale_keys(json.loads(loc_file.read_text(encoding="utf-8")))
+        missing = sorted(set(base_flat) - set(loc_flat))
+        extra = sorted(set(loc_flat) - set(base_flat))
+        assert not missing, f"{loc_file.name} missing keys: {missing}"
+        assert not extra, f"{loc_file.name} has extra keys: {extra}"
+
+        for key, base_val in base_flat.items():
+            base_fields = _extract_format_fields(base_val)
+            loc_fields = _extract_format_fields(loc_flat[key])
+            assert base_fields == loc_fields, (
+                f"{loc_file.name} placeholder mismatch at '{key}': "
+                f"expected {sorted(base_fields)}, got {sorted(loc_fields)}"
+            )

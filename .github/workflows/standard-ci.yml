@@ -43,3 +43,14 @@ jobs:
 
       - name: Check Missing Imports (Development)
         run: python scripts/check_imports.py tests --req requirements.in --req requirements-dev.in
+
+  docs-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Lint Markdown documentation
+        uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          config: .markdownlint-cli2.jsonc
