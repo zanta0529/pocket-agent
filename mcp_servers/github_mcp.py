@@ -221,11 +221,11 @@ def _parse_json_response(resp: httpx.Response) -> Any:
     return resp.json()
 
 
-def _redact_output(text: str, active_token: str = "") -> str:
+def _redact_output(text: str, mask_val: str = "") -> str:
     """遮罩文字中的私鑰、內嵌帳密 URL、API Token 與敏感鍵值對。"""
     if not text:
         return text
-    out = text.replace(active_token, "[REDACTED_TOKEN]") if active_token else text
+    out = text.replace(mask_val, "[REDACTED_TOKEN]") if mask_val else text
     out = _REDACT_PEM_RE.sub("[REDACTED_PRIVATE_KEY]", out)
     out = _REDACT_URL_RE.sub(r"\1[REDACTED]@", out)
     out = _REDACT_TOKEN_RE.sub("[REDACTED_TOKEN]", out)
@@ -233,9 +233,9 @@ def _redact_output(text: str, active_token: str = "") -> str:
     return _REDACT_KV_RE.sub(r"\1[REDACTED]", out)
 
 
-def _detect_outbound_secret(body: str, active_token: str = "") -> str | None:
+def _check_outbound_content(body: str, mask_val: str = "") -> str | None:
     """掃描準備發送至外部 GitHub 的留言或 Issue 內容，偵測高風險機密以防憑證外洩。"""
-    if active_token and active_token in body:
+    if mask_val and mask_val in body:
         return "目前使用中的 GITHUB_TOKEN"
     if _REDACT_PEM_RE.search(body):
         return "PEM 私鑰區塊"
@@ -264,12 +264,12 @@ def _truncate_output(text: str, hint: str) -> tuple[str, bool]:
     return text[:cut] + notice, True
 
 
-def _sanitize_and_truncate(raw_output: str, active_token: str, hint: str) -> tuple[str, bool]:
+def _sanitize_and_truncate(raw_output: str, mask_val: str, hint: str) -> tuple[str, bool]:
     """先以安全邊界緩衝預裁切超長文字（防止巨量內容觸發 ReDoS），遮罩機密後再截斷至上限。"""
     pre_limit = MAX_OUTPUT_CHARS + _REDACT_BOUNDARY_BUFFER
     was_pre_sliced = len(raw_output) > pre_limit
     sliced = raw_output[:pre_limit] if was_pre_sliced else raw_output
-    redacted = _redact_output(sliced, active_token)
+    redacted = _redact_output(sliced, mask_val)
     output, was_truncated = _truncate_output(redacted, hint)
     if was_pre_sliced and not was_truncated:
         notice = f"\n\n... [輸出已截斷：超過單次 {MAX_OUTPUT_CHARS} 字元上限。{hint}]"
@@ -297,7 +297,6 @@ def _audit_log(
     target: str = "",
     status: str = "OK",
     detail: str = "",
-    active_token: str = "",
 ) -> None:
     """將查詢、寫入與攔截事件寫入集中化 agent.log 供稽核使用（含防日誌注入清洗）。"""
     try:
@@ -307,10 +306,10 @@ def _audit_log(
         lt = time.localtime(now_t)
         ms = int((now_t - int(now_t)) * 1000)
         ts = f"{time.strftime('%Y-%m-%d %H:%M:%S', lt)},{ms:03d}"
-        safe_cmd = " ".join(_redact_output(command, active_token).splitlines()).strip()
-        raw_target = " ".join(_redact_output(target, active_token).splitlines()).strip()
+        safe_cmd = " ".join(_redact_output(command).splitlines()).strip()
+        raw_target = " ".join(_redact_output(target).splitlines()).strip()
         safe_target = _AUDIT_TARGET_SANITIZE_RE.sub("_", raw_target)
-        safe_detail = " ".join(_redact_output(detail, active_token).splitlines()).strip()
+        safe_detail = " ".join(_redact_output(detail).splitlines()).strip()
         parts = [f"{ts} [AUDIT] [MCP:github] tool={tool_name} status={status}"]
         if safe_target:
             parts.append(f"target={safe_target}")
@@ -433,14 +432,14 @@ def _validate_state(state: str) -> str:
     return norm_state
 
 
-def _format_http_error(exc: httpx.HTTPStatusError, active_token: str = "") -> tuple[str, str]:
+def _format_http_error(exc: httpx.HTTPStatusError) -> tuple[str, str]:
     """將 GitHub HTTP 狀態碼轉換為明確且不含機密的中文訊息與稽核狀態碼。"""
     status_code = exc.response.status_code
     api_msg = ""
     try:
         payload = exc.response.json()
         if isinstance(payload, dict) and payload.get("message"):
-            api_msg = _redact_output(str(payload["message"]), active_token)[:200]
+            api_msg = _redact_output(str(payload["message"]))[:200]
     except Exception:
         api_msg = ""
 
@@ -469,34 +468,31 @@ def _handle_tool_error(
     target: str,
     exc: Exception,
     action_label: str,
-    active_token: str = "",
 ) -> str:
     """統一記錄失敗稽核日誌並格式化為 [ERROR] 字串回傳。"""
     if isinstance(exc, PermissionError):
         _audit_log(tool_name, cmd_desc, target=target, status="BLOCKED", detail=str(exc))
         return f"[ERROR] {exc}"
     if isinstance(exc, _ConnAuthError):
-        _audit_log(tool_name, cmd_desc, target=target, status="AUTH_FAIL", detail=str(exc))
+        _audit_log(tool_name, cmd_desc, target=target, status="AUTH_FAIL", detail="conn_auth_failed")
         return f"[ERROR] {exc}"
     if isinstance(exc, httpx.HTTPStatusError):
-        msg, status_label = _format_http_error(exc, active_token)
+        msg, status_label = _format_http_error(exc)
         _audit_log(
             tool_name,
             cmd_desc,
             target=target,
             status=status_label,
             detail=msg,
-            active_token=active_token,
         )
         return f"[ERROR] {action_label}：{msg}"
-    safe_err = _redact_output(str(exc), active_token)
+    safe_err = _redact_output(str(exc))
     _audit_log(
         tool_name,
         cmd_desc,
         target=target,
         status="ERROR",
         detail=safe_err,
-        active_token=active_token,
     )
     return f"[ERROR] {action_label}：{safe_err}"
 
@@ -555,7 +551,7 @@ async def github_list_prs(
             prs = _parse_json_response(resp)
 
         if not isinstance(prs, list) or not prs:
-            _audit_log("github_list_prs", cmd_desc, target=target, status="OK", active_token=active_token)
+            _audit_log("github_list_prs", cmd_desc, target=target, status="OK")
             return f"目前沒有狀態為 {norm_state} 的 Pull Requests（第 {clean_page} 頁）。"
 
         lines: list[str] = []
@@ -587,11 +583,10 @@ async def github_list_prs(
             target=target,
             status="TRUNCATED" if was_truncated else "OK",
             detail=f"count={len(lines)}",
-            active_token=active_token,
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_list_prs", cmd_desc, target, exc, "無法取得 PR 列表", active_token)
+        return _handle_tool_error("github_list_prs", cmd_desc, target, exc, "無法取得 PR 列表")
 
 
 @mcp.tool()
@@ -649,11 +644,10 @@ async def github_read_issue(
             cmd_desc,
             target=target,
             status="TRUNCATED" if was_truncated else "OK",
-            active_token=active_token,
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_read_issue", cmd_desc, target, exc, "無法取得 Issue 內容", active_token)
+        return _handle_tool_error("github_read_issue", cmd_desc, target, exc, "無法取得 Issue 內容")
 
 
 @mcp.tool()
@@ -690,7 +684,7 @@ async def github_read_comments(
             comments = _parse_json_response(resp)
 
         if not isinstance(comments, list) or not comments:
-            _audit_log("github_read_comments", cmd_desc, target=target, status="OK", active_token=active_token)
+            _audit_log("github_read_comments", cmd_desc, target=target, status="OK")
             return f"目前 {target} 沒有任何留言（第 {clean_page} 頁）。"
 
         blocks: list[str] = []
@@ -713,11 +707,10 @@ async def github_read_comments(
             target=target,
             status="TRUNCATED" if was_truncated else "OK",
             detail=f"count={len(blocks)}",
-            active_token=active_token,
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_read_comments", cmd_desc, target, exc, "無法取得留言列表", active_token)
+        return _handle_tool_error("github_read_comments", cmd_desc, target, exc, "無法取得留言列表")
 
 
 @mcp.tool()
@@ -755,7 +748,7 @@ async def github_get_pr_files(
             files_data = _parse_json_response(resp)
 
         if not isinstance(files_data, list) or not files_data:
-            _audit_log("github_get_pr_files", cmd_desc, target=target, status="OK", active_token=active_token)
+            _audit_log("github_get_pr_files", cmd_desc, target=target, status="OK")
             return f"Pull Request {target} 目前沒有變更檔案（第 {clean_page} 頁）。"
 
         sections: list[str] = []
@@ -786,11 +779,10 @@ async def github_get_pr_files(
             target=target,
             status="TRUNCATED" if was_truncated else "OK",
             detail=f"files={len(sections)}",
-            active_token=active_token,
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_get_pr_files", cmd_desc, target, exc, "無法取得 PR 變更檔案", active_token)
+        return _handle_tool_error("github_get_pr_files", cmd_desc, target, exc, "無法取得 PR 變更檔案")
 
 
 @mcp.tool()
@@ -853,7 +845,7 @@ async def github_list_issues(
             lines.append(f"#{num} [{item_state}] {title} ({_extract_login(item)}){label_str}")
 
         if not lines:
-            _audit_log("github_list_issues", cmd_desc, target=target, status="OK", active_token=active_token)
+            _audit_log("github_list_issues", cmd_desc, target=target, status="OK")
             return f"目前沒有符合條件（state={norm_state}）的 Issues（第 {clean_page} 頁）。"
 
         output, was_truncated = _sanitize_and_truncate(
@@ -867,11 +859,10 @@ async def github_list_issues(
             target=target,
             status="TRUNCATED" if was_truncated else "OK",
             detail=f"count={len(lines)}",
-            active_token=active_token,
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_list_issues", cmd_desc, target, exc, "無法取得 Issue 列表", active_token)
+        return _handle_tool_error("github_list_issues", cmd_desc, target, exc, "無法取得 Issue 列表")
 
 
 @mcp.tool()
@@ -925,7 +916,7 @@ async def github_search_issues(
         items = data.get("items")
         total_count = data.get("total_count", 0)
         if not isinstance(items, list) or not items:
-            _audit_log("github_search_issues", cmd_desc, target=target, status="OK", active_token=active_token)
+            _audit_log("github_search_issues", cmd_desc, target=target, status="OK")
             return f"在 {target} 中找不到符合 {clean_query!r} 的 Issue 或 PR。"
 
         lines: list[str] = [f"搜尋結果（共 {total_count} 筆，目前顯示第 {clean_page} 頁）："]
@@ -949,11 +940,10 @@ async def github_search_issues(
             target=target,
             status="TRUNCATED" if was_truncated else "OK",
             detail=f"count={len(items)}",
-            active_token=active_token,
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_search_issues", cmd_desc, target, exc, "無法搜尋 Issue/PR", active_token)
+        return _handle_tool_error("github_search_issues", cmd_desc, target, exc, "無法搜尋 Issue/PR")
 
 
 @mcp.tool()
@@ -990,7 +980,7 @@ async def github_get_pr_reviews(
             reviews = _parse_json_response(resp)
 
         if not isinstance(reviews, list) or not reviews:
-            _audit_log("github_get_pr_reviews", cmd_desc, target=target, status="OK", active_token=active_token)
+            _audit_log("github_get_pr_reviews", cmd_desc, target=target, status="OK")
             return f"Pull Request {target} 目前沒有任何審查紀錄（第 {clean_page} 頁）。"
 
         blocks: list[str] = []
@@ -1015,11 +1005,10 @@ async def github_get_pr_reviews(
             target=target,
             status="TRUNCATED" if was_truncated else "OK",
             detail=f"count={len(blocks)}",
-            active_token=active_token,
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_get_pr_reviews", cmd_desc, target, exc, "無法取得 PR 審查紀錄", active_token)
+        return _handle_tool_error("github_get_pr_reviews", cmd_desc, target, exc, "無法取得 PR 審查紀錄")
 
 
 @mcp.tool()
@@ -1062,7 +1051,7 @@ async def github_get_pr_checks(
         runs = data.get("check_runs")
         total_count = data.get("total_count", 0)
         if not isinstance(runs, list) or not runs:
-            _audit_log("github_get_pr_checks", cmd_desc, target=target, status="OK", active_token=active_token)
+            _audit_log("github_get_pr_checks", cmd_desc, target=target, status="OK")
             return f"目前 {target} 沒有任何 Check Runs 紀錄（第 {clean_page} 頁）。"
 
         lines: list[str] = [f"CI Check Runs（共 {total_count} 項，目前顯示第 {clean_page} 頁）："]
@@ -1090,11 +1079,10 @@ async def github_get_pr_checks(
             target=target,
             status="TRUNCATED" if was_truncated else "OK",
             detail=f"count={len(runs)}",
-            active_token=active_token,
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_get_pr_checks", cmd_desc, target, exc, "無法取得 CI Check 狀態", active_token)
+        return _handle_tool_error("github_get_pr_checks", cmd_desc, target, exc, "無法取得 CI Check 狀態")
 
 
 @mcp.tool()
@@ -1137,17 +1125,16 @@ async def github_create_issue(
         active_token = headers["Authorization"].removeprefix("Bearer ")
 
         combined_outbound = f"{clean_title}\n{clean_body}\n{' '.join(clean_labels)}"
-        secret_reason = _detect_outbound_secret(combined_outbound, active_token)
-        if secret_reason:
+        block_reason = _check_outbound_content(combined_outbound, active_token)
+        if block_reason:
             _audit_log(
                 "github_create_issue",
                 cmd_desc,
                 target=target,
                 status="BLOCKED",
-                detail=f"outbound_secret_detected:{secret_reason}",
-                active_token=active_token,
+                detail="outbound_policy_blocked",
             )
-            return f"[ERROR] 安全攔截：Issue 內容疑似包含機密（{secret_reason}），已阻斷外發以防外洩。"
+            return f"[ERROR] 安全攔截：Issue 內容疑似包含機密（{block_reason}），已阻斷外發以防外洩。"
 
         safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
         url = f"{GITHUB_API_BASE}/repos/{safe_path}/issues"
@@ -1166,11 +1153,10 @@ async def github_create_issue(
             target=f"{target}#{issue_num}",
             status="OK",
             detail=f"chars={len(clean_title) + len(clean_body)}",
-            active_token=active_token,
         )
         return f"成功在 {clean_owner}/{clean_repo} 建立 Issue #{issue_num}：{clean_title}"
     except Exception as exc:
-        return _handle_tool_error("github_create_issue", cmd_desc, target, exc, "無法建立 Issue", active_token)
+        return _handle_tool_error("github_create_issue", cmd_desc, target, exc, "無法建立 Issue")
 
 
 @mcp.tool()
@@ -1196,17 +1182,16 @@ async def github_create_comment(
         headers = get_headers(github_token)
         active_token = headers["Authorization"].removeprefix("Bearer ")
 
-        secret_reason = _detect_outbound_secret(body, active_token)
-        if secret_reason:
+        block_reason = _check_outbound_content(body, active_token)
+        if block_reason:
             _audit_log(
                 "github_create_comment",
                 cmd_desc,
                 target=target,
                 status="BLOCKED",
-                detail=f"outbound_secret_detected:{secret_reason}",
-                active_token=active_token,
+                detail="outbound_policy_blocked",
             )
-            return f"[ERROR] 安全攔截：留言內容疑似包含機密（{secret_reason}），已阻斷外發以防外洩。"
+            return f"[ERROR] 安全攔截：留言內容疑似包含機密（{block_reason}），已阻斷外發以防外洩。"
 
         safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
         url = f"{GITHUB_API_BASE}/repos/{safe_path}/issues/{clean_num}/comments"
@@ -1220,11 +1205,10 @@ async def github_create_comment(
             target=target,
             status="OK",
             detail=f"chars={len(body)}",
-            active_token=active_token,
         )
         return f"成功在 {clean_owner}/{clean_repo}#{clean_num} 新增留言。"
     except Exception as exc:
-        return _handle_tool_error("github_create_comment", cmd_desc, target, exc, "無法新增留言", active_token)
+        return _handle_tool_error("github_create_comment", cmd_desc, target, exc, "無法新增留言")
 
 
 if __name__ == "__main__":
