@@ -25,27 +25,28 @@
 
 ## Testing
 
-<!-- Record actual checks executed (real terminal/host vs. mocked). Listing a command is not verification; do not check unrun items below. -->
+<!-- Record any local or manual checks run and results (real terminal/host vs. mocked), or note "Pending CI" if relying on standard-ci.yml. Do not check unverified items below. -->
 
 - Checks run and results:
-- CI run (if available):
 - Not run / N/A (with reasons):
+
+## Automated CI gates (`.github/workflows/standard-ci.yml`)
+
+<!-- Enforced on GitHub via required status checks (`build-and-lint`, `docs-lint`); no manual checkboxes needed. -->
+
+- `build-and-lint`: `ruff format --check .`, `ruff check .`, `pytest tests/`, `scripts/check_imports.py`
+- `docs-lint`: Markdown formatting against `.markdownlint-cli2.jsonc`
 
 ## Checklist
 
-<!-- Check only verified items. Leave N/A items unchecked (or mark N/A), and explain pending checks under Testing. -->
+<!-- Check only items verified in this change. Leave N/A items unchecked (or mark N/A). -->
 
-### Code quality & CI (`.github/workflows/standard-ci.yml`)
+### Code & dependencies
 
 - [ ] Compatible with Python 3.14+, UTF-8, LF line endings, and the 120-character line length limit.
-- [ ] Ran `ruff format --check .` and `ruff check .` with no remaining issues.
-- [ ] Verified dependency integrity:
-  - `python scripts/check_imports.py src scripts --req requirements.in --ignore tiktoken`
-  - `python scripts/check_imports.py tests --req requirements.in --req requirements-dev.in`
-- [ ] Ran `pytest tests/` and all tests pass (with network, OAuth, and user data isolated).
 - [ ] *(if applicable)* Added or updated regression tests for bug fixes / behavior changes.
 - [ ] *(if applicable)* Updated `requirements.in` / `requirements-dev.in` and regenerated lockfiles via `pip-compile` (no manual edits to `.txt` lockfiles).
-- [ ] *(if applicable)* Verified Markdown formatting against `.markdownlint-cli2.jsonc` (`docs-lint` job) and synced `src/pocket_agent/locales/*.json` for UI text changes.
+- [ ] *(if applicable)* Synced `src/pocket_agent/locales/*.json` for UI text changes.
 
 ### Architecture & security invariants
 
