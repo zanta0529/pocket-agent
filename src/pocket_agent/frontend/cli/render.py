@@ -272,6 +272,10 @@ class CliRenderer:
                     issue_no = parsed.get("pull_number")
                 if issue_no is not None and str(issue_no).strip() != "":
                     val = f"{parsed['owner']}/{parsed['repo']}#{issue_no}"
+                elif parsed.get("head") and str(parsed["head"]).strip():
+                    head_s = str(parsed["head"]).strip()
+                    base_s = str(parsed.get("base") or "").strip() or "default"
+                    val = f"{parsed['owner']}/{parsed['repo']} ({head_s} -> {base_s})"
                 elif parsed.get("ref") and str(parsed["ref"]).strip():
                     val = f"{parsed['owner']}/{parsed['repo']}@{str(parsed['ref']).strip()}"
                 else:
@@ -571,7 +575,7 @@ class CliRenderer:
 
             name_lower = real_name.lower()
 
-            if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep", "get"]):
+            if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep", "get", "prepare"]):
                 action = "Read"
             elif any(kw in name_lower for kw in ["write", "replace", "edit", "patch", "delete", "create"]):
                 action = "Write"

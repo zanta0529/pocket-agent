@@ -436,109 +436,170 @@ def test_github_get_pr_reviews_and_checks_and_create_issue(monkeypatch):
     client_create.post.assert_awaited_once()
 
 
-def test_github_prepare_pr_context_priority(tmp_path, monkeypatch):
-    import base64
-    from unittest.mock import AsyncMock, MagicMock
-
+def test_github_prepare_pr_context_with_local_and_fallback_template(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+    monkeypatch.chdir(tmp_path)
 
-    # 1. 本機工作區存在 .github/pull_request_template.md
-    tpl_dir = tmp_path / ".github"
-    tpl_dir.mkdir(parents=True)
-    (tpl_dir / "pull_request_template.md").write_text("## Local Template\nCloses #", encoding="utf-8")
+    req = httpx.Request("GET", "https://api.github.com/repos/octocat/hello")
+    resp_repo = httpx.Response(200, json={"default_branch": "main"}, request=req)
+    resp_404 = httpx.Response(404, json={"message": "Not Found"}, request=req)
+    resp_compare = httpx.Response(
+        200,
+        json={
+            "commits": [{"sha": "1234567890abcdef", "commit": {"message": "feat(cli): enhance input\n\ndetails"}}],
+            "files": [
+                {
+                    "filename": "src/pocket_agent/frontend/cli/input.py",
+                    "status": "modified",
+                    "additions": 12,
+                    "deletions": 3,
+                    "patch": "@@ -1,3 +1,12 @@\n+new_line = True",
+                },
+            ],
+        },
+        request=req,
+    )
 
-    cm_repo, _ = _mock_http_client(json_data={"default_branch": "dev"})
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_repo):
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=[resp_repo, resp_404, resp_compare])
+    cm = AsyncMock()
+    cm.__aenter__.return_value = client
+    cm.__aexit__.return_value = False
+
+    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm):
+        out_fallback = asyncio.run(
+            github_mcp.github_prepare_pr_context("octocat", "hello", head="enhance_cli_input"),
+        )
+
+    assert "合併方向：enhance_cli_input -> main" in out_fallback
+    assert "預設業界標準範本 (Conventional PR Template)" in out_fallback
+    assert "## Summary" in out_fallback
+    assert "一律預設使用英文（English）" in out_fallback
+    assert "- 1234567 feat(cli): enhance input" in out_fallback
+    assert "src/pocket_agent/frontend/cli/input.py [modified] (+12 / -3)" in out_fallback
+
+    gh_dir = tmp_path / ".github"
+    gh_dir.mkdir()
+    (gh_dir / "pull_request_template.md").write_text("## Custom Repo Template\n- [ ] Check A", encoding="utf-8")
+
+    client2 = AsyncMock()
+    client2.get = AsyncMock(side_effect=[resp_compare])
+    cm2 = AsyncMock()
+    cm2.__aenter__.return_value = client2
+    cm2.__aexit__.return_value = False
+
+    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm2):
         out_local = asyncio.run(
-            github_mcp.github_prepare_pr_context("octocat", "hello", workspace_root=str(tmp_path)),
+            github_mcp.github_prepare_pr_context("octocat", "hello", head="octocat:enhance_cli_input", base="dev"),
         )
-    assert "PR 範本來源：local:.github/pull_request_template.md" in out_local
-    assert "## Local Template" in out_local
-    assert "建議目標分支 (base)：dev" in out_local
 
-    # 2. 本機無範本 -> 從遠端下載
-    empty_ws = tmp_path / "empty_ws"
-    empty_ws.mkdir()
-    encoded_tpl = base64.b64encode(b"## Remote Template\nDetails").decode("ascii")
-
-    resp_repo = MagicMock()
-    resp_repo.status_code = 200
-    resp_repo.content = b"{}"
-    resp_repo.headers = {}
-    resp_repo.json.return_value = {"default_branch": "main"}
-    resp_repo.raise_for_status = MagicMock()
-
-    resp_tpl = MagicMock()
-    resp_tpl.status_code = 200
-    resp_tpl.content = b"{}"
-    resp_tpl.headers = {}
-    resp_tpl.json.return_value = {"encoding": "base64", "content": encoded_tpl}
-    resp_tpl.raise_for_status = MagicMock()
-
-    client_remote = MagicMock()
-    client_remote.get = AsyncMock(side_effect=[resp_repo, resp_tpl])
-    cm_remote = MagicMock()
-    cm_remote.__aenter__ = AsyncMock(return_value=client_remote)
-    cm_remote.__aexit__ = AsyncMock(return_value=False)
-
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_remote):
-        out_remote = asyncio.run(
-            github_mcp.github_prepare_pr_context("octocat", "hello", workspace_root=str(empty_ws)),
-        )
-    assert "PR 範本來源：remote:.github/pull_request_template.md" in out_remote
-    assert "## Remote Template" in out_remote
-
-    # 3. 本機與遠端皆無 -> 使用通用範本
-    resp_404 = MagicMock()
-    resp_404.status_code = 404
-    client_fallback = MagicMock()
-    client_fallback.get = AsyncMock(side_effect=[resp_repo, resp_404, resp_404, resp_404, resp_404])
-    cm_fallback = MagicMock()
-    cm_fallback.__aenter__ = AsyncMock(return_value=client_fallback)
-    cm_fallback.__aexit__ = AsyncMock(return_value=False)
-
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_fallback):
-        out_generic = asyncio.run(
-            github_mcp.github_prepare_pr_context("octocat", "hello", workspace_root=str(empty_ws)),
-        )
-    assert "PR 範本來源：builtin:generic" in out_generic
-    assert "## Summary" in out_generic
+    assert "合併方向：octocat:enhance_cli_input -> dev" in out_local
+    assert "本機工作區範本 (.github/pull_request_template.md)" in out_local
+    assert "## Custom Repo Template" in out_local
 
 
-def test_github_create_pr(monkeypatch):
+def test_github_create_pr_and_422_error_and_no_merge_tool(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+    assert not hasattr(github_mcp, "github_merge_pr")
 
-    # 外發機密攔截
     with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
-        blocked = asyncio.run(
+        blocked_pr = asyncio.run(
             github_mcp.github_create_pr(
                 "octocat",
                 "hello",
-                "Add i18n",
-                head="impl_i18n",
-                base="dev",
-                body="token=ghp_123456789012345678901234",
-            )
+                title="feat: add pr",
+                head="enhance_cli_input",
+                base="main",
+                body="Leak ghp_1234567890abcdefghijklmnop",
+            ),
         )
-    assert blocked.startswith("[ERROR] 安全攔截")
+    assert blocked_pr.startswith("[ERROR] 安全攔截")
     mock_factory.assert_not_called()
 
-    # 成功建立 PR
-    cm_pr, client_pr = _mock_http_client(
-        json_data={"number": 88, "html_url": "https://github.com/octocat/hello/pull/88"},
-        status_code=201,
+    cm_same, _ = _mock_http_client(json_data={})
+    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_same):
+        same_branch = asyncio.run(
+            github_mcp.github_create_pr("octocat", "hello", title="feat: x", head="main", base="main"),
+        )
+    assert "不可相同" in same_branch
+
+    cm_422, _ = _mock_http_client(
+        json_data={"message": "Validation Failed", "errors": [{"message": "A pull request already exists"}]},
+        status_code=422,
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_pr):
-        out_pr = asyncio.run(
+    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_422):
+        out_422 = asyncio.run(
             github_mcp.github_create_pr(
                 "octocat",
                 "hello",
-                "feat: add i18n support",
-                head="impl_i18n",
-                base="dev",
-                body="## What does this PR do?",
-            )
+                title="feat: test",
+                head="enhance_cli_input",
+                base="main",
+            ),
         )
-    assert "成功在 octocat/hello 建立 PR #88（impl_i18n -> dev）：feat: add i18n support" in out_pr
-    assert "https://github.com/octocat/hello/pull/88" in out_pr
-    client_pr.post.assert_awaited_once()
+    assert "HTTP 422" in out_422
+    assert "A pull request already exists" in out_422
+
+    req = httpx.Request("POST", "https://api.github.com/repos/octocat/hello/pulls")
+    resp_repo = httpx.Response(200, json={"default_branch": "main"}, request=req)
+    resp_created = httpx.Response(
+        201,
+        json={"number": 108, "html_url": "https://github.com/octocat/hello/pull/108"},
+        request=req,
+    )
+    client_ok = AsyncMock()
+    client_ok.get = AsyncMock(return_value=resp_repo)
+    client_ok.post = AsyncMock(return_value=resp_created)
+    cm_ok = AsyncMock()
+    cm_ok.__aenter__.return_value = client_ok
+    cm_ok.__aexit__.return_value = False
+
+    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_ok):
+        out_ok = asyncio.run(
+            github_mcp.github_create_pr(
+                "octocat",
+                "hello",
+                title="feat(cli): enhance input",
+                head="enhance_cli_input",
+                body="## Summary\nReady",
+            ),
+        )
+    assert "Pull Request #108（enhance_cli_input -> main）" in out_ok
+    assert "https://github.com/octocat/hello/pull/108" in out_ok
+    assert "不會自動執行 Merge" in out_ok
+    _, post_kwargs = client_ok.post.call_args
+    assert post_kwargs["json"]["base"] == "main"
+    assert post_kwargs["json"]["head"] == "enhance_cli_input"
+
+
+def test_confirmation_bridge_formats_pr_preview_and_requires_explicit_approval():
+    from pocket_agent.frontend.cli.confirmation import ConfirmationBridge
+
+    formatted = ConfirmationBridge._format_command(
+        (
+            "mcp__github__github_create_pr",
+            {
+                "owner": "octocat",
+                "repo": "hello",
+                "head": "enhance_cli_input",
+                "base": "main",
+                "title": "feat(cli): enhance input",
+                "body": "## Summary\n- item 1",
+                "draft": False,
+            },
+        ),
+    )
+    assert "動作：建立 GitHub Pull Request（僅建立 PR 單，絕不自動執行 Merge）" in formatted
+    assert "合併分支方向：enhance_cli_input -> main" in formatted
+    assert "PR 標題：feat(cli): enhance input" in formatted
+    assert "## Summary\n- item 1" in formatted
+
+    dummy_bridge = SimpleNamespace(
+        state=SimpleNamespace(accept_edits=True, session_approved_commands={formatted.strip()}),
+    )
+    assert ConfirmationBridge._is_auto_allowed(dummy_bridge, formatted, True) is False
+
+    renderer = CliRenderer(Console())
+    raw_prep = '{"owner": "octocat", "repo": "hello", "head": "enhance_cli_input", "base": "main"}'
+    expected_target = "octocat/hello (enhance_cli_input -> main)"
+    assert renderer._summarise_args("github_prepare_pr_context", raw_prep) == expected_target

@@ -70,6 +70,30 @@ _SEARCH_SCOPE_OVERRIDE_RE = re.compile(r"(?i)\b(?:repo|org|user)\s*:")
 _REDACT_BOUNDARY_BUFFER = 2048
 _MAX_SINGLE_PATCH_CHARS = 3000
 
+_LOCAL_PR_TEMPLATE_PATHS: tuple[str, ...] = (
+    ".github/pull_request_template.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    "docs/pull_request_template.md",
+    "docs/PULL_REQUEST_TEMPLATE.md",
+    "pull_request_template.md",
+    "PULL_REQUEST_TEMPLATE.md",
+)
+
+_DEFAULT_PR_TEMPLATE = (
+    "## Summary\n"
+    "<!-- Briefly describe what this PR does and why -->\n\n"
+    "## Key Changes\n"
+    "<!-- List the main changes made in this branch -->\n\n"
+    "## Type of Change\n"
+    "- [ ] Bug fix\n"
+    "- [ ] New feature\n"
+    "- [ ] Refactor / Performance improvement\n"
+    "- [ ] Security hardening\n"
+    "- [ ] Docs / Tests / Chore\n\n"
+    "## Verification & Testing\n"
+    "<!-- Describe how the changes were tested or verified -->"
+)
+
 _RUNTIME_CREDS: dict[str, str] = {}
 _RUNTIME_CREDS_TS: float = 0.0
 _CREDS_TTL_SECONDS: float = 600.0
@@ -105,29 +129,6 @@ _OUTBOUND_KV_SECRET_RE = re.compile(
     r"[A-Za-z0-9_./+=-]{8,}",
 )
 _AUDIT_TARGET_SANITIZE_RE = re.compile(r"[\s='\"\\]+")
-
-_PR_TEMPLATE_CANDIDATES: tuple[str, ...] = (
-    ".github/pull_request_template.md",
-    ".github/PULL_REQUEST_TEMPLATE.md",
-    "pull_request_template.md",
-    "PULL_REQUEST_TEMPLATE.md",
-    "docs/pull_request_template.md",
-    "docs/PULL_REQUEST_TEMPLATE.md",
-)
-
-_GENERIC_PR_TEMPLATE = (
-    "## Summary\n"
-    "<!-- Describe the changes in this PR and why they are needed. -->\n\n"
-    "## Related Issues\n"
-    "<!-- Closes # -->\n\n"
-    "## Type of Change\n"
-    "- [ ] Bug fix\n"
-    "- [ ] New feature\n"
-    "- [ ] Refactor / Chore\n"
-    "- [ ] Documentation / Tests\n\n"
-    "## Testing & Verification\n"
-    "<!-- Describe how these changes were tested. -->\n"
-)
 
 
 class _ConnAuthError(RuntimeError):
@@ -437,6 +438,85 @@ def _validate_git_ref(ref: str) -> str:
     return cleaned
 
 
+def _validate_head_ref(head: str) -> str:
+    """驗證 PR 來源分支 (head)，支援同儲存庫分支或跨 Fork 之 owner:branch 格式。"""
+    cleaned = (head or "").strip()
+    if ":" in cleaned:
+        parts = cleaned.split(":")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ValueError(f"無效的 head 參數：{head!r}（跨 Fork 格式須為 owner:branch）。")
+        fork_owner = _validate_repo_segment(parts[0], "head owner")
+        branch_ref = _validate_git_ref(parts[1])
+        return f"{fork_owner}:{branch_ref}"
+    return _validate_git_ref(cleaned)
+
+
+async def _resolve_base_branch(
+    client: httpx.AsyncClient,
+    safe_path: str,
+    headers: dict[str, str],
+    base: str,
+) -> str:
+    """解析 PR 目標分支 (base)；若未指定則自動向 GitHub 查詢儲存庫的 default_branch。"""
+    cleaned = (base or "").strip()
+    if cleaned:
+        return _validate_git_ref(cleaned)
+    repo_url = f"{GITHUB_API_BASE}/repos/{safe_path}"
+    resp = await client.get(repo_url, headers=headers)
+    repo_data = _parse_json_response(resp)
+    default_branch = "main"
+    if isinstance(repo_data, dict) and isinstance(repo_data.get("default_branch"), str):
+        candidate = repo_data["default_branch"].strip()
+        if candidate:
+            default_branch = candidate
+    return _validate_git_ref(default_branch)
+
+
+async def _load_pr_template(
+    client: httpx.AsyncClient,
+    safe_path: str,
+    headers: dict[str, str],
+) -> tuple[str, str]:
+    """依「本機工作區 → 遠端儲存庫 API → 內建業界標準慣例範本」三階段取得 PR 範本。"""
+    cwd = Path.cwd()
+    for rel_path in _LOCAL_PR_TEMPLATE_PATHS:
+        candidate = cwd / rel_path
+        try:
+            if candidate.is_file() and candidate.stat().st_size <= MAX_RESPONSE_BYTES:
+                content = candidate.read_text(encoding="utf-8", errors="replace").strip()
+                if content:
+                    return content, f"本機工作區範本 ({rel_path})"
+        except OSError:
+            continue
+
+    template_dir = cwd / ".github" / "PULL_REQUEST_TEMPLATE"
+    try:
+        if template_dir.is_dir():
+            for md_file in sorted(template_dir.glob("*.md")):
+                if md_file.is_file() and md_file.stat().st_size <= MAX_RESPONSE_BYTES:
+                    content = md_file.read_text(encoding="utf-8", errors="replace").strip()
+                    if content:
+                        rel_str = md_file.relative_to(cwd).as_posix()
+                        return content, f"本機工作區範本 ({rel_str})"
+    except OSError:
+        pass
+
+    remote_url = f"{GITHUB_API_BASE}/repos/{safe_path}/contents/.github/pull_request_template.md"
+    try:
+        resp = await client.get(remote_url, headers=headers)
+        if resp.status_code == 200:
+            data = _parse_json_response(resp)
+            if isinstance(data, dict) and isinstance(data.get("content"), str):
+                raw_b64 = data["content"]
+                decoded = base64.b64decode(raw_b64).decode("utf-8", errors="replace").strip()
+                if decoded:
+                    return decoded, "遠端儲存庫範本 (.github/pull_request_template.md)"
+    except Exception:
+        pass
+
+    return _DEFAULT_PR_TEMPLATE, "預設業界標準範本 (Conventional PR Template)"
+
+
 def check_repo_allowed(owner: str, repo: str) -> tuple[str, str]:
     """驗證 owner/repo 格式合法性，並核對 GITHUB_ALLOWED_REPOS 白名單（若有設定）。"""
     clean_owner = _validate_repo_segment(owner, "owner")
@@ -489,6 +569,26 @@ def _format_http_error(exc: httpx.HTTPStatusError) -> tuple[str, str]:
         return f"GitHub 拒絕存取 (HTTP 403)：Token 權限不足或資源受保護{suffix}。", "AUTH_FAIL"
     if status_code == 404:
         msg = "找不到指定的儲存庫、Issue 或 Pull Request，或 Token 無權存取該資源 (HTTP 404)。"
+        return msg, "ERROR"
+    if status_code == 422:
+        err_details: list[str] = []
+        try:
+            payload = exc.response.json()
+            if isinstance(payload, dict) and isinstance(payload.get("errors"), list):
+                for item in payload["errors"]:
+                    if isinstance(item, dict):
+                        if item.get("message"):
+                            err_details.append(_redact_output(str(item["message"]))[:160])
+                        elif item.get("field") and item.get("code"):
+                            err_details.append(f"{item['field']}:{item['code']}")
+        except Exception:
+            pass
+        joined_err = "；".join(err_details) if err_details else api_msg
+        suffix = f"（{joined_err}）" if joined_err else ""
+        msg = (
+            f"GitHub 驗證失敗 (HTTP 422 Unprocessable Entity){suffix}。"
+            "請確認來源分支 (head) 是否已 git push 至遠端，且尚未存在相同分支的開啟中 PR。"
+        )
         return msg, "ERROR"
     suffix = f"：{api_msg}" if api_msg else ""
     return f"GitHub API 回傳錯誤 (HTTP {status_code}){suffix}", "ERROR"
@@ -1243,153 +1343,106 @@ async def github_create_comment(
         return _handle_tool_error("github_create_comment", cmd_desc, target, exc, "無法新增留言")
 
 
-def _validate_pr_head(head: str) -> str:
-    """驗證 PR head 分支（支援 branch 或 owner:branch 格式）。"""
-    cleaned = (head or "").strip()
-    if not cleaned:
-        raise ValueError(t("github_mcp.pr_head_empty"))
-    if ":" in cleaned:
-        owner_part, branch_part = cleaned.split(":", 1)
-        clean_owner = _validate_repo_segment(owner_part, "head owner")
-        clean_branch = _validate_git_ref(branch_part)
-        return f"{clean_owner}:{clean_branch}"
-    return _validate_git_ref(cleaned)
-
-
-def _find_local_pr_template(workspace_root: Path) -> tuple[str, str] | None:
-    """在本機工作區搜尋 PR 範本，並驗證路徑不越界。"""
-    resolved_root = workspace_root.resolve()
-    for rel_path in _PR_TEMPLATE_CANDIDATES:
-        candidate = (resolved_root / rel_path).resolve()
-        if not candidate.is_relative_to(resolved_root):
-            continue
-        if candidate.is_file():
-            try:
-                text = candidate.read_text(encoding="utf-8")
-                if text.strip():
-                    return rel_path, text
-            except OSError:
-                continue
-
-    tpl_dir = (resolved_root / ".github" / "PULL_REQUEST_TEMPLATE").resolve()
-    if tpl_dir.is_relative_to(resolved_root) and tpl_dir.is_dir():
-        for md_file in sorted(tpl_dir.glob("*.md")):
-            resolved_md = md_file.resolve()
-            if not resolved_md.is_relative_to(resolved_root) or not resolved_md.is_file():
-                continue
-            try:
-                text = resolved_md.read_text(encoding="utf-8")
-                if text.strip():
-                    rel = resolved_md.relative_to(resolved_root).as_posix()
-                    return rel, text
-            except OSError:
-                continue
-    return None
-
-
-async def _fetch_remote_pr_template(
-    client: httpx.AsyncClient,
-    headers: dict[str, str],
-    clean_owner: str,
-    clean_repo: str,
-) -> tuple[str, str] | None:
-    """從遠端 GitHub 儲存庫嘗試下載 PR 範本。"""
-    safe_repo = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
-    for rel_path in _PR_TEMPLATE_CANDIDATES[:4]:
-        url = f"{GITHUB_API_BASE}/repos/{safe_repo}/contents/{rel_path}"
-        try:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 404:
-                continue
-            data = _parse_json_response(resp)
-            if isinstance(data, dict) and data.get("encoding") == "base64" and data.get("content"):
-                decoded = base64.b64decode(str(data["content"])).decode("utf-8", errors="replace")
-                if decoded.strip():
-                    return rel_path, decoded
-        except Exception:
-            continue
-    return None
-
-
 @mcp.tool()
 async def github_prepare_pr_context(
     owner: str,
     repo: str,
+    head: str,
     base: str = "",
-    head: str = "",
-    workspace_root: str = "",
     github_token: str = "",
 ) -> str:
-    """準備建立 PR 所需上下文與範本（依序搜尋：本機工作區 -> 遠端儲存庫 -> 通用範本）。"""
+    """讀取專案 PR 範本並比對 base...head 分支變更（除非使用者明確指定語言，否則預設以英文撰寫 PR 內容）。"""
     active_token = ""
     target = f"{owner}/{repo}"
-    cmd_desc = "PREPARE pr context"
+    cmd_desc = f"GET compare head={head} base={base or 'default'}"
     try:
         clean_owner, clean_repo = check_repo_allowed(owner, repo)
+        clean_head = _validate_head_ref(head)
         target = f"{clean_owner}/{clean_repo}"
-        clean_base = _validate_git_ref(base) if base.strip() else ""
-        clean_head = _validate_pr_head(head) if head.strip() else ""
-
-        root_path = Path(workspace_root).expanduser() if workspace_root.strip() else Path.cwd()
-        local_tpl = _find_local_pr_template(root_path)
 
         headers = get_headers(github_token)
         active_token = headers["Authorization"].removeprefix("Bearer ")
-        safe_repo = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
-
-        default_branch = clean_base
-        template_source = ""
-        template_body = ""
+        safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
 
         async with _create_http_client() as client:
-            if not default_branch:
-                try:
-                    repo_resp = await client.get(f"{GITHUB_API_BASE}/repos/{safe_repo}", headers=headers)
-                    if repo_resp.status_code == 200:
-                        repo_data = _parse_json_response(repo_resp)
-                        if isinstance(repo_data, dict) and repo_data.get("default_branch"):
-                            default_branch = str(repo_data["default_branch"])
-                except Exception:
-                    pass
+            clean_base = await _resolve_base_branch(client, safe_path, headers, base)
+            target = f"{clean_owner}/{clean_repo} ({clean_head}->{clean_base})"
+            template_text, template_source = await _load_pr_template(client, safe_path, headers)
 
-            if local_tpl is not None:
-                rel_path, template_body = local_tpl
-                template_source = f"local:{rel_path}"
+            safe_base = quote(clean_base, safe="")
+            if ":" in clean_head:
+                fk_owner, fk_branch = clean_head.split(":", 1)
+                safe_head = f"{quote(fk_owner, safe='')}:{quote(fk_branch, safe='')}"
             else:
-                remote_tpl = await _fetch_remote_pr_template(client, headers, clean_owner, clean_repo)
-                if remote_tpl is not None:
-                    rel_path, template_body = remote_tpl
-                    template_source = f"remote:{rel_path}"
-                else:
-                    template_source = "builtin:generic"
-                    template_body = _GENERIC_PR_TEMPLATE
+                safe_head = quote(clean_head, safe="")
 
-        info_lines = [
-            t("github_mcp.pr_ctx_repo", owner=clean_owner, repo=clean_repo),
-            t("github_mcp.pr_ctx_base", base=default_branch or "main"),
-        ]
-        if clean_head:
-            info_lines.append(t("github_mcp.pr_ctx_head", head=clean_head))
-        info_lines.extend(
-            [
-                t("github_mcp.pr_ctx_source", source=template_source),
-                "",
-                t("github_mcp.pr_ctx_template_header"),
-                template_body.strip(),
-            ]
+            compare_url = f"{GITHUB_API_BASE}/repos/{safe_path}/compare/{safe_base}...{safe_head}"
+            resp = await client.get(compare_url, headers=headers)
+            compare_data = _parse_json_response(resp)
+
+        if not isinstance(compare_data, dict):
+            raise ValueError("GitHub API 回傳的分支比較資料格式異常。")
+
+        raw_commits = compare_data.get("commits")
+        commits_list = raw_commits if isinstance(raw_commits, list) else []
+        commit_lines: list[str] = []
+        for c_item in commits_list[:30]:
+            if not isinstance(c_item, dict):
+                continue
+            sha = str(c_item.get("sha") or "")[:7]
+            c_obj = c_item.get("commit")
+            msg_first = ""
+            if isinstance(c_obj, dict) and c_obj.get("message"):
+                msg_first = str(c_obj["message"]).splitlines()[0].strip()
+            commit_lines.append(f"- {sha} {msg_first}".strip())
+
+        raw_files = compare_data.get("files")
+        files_list = raw_files if isinstance(raw_files, list) else []
+        file_lines: list[str] = []
+        for f_item in files_list[:50]:
+            if not isinstance(f_item, dict):
+                continue
+            fname = f_item.get("filename") or "?"
+            fstatus = f_item.get("status") or "modified"
+            fadd = f_item.get("additions", 0)
+            fdel = f_item.get("deletions", 0)
+            line = f"- {fname} [{fstatus}] (+{fadd} / -{fdel})"
+            patch_str = f_item.get("patch")
+            if isinstance(patch_str, str) and patch_str.strip():
+                snippet = patch_str.strip()[:600]
+                if len(patch_str.strip()) > 600:
+                    snippet += "\n... [Diff 摘要已截斷]"
+                line += f"\n```diff\n{snippet}\n```"
+            file_lines.append(line)
+
+        commits_block = "\n".join(commit_lines) if commit_lines else "（無 Commit 紀錄）"
+        files_block = "\n".join(file_lines) if file_lines else "（無檔案變更）"
+        raw_output = (
+            f"目標儲存庫：{clean_owner}/{clean_repo}\n"
+            f"合併方向：{clean_head} -> {clean_base}\n"
+            f"範本來源：{template_source}\n\n"
+            f"=== PR 範本內容 ===\n{template_text}\n\n"
+            f"=== 分支 Commit 列表 (共 {len(commits_list)} 筆) ===\n{commits_block}\n\n"
+            f"=== 變更檔案摘要 (共 {len(files_list)} 檔) ===\n{files_block}\n\n"
+            "=== 執行規範 ===\n"
+            "1. 語言規範（Language Policy）：除非使用者明確指定使用的語言，"
+            "否則產生的 PR Title 與 PR Body 內容**一律預設使用英文（English）**撰寫。\n"
+            "2. 請依據上述範本與變更內容，撰寫結構完整的英文 PR Title（建議採 Conventional Commits 格式）與 PR Body。\n"
+            f"3. 完成後請呼叫 github_create_pr（head={clean_head!r}, base={clean_base!r}）；"
+            "系統會在終端機畫面完整列出預計執行的動作與 PR 內容，待使用者同意後才會送出，且絕不自動執行 Merge。"
         )
 
         output, was_truncated = _sanitize_and_truncate(
-            "\n".join(info_lines),
+            raw_output,
             active_token,
-            t("github_mcp.pr_ctx_truncated"),
+            "變更內容過長已截斷尾端，請直接依據現有摘要撰寫 PR。",
         )
         _audit_log(
             "github_prepare_pr_context",
             cmd_desc,
             target=target,
             status="TRUNCATED" if was_truncated else "OK",
-            detail=f"source={template_source}",
+            detail=f"commits={len(commits_list)},files={len(files_list)}",
         )
         return output
     except Exception as exc:
@@ -1408,18 +1461,18 @@ async def github_create_pr(
     repo: str,
     title: str,
     head: str,
-    base: str,
+    base: str = "",
     body: str = "",
     draft: bool = False,
-    maintainer_can_modify: bool = True,
     github_token: str = "",
 ) -> str:
-    """在指定儲存庫建立新的 Pull Request（自動掃描標題與內文以防機密外洩）。"""
+    """在指定儲存庫建立 Pull Request（預設應以英文撰寫 title 與 body，除非使用者指定其他語言；絕不自動執行 Merge）。"""
     active_token = ""
     target = f"{owner}/{repo}"
-    cmd_desc = f"POST pulls head={head} base={base}"
+    cmd_desc = f"POST pulls head={head} base={base or 'default'} draft={draft}"
     try:
         clean_owner, clean_repo = check_repo_allowed(owner, repo)
+        clean_head = _validate_head_ref(head)
         target = f"{clean_owner}/{clean_repo}"
 
         if not isinstance(title, str) or not title.strip():
@@ -1428,10 +1481,7 @@ async def github_create_pr(
         if any(ch in clean_title for ch in ("\r", "\n", "\x00")):
             raise ValueError(t("github_mcp.pr_title_invalid_chars"))
 
-        clean_head = _validate_pr_head(head)
-        clean_base = _validate_git_ref(base)
         clean_body = body if isinstance(body, str) else ""
-
         headers = get_headers(github_token)
         active_token = headers["Authorization"].removeprefix("Bearer ")
 
@@ -1448,39 +1498,35 @@ async def github_create_pr(
             return t("github_mcp.pr_outbound_blocked", reason=block_reason)
 
         safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
-        url = f"{GITHUB_API_BASE}/repos/{safe_path}/pulls"
-        payload: dict[str, Any] = {
-            "title": clean_title,
-            "head": clean_head,
-            "base": clean_base,
-            "body": clean_body,
-            "draft": bool(draft),
-            "maintainer_can_modify": bool(maintainer_can_modify),
-        }
-
         async with _create_http_client() as client:
+            clean_base = await _resolve_base_branch(client, safe_path, headers, base)
+            if clean_head == clean_base:
+                raise ValueError(f"來源分支 (head={clean_head!r}) 與目標分支 (base={clean_base!r}) 不可相同。")
+            url = f"{GITHUB_API_BASE}/repos/{safe_path}/pulls"
+            payload: dict[str, Any] = {
+                "title": clean_title,
+                "head": clean_head,
+                "base": clean_base,
+                "body": clean_body,
+                "draft": bool(draft),
+            }
             resp = await client.post(url, headers=headers, json=payload)
             created = _parse_json_response(resp)
 
         pr_num = created.get("number", "?") if isinstance(created, dict) else "?"
-        pr_url = created.get("html_url", "") if isinstance(created, dict) else ""
+        html_url = created.get("html_url", "") if isinstance(created, dict) else ""
+        url_line = f"\nPR 網址：{html_url}" if html_url else ""
         _audit_log(
             "github_create_pr",
             cmd_desc,
             target=f"{target}#{pr_num}",
             status="OK",
-            detail=f"{clean_head}->{clean_base}",
+            detail=f"chars={len(clean_title) + len(clean_body)}",
         )
-        url_suffix = f"\nURL: {pr_url}" if pr_url else ""
-        return t(
-            "github_mcp.pr_created",
-            owner=clean_owner,
-            repo=clean_repo,
-            num=pr_num,
-            head=clean_head,
-            base=clean_base,
-            title=clean_title,
-            url_suffix=url_suffix,
+        return (
+            f"成功在 {clean_owner}/{clean_repo} 建立 Pull Request #{pr_num}"
+            f"（{clean_head} -> {clean_base}）：{clean_title}{url_line}\n"
+            "（本工具僅建立 PR 單，不會自動執行 Merge；請前往 GitHub 網站確認並執行合併。）"
         )
     except Exception as exc:
         return _handle_tool_error(
