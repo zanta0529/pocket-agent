@@ -280,6 +280,7 @@ PocketAgent 的全域設定檔位於 `~/.pocket-agent/config.json`，採巢狀 J
 {
   "active_provider": "openai",
   "active_model": "gpt-6-astra",
+  "locale": "zh_TW",
   "system": {
     "max_tool_rounds": 20,
     "log_level": "WARNING",
