@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 import warnings
@@ -47,6 +48,9 @@ _SERVICE_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 
 # 執行期記憶體快取（僅存活於當前行程生命週期，不落盤）
 _RUNTIME_CREDS: dict[str, str] = {}
+_CREDS_UPDATED_AT: float = 0.0
+_CREDS_TTL_SECONDS: float = 600.0  # 10 分鐘閒置清除
+_CREDS_LOCK = threading.RLock()
 _ACTIVE_SESSION: dict[str, Any] = {
     "process": None,
     "pid": 0,
@@ -231,6 +235,14 @@ def _tty_prompt(prompt_text: str, *, is_password: bool = False) -> str:
         raise ValueError("沒有可用的互動終端機，請由上層注入連線參數；不讀取 MCP stdin。") from exc
 
 
+def _check_creds_ttl() -> None:
+    global _CREDS_UPDATED_AT
+    now = time.monotonic()
+    if _RUNTIME_CREDS and _CREDS_UPDATED_AT > 0 and (now - _CREDS_UPDATED_AT > _CREDS_TTL_SECONDS):
+        _RUNTIME_CREDS.clear()
+        _CREDS_UPDATED_AT = 0.0
+
+
 def _resolve_connection_params(
     rdp_host: str = "",
     rdp_port: str = "",
@@ -238,6 +250,17 @@ def _resolve_connection_params(
     rdp_password: str = "",
 ) -> tuple[str, str, str, str]:
     """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得 RDP 連線四要素。"""
+    with _CREDS_LOCK:
+        return _resolve_connection_params_locked(rdp_host, rdp_port, rdp_user, rdp_password)
+
+
+def _resolve_connection_params_locked(
+    rdp_host: str = "",
+    rdp_port: str = "",
+    rdp_user: str = "",
+    rdp_password: str = "",
+) -> tuple[str, str, str, str]:
+    _check_creds_ttl()
     cached_host = _RUNTIME_CREDS.get("WIN_HOST", "")
     cached_port = _RUNTIME_CREDS.get("WIN_RDP_PORT", "")
     cached_user = _RUNTIME_CREDS.get("WIN_RDP_USER", "")
@@ -291,6 +314,8 @@ def _resolve_connection_params(
     _RUNTIME_CREDS["WIN_RDP_PORT"] = port
     _RUNTIME_CREDS["WIN_RDP_USER"] = user
     _RUNTIME_CREDS["WIN_RDP_PASSWORD"] = password
+    global _CREDS_UPDATED_AT
+    _CREDS_UPDATED_AT = time.monotonic()
     return host, port, user, password
 
 

@@ -18,6 +18,7 @@ import ipaddress
 import os
 import re
 import sys
+import threading
 import time
 import warnings
 from pathlib import Path
@@ -58,6 +59,7 @@ mcp = MCPServer("mysql")
 _RUNTIME_CREDS: dict[str, str] = {}
 _CREDS_UPDATED_AT: float = 0.0
 _CREDS_TTL_SECONDS: float = 600.0  # 10 分鐘閒置清除
+_CREDS_LOCK = threading.Lock()
 
 _HOST_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 _FORBIDDEN_MYSQL_RE = re.compile(
@@ -99,8 +101,9 @@ def _check_creds_ttl() -> None:
 
 def _clear_creds_cache() -> None:
     global _CREDS_UPDATED_AT
-    _RUNTIME_CREDS.clear()
-    _CREDS_UPDATED_AT = 0.0
+    with _CREDS_LOCK:
+        _RUNTIME_CREDS.clear()
+        _CREDS_UPDATED_AT = 0.0
 
 
 def _validate_host(value: str) -> str:
@@ -268,6 +271,17 @@ def _resolve_connection_params(
     mysql_database: str = "",
 ) -> tuple[str, str, str, str, str]:
     """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得 MySQL 連線參數（MYSQL_DATABASE 為選填）。"""
+    with _CREDS_LOCK:
+        return _resolve_connection_params_locked(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
+
+
+def _resolve_connection_params_locked(
+    mysql_host: str = "",
+    mysql_port: str = "",
+    mysql_user: str = "",
+    mysql_password: str = "",
+    mysql_database: str = "",
+) -> tuple[str, str, str, str, str]:
     _check_creds_ttl()
     cached_host = _RUNTIME_CREDS.get("MYSQL_HOST", "")
     cached_port = _RUNTIME_CREDS.get("MYSQL_PORT", "")

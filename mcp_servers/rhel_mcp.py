@@ -21,6 +21,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import warnings
 from pathlib import Path
@@ -39,16 +40,37 @@ _SEARCH_RE = re.compile(r"^[a-zA-Z0-9_.:@/+\- ]+$")
 
 # 執行期記憶體快取（僅存活於當前行程生命週期，不落盤）
 _RUNTIME_CREDS: dict[str, str] = {}
+_TARGET_CREDS: dict[tuple[str, str, str, str], tuple[str, float]] = {}
 _CREDS_UPDATED_AT: float = 0.0
 _CREDS_TTL_SECONDS: float = 600.0  # 10 分鐘閒置清除
+_CREDS_LOCK = threading.Lock()
 
 
 def _check_creds_ttl() -> None:
     global _CREDS_UPDATED_AT
     now = time.monotonic()
-    if _RUNTIME_CREDS and (now - _CREDS_UPDATED_AT > _CREDS_TTL_SECONDS):
+    if _RUNTIME_CREDS and _CREDS_UPDATED_AT > 0 and (now - _CREDS_UPDATED_AT > _CREDS_TTL_SECONDS):
         _RUNTIME_CREDS.clear()
         _CREDS_UPDATED_AT = 0.0
+    expired = [k for k, (_, ts) in _TARGET_CREDS.items() if now - ts > _CREDS_TTL_SECONDS]
+    for k in expired:
+        _TARGET_CREDS.pop(k, None)
+
+
+def _clear_creds_cache(target_host: str = "") -> None:
+    global _CREDS_UPDATED_AT
+    with _CREDS_LOCK:
+        clean_host = target_host.strip()
+        if not clean_host:
+            _RUNTIME_CREDS.clear()
+            _TARGET_CREDS.clear()
+            _CREDS_UPDATED_AT = 0.0
+            return
+        for key in [k for k in _TARGET_CREDS if k[0] == clean_host]:
+            _TARGET_CREDS.pop(key, None)
+        if _RUNTIME_CREDS.get("RHEL_HOST") == clean_host:
+            _RUNTIME_CREDS.clear()
+            _CREDS_UPDATED_AT = 0.0
 
 
 _VALID_SORT_KEYS = {"cpu", "mem", "memory"}
@@ -345,6 +367,17 @@ def _resolve_connection_params(
     ssh_key_path: str = "",
 ) -> tuple[str, str, str, str, str]:
     """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得連線五要素。"""
+    with _CREDS_LOCK:
+        return _resolve_connection_params_locked(ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
+
+
+def _resolve_connection_params_locked(
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+    ssh_key_path: str = "",
+) -> tuple[str, str, str, str, str]:
     _check_creds_ttl()
     cached_host = _RUNTIME_CREDS.get("RHEL_HOST", "")
     cached_port = _RUNTIME_CREDS.get("RHEL_SSH_PORT", "")
@@ -400,6 +433,8 @@ def _resolve_connection_params(
         env_key,
     )
     password = ssh_password
+    if not password and target in _TARGET_CREDS:
+        password = _TARGET_CREDS[target][0]
     if not password and target == cached_target:
         password = _RUNTIME_CREDS.get("RHEL_SSH_PASSWORD", "")
     if not password and target == env_target:
@@ -413,13 +448,15 @@ def _resolve_connection_params(
         if not password:
             raise ValueError("未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；未指定私鑰時必須提供密碼驗證。")
 
+    now = time.monotonic()
     _RUNTIME_CREDS["RHEL_HOST"] = host
     _RUNTIME_CREDS["RHEL_SSH_PORT"] = port
     _RUNTIME_CREDS["RHEL_SSH_USER"] = user
     _RUNTIME_CREDS["RHEL_SSH_PASSWORD"] = password
     _RUNTIME_CREDS["RHEL_SSH_KEY_PATH"] = key_path
+    _TARGET_CREDS[target] = (password, now)
     global _CREDS_UPDATED_AT
-    _CREDS_UPDATED_AT = time.monotonic()
+    _CREDS_UPDATED_AT = now
     return host, port, user, password, key_path
 
 
@@ -701,6 +738,13 @@ def _run_with_askpass(
         return _capture_ssh(ssh_args, timeout=timeout + 15, creationflags=creationflags, env=env)
 
 
+def _is_transport_or_auth_error(msg: str) -> bool:
+    """辨識連線、認證與逾時等傳輸層錯誤，避免被工具層摘要錯誤覆寫。"""
+    if not msg.startswith("[ERROR]"):
+        return False
+    return any(marker in msg for marker in ("[CONN_AUTH]", "[HOST_KEY_MISMATCH]", "執行逾時"))
+
+
 def _run_remote(
     remote_cmd: str,
     ssh_host: str = "",
@@ -742,9 +786,7 @@ def _run_remote(
                     status="AUTH_FAIL",
                     detail="Permission denied (exit 255)",
                 )
-                _RUNTIME_CREDS.clear()
-                global _CREDS_UPDATED_AT
-                _CREDS_UPDATED_AT = 0.0
+                _clear_creds_cache(ssh_host)
                 return (
                     "[ERROR] [CONN_AUTH] 遠端 SSH 認證失敗 (Permission denied, exit 255)\n"
                     "提示：請確認帳號與密碼/金鑰是否正確，且目標主機已啟用對應認證方式。"
@@ -807,8 +849,7 @@ def _run_remote(
             status="AUTH_FAIL",
             detail=str(e),
         )
-        _RUNTIME_CREDS.clear()
-        _CREDS_UPDATED_AT = 0.0
+        _clear_creds_cache(ssh_host)
         return "[ERROR] [CONN_AUTH] 連線參數或安全檢查失敗，請確認設定。"
     except subprocess.TimeoutExpired:
         _audit_log(
@@ -1041,6 +1082,8 @@ def rhel_query_journal(
         ssh_key_path,
         tool_name="rhel_query_journal",
     )
+    if _is_transport_or_auth_error(result):
+        return result
     if result.startswith("[ERROR]"):
         return "[ERROR] 日誌摘要查詢失敗；可能缺少權限或不支援指定的 journalctl 選項。"
     counts = {str(level): 0 for level in range(8)}
@@ -1107,7 +1150,8 @@ def rhel_read_config(
     ssh_key_path: str = "",
 ) -> str:
     """僅提供 /etc/selinux/config 的 SELINUX 列舉值；不提供任意設定檔原文。"""
-    if file_path != "/etc/selinux/config":
+    clean_path = file_path.strip()
+    if clean_path != "/etc/selinux/config":
         _audit_log(
             "rhel_read_config",
             f"file_path={file_path!r}",
@@ -1117,12 +1161,14 @@ def rhel_read_config(
         )
         return "[ERROR] 安全摘要模式僅支援 /etc/selinux/config 的 SELINUX 欄位，不讀取其他設定檔。"
     cmd = (
-        _remote_path_guard(file_path, directory=False) + "awk -F= -- '/^[[:space:]]*SELINUX[[:space:]]*=/ {"
+        _remote_path_guard(clean_path, directory=False) + "awk -F= -- '/^[[:space:]]*SELINUX[[:space:]]*=/ {"
         'v=$2; gsub(/[[:space:]]/,"",v); '
         'if (v == "enforcing" || v == "permissive" || v == "disabled") print "SELINUX=" v'
         '}\' "$real"'
     )
     result = _run_remote(cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_read_config")
+    if _is_transport_or_auth_error(result):
+        return result
     allowed = {"SELINUX=enforcing", "SELINUX=permissive", "SELINUX=disabled"}
     if result not in allowed:
         return "[ERROR] 無法取得唯一且有效的 SELINUX 設定，已捨棄內容。"
@@ -1337,7 +1383,7 @@ def rhel_network_connections(
                 detail=str(e),
             )
             return _redact_and_truncate(f"[ERROR] {e}")
-        filter_expr = f" sport = :{safe_port} or dport = :{safe_port}"
+        filter_expr = f" \\( sport = :{safe_port} or dport = :{safe_port} \\)"
 
     safe_lines = max(5, min(int(max_lines or 60), 150))
     cmd = f"{base_cmd}{filter_expr} | sed -n '1,{safe_lines}p'"

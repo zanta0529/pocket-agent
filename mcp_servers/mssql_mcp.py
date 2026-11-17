@@ -18,6 +18,7 @@ import ipaddress
 import os
 import re
 import sys
+import threading
 import time
 import warnings
 from pathlib import Path
@@ -57,6 +58,7 @@ mcp = MCPServer("mssql")
 _RUNTIME_CREDS: dict[str, str] = {}
 _CREDS_UPDATED_AT: float = 0.0
 _CREDS_TTL_SECONDS: float = 600.0  # 10 分鐘閒置清除
+_CREDS_LOCK = threading.Lock()
 
 _HOST_RE = re.compile(r"^[a-zA-Z0-9_.\-\\]+$")
 _USER_RE = re.compile(r"^[a-zA-Z0-9_.@$\-\\]+$")
@@ -101,8 +103,9 @@ def _check_creds_ttl() -> None:
 
 def _clear_creds_cache() -> None:
     global _CREDS_UPDATED_AT
-    _RUNTIME_CREDS.clear()
-    _CREDS_UPDATED_AT = 0.0
+    with _CREDS_LOCK:
+        _RUNTIME_CREDS.clear()
+        _CREDS_UPDATED_AT = 0.0
 
 
 def _validate_host(value: str) -> str:
@@ -296,6 +299,17 @@ def _resolve_connection_params(
     mssql_database: str = "",
 ) -> tuple[str, str, str, str, str]:
     """依「注入參數 → 記憶體快取 → 環境變數 → 終端機互動詢問」順序取得 SQL Server 連線參數（MSSQL_DATABASE 為選填）。"""
+    with _CREDS_LOCK:
+        return _resolve_connection_params_locked(mssql_host, mssql_port, mssql_user, mssql_password, mssql_database)
+
+
+def _resolve_connection_params_locked(
+    mssql_host: str = "",
+    mssql_port: str = "",
+    mssql_user: str = "",
+    mssql_password: str = "",
+    mssql_database: str = "",
+) -> tuple[str, str, str, str, str]:
     _check_creds_ttl()
     cached_host = _RUNTIME_CREDS.get("MSSQL_HOST", "")
     cached_port = _RUNTIME_CREDS.get("MSSQL_PORT", "")

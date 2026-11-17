@@ -115,7 +115,7 @@ def test_mcp_servers_output_chars_aligned():
     assert sqlite_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert mysql_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert mssql_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
-    assert _db_common.DB_HEALTH_MAX_TABLES == constants.DB_HEALTH_MAX_TABLES == 200
+    assert _db_common.DB_HEALTH_MAX_TABLES == constants.DB_HEALTH_MAX_TABLES == 500
     assert mysql_mcp.MYSQL_CHECK_TABLE_MAX_BYTES == constants.MYSQL_CHECK_TABLE_MAX_BYTES == 2 * 1024**3
     assert sqlite_mcp.SQLITE_QUICK_CHECK_MAX_BYTES == constants.SQLITE_QUICK_CHECK_MAX_BYTES == 500 * 1024**2
     assert _db_common.DB_FRAGMENTATION_WARN_RATIO == constants.DB_FRAGMENTATION_WARN_RATIO == 0.20

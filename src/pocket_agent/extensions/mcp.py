@@ -176,6 +176,7 @@ class MCPManager:
         self._exit_stack_closers: list[Any] = []
         self._server_envs: dict[str, dict[str, str]] = {}
         self._runtime_conn_cache: dict[str, dict[str, str]] = {}
+        self._conn_prompt_locks: dict[str, asyncio.Lock] = {}
         self.on_prompt_conn: Callable[[str, list[str]], dict[str, str]] | None = None
 
     # ── Lifecycle ─────────────────────────────────
@@ -281,6 +282,11 @@ class MCPManager:
         return [entry.schema for entry in self._tools.values()]
 
     async def _resolve_entry_ssh_conn(self, entry: ToolEntry) -> dict[str, str]:
+        lock = self._conn_prompt_locks.setdefault(entry.server_name, asyncio.Lock())
+        async with lock:
+            return await self._resolve_entry_ssh_conn_locked(entry)
+
+    async def _resolve_entry_ssh_conn_locked(self, entry: ToolEntry) -> dict[str, str]:
         server_env = self._server_envs.get(entry.server_name, {})
         cached = self._runtime_conn_cache.setdefault(entry.server_name, {})
         resolved: dict[str, str] = {}
