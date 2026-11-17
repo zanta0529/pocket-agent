@@ -447,7 +447,10 @@ class CliRenderer:
 
             from rich.panel import Panel
 
-            title = data.get("title", "錯誤") if isinstance(data, dict) else "錯誤"
+            from pocket_agent.system.i18n import t
+
+            default_err = t("cli.status_error")
+            title = data.get("title", default_err) if isinstance(data, dict) else default_err
             text = data.get("text", str(data)) if isinstance(data, dict) else str(data)
 
             panel = Panel(
@@ -463,7 +466,9 @@ class CliRenderer:
 
         elif kind in ("image_saved", "file_saved"):
             self._ensure_newline()
-            self.message(f"已儲存檔案：{data}", "green")
+            from pocket_agent.system.i18n import t
+
+            self.message(t("cli.file_saved", path=data), "green")
 
         elif kind == "round_start":
             self._flush_text_buffer()
@@ -522,7 +527,9 @@ class CliRenderer:
                 if len(snippet) > 60:
                     snippet = "..." + snippet[-57:]
                 if type(self._active_status).__name__ in ("Status", "MultiStatus", "Mock", "MagicMock", "AsyncMock"):
-                    self._active_status.update(f"思考中… {snippet}")
+                    from pocket_agent.system.i18n import t
+
+                    self._active_status.update(f"{t('cli.status_thinking')} {snippet}")
 
         elif kind == "read":
             self._ensure_newline()
@@ -530,7 +537,9 @@ class CliRenderer:
 
         elif kind == "tool_stream_start":
             self._ensure_newline()
-            msg = f"準備執行 {data} 工具，正在產生參數..."
+            from pocket_agent.system.i18n import t
+
+            msg = t("cli.tool_preparing", name=data)
             if self._active_status:
                 self._active_status.update(msg)
             else:
@@ -594,8 +603,10 @@ class CliRenderer:
                     from rich.live import Live
                     from rich.spinner import Spinner
 
+                    from pocket_agent.system.i18n import t
+
                     group_items = list(self._format_tool_lines(("  ", ""), self._pending_tools[call_id]))
-                    spinner = Spinner("dots", text=Text("執行工具中…", style="default"))
+                    spinner = Spinner("dots", text=Text(t("cli.tool_running"), style="default"))
                     group_items.append(spinner)
 
                     self._active_status = Live(
@@ -620,16 +631,23 @@ class CliRenderer:
                         options = q.get("options", [])
                         is_multi = q.get("is_multi_select", False)
 
+                        from pocket_agent.system.i18n import t
+
                         self.console.print()
                         self.console.print(
-                            Panel(Text(text), title="🤔 代理提問", title_align="left", border_style="bold blue")
+                            Panel(
+                                Text(text),
+                                title=t("cli.ask_question_title"),
+                                title_align="left",
+                                border_style="bold blue",
+                            )
                         )
                         for i, opt in enumerate(options):
                             self.console.print(f"  [{i + 1}] {opt}")
 
-                        hint = "請輸入選項編號，或自由作答"
+                        hint = t("cli.ask_question_hint")
                         if is_multi:
-                            hint += " (多選可用逗號分隔)"
+                            hint += t("cli.ask_question_multi")
 
                         from prompt_toolkit import prompt
 
@@ -704,11 +722,13 @@ class CliRenderer:
                     else:
                         content = Text(result_text, style="red")
 
+                    from pocket_agent.system.i18n import t
+
                     self.console.print()
                     self.console.print(
                         Panel(
                             content,
-                            title=f"✗ 工具執行失敗：{formatted_name}",
+                            title=t("cli.tool_failed_title", name=formatted_name),
                             title_align="left",
                             border_style="bold red",
                             expand=False,

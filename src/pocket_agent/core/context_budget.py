@@ -113,17 +113,41 @@ class ContextUsage:
         return "ok"
 
     def display_lines(self) -> list[str]:
-        kind = "估算" if self.is_estimate else "實際"
-        prefix = "約 " if self.is_estimate else ""
+        from pocket_agent.system.i18n import t
+
+        kind = t("context_usage.kind_estimate") if self.is_estimate else t("context_usage.kind_actual")
+        prefix = t("context_usage.prefix_estimate") if self.is_estimate else ""
         lines = [
-            f"上下文：{prefix}{self.used_tokens:,} / {self.window:,} tokens（{self.ratio:.0%}，{kind}）",
+            t(
+                "context_usage.summary_line",
+                prefix=prefix,
+                used=self.used_tokens,
+                window=self.window,
+                ratio=self.ratio,
+                kind=kind,
+            ),
         ]
         if self.effective_budget > 0:
             lines.append(
-                f"有效輸入預算：{prefix}{self.used_tokens:,} / {self.effective_budget:,} tokens"
-                f"（{self.effective_ratio:.0%}）"
+                t(
+                    "context_usage.effective_budget_line",
+                    prefix=prefix,
+                    used=self.used_tokens,
+                    budget=self.effective_budget,
+                    ratio=self.effective_ratio,
+                )
             )
-        lines.append(f"視窗來源：{self.source}")
+        source_map = {
+            SOURCE_CONFIG: t("context_usage.source_config"),
+            SOURCE_ENGINE: t("context_usage.source_engine"),
+            SOURCE_DEFAULT: t("context_usage.source_default"),
+        }
+        lines.append(
+            t(
+                "context_usage.window_source_line",
+                source=source_map.get(self.source, self.source),
+            )
+        )
         return lines
 
 

@@ -69,10 +69,10 @@ def file_argument(value: str) -> str:
     value = value.strip()
     if value.startswith(QUOTE):
         if not value.endswith(QUOTE) or len(value) < 3:
-            raise ValueError("路徑雙引號未成對或路徑為空")
+            raise ValueError(t("cli.file_arg_unclosed"))
         value = value[1:-1]
     if not value or QUOTE in value:
-        raise ValueError("用法：/file <路徑>（含空白可加雙引號）")
+        raise ValueError(t("cli.file_arg_usage"))
     return value
 
 
@@ -80,7 +80,7 @@ def references(text: str) -> list[str]:
     matches = list(REFERENCE.finditer(text))
     for start in re.finditer(r"(?:^|\s)@" + QUOTE, text):
         if not any(m.start() == start.start() for m in matches):
-            raise ValueError("@ 路徑雙引號未成對，或結尾缺少空白")
+            raise ValueError(t("cli.at_ref_unclosed"))
     return [m.group(1) or m.group(2) for m in matches]
 
 
@@ -237,13 +237,13 @@ def key_bindings(
                 from rich.text import Text
 
                 console = Console()
-                content = "以下貼上的檔案不在目前工作區內：\n"
+                content = t("cli.paste_outside_ws") + "\n"
                 for p, _ in unauthorized_paths:
                     content += f"  📄 {p}\n"
 
                 panel = Panel(
                     Text(content.strip(), style="yellow"),
-                    title="【安全警告】工作區權限請求",
+                    title=t("misc_cmd.file_ws_warning_title"),
                     title_align="left",
                     border_style="bold red",
                     expand=False,
@@ -252,26 +252,24 @@ def key_bindings(
                 console.print(panel)
 
                 try:
-                    ans = input("是否將它們所在的資料夾加入工作區並掛載？[y/N] ").strip().lower()
+                    ans = input(t("cli.paste_ws_confirm")).strip().lower()
                     if ans == "y":
                         for p, t_dir in unauthorized_paths:
                             if t_dir:
                                 agent.add_workspace_dir(t_dir)
                                 authorized_paths.append(p)
-                        console.print("[green]✓ 已授權並加入附件。[/green]")
+                        console.print(f"[green]{t('misc_cmd.file_ws_authorized')}[/green]")
                     else:
-                        console.print("[red]✗ 已取消加入這些檔案。[/red]")
-                except KeyboardInterrupt:
-                    console.print("\n[red]✗ 已取消操作。[/red]")
-                except EOFError:
-                    console.print("\n[red]✗ 已取消操作。[/red]")
+                        console.print(f"[red]{t('cli.paste_ws_cancelled')}[/red]")
+                except KeyboardInterrupt, EOFError:
+                    console.print(f"\n[red]{t('cli.op_cancelled')}[/red]")
 
                 # 在回呼函式內（取得授權後）才執行加入，避免非同步時序問題
                 if authorized_paths:
                     try:
                         added = state.add_files(authorized_paths)
                         for added_path in added:
-                            console.print(f"已加入待送：{added_path}")
+                            console.print(t("misc_cmd.file_added", path=added_path))
                     except Exception:
                         pass
 
@@ -287,7 +285,7 @@ def key_bindings(
                 try:
                     added = state.add_files(authorized_paths)
                     for added_path in added:
-                        console.print(f"已加入待送：{added_path}")
+                        console.print(t("misc_cmd.file_added", path=added_path))
                 except Exception:
                     pass
 

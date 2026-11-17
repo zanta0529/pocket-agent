@@ -119,7 +119,7 @@ async def send_turn(
             # 串流模式：啟動思考中 spinner，等第一個 text 事件停止它
             from rich.status import Status
 
-            status = Status("思考中…", spinner="dots", console=renderer.console)
+            status = Status(t("cli.status_thinking"), spinner="dots", console=renderer.console)
             renderer._active_status = status
             status.start()
 
@@ -135,7 +135,7 @@ async def send_turn(
         agent.on_stream = None
         renderer._stop_status()
         state.last_failed_input = raw
-        renderer.message("⏹ 已停止主代理", "yellow")
+        renderer.message(t("cli.stopped_main"), "yellow")
         return
     except Exception as exc:
         agent.on_stream = None
@@ -150,14 +150,14 @@ async def send_turn(
 
         panel = Panel(
             Markdown(err_text),
-            title="⚠️ 本輪未完成 (錯誤)",
+            title=t("subagent_cmd.error_title"),
             title_align="left",
             border_style="bold red",
             expand=False,
         )
         renderer.console.print()
         renderer.console.print(panel)
-        renderer.message("待送附件保留；本輪可能部分完成，重送前請檢查結果。未自動重試。", "yellow")
+        renderer.message(t("subagent_cmd.partial_warning"), "yellow")
         await asyncio.to_thread(_autosave_session, agent, state, renderer, True)
         return
 
@@ -167,7 +167,7 @@ async def send_turn(
     if result.action == "image":
         if not hasattr(agent, "generate_image") and hasattr(agent, "activity") and getattr(agent, "activity", None):
             agent.activity.record_file_change(reply, "added", existed_before=False)
-        renderer.message(f"已存檔：{reply}", "green")
+        renderer.message(t("session_cmd.saved", id=reply), "green")
     else:
         turn_tokens = getattr(agent, "total_tokens", 0)
         state.session_tokens += turn_tokens
@@ -211,9 +211,11 @@ async def conversation(
     from pocket_agent.frontend.cli.interrupts import OperationInterrupted, run_operation
 
     def stopping() -> None:
+        from pocket_agent.system.i18n import t
+
         agent.request_stop()
         renderer._stop_status()
-        renderer.message("⏸ 停止要求已送出，等待進行中的工作收尾…", "yellow")
+        renderer.message(t("cli.stopping"), "yellow")
 
     handler = CommandHandler(agent, state, reader, renderer, tools)
     agent.on_stream = renderer.event
@@ -226,7 +228,9 @@ async def conversation(
         except KeyboardInterrupt:
             now = monotonic()
             if now - last_sigint_time < 1.5:
-                renderer.message("收到中斷訊號，正在離開…", "yellow")
+                from pocket_agent.system.i18n import t
+
+                renderer.message(t("cli.exiting_on_sigint"), "yellow")
                 break
             last_sigint_time = now
             state.last_failed_input = ""

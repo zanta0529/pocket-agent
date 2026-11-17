@@ -6,6 +6,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
+from pocket_agent.system.i18n import t
 
 
 async def switch_model(
@@ -19,13 +20,13 @@ async def switch_model(
     from pocket_agent.system.providers import SUPPORTED_PROVIDERS
 
     if provider not in SUPPORTED_PROVIDERS or not model or any(c.isspace() for c in model):
-        raise ValueError(f"用法：/model <{'|'.join(SUPPORTED_PROVIDERS)}> <模型名稱>")
+        raise ValueError(t("system_cmd.model_usage", providers="|".join(SUPPORTED_PROVIDERS)))
     new_client = get_provider_client(provider=provider, model=model)
     old_client = agent.client
     # No await between construction and commit: all consumers see one state.
     agent.client, agent.model, agent.provider = new_client, model, provider
     state.provider, state.model = provider, model
-    renderer.message(f"當次對話已切換：{provider} / {model}", "green")
+    renderer.message(t("system_cmd.model_switched", provider=provider, model=model), "green")
 
     from pocket_agent.system.config import config
 
@@ -39,7 +40,7 @@ async def switch_model(
     try:
         await old_client.close()
     except Exception:
-        renderer.message("已切換，但舊連線清理失敗；目前模型不受影響。", "yellow")
+        renderer.message(t("system_cmd.model_close_warn"), "yellow")
 
 
 async def do_model_flow(ctx: CommandContext, args: str) -> None:
@@ -56,26 +57,26 @@ async def do_model_flow(ctx: CommandContext, args: str) -> None:
         elif len(parts) == 2:
             provider, model = parts
         else:
-            raise ValueError(f"用法：/model [<{'|'.join(SUPPORTED_PROVIDERS)}>] <模型名稱>")
+            raise ValueError(t("system_cmd.model_usage_opt", providers="|".join(SUPPORTED_PROVIDERS)))
     else:
         # 轉換為 display_name 顯示
         display_choices = [PROVIDER_STRATEGIES[p].display_name for p in SUPPORTED_PROVIDERS]
-        chosen_display = await ctx.reader.choose("提供者", display_choices)
+        chosen_display = await ctx.reader.choose(t("system_cmd.model_choose_provider"), display_choices)
         if not chosen_display:
             return
 
         # 轉回 internal ID
         provider = next((p for p in SUPPORTED_PROVIDERS if PROVIDER_STRATEGIES[p].display_name == chosen_display), None)
         if not provider or provider not in SUPPORTED_PROVIDERS:
-            raise ValueError(f"僅支援 {', '.join(SUPPORTED_PROVIDERS)}")
+            raise ValueError(t("system_cmd.model_unsupported_provider", providers=", ".join(SUPPORTED_PROVIDERS)))
 
         try:
             models = fetch_available_models(provider)
         except Exception:
             models = []
         if not models:
-            ctx.renderer.message("無法取得模型清單，請手動輸入名稱。", "yellow")
-        model = await ctx.reader.choose("模型名稱 · Tab／方向鍵補全", models)
+            ctx.renderer.message(t("system_cmd.model_fetch_failed"), "yellow")
+        model = await ctx.reader.choose(t("system_cmd.model_choose_name"), models)
         if not model:
             return
     await switch_model(ctx.agent, ctx.state, provider, model, ctx.renderer)
@@ -84,13 +85,13 @@ async def do_model_flow(ctx: CommandContext, args: str) -> None:
 class ReasoningCommand(CliCommand):
     """在對話中即時切換 LLM 推理強度 (auto / high / medium / low / none)。"""
 
-    _CHOICES = [
-        ("auto", "Auto (預設，交由模型自行決定)"),
-        ("high", "High (深度推理)"),
-        ("medium", "Medium (平衡)"),
-        ("low", "Low (快速回應)"),
-        ("none", "None (關閉推理)"),
-    ]
+    _CHOICE_KEYS = (
+        ("auto", "system_cmd.reasoning_auto"),
+        ("high", "system_cmd.reasoning_high"),
+        ("medium", "system_cmd.reasoning_medium"),
+        ("low", "system_cmd.reasoning_low"),
+        ("none", "system_cmd.reasoning_none"),
+    )
 
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         from pocket_agent.system.constants import VALID_REASONING_EFFORTS
@@ -98,21 +99,25 @@ class ReasoningCommand(CliCommand):
         raw = args.strip().lower()
         if not raw:
             current = str(getattr(ctx.agent, "reasoning_effort", "auto") or "auto").lower()
-            labels = [label for _, label in self._CHOICES]
-            selected = await ctx.reader.choose(f"選擇推理強度（目前：{current.capitalize()}）", labels)
+            choices_resolved = [(key, t(i18n_key)) for key, i18n_key in self._CHOICE_KEYS]
+            labels = [label for _, label in choices_resolved]
+            selected = await ctx.reader.choose(
+                t("system_cmd.reasoning_choose", current=current.capitalize()),
+                labels,
+            )
             if not selected:
                 return CommandResult()
-            level = next((key for key, label in self._CHOICES if label == selected), None)
+            level = next((key for key, label in choices_resolved if label == selected), None)
             if not level:
                 return CommandResult()
         else:
             if raw not in VALID_REASONING_EFFORTS:
-                raise ValueError(f"用法：/reasoning [{'|'.join(VALID_REASONING_EFFORTS)}]")
+                raise ValueError(t("system_cmd.reasoning_usage", efforts="|".join(VALID_REASONING_EFFORTS)))
             level = raw
 
         ctx.agent.reasoning_effort = level
         ctx.state.reasoning_effort = level
-        ctx.renderer.message(f"✓ 推理強度已設為：{level.capitalize()}", "green")
+        ctx.renderer.message(t("system_cmd.reasoning_set", level=level.capitalize()), "green")
         return CommandResult()
 
 
@@ -121,7 +126,7 @@ class AddDirCommand(CliCommand):
 
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if not args.strip():
-            raise ValueError("用法：/add-dir <目錄路徑>")
+            raise ValueError(t("system_cmd.add_dir_usage"))
         status, msg, target_dir = ctx.agent.check_new_workspace_dir(args.strip())
         if status in ("invalid", "not_found"):
             raise ValueError(msg)
@@ -130,16 +135,18 @@ class AddDirCommand(CliCommand):
             return CommandResult()
 
         warn_text = Text()
-        warn_text.append("【安全警告】", style="bold red")
-        warn_text.append(f"{msg}是否授權本次會話讀寫該目錄？")
+        warn_text.append(t("system_cmd.add_dir_warning"), style="bold red")
+        warn_text.append(t("system_cmd.add_dir_confirm_msg", msg=msg))
         ctx.renderer.console.print(warn_text)
 
-        confirm = await ctx.reader.choose("請選擇", ["允許", "拒絕"])
-        if confirm == "允許" and target_dir is not None:
+        allow_label = t("system_cmd.allow")
+        deny_label = t("system_cmd.deny")
+        confirm = await ctx.reader.choose(t("system_cmd.choose_prompt"), [allow_label, deny_label])
+        if confirm == allow_label and target_dir is not None:
             ctx.agent.add_workspace_dir(target_dir)
-            ctx.renderer.message(f"✓ 已授權：{target_dir}，可透過工具讀寫。", "green")
+            ctx.renderer.message(t("system_cmd.add_dir_authorized", path=target_dir), "green")
         else:
-            ctx.renderer.message("⚠ 已拒絕授權。", "yellow")
+            ctx.renderer.message(t("system_cmd.add_dir_denied"), "yellow")
         return CommandResult()
 
 
@@ -151,11 +158,12 @@ class RmDirCommand(CliCommand):
         if not target:
             dirs = list(getattr(ctx.agent, "workspace_dirs", []))
             if not dirs:
-                ctx.renderer.message("目前沒有任何額外授權目錄可移除。")
+                ctx.renderer.message(t("system_cmd.rm_dir_empty"))
                 return CommandResult()
-            selected = await ctx.reader.choose("選擇要移除的額外授權目錄", [*dirs, "取消"])
-            if not selected or selected == "取消":
-                ctx.renderer.message("已取消移除。")
+            cancel_label = t("session_cmd.cancel")
+            selected = await ctx.reader.choose(t("system_cmd.rm_dir_choose"), [*dirs, cancel_label])
+            if not selected or selected == cancel_label:
+                ctx.renderer.message(t("system_cmd.rm_dir_cancelled"))
                 return CommandResult()
             target = selected
 
@@ -170,13 +178,13 @@ class WorkspaceCommand(CliCommand):
     """顯示目前預設與額外授權之工作區目錄（/workspace）。"""
 
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
-        lines = ["【預設工作區】", f"  {Path.cwd().resolve()}"]
+        lines = [t("system_cmd.workspace_default"), f"  {Path.cwd().resolve()}"]
         if ctx.agent.workspace_dirs:
-            lines.append("\n【額外授權目錄】")
+            lines.append(t("system_cmd.workspace_extra"))
             for wd in ctx.agent.workspace_dirs:
                 lines.append(f"  {wd}")
         else:
-            lines.append("\n【額外授權目錄】無")
+            lines.append(t("system_cmd.workspace_extra_none"))
         ctx.renderer.message("\n".join(lines), "cyan")
         return CommandResult()
 
@@ -196,7 +204,7 @@ class LearnCommand(CliCommand):
         from pocket_agent.extensions.skills import save_skill
         from pocket_agent.system.registry import parse_frontmatter
 
-        ctx.renderer.message("正在萃取對話知識，請稍候...", "dim")
+        ctx.renderer.message(t("system_cmd.learn_extracting"), "dim")
         skill_content = await ctx.agent.extract_skill()
         meta, body = parse_frontmatter(skill_content)
         suggested_name = meta.get("name", "")
@@ -205,20 +213,20 @@ class LearnCommand(CliCommand):
         ctx.renderer.console.print(Markdown(skill_content))
 
         skill_name = await ctx.reader.read(
-            "請輸入要儲存的 Skill 名稱 (英數字中折線，例如 my-skill，留空取消): ",
+            t("system_cmd.learn_name_prompt"),
             default=suggested_name,
         )
         if not skill_name:
-            ctx.renderer.message("已取消儲存。")
+            ctx.renderer.message(t("system_cmd.learn_cancelled"))
             return CommandResult()
 
-        skill_desc = await ctx.reader.read("請輸入簡短的 Skill 描述: ", default=suggested_desc)
-        scope = await ctx.reader.choose("請選擇儲存範圍", ["workspace", "global"])
+        skill_desc = await ctx.reader.read(t("system_cmd.learn_desc_prompt"), default=suggested_desc)
+        scope = await ctx.reader.choose(t("system_cmd.learn_scope_choose"), ["workspace", "global"])
         if scope:
             save_path = save_skill(skill_name.strip(), skill_desc.strip(), body.strip(), scope)
-            ctx.renderer.message(f"✓ 已儲存 Skill 至: {save_path}", "green")
+            ctx.renderer.message(t("system_cmd.learn_saved", path=save_path), "green")
         else:
-            ctx.renderer.message("已取消儲存。")
+            ctx.renderer.message(t("system_cmd.learn_cancelled"))
         return CommandResult()
 
 
@@ -232,17 +240,17 @@ class UndoCommand(CliCommand):
         if target:
             res = sys_registry.execute(f"/undo {target}", ctx.agent)
             if res is None or res.status == "error":
-                raise ValueError(res.message if res else "還原失敗")
+                raise ValueError(res.message if res else t("system_cmd.undo_failed"))
             ctx.renderer.message(res.message, "green")
             return CommandResult()
 
         res = sys_registry.execute("/undo", ctx.agent)
         if res is None or res.status == "error":
-            raise ValueError(res.message if res else "找不到可用的備份紀錄")
+            raise ValueError(res.message if res else t("system_cmd.undo_no_backup"))
 
         mapping = res.payload.get("mapping", {})
         if not mapping:
-            ctx.renderer.message("目前沒有可用的備份紀錄。")
+            ctx.renderer.message(t("system_cmd.undo_no_backup_msg"))
             return CommandResult()
 
         choices = []
@@ -256,11 +264,12 @@ class UndoCommand(CliCommand):
                 display = orig
             choices.append(display)
             choice_map[display] = orig
-        choices.append("取消")
+        cancel_label = t("session_cmd.cancel")
+        choices.append(cancel_label)
 
-        selected = await ctx.reader.choose("選擇要還原的檔案 (標籤為備份當下時間)", choices)
-        if not selected or selected == "取消":
-            ctx.renderer.message("已取消還原。")
+        selected = await ctx.reader.choose(t("system_cmd.undo_choose"), choices)
+        if not selected or selected == cancel_label:
+            ctx.renderer.message(t("system_cmd.undo_cancelled"))
             return CommandResult()
 
         orig_path_str = choice_map[selected]
@@ -276,26 +285,30 @@ class UndoCommand(CliCommand):
                 )
             )
             if not diff:
-                ctx.renderer.message("檔案內容無差異，無需還原。", "yellow")
+                ctx.renderer.message(t("system_cmd.undo_no_backup_msg"), "yellow")
                 return CommandResult()
-            ctx.renderer.console.print("\n[bold cyan]─── 檔案差異預覽 (還原將套用以下變更) ───[/bold cyan]")
+            ctx.renderer.console.print(f"\n[bold cyan]{t('system_cmd.undo_diff_header')}[/bold cyan]")
             ctx.renderer.console.print(Syntax("".join(diff), "diff", theme="monokai", background_color="default"))
             ctx.renderer.console.print("[bold cyan]───────────────────────────────────────────────[/bold cyan]\n")
         except UnicodeDecodeError:
-            ctx.renderer.message("⚠ 二進制檔案或不支援的編碼，無法預覽差異。", "yellow")
+            ctx.renderer.message(t("system_cmd.undo_diff_binary"), "yellow")
         except Exception as exc:
-            ctx.renderer.message(f"⚠ 產生差異預覽時發生錯誤: {exc}", "yellow")
+            ctx.renderer.message(t("system_cmd.undo_diff_error", error=exc), "yellow")
 
-        confirm = await ctx.reader.choose("確定要執行上述還原覆蓋嗎？", ["確認還原", "取消"])
-        if confirm != "確認還原":
-            ctx.renderer.message("已取消還原。")
+        confirm_yes = t("system_cmd.undo_confirm_yes")
+        confirm = await ctx.reader.choose(t("system_cmd.undo_confirm_prompt"), [confirm_yes, cancel_label])
+        if confirm != confirm_yes:
+            ctx.renderer.message(t("system_cmd.undo_cancelled"))
             return CommandResult()
 
         restore_result = sys_registry.execute(f"/undo {orig_path_str}", ctx.agent)
         if restore_result and restore_result.status == "success":
             ctx.renderer.message(restore_result.message, "green")
         else:
-            ctx.renderer.message(restore_result.message if restore_result else "還原失敗", "red")
+            ctx.renderer.message(
+                restore_result.message if restore_result else t("system_cmd.undo_failed"),
+                "red",
+            )
         return CommandResult()
 
 
@@ -325,9 +338,12 @@ class ConfigCommand(CliCommand):
         if args.strip():
             res = sys_registry.execute(f"/config {args}", ctx.agent)
             if res is None or res.status == "error":
-                raise ValueError(res.message if res else "設定指令失敗")
+                raise ValueError(res.message if res else t("system_cmd.config_cmd_failed"))
             ctx.renderer.console.print(res.message)
             return CommandResult()
+
+        add_item_label = t("system_cmd.config_add_item")
+        exit_label = t("system_cmd.config_exit")
 
         while True:
             flat_data = self._flatten(config.to_dict())
@@ -341,18 +357,21 @@ class ConfigCommand(CliCommand):
                 choices.append(f"{k} = {display_v}")
                 keys_list.append(k)
 
-            choices.extend(["➕ 新增設定項", "離開"])
-            selected = await ctx.reader.choose("【全域設定檔】(選擇項目以編輯)", choices)
-            if not selected or selected == "離開":
-                ctx.renderer.message("已離開設定選單。")
+            choices.extend([add_item_label, exit_label])
+            selected = await ctx.reader.choose(t("system_cmd.config_menu_title"), choices)
+            if not selected or selected == exit_label:
+                ctx.renderer.message(t("system_cmd.config_exited"))
                 return CommandResult()
 
-            if selected == "➕ 新增設定項":
-                new_key = await ctx.reader.read("設定鍵名 (Key, 可用點表示法): ")
+            if selected == add_item_label:
+                new_key = await ctx.reader.read(t("system_cmd.config_new_key_prompt"))
                 if not new_key:
                     continue
                 is_secret = self._is_secret_key(new_key)
-                new_val = await ctx.reader.read(f"設定值 (Value) [{new_key}]: ", is_password=is_secret)
+                new_val = await ctx.reader.read(
+                    t("system_cmd.config_new_val_prompt", key=new_key),
+                    is_password=is_secret,
+                )
                 if new_val:
                     res = sys_registry.execute(f"/config set {new_key.strip()} {new_val.strip()}", ctx.agent)
                     if res:
@@ -368,9 +387,13 @@ class ConfigCommand(CliCommand):
                 from pocket_agent.system.i18n import get_available_locales
 
                 available_locales = get_available_locales()
-                new_val = await ctx.reader.choose(f"選擇 {key}", available_locales)
+                new_val = await ctx.reader.choose(t("system_cmd.config_choose_key", key=key), available_locales)
             else:
-                prompt_msg = f"編輯 {key} (機密欄位留空則不修改): " if is_secret else f"編輯 {key}: "
+                prompt_msg = (
+                    t("system_cmd.config_edit_secret", key=key)
+                    if is_secret
+                    else t("system_cmd.config_edit_normal", key=key)
+                )
                 new_val = await ctx.reader.read(
                     prompt_msg, default="" if is_secret else current_val, is_password=is_secret
                 )

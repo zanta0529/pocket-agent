@@ -8,6 +8,7 @@ from pocket_agent.frontend.cli.commands.core import (
     CommandContext,
     CommandResult,
 )
+from pocket_agent.system.i18n import t
 
 
 def _load_session_into_context(ctx: CommandContext, session_id: str) -> None:
@@ -16,7 +17,7 @@ def _load_session_into_context(ctx: CommandContext, session_id: str) -> None:
 
     data = load_session(session_id)
     if data is None:
-        raise ValueError(f"找不到 session：{session_id}")
+        raise ValueError(t("session_cmd.not_found", id=session_id))
     if ctx.agent.history and getattr(ctx.agent, "is_sensitive_session", False) is not True:
         save_session(ctx.state.session_id, ctx.agent.history)
 
@@ -33,7 +34,11 @@ def _load_session_into_context(ctx: CommandContext, session_id: str) -> None:
     ctx.state.session_tokens = 0
     ctx.state.last_failed_input = ""
     ctx.renderer.message(
-        f"已載入：{data.get('title', '（無標題）')} · {len(data['history'])} 則訊息",
+        t(
+            "session_cmd.loaded",
+            title=data.get("title", t("cli.session_untitled")),
+            count=len(data["history"]),
+        ),
         "green",
     )
 
@@ -57,34 +62,36 @@ def _delete_session_by_id(ctx: CommandContext, session_id: str) -> None:
         ctx.state.session_id = new_session_id()
         ctx.state.session_tokens = 0
         ctx.state.last_failed_input = ""
-    ctx.renderer.message(f"已刪除：{title}")
+    ctx.renderer.message(t("session_cmd.deleted", title=title))
 
 
 class _SessionInteractiveCommand(CliCommand):
     """互動式分頁瀏覽歷史對話並執行載入或刪除。"""
-
-    _ACTIONS = {
-        "載入": _load_session_into_context,
-        "刪除": _delete_session_by_id,
-    }
 
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         from pocket_agent.core.sessions import list_sessions
 
         sessions = list_sessions()
         if not sessions:
-            ctx.renderer.message("尚無歷史對話。")
+            ctx.renderer.message(t("session_cmd.no_history"))
             return CommandResult()
 
         selected = await self._pick_session(ctx, sessions)
         if not selected:
             return CommandResult()
 
+        load_label = t("session_cmd.action_load")
+        delete_label = t("session_cmd.action_delete")
+        cancel_label = t("session_cmd.cancel")
+        actions = {
+            load_label: _load_session_into_context,
+            delete_label: _delete_session_by_id,
+        }
         action = await ctx.reader.choose(
-            f"「{selected['title'][:30]}」→ 選擇動作",
-            [*self._ACTIONS.keys(), "取消"],
+            t("session_cmd.pick_action", title=selected["title"][:30]),
+            [load_label, delete_label, cancel_label],
         )
-        handler = self._ACTIONS.get(action)
+        handler = actions.get(action)
         if handler is not None:
             handler(ctx, selected["id"])
         return CommandResult()
@@ -93,7 +100,7 @@ class _SessionInteractiveCommand(CliCommand):
     async def _pick_session(ctx: CommandContext, sessions: list[dict]) -> dict | None:
         page = 0
         page_size = 5
-        more_label = "↓ 載入更多歷史紀錄..."
+        more_label = t("session_cmd.load_more")
 
         while True:
             start = page * page_size
@@ -106,7 +113,7 @@ class _SessionInteractiveCommand(CliCommand):
             if end < len(sessions):
                 choices.append(more_label)
 
-            selected_label = await ctx.reader.choose("選擇對話（↑↓ 移動光棒，Enter 確認，Esc 取消）", choices)
+            selected_label = await ctx.reader.choose(t("session_cmd.pick_session"), choices)
             if not selected_label:
                 return None
             if selected_label == more_label:
@@ -125,7 +132,7 @@ class _SessionListCommand(CliCommand):
 
         sessions = list_sessions()
         if not sessions:
-            ctx.renderer.message("尚無歷史對話。")
+            ctx.renderer.message(t("session_cmd.no_history"))
             return CommandResult()
 
         for i, s in enumerate(sessions, 1):
@@ -139,7 +146,7 @@ class _SessionLoadCommand(CliCommand):
 
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if not args:
-            raise ValueError("用法：/session load <id>")
+            raise ValueError(t("session_cmd.usage_load"))
         _load_session_into_context(ctx, args)
         return CommandResult()
 
@@ -151,12 +158,12 @@ class _SessionSaveCommand(CliCommand):
         from pocket_agent.core.sessions import save_session
 
         if not ctx.agent.history:
-            ctx.renderer.message("對話歷史為空，略過儲存。")
+            ctx.renderer.message(t("session_cmd.empty_history_skip"))
         elif getattr(ctx.agent, "is_sensitive_session", False) is True:
-            ctx.renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
+            ctx.renderer.message(t("cli.sensitive_session_warning"), "yellow")
         else:
             save_session(ctx.state.session_id, ctx.agent.history)
-            ctx.renderer.message(f"已存檔：{ctx.state.session_id}", "green")
+            ctx.renderer.message(t("session_cmd.saved", id=ctx.state.session_id), "green")
         return CommandResult()
 
 
@@ -165,7 +172,7 @@ class _SessionDeleteCommand(CliCommand):
 
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if not args:
-            raise ValueError("用法：/session delete <id>")
+            raise ValueError(t("session_cmd.usage_delete"))
         _delete_session_by_id(ctx, args)
         return CommandResult()
 
@@ -189,7 +196,7 @@ class SessionCommand(CliCommand):
 
         command = self._registry.get(sub)
         if command is None:
-            raise ValueError("用法：/session [list | load <id> | save | delete <id> | prune]")
+            raise ValueError(t("session_cmd.usage_session"))
         return await command.execute(ctx, sub_arg)
 
 
@@ -202,12 +209,12 @@ def _parse_prune_args(args: str) -> tuple[int | None, int | None]:
     if len(parts) == 1 and parts[0].isdigit():
         days = int(parts[0])
         if days < 1:
-            raise ValueError("天數必須大於等於 1。")
+            raise ValueError(t("session_cmd.prune_days_invalid"))
         return (days, None)
     if len(parts) == 2 and parts[0] == "--keep" and parts[1].isdigit():
         keep = int(parts[1])
         return (None, keep)
-    raise ValueError("用法：/prune [<天數> | --keep <筆數>]")
+    raise ValueError(t("session_cmd.usage_prune"))
 
 
 def _format_bytes_human(num_bytes: int) -> str:
@@ -222,11 +229,15 @@ async def _run_prune_flow(ctx: CommandContext, args: str) -> None:
 
     days, keep = _parse_prune_args(args)
     if days is None and keep is None:
-        opt_days = f"清理超過 {DEFAULT_SESSION_PRUNE_DAYS} 天之歷史對話"
-        opt_keep = f"僅保留最近 {DEFAULT_SESSION_PRUNE_KEEP} 筆歷史對話"
-        choice = await ctx.reader.choose("選擇歷史對話清理規則（目前對話將受保護）", [opt_days, opt_keep, "取消"])
-        if not choice or choice == "取消":
-            ctx.renderer.message("已取消清理歷史對話。")
+        opt_days = t("session_cmd.prune_opt_days", days=DEFAULT_SESSION_PRUNE_DAYS)
+        opt_keep = t("session_cmd.prune_opt_keep", keep=DEFAULT_SESSION_PRUNE_KEEP)
+        cancel_label = t("session_cmd.cancel")
+        choice = await ctx.reader.choose(
+            t("session_cmd.prune_choose_rule"),
+            [opt_days, opt_keep, cancel_label],
+        )
+        if not choice or choice == cancel_label:
+            ctx.renderer.message(t("session_cmd.prune_cancelled"))
             return
         if choice == opt_days:
             days = DEFAULT_SESSION_PRUNE_DAYS
@@ -239,38 +250,51 @@ async def _run_prune_flow(ctx: CommandContext, args: str) -> None:
         keep=keep,
         exclude_session_id=current_sid,
     )
-    rule_desc = f"超過 {days} 天" if days is not None else f"僅保留最新 {keep} 筆"
+    rule_desc = (
+        t("session_cmd.prune_rule_days", days=days) if days is not None else t("session_cmd.prune_rule_keep", keep=keep)
+    )
 
     if not candidates:
         ctx.renderer.message(
-            f"✓ 沒有符合「{rule_desc}」的歷史對話需清理"
-            f"（目前共 {total_count} 筆，佔 {_format_bytes_human(total_bytes)}）。",
+            t(
+                "session_cmd.prune_none",
+                rule=rule_desc,
+                total=total_count,
+                size=_format_bytes_human(total_bytes),
+            ),
             "green",
         )
         return
 
     est_bytes = sum(c.get("size_bytes", 0) for c in candidates)
     ctx.renderer.message(
-        f"找到 {len(candidates)} 筆符合「{rule_desc}」的歷史對話（預計釋放 {_format_bytes_human(est_bytes)}）：",
+        t(
+            "session_cmd.prune_found",
+            count=len(candidates),
+            rule=rule_desc,
+            size=_format_bytes_human(est_bytes),
+        ),
         "yellow",
     )
     for item in candidates[:5]:
         dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(item.get("updated_at", 0)))
-        ctx.renderer.message(f"  • [{dt}] {item.get('title', '（無標題）')}", "dim")
+        ctx.renderer.message(f"  • [{dt}] {item.get('title', t('cli.session_untitled'))}", "dim")
     if len(candidates) > 5:
-        ctx.renderer.message(f"  … 及另外 {len(candidates) - 5} 筆", "dim")
+        ctx.renderer.message(t("session_cmd.prune_more", count=len(candidates) - 5), "dim")
 
+    yes_label = t("session_cmd.prune_confirm_yes")
+    cancel_label = t("session_cmd.cancel")
     confirm = await ctx.reader.choose(
-        f"確定要永久刪除上述 {len(candidates)} 筆歷史對話嗎？",
-        ["確認刪除", "取消"],
+        t("session_cmd.prune_confirm_prompt", count=len(candidates)),
+        [yes_label, cancel_label],
     )
-    if confirm != "確認刪除":
-        ctx.renderer.message("已取消清理歷史對話。")
+    if confirm != yes_label:
+        ctx.renderer.message(t("session_cmd.prune_cancelled"))
         return
 
     deleted, freed = prune_sessions([c["id"] for c in candidates], exclude_session_id=current_sid)
     ctx.renderer.message(
-        f"✓ 已清理 {deleted} 筆歷史對話，釋放 {_format_bytes_human(freed)} 磁碟空間。",
+        t("session_cmd.prune_done", deleted=deleted, size=_format_bytes_human(freed)),
         "green",
     )
 
@@ -286,13 +310,13 @@ class PruneCommand(CliCommand):
 class CompactCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/compact 不接受參數")
+            raise ValueError(t("session_cmd.compact_no_args"))
         history = ctx.agent.history
         if len(history) < 6:
-            ctx.renderer.message("對話歷史不足（需至少 6 則），無需壓縮。")
+            ctx.renderer.message(t("session_cmd.compact_too_short"))
             return CommandResult()
 
-        ctx.renderer.message("壓縮中…（正在建立高密度對話摘要）", "dim")
+        ctx.renderer.message(t("session_cmd.compact_running"), "dim")
         original_len = len(history)
         keep_recent = 2 if len(history) < 8 else 4
 
@@ -301,7 +325,7 @@ class CompactCommand(CliCommand):
         def stopping() -> None:
             ctx.agent.request_stop()
             ctx.renderer._stop_status()
-            ctx.renderer.message("⏸ 停止要求已送出，等待進行中的工作收尾…", "yellow")
+            ctx.renderer.message(t("cli.stopping"), "yellow")
 
         try:
             success, orig_tokens, comp_tokens = await run_operation(
@@ -309,21 +333,26 @@ class CompactCommand(CliCommand):
             )
         except OperationInterrupted:
             ctx.renderer._stop_status()
-            ctx.renderer.message("⏹ 壓縮已中止", "yellow")
+            ctx.renderer.message(t("session_cmd.compact_interrupted"), "yellow")
             return CommandResult()
         except Exception as e:
-            ctx.renderer.message(f"壓縮失敗：{e}", "red")
+            ctx.renderer.message(t("session_cmd.compact_failed", error=e), "red")
             return CommandResult()
 
         if not success:
-            ctx.renderer.message("目前歷史對話結構過短或無顯著壓縮收益，歷史未變更。", "yellow")
+            ctx.renderer.message(t("session_cmd.compact_no_gain"), "yellow")
             return CommandResult()
 
         saved_tokens = max(0, orig_tokens - comp_tokens)
         ctx.renderer.message(
-            f"✓ 已壓縮：{original_len} 則 → {len(ctx.agent.history)} 則 "
-            f"（原約 {orig_tokens:,} tokens → 壓縮後約 {comp_tokens:,} tokens，"
-            f"釋放約 {saved_tokens:,} tokens）",
+            t(
+                "session_cmd.compact_done",
+                orig_len=original_len,
+                new_len=len(ctx.agent.history),
+                orig_tokens=orig_tokens,
+                comp_tokens=comp_tokens,
+                saved_tokens=saved_tokens,
+            ),
             "green",
         )
         return CommandResult()
@@ -332,20 +361,20 @@ class CompactCommand(CliCommand):
 class NewCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args:
-            raise ValueError("/new 不接受參數")
+            raise ValueError(t("session_cmd.new_no_args"))
         from pocket_agent.core.sessions import new_session_id, save_session
 
         old_session_id = ctx.state.session_id
         # 若原先對話有內容，先自動儲存保護工作成果
         if ctx.agent.history:
             if getattr(ctx.agent, "is_sensitive_session", False) is True:
-                saved_msg = "（前次會話涉及敏感主機診斷，不予持久化儲存）"
+                saved_msg = t("session_cmd.new_prev_sensitive")
             else:
                 try:
                     save_session(old_session_id, ctx.agent.history)
-                    saved_msg = f"（已自動儲存前次會話：{old_session_id}）"
+                    saved_msg = t("session_cmd.new_prev_saved", id=old_session_id)
                 except Exception as e:
-                    saved_msg = f"（前次會話自動存檔失敗：{e}）"
+                    saved_msg = t("session_cmd.new_prev_save_failed", error=e)
         else:
             saved_msg = ""
 
@@ -370,7 +399,7 @@ class NewCommand(CliCommand):
         ctx.state.session_approved_commands.clear()
         ctx.state.accept_edits = False
 
-        info = f"✓ 已開啟全新對話（Session ID: {ctx.state.session_id}）· 上下文與暫存已完整清空。"
+        info = t("session_cmd.new_started", id=ctx.state.session_id)
         if saved_msg:
             info += f"\n  {saved_msg}"
         ctx.renderer.message(info, "green")
@@ -382,18 +411,18 @@ class RenameCommand(CliCommand):
         new_title = args.strip()
         if not new_title:
             try:
-                prompt_input = await ctx.reader.read("請輸入新的對話標題（或按 Ctrl+C 取消）：")
+                prompt_input = await ctx.reader.read(t("session_cmd.rename_prompt"))
                 new_title = prompt_input.strip()
             except KeyboardInterrupt, EOFError:
-                ctx.renderer.message("已取消重新命名。")
+                ctx.renderer.message(t("session_cmd.rename_cancelled"))
                 return CommandResult()
 
         if not new_title:
-            ctx.renderer.message("標題不得為空，已取消重新命名。", "yellow")
+            ctx.renderer.message(t("session_cmd.rename_empty"), "yellow")
             return CommandResult()
 
         if getattr(ctx.agent, "is_sensitive_session", False) is True:
-            ctx.renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，不予持久化儲存。", "yellow")
+            ctx.renderer.message(t("session_cmd.rename_sensitive"), "yellow")
             return CommandResult()
 
         clean_title = new_title.replace("\n", " ")[:60]
@@ -404,7 +433,7 @@ class RenameCommand(CliCommand):
         if not renamed:
             save_session(ctx.state.session_id, ctx.agent.history, title=clean_title)
 
-        ctx.renderer.message(f"✓ 已將目前對話重新命名為：「{clean_title}」", "green")
+        ctx.renderer.message(t("session_cmd.rename_done", title=clean_title), "green")
         return CommandResult()
 
 
@@ -413,7 +442,7 @@ class ActivityCommand(CliCommand):
 
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         if args.strip():
-            raise ValueError("/activity 不接受參數")
+            raise ValueError(t("session_cmd.activity_no_args"))
 
         from pocket_agent.core.activity import SessionActivityTracker
 
@@ -432,15 +461,15 @@ class ActivityCommand(CliCommand):
         console.print()
 
         # ── 區塊一：本次會話檔案異動清單 ─────────────────────────────
-        console.print(Text("📁 本次會話檔案異動清單", style="bold cyan"))
+        console.print(Text(t("session_cmd.activity_files_header"), style="bold cyan"))
         total_files = sum(len(v) for v in file_changes.values())
         if total_files == 0:
-            console.print(Text("  （本次會話尚無新增、修改或刪除的檔案）", style="dim"))
+            console.print(Text(t("session_cmd.activity_files_empty"), style="dim"))
         else:
             categories = (
-                ("added", "新增", "+", "bold green"),
-                ("modified", "修改", "~", "bold yellow"),
-                ("deleted", "刪除", "-", "bold red"),
+                ("added", t("session_cmd.activity_added"), "+", "bold green"),
+                ("modified", t("session_cmd.activity_modified"), "~", "bold yellow"),
+                ("deleted", t("session_cmd.activity_deleted"), "-", "bold red"),
             )
             for key, label, symbol, color in categories:
                 paths = file_changes.get(key, [])
@@ -449,7 +478,7 @@ class ActivityCommand(CliCommand):
                 header.append(f" ({len(paths)})", style="dim")
                 console.print(header)
                 if not paths:
-                    console.print(Text("    （無）", style="dim"))
+                    console.print(Text(t("session_cmd.activity_none"), style="dim"))
                 else:
                     for p in paths:
                         line = Text("    ")
@@ -460,19 +489,19 @@ class ActivityCommand(CliCommand):
         console.print()
 
         # ── 區塊二：本次會話上網查詢網址清單 ─────────────────────────
-        console.print(Text("🌐 本次會話上網查詢網址清單", style="bold magenta"))
+        console.print(Text(t("session_cmd.activity_urls_header"), style="bold magenta"))
         if not url_items:
-            console.print(Text("  （本次會話尚無上網查詢網址紀錄）", style="dim"))
+            console.print(Text(t("session_cmd.activity_urls_empty"), style="dim"))
         else:
             for idx, item in enumerate(url_items, 1):
                 is_ok = item.status == "success"
-                status_label = "[成功]" if is_ok else "[失敗]"
+                status_label = t("session_cmd.activity_url_ok") if is_ok else t("session_cmd.activity_url_fail")
                 status_style = "bold green" if is_ok else "bold red"
                 line = Text(f"  {idx}. ")
                 line.append(status_label, style=status_style)
                 line.append(f" {item.url}")
                 if item.count > 1:
-                    line.append(f" ({item.count} 次)", style="dim")
+                    line.append(t("session_cmd.activity_url_count", count=item.count), style="dim")
                 console.print(line, soft_wrap=True, overflow="ignore", crop=False)
 
         console.print()

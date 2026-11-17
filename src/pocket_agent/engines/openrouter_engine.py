@@ -50,10 +50,12 @@ class OpenRouterEngine(StandardChatCompletionsEngine):
         return None
 
     async def get_quota(self) -> QuotaInfo:
+        from pocket_agent.system.i18n import t
+
         try:
             api_key = self.client.api_key
         except AttributeError:
-            return QuotaInfo(is_supported=False, message="無法取得 API Key")
+            return QuotaInfo(is_supported=False, message=t("quota.missing_api_key"))
 
         try:
             response = await self._http_get(
@@ -95,7 +97,7 @@ class OpenRouterEngine(StandardChatCompletionsEngine):
             )
         except Exception as e:
             log.error(f"Failed to fetch OpenRouter quota: {e}")
-            return QuotaInfo(is_supported=False, message=f"查詢 OpenRouter 額度失敗：{str(e)}")
+            return QuotaInfo(is_supported=False, message=t("quota.openrouter_fetch_failed", error=e))
 
     def parse_api_error(self, exc: Exception) -> str | None:
         """Parse OpenRouter APIStatusError for reset time or remedy hint."""
