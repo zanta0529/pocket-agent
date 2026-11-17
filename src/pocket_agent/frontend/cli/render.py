@@ -134,12 +134,11 @@ def clip(value: str, width: int) -> str:
 
 
 def toolbar(state: CliState, width: int) -> FormattedText:
+    from pocket_agent.system.i18n import t
+
     width = max(0, width)
 
-    if not state.pending_files:
-        count = "待送 0"
-    else:
-        count = f"待送 {len(state.pending_files)}"
+    count = t("cli.toolbar_pending", count=len(state.pending_files) if state.pending_files else 0)
 
     if state.session_tokens > 0:
         max_tokens = max(1, getattr(state, "context_window", DEFAULT_CONTEXT_WINDOW) or DEFAULT_CONTEXT_WINDOW)
@@ -156,23 +155,23 @@ def toolbar(state: CliState, width: int) -> FormattedText:
         and getattr(state, "quota_remaining", None) is not None
     ):
         used = state.quota_limit - state.quota_remaining
-        tokens_str += f" · 額度 ${used:.3f}/${state.quota_limit:.3f}"
+        tokens_str += t("cli.toolbar_quota", used=used, limit=state.quota_limit)
 
     accept_status = "ON" if getattr(state, "accept_edits", False) else "OFF"
     reasoning_val = str(getattr(state, "reasoning_effort", "auto") or "auto").strip().capitalize()
-    tokens_str += f" · 推理: {reasoning_val} · Accept-edits: {accept_status}"
+    tokens_str += t("cli.toolbar_reasoning", reasoning=reasoning_val, accept=accept_status)
 
     if getattr(state, "staged_update_version", None):
-        tokens_str += f" · ✨ 新版 ({state.staged_update_version}) 就緒"
+        tokens_str += t("cli.toolbar_update_ready", version=state.staged_update_version)
 
     model = f"[ {state.provider} ] {state.model}"
     budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
     line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
 
     for extra in [
-        " · / 指令  @ 檔案",
-        " · Shift+Tab 自動編輯",
-        " · Enter 送出  Esc+Enter 換行",
+        t("cli.toolbar_hint_cmd"),
+        t("cli.toolbar_hint_accept"),
+        t("cli.toolbar_hint_keys"),
         f" · {Path.cwd().name}",
     ]:
         if cell_len(plain(line + extra)) <= width:
@@ -366,6 +365,7 @@ class CliRenderer:
         self.console.print(Text(plain(value), style=style))
 
     def banner(self) -> None:
+        from pocket_agent.system.i18n import t
         from pocket_agent.system.paths import is_portable
 
         title_text = "Pocket Agent"
@@ -390,7 +390,7 @@ class CliRenderer:
                     ("│ >_   │  ", ""),
                     (f"{title_text}\n", "bold #B8860B"),
                     ("│      │  ", ""),
-                    ("你的終端 AI 工作夥伴\n", ""),
+                    (f"{t('cli.banner_tagline')}\n", ""),
                     ("╰───╲──╯", ""),
                 )
             )
@@ -398,8 +398,17 @@ class CliRenderer:
         self.message("─" * min(width, 80), "")
 
     def welcome(self, state: CliState, tools: list[str]) -> None:
-        self.message(f"[ {state.provider} ] {state.model} · {len(tools)} 個 MCP 工具 · 就緒")
-        self.message("/ 指令 · @ 檔案 · Tab 補全 · Shift+Tab 切換自動編輯 · Enter 送出 · Esc 後 Enter 換行")
+        from pocket_agent.system.i18n import t
+
+        self.message(
+            t(
+                "cli.welcome_status",
+                provider=state.provider,
+                model=state.model,
+                tool_count=len(tools),
+            )
+        )
+        self.message(t("cli.welcome_shortcuts"))
 
     def user(self, raw: str) -> None:
         self.console.print()
@@ -424,7 +433,9 @@ class CliRenderer:
         self._stream_header_printed = False
         self._stream_has_content = False
         self._thinking_buffer = ""
-        self.message(f"本輪已返回 · {seconds:.1f} 秒 · {tokens} tokens")
+        from pocket_agent.system.i18n import t
+
+        self.message(t("cli.reply_footer", seconds=seconds, tokens=tokens))
 
     def event(self, kind: str, data: object) -> None:
         if kind == "system":

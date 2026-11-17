@@ -18,3 +18,17 @@ def _isolate_pocket_user_dir(tmp_path_factory: pytest.TempPathFactory, monkeypat
     monkeypatch.setattr("pocket_agent.system.paths.user_dir", _fake_user_dir)
     monkeypatch.setattr("pocket_agent.system.housekeeping.user_dir", _fake_user_dir)
     return fake_user_dir
+
+
+@pytest.fixture(autouse=True)
+def _isolate_i18n_locale(monkeypatch: pytest.MonkeyPatch):
+    """確保所有測試預設使用 zh_TW，不受本機真實 ~/.pocket-agent/config.json 影響。"""
+    from pocket_agent.system import i18n
+
+    i18n.clear_cache()
+    i18n.set_locale(i18n.DEFAULT_LOCALE)
+    monkeypatch.delenv("POCKET_AGENT_LANG", raising=False)
+    yield
+    i18n.clear_cache()
+    i18n.set_locale(i18n.DEFAULT_LOCALE)
+    monkeypatch.delenv("POCKET_AGENT_LANG", raising=False)

@@ -76,6 +76,11 @@ def test_t_kwargs_formatting_error_handled():
 
 def test_get_locale_precedence(monkeypatch):
     """驗證語系判斷優先權。"""
+    from pocket_agent.system import config as config_mod
+
+    # 隔離真實使用者的 ~/.pocket-agent/config.json
+    monkeypatch.setattr(config_mod.config, "get", lambda key, default=None: None)
+
     # 1. 顯式設定優先
     set_locale("en_US")
     assert get_locale() == "en_US"
@@ -85,9 +90,16 @@ def test_get_locale_precedence(monkeypatch):
     monkeypatch.setenv("POCKET_AGENT_LANG", "en_US")
     assert get_locale() == "en_US"
 
-    # 3. 清除環境變數後，回退至預設 zh_TW
+    # 3. 清除環境變數後，讀取 config["locale"]，若無則回退至預設 zh_TW
     monkeypatch.delenv("POCKET_AGENT_LANG", raising=False)
     assert get_locale() == "zh_TW"
+
+    monkeypatch.setattr(
+        config_mod.config,
+        "get",
+        lambda key, default=None: "en_US" if key == "locale" else default,
+    )
+    assert get_locale() == "en_US"
 
 
 def test_get_available_locales():
