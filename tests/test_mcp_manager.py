@@ -213,3 +213,53 @@ def test_start_cancellation_propagates(stage):
             register.side_effect = asyncio.CancelledError()
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(manager.start())
+
+
+def test_parallel_calls_serialize_conn_prompt():
+    import time
+    from types import SimpleNamespace
+
+    manager = MCPManager("dummy.yaml")
+    fake_tools = [
+        SimpleNamespace(
+            name=f"rhel_tool_{i}",
+            description=f"tool {i}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ssh_host": {"type": "string"},
+                    "ssh_port": {"type": "string"},
+                    "ssh_user": {"type": "string"},
+                    "ssh_password": {"type": "string"},
+                },
+            },
+        )
+        for i in range(5)
+    ]
+    fake_session = SimpleNamespace(
+        list_tools=AsyncMock(return_value=SimpleNamespace(tools=fake_tools)),
+        call_tool=AsyncMock(return_value=MagicMock(content=[MagicMock(text="OK")])),
+    )
+    asyncio.run(manager._register_tools("rhel_ops", fake_session, inject={}, safe_read_tools="*"))
+
+    prompt_calls = []
+
+    def slow_prompt(server_name, missing_keys):
+        time.sleep(0.02)
+        prompt_calls.append((server_name, list(missing_keys)))
+        return {
+            "RHEL_HOST": "10.0.0.10",
+            "RHEL_SSH_PORT": "22",
+            "RHEL_SSH_USER": "ops",
+            "RHEL_SSH_PASSWORD": "secret",
+        }
+
+    manager.on_prompt_conn = slow_prompt
+
+    async def _run_parallel():
+        return await asyncio.gather(*(manager.call(f"rhel_tool_{i}", {}) for i in range(5)))
+
+    results = asyncio.run(_run_parallel())
+    assert len(results) == 5
+    assert len(prompt_calls) == 1
+    assert fake_session.call_tool.await_count == 5

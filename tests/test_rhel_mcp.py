@@ -14,7 +14,7 @@ from pocket_agent.extensions.mcp import MCPManager
 
 @pytest.fixture(autouse=True)
 def _clean_rhel_env_and_cache(monkeypatch, tmp_path):
-    rhel_mcp._RUNTIME_CREDS.clear()
+    rhel_mcp._clear_creds_cache()
     monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     for key in (
         "RHEL_HOST",
@@ -753,3 +753,63 @@ def test_ipv6_env_host_matches_password_and_known_hosts_prefix_safety(monkeypatc
         "172.17.3.570 ssh-ed25519 EXISTINGKEY",
         "172.17.3.57 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
     ]
+
+
+def test_rhel_query_journal_and_read_config_preserve_conn_auth_error(monkeypatch):
+    """CR-002 & CR-004: 認證／連線錯誤不得被摘要錯誤覆寫，且設定檔路徑應忽略前後空白。"""
+    _set_full_creds(monkeypatch)
+    auth_fail = SimpleNamespace(returncode=255, stdout="", stderr="Permission denied (publickey,password).")
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=auth_fail):
+        res_journal = rhel_mcp.rhel_query_journal()
+        assert "[CONN_AUTH]" in res_journal
+
+    _set_full_creds(monkeypatch)
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=auth_fail):
+        res_cfg = rhel_mcp.rhel_read_config(" /etc/selinux/config ")
+        assert "[CONN_AUTH]" in res_cfg
+
+    _set_full_creds(monkeypatch)
+    ok_cfg = SimpleNamespace(returncode=0, stdout="SELINUX=enforcing\n", stderr="")
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=ok_cfg):
+        assert rhel_mcp.rhel_read_config(" /etc/selinux/config ") == "SELINUX=enforcing"
+
+
+def test_rhel_network_connections_parenthesizes_port_filter(monkeypatch):
+    """CR-003: 指定 state 與 port 時，ss 過濾條件應以括號群組避免運算子優先權錯誤。"""
+    _set_full_creds(monkeypatch)
+    fake_proc = SimpleNamespace(returncode=0, stdout="Netid State\n", stderr="")
+    with patch("mcp_servers.rhel_mcp._capture_ssh", return_value=fake_proc) as mock_run:
+        rhel_mcp.rhel_network_connections(state="established", port="443")
+        remote_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "\\( sport = :443 or dport = :443 \\)" in remote_cmd
+
+
+def test_rhel_parallel_resolve_connection_params_prompts_once(monkeypatch):
+    """CR-001: 多執行緒同時解析連線參數時應序列化詢問並共用快取，不可重複提示。"""
+    import concurrent.futures
+    import time
+
+    rhel_mcp._clear_creds_cache()
+    for env_key in ("RHEL_HOST", "RHEL_SSH_PORT", "RHEL_SSH_USER", "RHEL_SSH_PASSWORD", "RHEL_SSH_KEY_PATH"):
+        monkeypatch.delenv(env_key, raising=False)
+
+    prompt_log = []
+
+    def fake_tty_prompt(prompt_text, *, is_password=False):
+        time.sleep(0.01)
+        prompt_log.append(prompt_text)
+        if "RHEL_HOST" in prompt_text:
+            return "10.0.0.20"
+        if "RHEL_SSH_PORT" in prompt_text:
+            return "22"
+        if "RHEL_SSH_USER" in prompt_text:
+            return "admin"
+        return "pw!"
+
+    with patch("mcp_servers.rhel_mcp._tty_prompt", side_effect=fake_tty_prompt):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(rhel_mcp._resolve_connection_params) for _ in range(4)]
+            results = [f.result() for f in futures]
+
+    assert all(r == ("10.0.0.20", "22", "admin", "pw!", "") for r in results)
+    assert len(prompt_log) == 4

@@ -14,6 +14,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -44,6 +45,7 @@ mcp = MCPServer("sqlite")
 _RUNTIME_CREDS: dict[str, str] = {}
 _RUNTIME_CREDS_TS: float = 0.0
 _CREDS_TTL_SECONDS = 600
+_CREDS_LOCK = threading.RLock()
 
 
 class _ConnAuthError(RuntimeError):
@@ -68,8 +70,9 @@ _FORBIDDEN_SQLITE_RE = re.compile(
 
 def _clear_creds_cache() -> None:
     global _RUNTIME_CREDS_TS
-    _RUNTIME_CREDS.clear()
-    _RUNTIME_CREDS_TS = 0.0
+    with _CREDS_LOCK:
+        _RUNTIME_CREDS.clear()
+        _RUNTIME_CREDS_TS = 0.0
 
 
 def _ensure_creds_ttl() -> None:
@@ -228,6 +231,11 @@ def _is_network_path(raw: str | None) -> bool:
 
 def get_db_path(custom_path: str = "") -> Path:
     """解析並驗證 DB_PATH 目標檔案路徑。若未設定或為空，則提示使用者輸入並快取於記憶體。"""
+    with _CREDS_LOCK:
+        return _get_db_path_locked(custom_path)
+
+
+def _get_db_path_locked(custom_path: str = "") -> Path:
     _ensure_creds_ttl()
     raw_path = custom_path.strip().strip("'\"") if custom_path else ""
 
