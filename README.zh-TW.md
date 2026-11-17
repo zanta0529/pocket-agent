@@ -5,7 +5,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#系統環境需求)
 
 ## 📖 專案簡介 (Introduction)
 
@@ -76,15 +76,20 @@ cd pocket-agent
 依您的作業系統執行對應啟動腳本：
 
 - **🪟 Windows (命令提示字元 / CMD)**：
+
   ```cmd
   run.bat
   ```
+
 - **🐧 Linux (終端機)**：
+
   ```bash
   chmod +x run.sh
   ./run.sh
   ```
+
 - **🍎 macOS (終端機或 Finder 雙擊)**：
+
   ```bash
   chmod +x run.command
   ./run.command
@@ -364,6 +369,7 @@ pip install -r requirements-dev.txt
 - **直接相依來源**為 `requirements.in` 與 `requirements-dev.in`。
 - **嚴禁手動修改** `requirements.txt` 與 `requirements-dev.txt`（這些檔案是由 `pip-compile` 自動產生的版本鎖定檔）。
 - 若需新增或調整套件，請修改 `.in` 檔案後重新編譯：
+
   ```bash
   pip-compile requirements.in
   pip-compile requirements-dev.in
