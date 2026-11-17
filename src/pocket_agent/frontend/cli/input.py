@@ -19,39 +19,48 @@ from prompt_toolkit.output import ColorDepth
 from pocket_agent.frontend.cli.render import plain, toolbar
 from pocket_agent.frontend.cli.state import CliState
 from pocket_agent.system.constants import PROVIDER_OPENAI
+from pocket_agent.system.i18n import t
 
-BUILTINS = {
-    "activity": "列出本次會話新增／修改／刪除的檔案與上網查詢網址清單",
-    "add-dir": "單次會話內，將外部資料夾加入工作範圍",
-    "agents": "列出目前所有可用的子代理清單與能力",
-    "attachments": "查看／移除待送附件",
-    "clean": "手動清理過期日誌與暫存檔 (Housekeeping)",
-    "clear": "清除對話，保留附件",
-    "codesearch": "搜尋程式碼片段並加入對話上下文",
-    "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
-    "config": "顯示或更改全域設定檔 (/config set <key> <value>)",
-    "exit": "離開",
-    "file": "附加一般檔案",
-    "goal": "設定長期目標，Agent 會持續嘗試完成任務不輕易中斷",
-    "help": "指令說明",
-    "learn": "從近期對話萃取為共用技能",
-    "logout": "登出",
-    "mcp": "MCP 工具清單（/mcp sqlite <路徑> 可切換 SQLite 資料庫）",
-    "model": "切換當次提供者與模型",
-    "new": "開啟全新乾淨對話（自動儲存既有對話，完整清空上下文）",
-    "parallel": "手動平行啟動多個子代理 (用法: /parallel <name>:<task> | <name>:<task>)",
-    "prune": "手動清理過期或過多的歷史對話 (/prune [<天數> | --keep <筆數>])",
-    "reasoning": "調整推理強度 (auto / high / medium / low / none)",
-    "rename": "重新命名目前的對話標題，方便日後識別與載入 (/rename <新標題>)",
-    "rm-dir": "單次會話內，將外部資料夾從工作範圍移除",
-    "rm-file": "從待送區移除附件檔案",
-    "session": "查看／載入歷史對話",
-    "skills": "列出目前所有可用的全域與專案技能",
-    "subagent": "強制委派任務給指定的子代理",
-    "undo": "時光機：還原上一次被 AI 修改的檔案",
-    "usage": "顯示當前對話累計 Token 用量",
-    "workspace": "顯示目前的工作區路徑清單",
-}
+BUILTIN_COMMAND_NAMES = (
+    "activity",
+    "add-dir",
+    "agents",
+    "attachments",
+    "clean",
+    "clear",
+    "codesearch",
+    "compact",
+    "config",
+    "exit",
+    "file",
+    "goal",
+    "help",
+    "learn",
+    "logout",
+    "mcp",
+    "model",
+    "new",
+    "parallel",
+    "prune",
+    "reasoning",
+    "rename",
+    "rm-dir",
+    "rm-file",
+    "session",
+    "skills",
+    "subagent",
+    "undo",
+    "usage",
+    "workspace",
+)
+
+
+def get_builtin_commands() -> dict[str, str]:
+    """依目前語系動態取得內建斜線指令與說明。"""
+    return {name: t(f"commands.{name}") for name in BUILTIN_COMMAND_NAMES}
+
+
+BUILTINS = {name: f"commands.{name}" for name in BUILTIN_COMMAND_NAMES}
 QUOTE = chr(34)
 REFERENCE = re.compile(r"(?:^|\s)@(?:" + QUOTE + "([^" + QUOTE + "]+)" + QUOTE + r"(?=\s|$)|([^\s" + QUOTE + "]+))")
 
@@ -113,7 +122,7 @@ class SlashCommandCompleter(Completer):
                         candidate,
                         start_position=-len(prefix),
                         display=plain(entry.name),
-                        display_meta="目錄" if directory else "檔案",
+                        display_meta=t("cli.completion_dir") if directory else t("cli.completion_file"),
                     )
         except OSError:
             return
@@ -134,11 +143,11 @@ class SlashCommandCompleter(Completer):
         from pocket_agent.system.commands import list_commands
         from pocket_agent.system.paths import is_portable
 
-        commands = dict(BUILTINS)
+        commands = get_builtin_commands()
         if is_image_command_supported(self.state, self.agent):
-            commands["image"] = "產生圖片（待送附件作參考圖）"
+            commands["image"] = t("commands.image")
         if is_portable():
-            commands["update"] = "檢查並套用最新發佈版更新（自動儲存並重啟）"
+            commands["update"] = t("commands.update")
         for command in list_commands():
             commands.setdefault(command["name"], command["description"])
 

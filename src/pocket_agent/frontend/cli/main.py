@@ -325,8 +325,13 @@ class CliFrontend(FrontendStrategy):
 
             renderer.banner()
 
+            label_map = {
+                "全域規範": t("cli.instruction_label_global"),
+                "工作區規範": t("cli.instruction_label_workspace"),
+            }
             for label, src_path in loaded_sources:
-                renderer.message(t("cli.loaded_instruction", label=label, path=src_path))
+                display_label = label_map.get(label, label)
+                renderer.message(t("cli.loaded_instruction", label=display_label, path=src_path))
 
             from rich.prompt import Prompt
 

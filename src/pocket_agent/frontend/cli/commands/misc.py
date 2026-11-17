@@ -6,7 +6,8 @@ from rich.text import Text
 
 from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
-from pocket_agent.frontend.cli.input import BUILTINS, file_argument, is_image_command_supported
+from pocket_agent.frontend.cli.input import file_argument, get_builtin_commands, is_image_command_supported
+from pocket_agent.system.i18n import t
 
 # /mcp sqlite <db_path> 所呼叫的 SQLite MCP 切換工具名稱
 _SQLITE_SWITCH_TOOL = "sqlite_switch_database"
@@ -354,9 +355,9 @@ class McpCommand(CliCommand):
             header.append(f" (共 {len(tools)} 個功能)\n", style="dim")
             ctx.renderer.console.print(header)
 
-            for t in tools:
-                line = Text(f"  • {_mcp_display_name(t)}", style="bold green")
-                desc = t.get("description")
+            for tool_info in tools:
+                line = Text(f"  • {_mcp_display_name(tool_info)}", style="bold green")
+                desc = tool_info.get("description")
                 if desc:
                     first_line = desc.split("\n")[0].strip()
                     line.append(f"\n    {first_line}", style="dim")
@@ -368,8 +369,8 @@ class McpCommand(CliCommand):
         # 預設無參數：以分組方式清晰呈現啟用的 MCP 工具與功能清單
         total_tools = sum(len(t) for t in grouped.values())
         ctx.renderer.console.print()
-        header = Text("🔌 已啟用的 MCP 工具\n", style="bold magenta")
-        header.append(f"{len(grouped)} 個服務已連線，共提供 {total_tools} 個功能", style="dim")
+        header = Text(t("mcp_cmd.header"), style="bold magenta")
+        header.append(t("mcp_cmd.summary", servers=len(grouped), tools=total_tools), style="dim")
         ctx.renderer.console.print(header)
         ctx.renderer.console.print()
 
@@ -379,14 +380,14 @@ class McpCommand(CliCommand):
 
         for server_name, tools in grouped.items():
             title = Text(f"📦 {server_name} ", style="bold cyan")
-            title.append(f"({len(tools)} 個功能)", style="bold yellow")
+            title.append(t("mcp_cmd.server_tools_count", count=len(tools)), style="bold yellow")
             ctx.renderer.console.print(title)
 
             for i in range(0, len(tools), num_cols):
                 row_tools = tools[i : i + num_cols]
                 line = Text("   ")
-                for j, t in enumerate(row_tools):
-                    tool_text = f"• {_mcp_display_name(t)}"
+                for j, tool_item in enumerate(row_tools):
+                    tool_text = f"• {_mcp_display_name(tool_item)}"
                     if j < len(row_tools) - 1:
                         pad = max(1, col_width - cell_len(tool_text))
                         tool_text = tool_text + (" " * pad)
@@ -394,18 +395,18 @@ class McpCommand(CliCommand):
                 ctx.renderer.console.print(line)
             ctx.renderer.console.print()
 
-        tip = Text("💡 提示：輸入 ", style="dim")
-        tip.append("/mcp <工具名稱>", style="bold yellow")
-        tip.append(" 可查看該 MCP 工具的詳細功能說明（例如 ", style="dim")
+        tip = Text(t("mcp_cmd.tip_prefix"), style="dim")
+        tip.append(t("mcp_cmd.tip_cmd"), style="bold yellow")
+        tip.append(t("mcp_cmd.tip_mid"), style="dim")
         sample_server = next(iter(grouped.keys()))
         tip.append(f"/mcp {sample_server}", style="cyan")
-        tip.append("）", style="dim")
+        tip.append(t("mcp_cmd.tip_suffix"), style="dim")
         ctx.renderer.console.print(tip)
         if mcp_manager is not None and hasattr(mcp_manager, "find_server_for_tool"):
             if isinstance(mcp_manager.find_server_for_tool(_SQLITE_SWITCH_TOOL), str):
-                sqlite_tip = Text("💡 提示：輸入 ", style="dim")
-                sqlite_tip.append("/mcp sqlite <資料庫路徑>", style="bold yellow")
-                sqlite_tip.append(" 可直接切換 SQLite 資料庫檔案", style="dim")
+                sqlite_tip = Text(t("mcp_cmd.tip_prefix"), style="dim")
+                sqlite_tip.append(t("mcp_cmd.sqlite_tip_cmd"), style="bold yellow")
+                sqlite_tip.append(t("mcp_cmd.sqlite_tip_desc"), style="dim")
                 ctx.renderer.console.print(sqlite_tip)
         ctx.renderer.console.print()
 
@@ -498,12 +499,12 @@ class SkillsCommand(CliCommand):
                 ctx.renderer.console.print(f"\n[bold white]Skill: {skill_name}[/bold white]")
                 ctx.renderer.console.print(Markdown(body))
             else:
-                ctx.renderer.message(f"無法載入技能 {skill_name}")
+                ctx.renderer.message(t("skills_cmd.load_failed", name=skill_name))
             return CommandResult()
 
         skills = list_skills(ctx.agent.workspace_dirs)
         if not skills:
-            ctx.renderer.message("目前沒有可用的全域或專案技能。")
+            ctx.renderer.message(t("skills_cmd.empty"))
             return CommandResult()
 
         ctx.renderer.console.print()
@@ -556,7 +557,7 @@ class SkillsCommand(CliCommand):
         print_group("Global skills", "Global config", global_skills)
         print_group("Built-in skills", "Built-in", builtin_skills)
 
-        ctx.renderer.message("提示：若要檢視某個技能的完整內容，請輸入 /skills <skill_name>", "dim")
+        ctx.renderer.message(t("skills_cmd.hint"), "dim")
         return CommandResult()
 
 
@@ -566,14 +567,14 @@ class HelpCommand(CliCommand):
             raise ValueError("/help 不接受參數")
         from pocket_agent.system.commands import list_commands
 
-        for command, description in BUILTINS.items():
+        for command, description in get_builtin_commands().items():
             ctx.renderer.message(f"/{command}  {description}")
         if is_image_command_supported(ctx.state, ctx.agent):
-            ctx.renderer.message("/image <描述>  生圖，待送附件作參考圖")
+            ctx.renderer.message(f"/image  {t('commands.image')}")
         from pocket_agent.system.paths import is_portable
 
         if is_portable():
-            ctx.renderer.message("/update  檢查並套用 GitHub 最新更新（自動儲存並重啟）")
+            ctx.renderer.message(f"/update  {t('commands.update')}")
 
         ctx.renderer.message("/attachments remove <編號> · /attachments clear")
         ctx.renderer.message(
