@@ -125,7 +125,7 @@ def _resolve_nested_key(data: dict[str, Any], key: str) -> Any:
     return curr
 
 
-def t(key: str, default: str | None = None, **kwargs: Any) -> str:
+def t(key: str, /, default: str | None = None, **kwargs: Any) -> str:
     """多語系字串翻譯查找介面。
 
     Args:

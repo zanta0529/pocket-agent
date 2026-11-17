@@ -134,3 +134,11 @@ def test_wizard_init_setup_locale(tmp_path, monkeypatch):
     fake_cfg.write_text(json.dumps({"locale": "zh_TW"}), encoding="utf-8")
     _init_setup_locale()
     assert get_locale() == "zh_TW"
+
+
+def test_t_accepts_key_in_kwargs():
+    """驗證格式化參數中包含 key=... 時不會與第一個位置參數衝突。"""
+    set_locale("zh_TW")
+    assert t("system_cmd.config_edit_normal", key="locale") == "編輯 locale: "
+    set_locale("en_US")
+    assert t("system_cmd.config_edit_normal", key="locale") == "Edit locale: "
