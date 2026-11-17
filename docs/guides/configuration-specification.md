@@ -21,10 +21,11 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 
 ### 2.1 頂層設定 (Top-level Settings)
 
-| 鍵值 (Key)        | 型別     | 預設值          | 環境變數                | 說明                                                                                                           |
-| :---------------- | :------- | :-------------- | :---------------------- | :------------------------------------------------------------------------------------------------------------- |
+| 鍵值 (Key)        | 型別     | 預設值          | 環境變數                | 說明                                                                                                                     |
+| :---------------- | :------- | :-------------- | :---------------------- | :----------------------------------------------------------------------------------------------------------------------- |
 | `active_provider` | `string` | `"openai"`      | `POCKET_AGENT_PROVIDER` | 目前啟用的主要模型供應商（如 `openai`, `openrouter`, `ollama`, `ollamacloud`, `sambanova`, `groq`, `mistral`, `gemini`） |
-| `active_model`    | `string` | `"gpt-6-astra"` | `OPENAI_MODEL`          | 目前啟用的模型名稱                                                                                             |
+| `active_model`    | `string` | `"gpt-6-astra"` | `OPENAI_MODEL`          | 目前啟用的模型名稱                                                                                                       |
+| `locale`          | `string` | `"zh_TW"`       | `POCKET_AGENT_LANG`     | 介面顯示語系（對應 `src/pocket_agent/locales/*.json`，如 `zh_TW`、`en_US`）；可透過 `setup` 或 `/config` 選單切換。     |
 
 ---
 
