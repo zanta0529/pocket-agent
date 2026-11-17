@@ -272,14 +272,16 @@ class OpenAIErrorQuotaStrategy(ABC):
         return details
 
     def format_error_hint(self, details: OpenAIRateLimitDetails) -> str | None:
+        from pocket_agent.system.i18n import t
+
         hint = BaseEngine.format_reset_time_hint(
             resets_at=details.resets_at,
             resets_in_seconds=details.resets_in_seconds,
         )
         lines: list[str] = []
         if details.is_usage_limit:
-            plan_suffix = f" (方案：{details.plan_type})" if details.plan_type else ""
-            lines.append(f"\n\n💳 **API 用量已達上限**{plan_suffix}")
+            plan_suffix = t("quota.plan_suffix", plan=details.plan_type) if details.plan_type else ""
+            lines.append(t("quota.usage_limit_reached", plan_suffix=plan_suffix))
 
         if hint:
             lines.append(hint.strip())
@@ -289,7 +291,9 @@ class OpenAIErrorQuotaStrategy(ABC):
         return None
 
     async def fetch_quota(self) -> QuotaInfo:
-        return QuotaInfo(is_supported=False, message="此 Provider 不支援透過 API 直接查詢額度。")
+        from pocket_agent.system.i18n import t
+
+        return QuotaInfo(is_supported=False, message=t("quota.unsupported"))
 
 
 class CodexOAuthQuotaStrategy(OpenAIErrorQuotaStrategy):
@@ -416,28 +420,36 @@ class CodexOAuthQuotaStrategy(OpenAIErrorQuotaStrategy):
         if isinstance(data, dict) and data.get("plan_type"):
             plan_display = format_plan_name(str(data["plan_type"])) or plan_display
 
+        from pocket_agent.system.i18n import t
+
         if not isinstance(data, dict):
             if plan_display:
                 return QuotaInfo(
                     is_supported=True,
                     plan_type=plan_display,
-                    extra_lines=["Codex 即時視窗額度：目前無法連線至 /wham/usage 端點取得百分比。"],
+                    extra_lines=[t("quota.codex_wham_unavailable")],
                 )
-            return QuotaInfo(is_supported=False, message="無法取得 Codex OAuth 額度資訊。")
+            return QuotaInfo(is_supported=False, message=t("quota.codex_oauth_unavailable"))
 
         extra_lines: list[str] = []
         rate_limit = data.get("rate_limit")
         if isinstance(rate_limit, dict):
-            for key, label in (("primary_window", "5 小時視窗"), ("secondary_window", "7 天週額度視窗")):
+            window_defs = (
+                ("primary_window", t("quota.codex_5h_window")),
+                ("secondary_window", t("quota.codex_7d_window")),
+            )
+            prefix = t("quota.reset_hint_prefix")
+            unknown_label = t("quota.unknown")
+            for key, label in window_defs:
                 win = rate_limit.get(key)
                 if not isinstance(win, dict):
                     continue
                 used_pct = win.get("used_percent")
                 w_at, w_in = self._extract_window_reset(win)
                 reset_hint = BaseEngine.format_reset_time_hint(resets_at=w_at, resets_in_seconds=w_in)
-                clean_reset = reset_hint.replace("\n\n⏳ **重置時間**：", "") if reset_hint else "未知"
+                clean_reset = reset_hint.replace(prefix, "") if reset_hint else unknown_label
                 if used_pct is not None:
-                    extra_lines.append(f"Codex {label}: 已用 {used_pct}% (重置時間：{clean_reset})")
+                    extra_lines.append(t("quota.codex_window_line", label=label, used=used_pct, reset=clean_reset))
 
         return QuotaInfo(
             is_supported=True,
@@ -453,9 +465,11 @@ class OpenAIApiQuotaStrategy(OpenAIErrorQuotaStrategy):
         return self._parse_common_details(exc)
 
     async def fetch_quota(self) -> QuotaInfo:
+        from pocket_agent.system.i18n import t
+
         return QuotaInfo(
             is_supported=False,
-            message="OpenAI API Key 模式請至 platform.openai.com/usage 查看帳單與用量。",
+            message=t("quota.openai_api_usage_hint"),
         )
 
 

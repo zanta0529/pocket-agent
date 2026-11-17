@@ -412,7 +412,22 @@
     "daily_used": "Today's spend: ${daily_used:.4f}",
     "free_requests": "Free model daily requests: Used {used} / Limit {limit} (Remaining {remaining})",
     "missing_api_key": "Unable to retrieve API Key",
-    "openrouter_fetch_failed": "Failed to query OpenRouter quota: {error}"
+    "openrouter_fetch_failed": "Failed to query OpenRouter quota: {error}",
+    "countdown_hms": "{hours}h {minutes}m {seconds}s",
+    "countdown_ms": "{minutes}m {seconds}s",
+    "countdown_s": "{seconds}s",
+    "reset_hint_prefix": "\n\n⏳ **Reset time**: ",
+    "reset_hint_future": "{prefix}{time} (in ~{countdown})",
+    "reset_hint_past": "{prefix}should have reset at {time}",
+    "plan_suffix": " (Plan: {plan})",
+    "usage_limit_reached": "\n\n💳 **API Usage Limit Reached**{plan_suffix}",
+    "codex_wham_unavailable": "Codex live window quota: unable to reach /wham/usage endpoint for percentages.",
+    "codex_oauth_unavailable": "Unable to fetch Codex OAuth quota details.",
+    "codex_5h_window": "5h window",
+    "codex_7d_window": "7d weekly window",
+    "unknown": "Unknown",
+    "codex_window_line": "Codex {label}: {used}% used (Reset: {reset})",
+    "openai_api_usage_hint": "For OpenAI API Key mode, check billing and usage at platform.openai.com/usage."
   },
   "context_usage": {
     "kind_estimate": "estimated",

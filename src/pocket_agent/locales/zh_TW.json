@@ -412,7 +412,22 @@
     "daily_used": "今日花費: ${daily_used:.4f}",
     "free_requests": "免費模型今日請求次數: 已用 {used} 次 / 上限 {limit} 次 (剩餘 {remaining} 次)",
     "missing_api_key": "無法取得 API Key",
-    "openrouter_fetch_failed": "查詢 OpenRouter 額度失敗：{error}"
+    "openrouter_fetch_failed": "查詢 OpenRouter 額度失敗：{error}",
+    "countdown_hms": "{hours} 小時 {minutes} 分 {seconds} 秒",
+    "countdown_ms": "{minutes} 分 {seconds} 秒",
+    "countdown_s": "{seconds} 秒",
+    "reset_hint_prefix": "\n\n⏳ **重置時間**：",
+    "reset_hint_future": "{prefix}{time} (距今約 {countdown})",
+    "reset_hint_past": "{prefix}應已於 {time} 重置",
+    "plan_suffix": " (方案：{plan})",
+    "usage_limit_reached": "\n\n💳 **API 用量已達上限**{plan_suffix}",
+    "codex_wham_unavailable": "Codex 即時視窗額度：目前無法連線至 /wham/usage 端點取得百分比。",
+    "codex_oauth_unavailable": "無法取得 Codex OAuth 額度資訊。",
+    "codex_5h_window": "5 小時視窗",
+    "codex_7d_window": "7 天週額度視窗",
+    "unknown": "未知",
+    "codex_window_line": "Codex {label}: 已用 {used}% (重置時間：{reset})",
+    "openai_api_usage_hint": "OpenAI API Key 模式請至 platform.openai.com/usage 查看帳單與用量。"
   },
   "context_usage": {
     "kind_estimate": "估算",
