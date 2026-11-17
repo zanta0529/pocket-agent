@@ -1343,7 +1343,7 @@ async def github_prepare_pr_context(
     base: str = "",
     github_token: str = "",
 ) -> str:
-    """讀取專案 PR 範本（無範本時自動套用業界標準慣例）並比對 base...head 分支變更，供產生 PR 內容。"""
+    """讀取專案 PR 範本並比對 base...head 分支變更（除非使用者明確指定語言，否則預設以英文撰寫 PR 內容）。"""
     active_token = ""
     target = f"{owner}/{repo}"
     cmd_desc = f"GET compare head={head} base={base or 'default'}"
@@ -1417,8 +1417,10 @@ async def github_prepare_pr_context(
             f"=== 分支 Commit 列表 (共 {len(commits_list)} 筆) ===\n{commits_block}\n\n"
             f"=== 變更檔案摘要 (共 {len(files_list)} 檔) ===\n{files_block}\n\n"
             "=== 執行規範 ===\n"
-            "1. 請依據上述範本與變更內容，撰寫結構完整的 PR Title（建議採 Conventional Commits 格式）與 PR Body。\n"
-            f"2. 完成後請呼叫 github_create_pr（head={clean_head!r}, base={clean_base!r}）；"
+            "1. 語言規範（Language Policy）：除非使用者明確指定使用的語言，"
+            "否則產生的 PR Title 與 PR Body 內容**一律預設使用英文（English）**撰寫。\n"
+            "2. 請依據上述範本與變更內容，撰寫結構完整的英文 PR Title（建議採 Conventional Commits 格式）與 PR Body。\n"
+            f"3. 完成後請呼叫 github_create_pr（head={clean_head!r}, base={clean_base!r}）；"
             "系統會在終端機畫面完整列出預計執行的動作與 PR 內容，待使用者同意後才會送出，且絕不自動執行 Merge。"
         )
 
@@ -1450,7 +1452,7 @@ async def github_create_pr(
     draft: bool = False,
     github_token: str = "",
 ) -> str:
-    """在指定儲存庫建立 Pull Request（僅建立 PR 單供人工審核，絕不自動執行 Merge）。"""
+    """在指定儲存庫建立 Pull Request（預設應以英文撰寫 title 與 body，除非使用者指定其他語言；絕不自動執行 Merge）。"""
     active_token = ""
     target = f"{owner}/{repo}"
     cmd_desc = f"POST pulls head={head} base={base or 'default'} draft={draft}"

@@ -474,6 +474,7 @@ def test_github_prepare_pr_context_with_local_and_fallback_template(monkeypatch,
     assert "合併方向：enhance_cli_input -> main" in out_fallback
     assert "預設業界標準範本 (Conventional PR Template)" in out_fallback
     assert "## Summary" in out_fallback
+    assert "一律預設使用英文（English）" in out_fallback
     assert "- 1234567 feat(cli): enhance input" in out_fallback
     assert "src/pocket_agent/frontend/cli/input.py [modified] (+12 / -3)" in out_fallback
 
