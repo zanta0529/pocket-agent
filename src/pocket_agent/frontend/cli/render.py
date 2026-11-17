@@ -22,11 +22,13 @@ class MultiStatus:
     def __init__(self, title, task_names, console):
         from rich.live import Live
 
+        from pocket_agent.system.i18n import t
+
         self.title = title
         self.console = console
         self.task_names = task_names
 
-        self._states = {name: "啟動中..." for name in task_names}
+        self._states = {name: t("cli.status_starting", "啟動中...") for name in task_names}
         self._live = Live(self._build_table(), console=console, refresh_per_second=10)
         self.is_running = False
 

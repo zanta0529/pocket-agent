@@ -21,6 +21,7 @@ def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_k
     from rich.prompt import Prompt
 
     from pocket_agent.extensions.mcp import get_conn_param_spec
+    from pocket_agent.system.i18n import t
 
     status = renderer._active_status
     if status:
@@ -29,7 +30,11 @@ def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_k
     renderer._ensure_newline()
     renderer.console.print()
     renderer.message(
-        f"🔐 [{server_name}] 請補充未設定的遠端連線資訊（僅存於本機記憶體，不會傳送給 AI 模型）：",
+        t(
+            "cli.mcp_conn_prompt",
+            f"🔐 [{server_name}] 請補充未設定的遠端連線資訊（僅存於本機記憶體，不會傳送給 AI 模型）：",
+            server_name=server_name,
+        ),
         "bold cyan",
     )
     collected: dict[str, str] = {}
@@ -52,12 +57,19 @@ def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_k
 def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer", silent: bool = False) -> None:
     """對話結束或每輪完成時自動存檔（失敗不中斷流程）。"""
     from pocket_agent.core.sessions import save_session
+    from pocket_agent.system.i18n import t
 
     if not getattr(agent, "history", None):
         return
     if getattr(agent, "is_sensitive_session", False) is True:
         if not silent:
-            renderer.message("【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。", "yellow")
+            renderer.message(
+                t(
+                    "cli.sensitive_session_warning",
+                    "【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。",
+                ),
+                "yellow",
+            )
         return
     try:
         save_session(state.session_id, agent.history)
@@ -85,16 +97,24 @@ async def send_turn(
         started = monotonic()
 
         from pocket_agent.frontend.cli.interrupts import OperationInterrupted, run_operation
+        from pocket_agent.system.i18n import t
 
         def stopping() -> None:
             agent.request_stop()
             renderer._stop_status()
-            renderer.message("⏸ 停止要求已送出，等待進行中的工作收尾…", "yellow")
+            renderer.message(
+                t("cli.stopping", "⏸ 停止要求已送出，等待進行中的工作收尾…"),
+                "yellow",
+            )
 
         if result.action == "image":
             from rich.status import Status
 
-            status = Status("生圖中（可能需要 1-2 分鐘）…", spinner="dots", console=renderer.console)
+            status = Status(
+                t("cli.generating_image", "生圖中（可能需要 1-2 分鐘）…"),
+                spinner="dots",
+                console=renderer.console,
+            )
             renderer._active_status = status
             status.start()
             try:

@@ -1,0 +1,30 @@
+{
+  "cli": {
+    "mcp_conn_prompt": "🔐 [{server_name}] 請補充未設定的遠端連線資訊（僅存於本機記憶體，不會傳送給 AI 模型）：",
+    "stopping": "⏸ 停止要求已送出，等待進行中的工作收尾…",
+    "generating_image": "生圖中（可能需要 1-2 分鐘）…",
+    "sensitive_session_warning": "【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。",
+    "status_starting": "啟動中...",
+    "status_thinking": "思考中...",
+    "status_completed": "完成",
+    "status_error": "錯誤",
+    "status_failed": "失敗"
+  },
+  "confirmation": {
+    "allow_file_write": "是否允許寫入檔案？",
+    "allow_shell_command": "是否放行終端機指令？",
+    "accept_edits_active": "【自動放行中】編輯請求已自動接受。"
+  },
+  "wizard": {
+    "title": "Pocket Agent 設定精靈",
+    "subtitle": "按 Ctrl+C 隨時離開",
+    "cancelled": "已取消。",
+    "completed": "✓ 設定完成！ 執行 {command} 開始使用。",
+    "step_provider_title": "① 選擇服務供應商 (Provider)",
+    "current_tag": "← 目前",
+    "choose_prompt": "選擇",
+    "provider_configured": "✓ 已設定為 {provider}",
+    "step_login_title": "② 供應商設定",
+    "step_model_title": "③ 選擇預設模型 (Model)"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "cli": {
+    "mcp_conn_prompt": "🔐 [{server_name}] Please provide missing remote connection details (stored only in local memory, not sent to AI models):",
+    "stopping": "⏸ Stop request sent, waiting for ongoing operations to finish...",
+    "generating_image": "Generating image (may take 1-2 minutes)...",
+    "sensitive_session_warning": "【Security Notice】This session involves sensitive diagnostics and will not be persisted to disk per security policy.",
+    "status_starting": "Starting...",
+    "status_thinking": "Thinking...",
+    "status_completed": "Completed",
+    "status_error": "Error",
+    "status_failed": "Failed"
+  },
+  "confirmation": {
+    "allow_file_write": "Allow file write?",
+    "allow_shell_command": "Allow terminal command execution?",
+    "accept_edits_active": "【Auto-allowed】Edit request accepted automatically."
+  },
+  "wizard": {
+    "title": "Pocket Agent Setup Wizard",
+    "subtitle": "Press Ctrl+C to exit anytime",
+    "cancelled": "Cancelled.",
+    "completed": "✓ Setup complete! Run {command} to get started.",
+    "step_provider_title": "① Select Service Provider",
+    "current_tag": "← Current",
+    "choose_prompt": "Select",
+    "provider_configured": "✓ Configured to {provider}",
+    "step_login_title": "② Provider Settings",
+    "step_model_title": "③ Select Default Model"
+  }
+}
