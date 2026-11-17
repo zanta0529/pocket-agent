@@ -363,8 +363,17 @@ class ConfigCommand(CliCommand):
             key = keys_list[idx]
             current_val = str(flat_data[key])
             is_secret = self._is_secret_key(key)
-            prompt_msg = f"編輯 {key} (機密欄位留空則不修改): " if is_secret else f"編輯 {key}: "
-            new_val = await ctx.reader.read(prompt_msg, default="" if is_secret else current_val, is_password=is_secret)
+
+            if key == "locale":
+                from pocket_agent.system.i18n import get_available_locales
+
+                available_locales = get_available_locales()
+                new_val = await ctx.reader.choose(f"選擇 {key}", available_locales)
+            else:
+                prompt_msg = f"編輯 {key} (機密欄位留空則不修改): " if is_secret else f"編輯 {key}: "
+                new_val = await ctx.reader.read(
+                    prompt_msg, default="" if is_secret else current_val, is_password=is_secret
+                )
 
             if new_val is not None and new_val.strip() and new_val != current_val:
                 res = sys_registry.execute(f"/config set {key} {new_val.strip()}", ctx.agent)

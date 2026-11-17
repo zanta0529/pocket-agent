@@ -13,7 +13,18 @@
   "confirmation": {
     "allow_file_write": "Allow file write?",
     "allow_shell_command": "Allow terminal command execution?",
-    "accept_edits_active": "【Auto-allowed】Edit request accepted automatically."
+    "accept_edits_active": "【Auto-allowed】Edit request accepted automatically.",
+    "accept_edits_enabled": "✓ Accept-edits mode enabled: file edits will be auto-allowed for this session",
+    "planned_command": "Planned command:\n{command}",
+    "panel_title": "【Security Warning】Command execution requested",
+    "session_approved": "✓ Auto-approved command for this session: {command}",
+    "allowlisted": "✓ Added \"{prefix}\" to the command allowlist for future auto-approval.",
+    "custom_instruction_empty": "No instruction entered; command execution cancelled.",
+    "custom_instruction_received": "✓ Instruction received: \"{instruction}\". Forwarded to Agent and added to guidelines.",
+    "prompt_options": "Allow? [y: once | a: session | A: allowlist | c: custom | N: deny] ",
+    "prompt_accept_edits_sync": " (Shift+Tab: Accept-edits)",
+    "prompt_accept_edits_async": " (Shift+Tab: Accept-edits)",
+    "custom_instruction_prompt": "👉 Enter instruction for the agent: "
   },
   "wizard": {
     "title": "Pocket Agent Setup Wizard",

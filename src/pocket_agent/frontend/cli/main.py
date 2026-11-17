@@ -30,11 +30,7 @@ def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_k
     renderer._ensure_newline()
     renderer.console.print()
     renderer.message(
-        t(
-            "cli.mcp_conn_prompt",
-            f"🔐 [{server_name}] 請補充未設定的遠端連線資訊（僅存於本機記憶體，不會傳送給 AI 模型）：",
-            server_name=server_name,
-        ),
+        t("cli.mcp_conn_prompt", server_name=server_name),
         "bold cyan",
     )
     collected: dict[str, str] = {}
@@ -63,13 +59,7 @@ def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer"
         return
     if getattr(agent, "is_sensitive_session", False) is True:
         if not silent:
-            renderer.message(
-                t(
-                    "cli.sensitive_session_warning",
-                    "【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。",
-                ),
-                "yellow",
-            )
+            renderer.message(t("cli.sensitive_session_warning"), "yellow")
         return
     try:
         save_session(state.session_id, agent.history)
@@ -102,16 +92,13 @@ async def send_turn(
         def stopping() -> None:
             agent.request_stop()
             renderer._stop_status()
-            renderer.message(
-                t("cli.stopping", "⏸ 停止要求已送出，等待進行中的工作收尾…"),
-                "yellow",
-            )
+            renderer.message(t("cli.stopping"), "yellow")
 
         if result.action == "image":
             from rich.status import Status
 
             status = Status(
-                t("cli.generating_image", "生圖中（可能需要 1-2 分鐘）…"),
+                t("cli.generating_image"),
                 spinner="dots",
                 console=renderer.console,
             )

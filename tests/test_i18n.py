@@ -88,3 +88,12 @@ def test_get_locale_precedence(monkeypatch):
     # 3. 清除環境變數後，回退至預設 zh_TW
     monkeypatch.delenv("POCKET_AGENT_LANG", raising=False)
     assert get_locale() == "zh_TW"
+
+
+def test_get_available_locales():
+    """驗證動態掃描 locales 目錄。"""
+    from pocket_agent.system.i18n import get_available_locales
+
+    locales = get_available_locales()
+    assert "zh_TW" in locales
+    assert "en_US" in locales

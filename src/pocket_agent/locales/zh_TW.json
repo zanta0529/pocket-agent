@@ -13,7 +13,18 @@
   "confirmation": {
     "allow_file_write": "是否允許寫入檔案？",
     "allow_shell_command": "是否放行終端機指令？",
-    "accept_edits_active": "【自動放行中】編輯請求已自動接受。"
+    "accept_edits_active": "【自動放行中】編輯請求已自動接受。",
+    "accept_edits_enabled": "✓ 已啟用 Accept-edits 模式：本次對話自動允許檔案編輯",
+    "planned_command": "預計執行：\n{command}",
+    "panel_title": "【安全警告】系統要求執行指令",
+    "session_approved": "✓ 已同意本次對話中自動執行指令: {command}",
+    "allowlisted": "✓ 已將「{prefix}」加入指令白名單，未來將自動執行此指令。",
+    "custom_instruction_empty": "未輸入指示，已取消執行指令。",
+    "custom_instruction_received": "✓ 已收到您的指示：「{instruction}」，已轉達給 Agent 並加入規範。",
+    "prompt_options": "允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] ",
+    "prompt_accept_edits_sync": "（Shift+Tab: 自動編輯(Accept-edits)）",
+    "prompt_accept_edits_async": "（Shift+Tab：Accept-edits）",
+    "custom_instruction_prompt": "👉 請輸入給代理工具的指示："
   },
   "wizard": {
     "title": "Pocket Agent 設定精靈",

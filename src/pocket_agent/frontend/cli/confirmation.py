@@ -13,6 +13,7 @@ from rich.text import Text
 
 from pocket_agent.core.cancellation import check_cancelled, current_scope
 from pocket_agent.frontend.cli.render import toolbar
+from pocket_agent.system.i18n import t
 from pocket_agent.system.permissions import add_command_to_allowlist, is_command_allowed
 
 
@@ -77,17 +78,18 @@ class ConfirmationBridge:
         self.agent.accept_edits = True
         for sub in getattr(self.agent, "active_subagents", []):
             sub.accept_edits = True
-        self.renderer.message("✓ 已啟用 Accept-edits 模式：本次對話自動允許檔案編輯", "green")
+        self.renderer.message(t("confirmation.accept_edits_enabled"), "green")
 
     def _render_confirm_panel(self, command: str) -> Any:
         self.renderer._ensure_newline()
         status = getattr(self.renderer, "_active_status", None)
         if status:
             status.stop()
+        planned = t("confirmation.planned_command", command=command)
         self.renderer.console.print(
             Panel(
-                Text(f"預計執行：\n{command}", style="yellow"),
-                title="【安全警告】系統要求執行指令",
+                Text(planned, style="yellow"),
+                title=t("confirmation.panel_title"),
                 title_align="left",
                 border_style="bold red",
                 expand=False,
@@ -104,12 +106,12 @@ class ConfirmationBridge:
             return True
         if answer == "a":
             self.state.session_approved_commands.add(command.strip())
-            self.renderer.message(f"✓ 已同意本次對話中自動執行指令: {command}", "green")
+            self.renderer.message(t("confirmation.session_approved", command=command), "green")
             return True
         if answer == "A":
             prefix = add_command_to_allowlist(command)
             self.renderer._ensure_newline()
-            self.renderer.message(f"✓ 已將「{prefix}」加入指令白名單，未來將自動執行此指令。", "green")
+            self.renderer.message(t("confirmation.allowlisted", prefix=prefix), "green")
             return True
         if answer in ("n", "N"):
             return False
@@ -117,11 +119,14 @@ class ConfirmationBridge:
 
     def _record_custom_instruction(self, custom_inst: str) -> bool | str:
         if not custom_inst:
-            self.renderer.message("未輸入指示，已取消執行指令。", "yellow")
+            self.renderer.message(t("confirmation.custom_instruction_empty"), "yellow")
             return False
         if hasattr(self.agent, "user_instructions"):
             self.agent.user_instructions.append(custom_inst)
-        self.renderer.message(f"✓ 已收到您的指示：「{custom_inst}」，已轉達給 Agent 並加入規範。", "green")
+        self.renderer.message(
+            t("confirmation.custom_instruction_received", instruction=custom_inst),
+            "green",
+        )
         return custom_inst
 
     def _sync_confirm(self, *args_tuple: Any) -> bool | str:
@@ -134,7 +139,7 @@ class ConfirmationBridge:
             return True
 
         status = self._render_confirm_panel(command)
-        prompt_msg = "允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] "
+        prompt_msg = t("confirmation.prompt_options")
         try:
             if is_fs_edit and sys.stdin.isatty():
                 import prompt_toolkit
@@ -146,8 +151,9 @@ class ConfirmationBridge:
                 def _accept_all(event: Any) -> None:
                     event.app.exit(result="__ACCEPT_EDITS__")
 
+                accept_hint = t("confirmation.prompt_accept_edits_sync")
                 ans = prompt_toolkit.prompt(
-                    prompt_msg + "（Shift+Tab: 自動編輯(Accept-edits)）",
+                    prompt_msg + accept_hint,
                     key_bindings=bindings,
                     bottom_toolbar=lambda: toolbar(self.state, shutil.get_terminal_size().columns),
                 )
@@ -160,7 +166,8 @@ class ConfirmationBridge:
                 return fixed
             if ans in ("c", "C"):
                 self.renderer._ensure_newline()
-                custom_inst = builtins.input("👉 請輸入給代理工具的指示：").strip()
+                inst_prompt = t("confirmation.custom_instruction_prompt")
+                custom_inst = builtins.input(inst_prompt).strip()
                 return self._record_custom_instruction(custom_inst)
             if ans:
                 return self._record_custom_instruction(ans)
@@ -194,9 +201,9 @@ class ConfirmationBridge:
                         event.app.exit(result="__ACCEPT_EDITS__")
 
                 session: PromptSession[str] = PromptSession()
-                prompt = "允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] "
+                prompt = t("confirmation.prompt_options")
                 if is_edit:
-                    prompt += "（Shift+Tab：Accept-edits）"
+                    prompt += t("confirmation.prompt_accept_edits_async")
                 answer = (
                     await session.prompt_async(
                         prompt,
@@ -211,7 +218,8 @@ class ConfirmationBridge:
                 if fixed is not None:
                     return fixed
                 if answer in ("c", "C"):
-                    answer = (await session.prompt_async("👉 請輸入給代理工具的指示：", handle_sigint=False)).strip()
+                    inst_prompt = t("confirmation.custom_instruction_prompt")
+                    answer = (await session.prompt_async(inst_prompt, handle_sigint=False)).strip()
                     check_cancelled()
                     return self._record_custom_instruction(answer)
                 if answer:

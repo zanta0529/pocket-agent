@@ -17,8 +17,8 @@ def run_setup() -> None:
     console.print()
     console.print(
         Panel(
-            Text(t("wizard.title", "Pocket Agent 設定精靈"), justify="center", style="bold cyan"),
-            subtitle=t("wizard.subtitle", "按 Ctrl+C 隨時離開"),
+            Text(t("wizard.title"), justify="center", style="bold cyan"),
+            subtitle=t("wizard.subtitle"),
             border_style="cyan",
         )
     )
@@ -30,16 +30,12 @@ def run_setup() -> None:
         _step_model(provider)
         _step_mcp()
     except KeyboardInterrupt:
-        console.print(f"\n[yellow]{t('wizard.cancelled', '已取消。')}[/yellow]")
+        console.print(f"\n[yellow]{t('wizard.cancelled')}[/yellow]")
         return
 
     console.print()
     console.print(Rule(style="green"))
-    completed_msg = t(
-        "wizard.completed",
-        "✓ 設定完成！ 執行 {command} 開始使用。",
-        command="python main.py",
-    )
+    completed_msg = t("wizard.completed", command="python main.py")
     console.print(f"[bold green]{completed_msg}[/bold green]")
     console.print()
 
@@ -48,19 +44,19 @@ def _step_provider() -> str:
     from pocket_agent.system.config import config
     from pocket_agent.system.providers import PROVIDER_STRATEGIES, SUPPORTED_PROVIDERS
 
-    console.print(Rule(t("wizard.step_provider_title", "① 選擇服務供應商 (Provider)")))
+    console.print(Rule(t("wizard.step_provider_title")))
     console.print()
 
     current_provider = config.get("active_provider", "openai")
 
     providers = SUPPORTED_PROVIDERS
     for i, p in enumerate(providers, 1):
-        tag = f" [green]{t('wizard.current_tag', '← 目前')}[/green]" if p == current_provider else ""
+        tag = f" [green]{t('wizard.current_tag')}[/green]" if p == current_provider else ""
         display = PROVIDER_STRATEGIES[p].display_name
         console.print(f"  [cyan]{i}[/cyan]. [bold]{display}[/bold]{tag}")
 
     choice = Prompt.ask(
-        t("wizard.choose_prompt", "選擇"),
+        t("wizard.choose_prompt"),
         choices=[str(i) for i in range(1, len(providers) + 1)],
         default=str(providers.index(current_provider) + 1 if current_provider in providers else 1),
     )
@@ -69,7 +65,6 @@ def _step_provider() -> str:
     config.set("active_provider", selected)
     configured_msg = t(
         "wizard.provider_configured",
-        "✓ 已設定為 {provider}",
         provider=PROVIDER_STRATEGIES[selected].display_name,
     )
     console.print(f"[green]{configured_msg}[/green]\n")
@@ -80,7 +75,7 @@ def _step_login(provider: str) -> None:
     from pocket_agent.system.config import config
     from pocket_agent.system.providers import PROVIDER_STRATEGIES
 
-    console.print(Rule(t("wizard.step_login_title", "② 供應商設定")))
+    console.print(Rule(t("wizard.step_login_title")))
     console.print()
 
     strategy_cls = PROVIDER_STRATEGIES.get(provider)

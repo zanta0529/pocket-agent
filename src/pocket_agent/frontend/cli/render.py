@@ -28,7 +28,7 @@ class MultiStatus:
         self.console = console
         self.task_names = task_names
 
-        self._states = {name: t("cli.status_starting", "啟動中...") for name in task_names}
+        self._states = {name: t("cli.status_starting") for name in task_names}
         self._live = Live(self._build_table(), console=console, refresh_per_second=10)
         self.is_running = False
 
@@ -38,17 +38,23 @@ class MultiStatus:
         from rich.table import Table
         from rich.text import Text
 
+        from pocket_agent.system.i18n import t
+
         table = Table(show_header=False, show_edge=False, box=None)
         table.add_column("Spinner", width=3)
         table.add_column("Name", style="bold cyan", width=15)
         table.add_column("Status")
 
+        completed_word = t("cli.status_completed")
+        error_word = t("cli.status_error")
+        failed_word = t("cli.status_failed")
+
         for name in self.task_names:
             state = self._states[name]
 
-            if "完成" in state or "✓" in state:
+            if "完成" in state or completed_word in state or "✓" in state:
                 icon = Text("✓", style="bold green")
-            elif "錯誤" in state or "失敗" in state or "✗" in state:
+            elif "錯誤" in state or "失敗" in state or error_word in state or failed_word in state or "✗" in state:
                 icon = Text("✗", style="bold red")
             else:
                 icon = Spinner("dots")

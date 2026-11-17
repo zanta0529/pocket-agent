@@ -35,6 +35,20 @@ def _get_locales_dir() -> Path:
     return adjacent
 
 
+def get_available_locales() -> list[str]:
+    """動態掃描 locales 目錄下所有可用的語系檔（不含 .json 副檔名）。"""
+    locales_dir = _get_locales_dir()
+    if not locales_dir.is_dir():
+        return list(SUPPORTED_LOCALES)
+
+    found: list[str] = []
+    for f in sorted(locales_dir.glob("*.json")):
+        if f.is_file() and not f.name.startswith("."):
+            found.append(f.stem)
+
+    return found if found else list(SUPPORTED_LOCALES)
+
+
 def load_locale(locale: str) -> dict[str, Any]:
     """載入指定語系之 JSON 翻譯表，具備記憶體快取。"""
     if locale in _translations_cache:
