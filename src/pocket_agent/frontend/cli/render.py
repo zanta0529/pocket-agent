@@ -261,8 +261,12 @@ class CliRenderer:
         if parsed and isinstance(parsed, dict):
             if parsed.get("owner") and parsed.get("repo"):
                 issue_no = parsed.get("issue_number")
+                if issue_no is None or str(issue_no).strip() == "":
+                    issue_no = parsed.get("pull_number")
                 if issue_no is not None and str(issue_no).strip() != "":
                     val = f"{parsed['owner']}/{parsed['repo']}#{issue_no}"
+                elif parsed.get("ref") and str(parsed["ref"]).strip():
+                    val = f"{parsed['owner']}/{parsed['repo']}@{str(parsed['ref']).strip()}"
                 else:
                     val = f"{parsed['owner']}/{parsed['repo']}"
             elif any(k in name_lower for k in ("run_command", "bash", "shell", "python", "powershell", "node", "cmd")):
@@ -539,7 +543,7 @@ class CliRenderer:
 
             name_lower = real_name.lower()
 
-            if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep"]):
+            if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep", "get"]):
                 action = "Read"
             elif any(kw in name_lower for kw in ["write", "replace", "edit", "patch", "delete", "create"]):
                 action = "Write"
