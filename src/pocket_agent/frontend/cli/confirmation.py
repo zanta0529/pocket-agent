@@ -57,6 +57,29 @@ class ConfirmationBridge:
     def _format_command(args_tuple: tuple[Any, ...]) -> str:
         if len(args_tuple) == 1 and isinstance(args_tuple[0], str):
             return args_tuple[0]
+        if len(args_tuple) == 2 and isinstance(args_tuple[0], str) and isinstance(args_tuple[1], dict):
+            tool_name, payload = args_tuple[0], args_tuple[1]
+            raw_tool = tool_name.split("__")[-1]
+            if raw_tool == "github_create_pr":
+                owner = payload.get("owner", "")
+                repo = payload.get("repo", "")
+                head = payload.get("head", "")
+                base = payload.get("base") or "（自動採用儲存庫預設主分支）"
+                title = payload.get("title", "")
+                body = payload.get("body", "")
+                draft_label = "草稿 (Draft)" if payload.get("draft") else "正式 PR (Ready for Review)"
+                return (
+                    f"動作：建立 GitHub Pull Request（僅建立 PR 單，絕不自動執行 Merge）\n"
+                    f"工具：{tool_name}\n"
+                    f"目標儲存庫：{owner}/{repo}\n"
+                    f"合併分支方向：{head} -> {base}\n"
+                    f"PR 模式：{draft_label}\n"
+                    f"PR 標題：{title}\n"
+                    f"PR 內文預覽：\n"
+                    f"{'─' * 40}\n"
+                    f"{body}\n"
+                    f"{'─' * 40}"
+                )
         return " ".join(
             json.dumps(a, ensure_ascii=False) if isinstance(a, (dict, list)) else str(a) for a in args_tuple
         )
@@ -66,6 +89,8 @@ class ConfirmationBridge:
         return command.startswith(("建立新檔：", "修改檔案：", "附加內容至檔案：", "局部修改檔案："))
 
     def _is_auto_allowed(self, command: str, is_fs_edit: bool) -> bool:
+        if command.startswith("動作：建立 GitHub Pull Request"):
+            return False
         if is_fs_edit and getattr(self.state, "accept_edits", False):
             return True
         if is_command_allowed(command):

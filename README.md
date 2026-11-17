@@ -231,7 +231,7 @@ run.bat setup       # Windows
 - **事件鉤子 (Hooks)**：支援在 `before_send`, `after_response`, `before_tool`, `after_tool` 綁定本機 Python 腳本，實現自訂攔截邏輯。
 - **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，輕鬆掛載本機檔案系統、資料庫或遠端工具。隨附提供：
   - `browser_mcp.py`：純 Python 網頁自動化操作，直接沿用系統 Edge/Chrome，支援 CDP 連接與 Cookie 狀態繼承。
-  - `github_mcp.py`：GitHub Issue / PR 檢索與留言互動。
+  - `github_mcp.py`：GitHub Issue / PR / Diff / Review / CI 檢索、範本感知 PR 建立與留言互動。
   - `sqlite_mcp.py` / `mysql_mcp.py` / `mssql_mcp.py`：本機與遠端資料庫結構探查與唯讀查詢。
   - `memory_mcp.py`：基於本機 JSON 的長期跨對話記憶檢索。
   - `rhel_mcp.py`：遠端 Linux (RHEL) 主機 SSH 結構化唯讀巡檢與系統日誌診斷。
@@ -332,6 +332,13 @@ servers:
     safe_read_tools:
       - github_list_prs
       - github_read_issue
+      - github_read_comments
+      - github_get_pr_files
+      - github_list_issues
+      - github_search_issues
+      - github_get_pr_reviews
+      - github_get_pr_checks
+      - github_prepare_pr_context
     env:
       GITHUB_TOKEN: '' # 建議留空，首次呼叫時於終端機安全隱藏輸入
 ```
