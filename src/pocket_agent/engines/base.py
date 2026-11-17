@@ -391,16 +391,19 @@ class BaseEngine:
         hours, remainder = divmod(secs, 3600)
         minutes, seconds = divmod(remainder, 60)
 
-        if hours:
-            countdown_str = f"{hours} 小時 {minutes} 分 {seconds} 秒"
-        elif minutes:
-            countdown_str = f"{minutes} 分 {seconds} 秒"
-        else:
-            countdown_str = f"{seconds} 秒"
+        from pocket_agent.system.i18n import t
 
+        if hours:
+            countdown_str = t("quota.countdown_hms", hours=hours, minutes=minutes, seconds=seconds)
+        elif minutes:
+            countdown_str = t("quota.countdown_ms", minutes=minutes, seconds=seconds)
+        else:
+            countdown_str = t("quota.countdown_s", seconds=seconds)
+
+        prefix = t("quota.reset_hint_prefix")
         if resets_at > now_ts:
-            return f"\n\n⏳ **重置時間**：{reset_time_str} (距今約 {countdown_str})"
-        return f"\n\n⏳ **重置時間**：應已於 {reset_dt.strftime('%Y-%m-%d %H:%M:%S')} 重置"
+            return t("quota.reset_hint_future", prefix=prefix, time=reset_time_str, countdown=countdown_str)
+        return t("quota.reset_hint_past", prefix=prefix, time=reset_dt.strftime("%Y-%m-%d %H:%M:%S"))
 
     def parse_api_error(self, exc: Exception) -> str | None:
         """
