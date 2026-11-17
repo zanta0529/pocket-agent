@@ -80,6 +80,7 @@ servers:
   #     - github_search_issues
   #     - github_get_pr_reviews
   #     - github_get_pr_checks
+  #     - github_prepare_pr_context
   #   env:
   #     GITHUB_TOKEN: ""                    # 選填：Personal Access Token（建議留空，於對話執行時安全輸入）
   #     GITHUB_ALLOWED_REPOS: ""            # 選填：允許存取之 owner/repo 白名單（逗號分隔，如 "org/repo1,org/repo2"）
