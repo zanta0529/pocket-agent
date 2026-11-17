@@ -2,25 +2,16 @@
 
 ## What does this PR do?
 
-<!-- A short description of the change and why. Link the issue it addresses. -->
-
-<!-- Link the issue it addresses (e.g., Closes #123), or remove if N/A. -->
-
-Closes #
-
-## Base branch
-
-<!-- CI runs on pull requests targeting `main` and `dev`. -->
-
-- [ ] This PR targets `dev` (or it is a release/hotfix PR targeting `main`).
+<!-- Short description of the change and why. Use `Closes #123` to auto-close an issue, `Refs #123` to link one, or omit if N/A. -->
 
 ## Type of change
 
-- [ ] Bug fix (regression test included)
-- [ ] New feature (follows the Adapter / Strategy / Factory / Command architecture)
+- [ ] Bug fix
+- [ ] New feature
 - [ ] Docs / comments / tests only
 - [ ] Refactor (no behavior change)
 - [ ] Security fix / boundary hardening
+- [ ] Breaking change
 
 ## Affected layers
 
@@ -32,26 +23,38 @@ Closes #
 - [ ] Built-in tools & MCP servers (`src/pocket_agent/tools/`, `mcp_servers/`)
 - [ ] Build scripts / docs / tests (`build_scripts/`, `scripts/`, `docs/`, `tests/`)
 
+## Testing
+
+<!-- Record any local or manual checks run and results (real terminal/host vs. mocked), or note "Pending CI" if relying on standard-ci.yml. Do not check unverified items below. -->
+
+- Checks run and results:
+- Not run / N/A (with reasons):
+
+## Automated CI gates (`.github/workflows/standard-ci.yml`)
+
+<!-- Enforced on GitHub via required status checks (`build-and-lint`, `docs-lint`); no manual checkboxes needed. -->
+
+- `build-and-lint`: `ruff format --check .`, `ruff check .`, `pytest tests/`, `scripts/check_imports.py`
+- `docs-lint`: Markdown formatting against `.markdownlint-cli2.jsonc`
+
 ## Checklist
 
-### Code quality & CI (`.github/workflows/standard-ci.yml`)
+<!-- Check only items verified in this change. Leave N/A items unchecked (or mark N/A). -->
+
+### Code & dependencies
 
 - [ ] Compatible with Python 3.14+, UTF-8, LF line endings, and the 120-character line length limit.
-- [ ] Ran `ruff format --check .` and `ruff check .` with no remaining issues.
-- [ ] Verified dependency integrity:
-  - `python scripts/check_imports.py src scripts --req requirements.in --ignore tiktoken`
-  - `python scripts/check_imports.py tests --req requirements.in --req requirements-dev.in`
-- [ ] Ran `pytest tests/` and all tests pass (with network, OAuth, and user data isolated).
-- [ ] If dependencies changed, updated `requirements.in` / `requirements-dev.in` and regenerated lockfiles via `pip-compile` (no manual edits to `.txt` lockfiles).
+- [ ] *(if applicable)* Added or updated regression tests for bug fixes / behavior changes.
+- [ ] *(if applicable)* Updated `requirements.in` / `requirements-dev.in` and regenerated lockfiles via `pip-compile` (no manual edits to `.txt` lockfiles).
+- [ ] *(if applicable)* Synced `src/pocket_agent/locales/*.json` for UI text changes.
 
 ### Architecture & security invariants
 
-- [ ] Preserves layered boundaries: tools dispatched via `core/tool_registry.py`, CLI commands registered via `CliCommandRegistry`, and constants centralized in `system/constants.py`.
+- [ ] Preserves relevant layered boundaries (`core/tool_registry.py`, `CliCommandRegistry`, `system/constants.py`, and Adapter / Strategy / Factory / Command patterns where applicable).
 - [ ] Preserves security invariants: `on_confirm` allows writes only when `decision is True`, command allowlist remains fail-closed, and MCP tools keep `mcp__<server>__<tool>` isolation and read-only boundaries.
-- [ ] Keeps the workspace clean (no temporary files in the repo, and no `.env`, tokens, sessions, or `agent*.log` committed).
-- [ ] If resource or execution paths changed, verified compatibility across source, Modern Portable (`build_scripts/build_portable.py`), and PyInstaller modes.
-- [ ] Confirmed this contribution complies with the project's `LICENSE` (MIT License).
+- [ ] PR diff contains no temporary files, `.env`, tokens, sessions, or `agent*.log`.
+- [ ] *(if applicable)* Verified resource / execution path compatibility across source, Modern Portable (`build_scripts/build_portable.py`), and PyInstaller modes.
 
 ## Notes for the reviewer
 
-<!-- Anything tricky, trade-offs, risk notes, or areas you want extra eyes on. -->
+<!-- Note breaking changes, config/data/permission migrations, rollback considerations, trade-offs, or areas needing extra eyes. Write "None" if N/A. -->

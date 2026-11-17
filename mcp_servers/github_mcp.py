@@ -1429,7 +1429,10 @@ async def github_prepare_pr_context(
             "否則產生的 PR Title 與 PR Body 內容**一律預設使用英文（English）**撰寫。\n"
             "2. 請依據上述範本與變更內容，撰寫結構完整的英文 PR Title（建議採 Conventional Commits 格式）與 PR Body。\n"
             f"3. 完成後請呼叫 github_create_pr（head={clean_head!r}, base={clean_base!r}）；"
-            "系統會在終端機畫面完整列出預計執行的動作與 PR 內容，待使用者同意後才會送出，且絕不自動執行 Merge。"
+            "系統會在終端機畫面完整列出預計執行的動作與 PR 內容，待使用者同意後才會送出，且絕不自動執行 Merge。\n"
+            "4. 證據誠信（Evidence Integrity）：僅可將本次對話已實際確認完成的項目勾選為 `[x]`；\n"
+            "   未在本機實測之項目請保留 `[ ]`，並於 Testing 區段誠實標註 `Pending CI` 或待人工驗證項目，"
+            "不得預先宣稱通過。"
         )
 
         output, was_truncated = _sanitize_and_truncate(
