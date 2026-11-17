@@ -7,13 +7,32 @@ from rich.prompt import Confirm, Prompt
 from rich.rule import Rule
 from rich.text import Text
 
-from pocket_agent.system.i18n import t
+from pocket_agent.system.i18n import get_available_locales, get_locale, set_locale, t
 from pocket_agent.system.paths import mcp_config_path
 
 console = Console()
 
 
+def _init_setup_locale() -> None:
+    """初始化精靈語系：若 config.json 有明確設定 locale 則採用，否則預設英文。"""
+    import json
+
+    from pocket_agent.system.config import CONFIG_PATH
+
+    initial_locale = "en_US"
+    if CONFIG_PATH.is_file():
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and isinstance(raw.get("locale"), str) and raw["locale"].strip():
+                initial_locale = raw["locale"].strip()
+        except Exception:
+            pass
+    set_locale(initial_locale)
+
+
 def run_setup() -> None:
+    _init_setup_locale()
+
     console.print()
     console.print(
         Panel(
@@ -25,6 +44,7 @@ def run_setup() -> None:
     console.print()
 
     try:
+        _step_locale()
         provider = _step_provider()
         _step_login(provider)
         _step_model(provider)
@@ -38,6 +58,31 @@ def run_setup() -> None:
     completed_msg = t("wizard.completed", command="python main.py")
     console.print(f"[bold green]{completed_msg}[/bold green]")
     console.print()
+
+
+def _step_locale() -> str:
+    from pocket_agent.system.config import config
+
+    console.print(Rule(t("wizard.step_locale_title")))
+    console.print()
+
+    current_locale = get_locale()
+    locales = get_available_locales()
+    for i, loc in enumerate(locales, 1):
+        tag = f" [green]{t('wizard.current_tag')}[/green]" if loc == current_locale else ""
+        console.print(f"  [cyan]{i}[/cyan]. [bold]{loc}[/bold]{tag}")
+
+    default_idx = str(locales.index(current_locale) + 1) if current_locale in locales else "1"
+    choice = Prompt.ask(
+        t("wizard.choose_prompt"),
+        choices=[str(i) for i in range(1, len(locales) + 1)],
+        default=default_idx,
+    )
+    selected = locales[int(choice) - 1]
+    config.set("locale", selected)
+    set_locale(selected)
+    console.print(f"[green]{t('wizard.locale_configured', locale=selected)}[/green]\n")
+    return selected
 
 
 def _step_provider() -> str:
@@ -86,11 +131,11 @@ def _step_login(provider: str) -> None:
 def _step_model(provider: str) -> None:
     from pocket_agent.system.config import config
 
-    console.print(Rule("③ 預設模型"))
+    console.print(Rule(t("wizard.step_model_title")))
     console.print()
 
     current = config.get("active_model", "gpt-4o")
-    console.print(f"[dim]目前：{current}[/dim]\n")
+    console.print(f"[dim]{t('wizard.model_current', model=current)}[/dim]\n")
 
     # 嘗試動態取得遠端/本地可用模型
     fetched = []
@@ -102,34 +147,38 @@ def _step_model(provider: str) -> None:
         pass
 
     if fetched:
-        provider_models = [(m, "從遠端取得") for m in fetched]
+        provider_models = [(m, t("wizard.model_from_remote")) for m in fetched]
     else:
         provider_models = []
 
     if not provider_models:
-        console.print("[yellow]無法取得推薦模型，請手動輸入。[/yellow]")
-        model = Prompt.ask("模型名稱").strip()
+        console.print(f"[yellow]{t('wizard.model_unavailable')}[/yellow]")
+        model = Prompt.ask(t("wizard.model_name_prompt")).strip()
     else:
         for i, (name, desc) in enumerate(provider_models, 1):
-            tag = " [green]← 目前[/green]" if name == current else ""
+            tag = f" [green]{t('wizard.current_tag')}[/green]" if name == current else ""
             console.print(f"  [cyan]{i}[/cyan]. [bold]{name}[/bold]  {desc}{tag}")
-        console.print(f"  [cyan]{len(provider_models) + 1}[/cyan]. 自訂")
+        console.print(f"  [cyan]{len(provider_models) + 1}[/cyan]. {t('wizard.model_custom')}")
         console.print()
 
-        choice = Prompt.ask("選擇", choices=[str(i) for i in range(1, len(provider_models) + 2)], default="1")
+        choice = Prompt.ask(
+            t("wizard.choose_prompt"),
+            choices=[str(i) for i in range(1, len(provider_models) + 2)],
+            default="1",
+        )
         if int(choice) == len(provider_models) + 1:
-            model = Prompt.ask("請輸入模型名稱").strip()
+            model = Prompt.ask(t("wizard.model_input_prompt")).strip()
         else:
             model = provider_models[int(choice) - 1][0]
 
     config.set("active_model", model)
-    console.print(f"[green]✓ 已設定預設模型為 {model}[/green]\n")
+    console.print(f"[green]{t('wizard.model_configured', model=model)}[/green]\n")
 
 
 def _step_mcp() -> None:
-    console.print(Rule("④ MCP 工具（可略過）"))
+    console.print(Rule(t("wizard.step_mcp_title")))
     console.print()
-    console.print("[dim]MCP 讓 agent 可以呼叫外部工具，例如讀寫檔案、查資料等。[/dim]\n")
+    console.print(f"[dim]{t('wizard.mcp_desc')}[/dim]\n")
 
     mcp_path = mcp_config_path()
     cfg = yaml.safe_load(mcp_path.read_text(encoding="utf-8")) if mcp_path.exists() else {}
@@ -137,32 +186,36 @@ def _step_mcp() -> None:
 
     active = [k for k, v in servers.items() if v is not None]
     if active:
-        console.print(f"[dim]目前已設定：{', '.join(active)}[/dim]\n")
+        console.print(f"[dim]{t('wizard.mcp_configured_list', servers=', '.join(active))}[/dim]\n")
 
-    if not Confirm.ask("要新增 MCP server 嗎？", default=False):
-        console.print("[dim]跳過。[/dim]\n")
+    if not Confirm.ask(t("wizard.mcp_ask_add"), default=False):
+        console.print(f"[dim]{t('wizard.mcp_skipped')}[/dim]\n")
         return
 
     while True:
-        name = Prompt.ask("Server 名稱").strip()
-        transport = Prompt.ask("傳輸方式", choices=["stdio", "sse", "streamable-http"], default="stdio")
+        name = Prompt.ask(t("wizard.mcp_server_name")).strip()
+        transport = Prompt.ask(
+            t("wizard.mcp_transport"),
+            choices=["stdio", "sse", "streamable-http"],
+            default="stdio",
+        )
 
         if transport == "stdio":
-            command = Prompt.ask("執行指令（例如 npx）").strip()
-            args_raw = Prompt.ask("參數（空白分隔，可留空）", default="").strip()
+            command = Prompt.ask(t("wizard.mcp_command")).strip()
+            args_raw = Prompt.ask(t("wizard.mcp_args"), default="").strip()
             servers[name] = {"transport": "stdio", "command": command, "args": args_raw.split() if args_raw else []}
         elif transport == "streamable-http":
-            url = Prompt.ask("Streamable HTTP URL").strip()
+            url = Prompt.ask(t("wizard.mcp_streamable_url")).strip()
             servers[name] = {"transport": "streamable-http", "url": url}
         else:
-            url = Prompt.ask("SSE URL").strip()
+            url = Prompt.ask(t("wizard.mcp_sse_url")).strip()
             servers[name] = {"transport": "sse", "url": url}
 
-        console.print(f"[green]✓ 已新增 {name}[/green]")
-        if not Confirm.ask("繼續新增？", default=False):
+        console.print(f"[green]{t('wizard.mcp_added', name=name)}[/green]")
+        if not Confirm.ask(t("wizard.mcp_ask_more"), default=False):
             break
 
     cfg["servers"] = servers
     mcp_path.parent.mkdir(parents=True, exist_ok=True)
     mcp_path.write_text(yaml.dump(cfg, allow_unicode=True, default_flow_style=False), encoding="utf-8")
-    console.print("[green]✓ mcp_config.yaml 已更新[/green]\n")
+    console.print(f"[green]{t('wizard.mcp_updated')}[/green]\n")

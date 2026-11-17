@@ -18,12 +18,14 @@ class OllamaLocalProvider(BaseProvider):
         from rich.console import Console
         from rich.prompt import Prompt
 
+        from pocket_agent.system.i18n import t
+
         console = Console()
         current_url = config.get("providers.ollama.base_url", "http://localhost:11434")
-        console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
-        new_url = Prompt.ask("請輸入 Ollama 連線位址", default=current_url)
+        console.print(f"[dim]{t('provider_setup.current_base_url', url=current_url)}[/dim]")
+        new_url = Prompt.ask(t("provider_setup.enter_ollama_url"), default=current_url)
         config.set("providers.ollama.base_url", new_url)
-        console.print("[green]✓ Ollama 設定已更新[/green]\n")
+        console.print(f"[green]{t('provider_setup.ollama_updated')}[/green]\n")
 
     def get_client(self) -> Any:
         base_url = config.get("providers.ollama.base_url")

@@ -109,3 +109,28 @@ def test_get_available_locales():
     locales = get_available_locales()
     assert "zh_TW" in locales
     assert "en_US" in locales
+
+
+def test_wizard_init_setup_locale(tmp_path, monkeypatch):
+    """驗證 setup 精靈初始化語系規則：無設定時預設 en_US，有設定時依 config.json。"""
+    import json
+
+    from pocket_agent.system import config as config_mod
+    from pocket_agent.system.wizard import _init_setup_locale
+
+    fake_cfg = tmp_path / "config.json"
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", fake_cfg)
+
+    # 1. config.json 不存在 -> 預設英文 en_US
+    _init_setup_locale()
+    assert get_locale() == "en_US"
+
+    # 2. config.json 存在但無 locale 欄位 -> 預設英文 en_US
+    fake_cfg.write_text(json.dumps({"active_provider": "openai"}), encoding="utf-8")
+    _init_setup_locale()
+    assert get_locale() == "en_US"
+
+    # 3. config.json 存在且有 locale="zh_TW" -> 依設定採用 zh_TW
+    fake_cfg.write_text(json.dumps({"locale": "zh_TW"}), encoding="utf-8")
+    _init_setup_locale()
+    assert get_locale() == "zh_TW"

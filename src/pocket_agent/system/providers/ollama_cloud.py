@@ -18,10 +18,12 @@ class OllamaCloudProvider(BaseProvider):
         from rich.console import Console
         from rich.prompt import Prompt
 
+        from pocket_agent.system.i18n import t
+
         console = Console()
         current_url = config.get("providers.ollama_cloud.base_url", "https://ollama.com/v1")
-        console.print(f"[dim]目前 Base URL: {current_url}[/dim]")
-        new_url = Prompt.ask("請輸入 Base URL", default=current_url)
+        console.print(f"[dim]{t('provider_setup.current_base_url', url=current_url)}[/dim]")
+        new_url = Prompt.ask(t("provider_setup.enter_base_url"), default=current_url)
         config.set("providers.ollama_cloud.base_url", new_url)
         cls.prompt_api_key("providers.ollama_cloud.api_key", "Ollama Cloud", config)
 
