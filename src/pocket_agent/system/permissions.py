@@ -76,7 +76,7 @@ _HARD_BLOCK_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "redirect output onto raw block device",
     ),
     (
-        re.compile(r"\bshred\s+.*-(?:[a-z]*[uzn])+\s+(?:/|[a-z]:\\|\*)", re.IGNORECASE),
+        re.compile(r"\bshred\s+[^\n]*-[a-z]*[uzn][a-z]*\s+(?:/|[a-z]:\\|\*)", re.IGNORECASE),
         "shred on root or drive",
     ),
     (
