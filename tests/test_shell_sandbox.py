@@ -103,3 +103,54 @@ def test_shell_tool_tuple_rejection_with_instruction():
 
         mock_popen.assert_not_called()
         assert "改由手動提交" in result
+
+
+def test_shell_env_scrubbing_and_mcp_preserves_explicit_env(tmp_path):
+    """驗證子行程會剝除敏感 API Key，但 MCP 明確設定的 env 仍會保留。"""
+    from pocket_agent.extensions.mcp import MCPManager
+    from pocket_agent.tools.shell import scrub_subprocess_env
+
+    synthetic_env = {
+        "PATH": "/usr/bin",
+        "OPENAI_API_KEY": "sk-synthetic-secret",
+        "GEMINI_API_KEY": "gem-synthetic-secret",
+        "POCKET_AGENT_TOKEN_TEST": "tok-synthetic",
+        "CUSTOM_SAFE_VAR": "keep-me",
+    }
+    cleaned = scrub_subprocess_env(synthetic_env)
+    assert "OPENAI_API_KEY" not in cleaned
+    assert "GEMINI_API_KEY" not in cleaned
+    assert "POCKET_AGENT_TOKEN_TEST" not in cleaned
+    assert cleaned["CUSTOM_SAFE_VAR"] == "keep-me"
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-parent-secret", "SAFE_PARENT": "ok"}, clear=False):
+        mgr = MCPManager(config_path=tmp_path / "mcp.yaml")
+        params = mgr._resolve_stdio_params({"command": "python", "args": ["-V"], "env": {"MY_MCP_TOKEN": "123"}})
+        assert params.env is not None
+        assert "OPENAI_API_KEY" not in params.env
+        assert params.env["MY_MCP_TOKEN"] == "123"
+        assert params.env["SAFE_PARENT"] == "ok"
+
+
+def test_shell_timeout_honest_termination_status():
+    """驗證程序樹清理未確認時，逾時訊息不可宣稱已強制終止。"""
+    import subprocess
+
+    from pocket_agent.tools.shell import ShellTerminationStatus
+
+    unconfirmed = ShellTerminationStatus(
+        exited=True,
+        tree_cleanup_confirmed=False,
+        output_complete=False,
+        backend="taskkill_fallback",
+    )
+    with patch("pocket_agent.tools.shell.subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout.read.return_value = b""
+        mock_proc.wait.side_effect = subprocess.TimeoutExpired(cmd="sleep 99", timeout=1)
+        mock_popen.return_value = mock_proc
+        with patch("pocket_agent.tools.shell._kill_proc_tree", return_value=unconfirmed):
+            res = call_shell_tool("run_command", {"command": "sleep 99", "timeout_sec": 1}, confirm=lambda _: True)
+
+    assert "程序樹清理未確認" in res
+    assert "已強制終止" not in res

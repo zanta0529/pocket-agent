@@ -65,21 +65,25 @@ class ConfirmationBridge:
                 owner = payload.get("owner", "")
                 repo = payload.get("repo", "")
                 head = payload.get("head", "")
-                base = payload.get("base") or "（自動採用儲存庫預設主分支）"
+                base = payload.get("base") or t("confirmation.pr_auto_base")
                 title = payload.get("title", "")
                 body = payload.get("body", "")
-                draft_label = "草稿 (Draft)" if payload.get("draft") else "正式 PR (Ready for Review)"
-                return (
-                    f"動作：建立 GitHub Pull Request（僅建立 PR 單，絕不自動執行 Merge）\n"
-                    f"工具：{tool_name}\n"
-                    f"目標儲存庫：{owner}/{repo}\n"
-                    f"合併分支方向：{head} -> {base}\n"
-                    f"PR 模式：{draft_label}\n"
-                    f"PR 標題：{title}\n"
-                    f"PR 內文預覽：\n"
-                    f"{'─' * 40}\n"
-                    f"{body}\n"
-                    f"{'─' * 40}"
+                draft_label = (
+                    t("confirmation.pr_mode_draft") if payload.get("draft") else t("confirmation.pr_mode_ready")
+                )
+                return "\n".join(
+                    [
+                        t("confirmation.pr_action"),
+                        t("confirmation.pr_tool", tool_name=tool_name),
+                        t("confirmation.pr_repo", owner=owner, repo=repo),
+                        t("confirmation.pr_branch", head=head, base=base),
+                        t("confirmation.pr_mode", mode=draft_label),
+                        t("confirmation.pr_title", title=title),
+                        t("confirmation.pr_body_preview"),
+                        "─" * 40,
+                        str(body),
+                        "─" * 40,
+                    ]
                 )
         return " ".join(
             json.dumps(a, ensure_ascii=False) if isinstance(a, (dict, list)) else str(a) for a in args_tuple
@@ -90,7 +94,7 @@ class ConfirmationBridge:
         return command.startswith(("建立新檔：", "修改檔案：", "附加內容至檔案：", "局部修改檔案："))
 
     def _is_auto_allowed(self, command: str, is_fs_edit: bool) -> bool:
-        if command.startswith("動作：建立 GitHub Pull Request"):
+        if command.startswith(("動作：建立 GitHub Pull Request", t("confirmation.pr_action"))):
             return False
         if is_fs_edit and getattr(self.state, "accept_edits", False):
             return True

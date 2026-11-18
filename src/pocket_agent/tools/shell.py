@@ -9,19 +9,23 @@
 import locale
 import logging
 import os
-import re
 import signal
 import subprocess
 import sys
 import threading
 import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from pocket_agent.system.constants import (
     DEFAULT_CLI_TIMEOUT_SEC,
     DEFAULT_PROCESS_BUFFER_BYTES,
     DEFAULT_TOOL_OUTPUT_CHARS,
     MAX_CLI_TIMEOUT_SEC,
+    SENSITIVE_ENV_EXACT_KEYS,
+    SENSITIVE_ENV_PREFIXES,
 )
+from pocket_agent.system.permissions import CommandVerdict, classify_command_safety
 
 log = logging.getLogger("pocket-agent")
 
@@ -126,24 +130,115 @@ def is_shell_tool(name: str) -> bool:
     return name == "run_command"
 
 
-def _kill_proc_tree(proc: subprocess.Popen, timeout: float = 0.5) -> None:
-    """終止子行程及其整個行程樹，具備逾時確認與強制升級。"""
-    if sys.platform == "win32":
-        try:
-            res = subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=timeout,
-            )
-            if res.returncode != 0 and proc.poll() is None:
-                proc.kill()
-        except Exception:
+def scrub_subprocess_env(
+    base_env: dict[str, str] | None = None,
+    *,
+    extra_allowlist: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, str]:
+    """複製環境變數並剝除主程序之敏感 API Key／憑證，避免子行程無意繼承洩漏。"""
+    env = dict(base_env if base_env is not None else os.environ)
+    allow_set: set[str] = {str(k).strip() for k in (extra_allowlist or ()) if str(k).strip()}
+    try:
+        from pocket_agent.system.config import config
+
+        cfg_allow = config.get("system.subprocess_env_allowlist", [])
+        if isinstance(cfg_allow, (list, tuple)):
+            allow_set.update(str(k).strip() for k in cfg_allow if str(k).strip())
+    except Exception:
+        pass
+
+    for key in list(env.keys()):
+        if key in allow_set:
+            continue
+        if key in SENSITIVE_ENV_EXACT_KEYS or key.startswith(SENSITIVE_ENV_PREFIXES):
+            env.pop(key, None)
+    return env
+
+
+@dataclass(frozen=True)
+class ShellTerminationStatus:
+    """子行程終止與程序樹清理結果契約。"""
+
+    exited: bool
+    tree_cleanup_confirmed: bool
+    output_complete: bool
+    backend: str
+    detail: str = ""
+
+
+class _ProcessContainmentStrategy(ABC):
+    """子行程生命週期圍堵與樹狀終止策略介面。"""
+
+    @abstractmethod
+    def attach(self, proc: subprocess.Popen) -> None:
+        """將已啟動的子行程綁定至圍堵機制。"""
+
+    @abstractmethod
+    def terminate(
+        self,
+        proc: subprocess.Popen,
+        timeout: float = 0.5,
+        *,
+        output_complete: bool = False,
+    ) -> ShellTerminationStatus:
+        """終止子行程與其後代，並回傳可驗證的清理狀態。"""
+
+    def cleanup(self) -> None:
+        """釋放策略持有的作業系統資源控制代碼。"""
+
+
+class _FallbackTreeContainment(_ProcessContainmentStrategy):
+    """預設跨平台行程樹終止策略（Windows taskkill / POSIX process group）。"""
+
+    def attach(self, proc: subprocess.Popen) -> None:
+        return None
+
+    def terminate(
+        self,
+        proc: subprocess.Popen,
+        timeout: float = 0.5,
+        *,
+        output_complete: bool = False,
+    ) -> ShellTerminationStatus:
+        if sys.platform == "win32":
             try:
-                proc.kill()
-            except Exception:
-                pass
-    else:
+                res = subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=timeout,
+                )
+                exited = proc.poll() is not None
+                if res.returncode == 0 and exited:
+                    return ShellTerminationStatus(
+                        exited=True,
+                        tree_cleanup_confirmed=True,
+                        output_complete=output_complete,
+                        backend="taskkill",
+                    )
+                if not exited:
+                    proc.kill()
+                    exited = proc.poll() is not None
+                return ShellTerminationStatus(
+                    exited=exited,
+                    tree_cleanup_confirmed=False,
+                    output_complete=output_complete,
+                    backend="taskkill_fallback",
+                    detail=f"taskkill rc={res.returncode}",
+                )
+            except Exception as e:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return ShellTerminationStatus(
+                    exited=proc.poll() is not None,
+                    tree_cleanup_confirmed=False,
+                    output_complete=output_complete,
+                    backend="proc_kill_fallback",
+                    detail=str(e),
+                )
+
         try:
             pgid = os.getpgid(proc.pid)
             os.killpg(pgid, signal.SIGTERM)
@@ -154,42 +249,180 @@ def _kill_proc_tree(proc: subprocess.Popen, timeout: float = 0.5) -> None:
                 time.sleep(0.05)
             if proc.poll() is None:
                 os.killpg(pgid, signal.SIGKILL)
+            exited = proc.poll() is not None
+            return ShellTerminationStatus(
+                exited=exited,
+                tree_cleanup_confirmed=exited,
+                output_complete=output_complete,
+                backend="posix_pgid",
+            )
         except ProcessLookupError:
-            pass
-        except Exception:
+            return ShellTerminationStatus(
+                exited=True,
+                tree_cleanup_confirmed=True,
+                output_complete=output_complete,
+                backend="posix_pgid",
+            )
+        except Exception as e:
             try:
                 proc.kill()
             except Exception:
                 pass
+            return ShellTerminationStatus(
+                exited=proc.poll() is not None,
+                tree_cleanup_confirmed=False,
+                output_complete=output_complete,
+                backend="proc_kill_fallback",
+                detail=str(e),
+            )
+
+
+class _WindowsJobContainment(_ProcessContainmentStrategy):
+    """Windows Job Object 行程生命週期管理（僅負責行程樹清理，非檔案或網路沙盒）。"""
+
+    def __init__(self) -> None:
+        self._job_handle = None
+        self._attached = False
+        self._fallback = _FallbackTreeContainment()
+
+    def attach(self, proc: subprocess.Popen) -> None:
+        raw_handle = getattr(proc, "_handle", None)
+        if not isinstance(raw_handle, int) or raw_handle <= 0:
+            return
+        try:
+            import win32job
+
+            job = win32job.CreateJobObject(None, "")
+            info = win32job.QueryInformationJobObject(job, win32job.JobObjectExtendedLimitInformation)
+            info["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            win32job.SetInformationJobObject(job, win32job.JobObjectExtendedLimitInformation, info)
+            win32job.AssignProcessToJobObject(job, raw_handle)
+            self._job_handle = job
+            self._attached = True
+        except Exception as e:
+            log.debug("Windows Job Object 綁定失敗，將降級至 taskkill：%s", e)
+            self.cleanup()
+
+    def terminate(
+        self,
+        proc: subprocess.Popen,
+        timeout: float = 0.5,
+        *,
+        output_complete: bool = False,
+    ) -> ShellTerminationStatus:
+        if not self._attached or self._job_handle is None:
+            return self._fallback.terminate(proc, timeout=timeout, output_complete=output_complete)
+        try:
+            import win32job
+
+            win32job.TerminateJobObject(self._job_handle, 1)
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < timeout:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.02)
+            exited = proc.poll() is not None
+            return ShellTerminationStatus(
+                exited=exited,
+                tree_cleanup_confirmed=exited,
+                output_complete=output_complete,
+                backend="win32_job",
+            )
+        except Exception as e:
+            fb = self._fallback.terminate(proc, timeout=timeout, output_complete=output_complete)
+            return ShellTerminationStatus(
+                exited=fb.exited,
+                tree_cleanup_confirmed=fb.tree_cleanup_confirmed,
+                output_complete=output_complete,
+                backend=f"win32_job->{fb.backend}",
+                detail=str(e),
+            )
+        finally:
+            self.cleanup()
+
+    def cleanup(self) -> None:
+        if self._job_handle is not None:
+            try:
+                import win32api
+
+                win32api.CloseHandle(self._job_handle)
+            except Exception:
+                pass
+            self._job_handle = None
+            self._attached = False
+
+
+def _create_containment_strategy() -> _ProcessContainmentStrategy:
+    """依作業系統與 pywin32 可用性建立行程圍堵策略（Factory）。"""
+    if sys.platform == "win32":
+        try:
+            import win32job  # noqa: F401
+
+            return _WindowsJobContainment()
+        except ImportError:
+            pass
+    return _FallbackTreeContainment()
 
 
 _active_shell_procs: set[subprocess.Popen] = set()
+_active_proc_strategies: dict[subprocess.Popen, _ProcessContainmentStrategy] = {}
 _shell_proc_lock = threading.Lock()
 _shell_cancel_generation: int = 0
 
 
-def interrupt_active_shell_processes() -> int:
-    """強制終止所有目前執行中的 Shell 子進程樹，防止取消後背景繼續執行。"""
+def _kill_proc_tree(
+    proc: subprocess.Popen,
+    timeout: float = 0.5,
+    *,
+    output_complete: bool = False,
+) -> ShellTerminationStatus:
+    """終止子行程及其整個行程樹，回傳結構化清理狀態契約。"""
+    with _shell_proc_lock:
+        strategy = _active_proc_strategies.get(proc)
+    if strategy is None:
+        strategy = _FallbackTreeContainment()
+    return strategy.terminate(proc, timeout=timeout, output_complete=output_complete)
+
+
+def interrupt_active_shell_processes_with_status() -> tuple[int, list[ShellTerminationStatus]]:
+    """強制終止所有目前執行中的 Shell 子行程樹，並回傳各行程的清理狀態契約。"""
     global _shell_cancel_generation
-    count = 0
+    statuses: list[ShellTerminationStatus] = []
     with _shell_proc_lock:
         _shell_cancel_generation += 1
-        procs = list(_active_shell_procs)
+        items = [(p, _active_proc_strategies.get(p) or _FallbackTreeContainment()) for p in _active_shell_procs]
 
-    for p in procs:
+    for proc, strategy in items:
         try:
-            _kill_proc_tree(p)
-            count += 1
-        except Exception:
-            pass
+            statuses.append(strategy.terminate(proc, output_complete=False))
+        except Exception as e:
+            statuses.append(
+                ShellTerminationStatus(
+                    exited=proc.poll() is not None,
+                    tree_cleanup_confirmed=False,
+                    output_complete=False,
+                    backend="error",
+                    detail=str(e),
+                )
+            )
 
     time.sleep(0.05)
     with _shell_proc_lock:
-        still_running = {p for p in _active_shell_procs if p.poll() is None}
-        _active_shell_procs.intersection_update(still_running)
+        for p in list(_active_shell_procs):
+            if p.poll() is not None:
+                _active_shell_procs.discard(p)
+                strat = _active_proc_strategies.pop(p, None)
+                if strat is not None:
+                    strat.cleanup()
 
-    if count:
-        log.warning("已強制終止 %d 個進行中的 Shell 子進程樹", count)
+    if statuses:
+        log.warning("已嘗試終止 %d 個進行中的 Shell 子行程樹", len(statuses))
+    return len(statuses), statuses
+
+
+def interrupt_active_shell_processes() -> int:
+    """強制終止所有目前執行中的 Shell 子進程樹，防止取消後背景繼續執行。"""
+    count, _ = interrupt_active_shell_processes_with_status()
     return count
 
 
@@ -202,34 +435,26 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
     if not command:
         return "[ERROR] 沒有提供指令。"
 
-    # --- Hard Command Floor (災難指令安全底線) ---
-    # 阻擋 rm -rf /, del /s /q (根目錄或全磁碟), rd /s, format, mkfs 等毀滅性關鍵字
-    # 注意：此為最後防線，容易被混淆繞過。真實防禦仍需依賴 Sandbox 或確認機制。
-    danger_patterns = [
-        r"rm\s+-[A-Za-z]*r[A-Za-z]*[fFv]*\s+(?:/[A-Za-z0-9_]*|~|\$HOME|\*|\s*$)",  # 更廣泛的 rm -rf 攔截
-        r"rm\s+.*--no-preserve-root",  # 阻擋強制根目錄刪除
-        r"del\s+(/[sqf]\s*)+\s*(?:[A-Za-z]:\\|\*)",  # 涵蓋 del /s /q *
-        r"\b(?:rd|rmdir)\s+(?:/[sq]\s*)+\s*[A-Za-z]:\\?(?:\s|$)",  # rd /s /q C:\
-        r"format\s+[A-Za-z]:",  # format C:
-        r"mkfs",  # mkfs.*
-        r"\bdd\s+.*if=/dev/(?:zero|urandom|null)\s+of=/dev/",  # 磁碟抹除
-        r">\s*/dev/sd[a-z]",  # 覆寫 raw 磁區
-        r"\bshred\s+.*-(?:[A-Za-z]*[uzn])+\s+(?:/|[A-Za-z]:\\|\*)",  # shred 磁區/根目錄
-    ]
-    for pattern in danger_patterns:
-        if re.search(pattern, command, re.IGNORECASE):
-            log.warning(f"SECURITY BLOCK: 嘗試執行毀滅性指令被系統底線攔截 -> {command}")
-            return f"[ERROR] 觸發安全底線限制，拒絕執行該高風險指令：{command}"
-    # ----------------------------------------------
+    safety = classify_command_safety(command)
+    if safety.verdict == CommandVerdict.BLOCKED:
+        log.warning("SECURITY BLOCK: 嘗試執行毀滅性指令被系統底線攔截 (%s) -> %s", safety.reason, command)
+        return f"[ERROR] 觸發安全底線限制（{safety.reason}），拒絕執行該高風險指令：{command}"
 
     cwd = args.get("cwd") or None
     if cwd and not os.path.isdir(cwd):
         return f"[ERROR] 工作目錄不存在或不是目錄：{cwd}"
 
+    confirm_prompt = command
+    if safety.verdict == CommandVerdict.CAUTION:
+        from pocket_agent.system.i18n import t
+
+        localized_reason = t(safety.reason_key) if safety.reason_key else safety.reason
+        confirm_prompt = t("confirmation.git_caution_banner", reason=localized_reason, command=command)
+
     start_generation = _shell_cancel_generation
     if confirm is not None:
         try:
-            allowed = confirm(command)
+            allowed = confirm(confirm_prompt)
         except Exception:
             log.exception("CLI confirm callback 失敗")
             allowed = False
@@ -296,6 +521,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         kwargs = {
             "shell": is_shell,
             "cwd": cwd,
+            "env": scrub_subprocess_env(),
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
         }
@@ -308,7 +534,10 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
             if _shell_cancel_generation != start_generation:
                 return "[操作已由使用者取消中斷，指令未建立與執行]"
             proc = subprocess.Popen(cmd_args, **kwargs)
+            strategy = _create_containment_strategy()
+            strategy.attach(proc)
             _active_shell_procs.add(proc)
+            _active_proc_strategies[proc] = strategy
 
         # 累積原始位元組，結束後一次解碼，避免多位元組字元被分段切斷而誤判編碼
         output_buf = bytearray()
@@ -350,20 +579,34 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
             proc.wait(timeout=timeout)
             t.join(timeout=1.0)
         except subprocess.TimeoutExpired:
-            _kill_proc_tree(proc)
+            term_status = _kill_proc_tree(proc, output_complete=False)
             try:
                 proc.stdout.close()
             except Exception:
                 pass
             t.join(timeout=0.5)
             partial = collect_output()
-            message = f"[ERROR] 指令逾時（{timeout} 秒），已強制終止。"
+            if term_status.exited and term_status.tree_cleanup_confirmed:
+                message = f"[ERROR] 指令逾時（{timeout} 秒），已強制終止（輸出可能不完整）。"
+            elif term_status.exited:
+                message = (
+                    f"[ERROR] 指令逾時（{timeout} 秒），主程序已退出但程序樹清理未確認"
+                    f"（後端：{term_status.backend}，輸出可能不完整）。"
+                )
+            else:
+                message = (
+                    f"[ERROR] 指令逾時（{timeout} 秒），已請求終止但尚未確認程序退出"
+                    f"（後端：{term_status.backend}，輸出可能不完整）。"
+                )
             if partial:
                 message += f"\n已收集的輸出：\n{partial}"
             return message
         finally:
             with _shell_proc_lock:
                 _active_shell_procs.discard(proc)
+                strat = _active_proc_strategies.pop(proc, None)
+            if strat is not None:
+                strat.cleanup()
             try:
                 proc.stdout.close()
             except Exception:

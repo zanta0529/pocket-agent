@@ -504,7 +504,9 @@ class MCPManager:
         raw_env = spec.get("env")
         env_dict: dict[str, str] | None = None
         if raw_env or is_py_cmd:
-            env_dict = dict(os.environ)
+            from pocket_agent.tools.shell import scrub_subprocess_env
+
+            env_dict = scrub_subprocess_env()
             env_dict.setdefault("PYTHONUTF8", "1")
             env_dict.setdefault("PYTHONIOENCODING", "utf-8")
             env_dict.setdefault("POCKET_AGENT_LOG_FILE", str(log_dir() / "agent.log"))

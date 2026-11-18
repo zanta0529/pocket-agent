@@ -165,11 +165,14 @@ class ShellToolHandler(ToolHandler):
         return is_shell_tool(name)
 
     def on_cancel(self, name: str, agent: Any) -> str:
-        from pocket_agent.tools.shell import interrupt_active_shell_processes
+        from pocket_agent.tools.shell import interrupt_active_shell_processes_with_status
 
-        killed = interrupt_active_shell_processes()
+        killed, statuses = interrupt_active_shell_processes_with_status()
         if killed > 0:
-            return f"[操作已由使用者取消中斷，進行中之 {killed} 個 Shell 子進程樹已嘗試強制終止]"
+            all_confirmed = bool(statuses) and all(s.exited and s.tree_cleanup_confirmed for s in statuses)
+            if all_confirmed:
+                return f"[操作已由使用者取消中斷，進行中之 {killed} 個 Shell 子行程樹已確認終止]"
+            return f"[操作已由使用者取消中斷，已請求終止 {killed} 個 Shell 子行程樹（部分程序樹清理未確認）]"
         return "[操作已由使用者取消中斷，Shell 指令未執行或已終止]"
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
