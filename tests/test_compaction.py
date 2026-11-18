@@ -349,3 +349,35 @@ def test_agent_run_loop_persists_tool_compact_to_history():
             assert "[舊工具輸出已清除" in agent.history[2]["output"]
 
     asyncio.run(_test())
+
+
+def test_build_operation_ledger_distinguishes_outcomes():
+    """驗證結構化操作紀錄能區分成功寫入、使用者拒絕與失敗嘗試，並遵守字元上限。"""
+    from pocket_agent.core.compaction import build_operation_ledger
+
+    history = [
+        {
+            "type": "function_call",
+            "call_id": "c1",
+            "name": "read_file",
+            "arguments": '{"path": "a.py", "start_line": 1, "end_line": 20}',
+        },
+        {"type": "function_call_output", "call_id": "c1", "output": "content"},
+        {
+            "type": "function_call",
+            "call_id": "c2",
+            "name": "write_to_file",
+            "arguments": '{"path": "b.py", "overwrite": false}',
+        },
+        {"type": "function_call_output", "call_id": "c2", "output": "[SUCCESS] 成功寫入檔案 b.py"},
+        {"type": "function_call", "call_id": "c3", "name": "run_command", "arguments": '{"command": "pytest"}'},
+        {"type": "function_call_output", "call_id": "c3", "output": "[使用者拒絕執行此指令]"},
+        {"type": "function_call", "call_id": "c4", "name": "replace_file_content", "arguments": '{"path": "a.py"}'},
+        {"type": "function_call_output", "call_id": "c4", "output": "[ERROR] 找不到指定的 target 字串"},
+    ]
+    ledger = build_operation_ledger(history, max_chars=500)
+    assert "b.py" in ledger
+    assert "a.py" in ledger
+    assert "使用者拒絕" in ledger
+    assert "失敗之工具" in ledger
+    assert len(ledger) <= 500

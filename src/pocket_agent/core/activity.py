@@ -55,6 +55,10 @@ class SessionActivityTracker:
         self._file_status: dict[str, str] = {}  # key -> "added" | "modified" | "deleted"
         self._confirmed_on_disk: dict[str, bool] = {}
         self._urls: dict[str, UrlActivityItem] = {}
+        self._read_files: dict[str, str] = {}
+        self._loaded_skills: list[str] = []
+        self._failed_ops: list[str] = []
+        self._refused_ops: list[str] = []
 
     def clear(self) -> None:
         """清空所有會話活動紀錄（供 /clear 與 /new 使用）。"""
@@ -63,6 +67,10 @@ class SessionActivityTracker:
         self._file_status.clear()
         self._confirmed_on_disk.clear()
         self._urls.clear()
+        self._read_files.clear()
+        self._loaded_skills.clear()
+        self._failed_ops.clear()
+        self._refused_ops.clear()
 
     @staticmethod
     def _normalize_path(path: str | Path) -> tuple[str, Path]:
@@ -165,8 +173,35 @@ class SessionActivityTracker:
                 self.record_url(raw_url, success=is_tool_output_success(result))
             return
 
-        # 2. 檔案寫入與產出工具（僅在成功執行時記錄，拒絕或報錯不列入）
+        # 2. 唯讀檔案、技能載入與失敗／拒絕事件追蹤
+        if real_name in ("read_file", "read_document") and is_tool_output_success(result):
+            path_str = str(args.get("path") or args.get("file") or "").strip()
+            if path_str:
+                display = format_display_path(path_str)
+                s_line = args.get("start_line")
+                e_line = args.get("end_line")
+                rng = f"L{s_line or 1}-{e_line or '?'}" if (s_line or e_line) else ""
+                self._read_files[display] = rng
+            return
+
+        if real_name in ("use_skill", "read_skill") and is_tool_output_success(result):
+            skill_name = str(args.get("name") or args.get("skill_name") or "").strip()
+            if skill_name and skill_name not in self._loaded_skills:
+                self._loaded_skills.append(skill_name)
+            return
+
+        # 3. 檔案寫入與產出工具（僅在成功執行時記錄，拒絕或報錯不列入）
         if not is_tool_output_success(result):
+            hint = str(args.get("path") or args.get("command") or args.get("query") or "").strip()
+            hint = " ".join(hint.split())[:60]
+            res_text = " ".join(str(result or "").split())[:80]
+            entry = f"{real_name}({hint}): {res_text}" if hint else f"{real_name}: {res_text}"
+            if isinstance(result, str) and result.strip().startswith("[使用者拒絕"):
+                if entry not in self._refused_ops:
+                    self._refused_ops = (self._refused_ops + [entry])[-20:]
+            else:
+                if entry not in self._failed_ops:
+                    self._failed_ops = (self._failed_ops + [entry])[-20:]
             return
 
         if real_name == "write_to_file" and isinstance(result, str) and result.startswith("[SUCCESS]"):
@@ -265,6 +300,18 @@ class SessionActivityTracker:
                 target.count += item.count
             else:
                 self._urls[item.url] = UrlActivityItem(url=item.url, status=item.status, count=item.count)
+
+        for path_str, rng in other._read_files.items():
+            self._read_files[path_str] = rng
+        for sk in other._loaded_skills:
+            if sk not in self._loaded_skills:
+                self._loaded_skills.append(sk)
+        for entry in other._failed_ops:
+            if entry not in self._failed_ops:
+                self._failed_ops = (self._failed_ops + [entry])[-20:]
+        for entry in other._refused_ops:
+            if entry not in self._refused_ops:
+                self._refused_ops = (self._refused_ops + [entry])[-20:]
 
     def rebuild_from_history(self, history: list[dict]) -> None:
         """從對話歷史 (history) 重建檔案與網址活動紀錄（供 /session load 使用）。"""

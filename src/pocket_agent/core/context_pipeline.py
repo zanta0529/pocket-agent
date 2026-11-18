@@ -34,6 +34,7 @@ class ContextPipeline:
         tools: list,
         *,
         cancel_check: Callable[[], bool],
+        activity: object | None = None,
     ) -> ContextPrepareResult:
         # 1. 優先清除較舊的工具輸出 (Tool Compact)，並直接複用該次估算結果
         cleared_outputs, estimated_tokens = self.budget.compact_and_estimate(input_items, instructions, tools)
@@ -45,7 +46,11 @@ class ContextPipeline:
             from pocket_agent.core.compaction import HistoryCompactor
 
             compactor = HistoryCompactor(self.engine)
-            new_items, compacted = await compactor.compact_history(input_items, cancel_check=cancel_check)
+            new_items, compacted = await compactor.compact_history(
+                input_items,
+                cancel_check=cancel_check,
+                activity=activity,
+            )
             if compacted:
                 input_items = new_items
                 history[:] = list(new_items)

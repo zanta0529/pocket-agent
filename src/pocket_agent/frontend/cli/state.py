@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pocket_agent.system.i18n import t
+
 
 def _new_session_id() -> str:
     from pocket_agent.core.sessions import new_session_id
@@ -35,7 +37,7 @@ class CliState:
         for value in paths:
             path = Path(value).expanduser().resolve(strict=True)
             if not path.is_file() and not path.is_dir():
-                raise ValueError(f"路徑不存在或無效：{path}")
+                raise ValueError(t("cli.invalid_path", path=path))
             if path.is_file():
                 with path.open("rb"):
                     pass
@@ -62,5 +64,5 @@ class CliState:
 
     def remove(self, number: int) -> str:
         if not 1 <= number <= len(self.pending_files):
-            raise ValueError("附件編號超出範圍")
+            raise ValueError(t("cli.attachment_index_out_of_range"))
         return self.pending_files.pop(number - 1)

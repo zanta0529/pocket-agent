@@ -64,7 +64,9 @@
     "paste_ws_cancelled": "✗ Cancelled adding these files.",
     "op_cancelled": "✗ Operation cancelled.",
     "stopped_main": "⏹ Main agent stopped",
-    "exiting_on_sigint": "Interrupt received, exiting..."
+    "exiting_on_sigint": "Interrupt received, exiting...",
+    "invalid_path": "Path does not exist or is invalid: {path}",
+    "attachment_index_out_of_range": "Attachment index out of range"
   },
   "confirmation": {
     "allow_file_write": "Allow file write?",
@@ -80,7 +82,23 @@
     "prompt_options": "Allow? [y: once | a: session | A: allowlist | c: custom | N: deny] ",
     "prompt_accept_edits_sync": " (Shift+Tab: Accept-edits)",
     "prompt_accept_edits_async": " (Shift+Tab: Accept-edits)",
-    "custom_instruction_prompt": "👉 Enter instruction for the agent: "
+    "custom_instruction_prompt": "👉 Enter instruction for the agent: ",
+    "git_caution_banner": "[High-risk Git Operation Warning: {reason}]\n{command}",
+    "git_caution_force_push": "git force-push may overwrite remote history",
+    "git_caution_reset_hard": "git reset --hard discards uncommitted local changes",
+    "git_caution_clean_f": "git clean -f permanently deletes untracked files",
+    "git_caution_branch_delete": "git branch -D force-deletes a branch regardless of merge status",
+    "git_caution_checkout_discard": "git checkout -- discards working-tree modifications",
+    "pr_action": "Action: Create GitHub Pull Request (PR creation only; never auto-merges)",
+    "pr_auto_base": "(auto-detect repository default branch)",
+    "pr_mode_draft": "Draft",
+    "pr_mode_ready": "Ready for Review",
+    "pr_tool": "Tool: {tool_name}",
+    "pr_repo": "Target repository: {owner}/{repo}",
+    "pr_branch": "Branch direction: {head} -> {base}",
+    "pr_mode": "PR mode: {mode}",
+    "pr_title": "PR title: {title}",
+    "pr_body_preview": "PR body preview:"
   },
   "wizard": {
     "title": "Pocket Agent Setup Wizard",

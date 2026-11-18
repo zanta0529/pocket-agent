@@ -303,3 +303,35 @@ def test_agent_blocks_truncated_chat_completion_tool_call_with_valid_json(monkey
         fs_spy.assert_not_called()
 
     asyncio.run(_test())
+
+
+def test_divergence_guard_warns_and_stops():
+    """驗證 DivergenceGuard 於連續 2 次重複時警告、連續 3 次重複時中止。"""
+    from pocket_agent.core.agent import DivergenceGuard
+
+    guard = DivergenceGuard(warn_threshold=2, stop_threshold=3)
+    call_a = [{"name": "read_file", "arguments": '{"path": "a.py", "start_line": 1}'}]
+    call_a_reordered = [{"name": "read_file", "arguments": '{"start_line": 1, "path": "a.py"}'}]
+    call_b = [{"name": "read_file", "arguments": '{"path": "b.py"}'}]
+
+    assert guard.observe_round(call_a) == "ok"
+    assert guard.observe_round(call_a_reordered) == "warn"
+    assert guard.observe_round(call_a) == "stop"
+    assert guard.observe_round(call_b) == "ok"
+
+
+def test_instructions_static_prefix_invariant_across_queries():
+    """驗證不同 query 與權限狀態下，_instructions() 的靜態核心前綴保持位元組一致。"""
+    mock_client = MagicMock()
+    mock_mcp = MagicMock()
+    agent = Agent(client=mock_client, mcp=mock_mcp, model="gpt-5", system_prompt="CORE_SYSTEM_RULE")
+
+    inst_1 = agent._instructions("query one", repo_map_str="MAP_A", skills_prompt="SKILLS_A")
+    agent.accept_edits = True
+    inst_2 = agent._instructions("query two", repo_map_str="MAP_B", skills_prompt="SKILLS_B")
+
+    anchor = "CORE_SYSTEM_RULE"
+    assert anchor in inst_1 and anchor in inst_2
+    prefix_1 = inst_1.split(anchor, 1)[0] + anchor
+    prefix_2 = inst_2.split(anchor, 1)[0] + anchor
+    assert prefix_1 == prefix_2

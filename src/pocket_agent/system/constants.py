@@ -166,6 +166,42 @@ OAUTH_AUTH_URLS: dict[str, str] = {
 }
 
 
+# ==============================================================================
+# 9. 迴圈防發散、壓縮紀錄與子行程隔離常數 (Loop Guard, Ledger & Env Scrubbing)
+# ==============================================================================
+# 設計意圖：
+# 集中管理重複工具呼叫偵測門檻、壓縮操作紀錄字元上限，以及子行程環境變數剝除清單。
+# ==============================================================================
+DIVERGENCE_WARN_REPEAT_COUNT = 2  # 連續相同工具與參數呼叫達此次數時注入收斂提醒
+DIVERGENCE_STOP_REPEAT_COUNT = 3  # 連續相同工具與參數呼叫達此次數時主動中止迴圈
+COMPACTION_LEDGER_MAX_CHARS = 2400  # 壓縮時結構化操作紀錄之最大字元上限
+
+SENSITIVE_ENV_EXACT_KEYS: tuple[str, ...] = (
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "SAMBANOVA_API_KEY",
+    "OLLAMA_API_KEY",
+    "OLLAMA_CLOUD_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "POCKET_AGENT_MASTER_PASSWORD",
+)
+
+SENSITIVE_ENV_PREFIXES: tuple[str, ...] = (
+    "POCKET_AGENT_OAUTH_",
+    "POCKET_AGENT_TOKEN_",
+)
+
+
 @dataclass(frozen=True)
 class SystemConstants:
     """系統常數集中存取容器 (唯讀結構)"""
