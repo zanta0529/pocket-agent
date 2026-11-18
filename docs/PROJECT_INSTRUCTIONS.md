@@ -68,7 +68,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 
 ### 3.1 多語系（i18n）開發規範
 
-- **語系檔維護**：所有使用者可見之顯示文字（CLI 提示、選單、設定精靈、錯誤訊息、狀態與額度顯示）必須維護於 `src/pocket_agent/locales/*.json`（目前包含 `zh_TW.json` 與 `en_US.json`），透過 `pocket_agent.system.i18n.t(key, **kwargs)` 讀取，**嚴禁在程式碼中寫死顯示文字**或傳入冗餘的 `default` 硬編碼文案；當語系檔與預設基準 `zh_TW` 皆查無鍵值時，直接回傳該 `key` 名稱以利開發與測試人員辨識遺漏。
+- **語系檔維護**：所有使用者可見之顯示文字（CLI 提示、選單、設定精靈、錯誤訊息、狀態與額度顯示）必須維護於 `src/pocket_agent/locales/*.json`（目前包含 `zh_TW.json` 與 `en_US.json`），透過 `pocket_agent.system.i18n.t(key, **kwargs)` 讀取，**嚴禁在程式碼中寫死顯示文字**或傳入冗餘的 `default` 硬編碼文案；新增或調整任何顯示文字時，**務必搜尋 `src/pocket_agent/locales/*.json` 下所有支援語系檔並同步新增／更新對應鍵值**。當語系檔與預設基準 `zh_TW` 皆查無鍵值時，直接回傳該 `key` 名稱以利開發與測試人員辨識遺漏。
 - **語系解析順序**：執行期由 `get_locale()` 依序解析：`set_locale()` 顯式設定 ＞ 環境變數 `POCKET_AGENT_LANG` ＞ `config.json` 之 `locale` ＞ 預設 `zh_TW`（`setup` 精靈啟動時若 `config.json` 未明確設定 `locale` 則預設使用 `en_US`）。
 - **不可翻譯之邊界不變量**：內部工具名稱（`read_file`、`mcp__<server>__<tool>`）、送往 LLM 的 System Prompt／Instructions、內部前綴比對邏輯（如 `ConfirmationBridge._is_fs_edit`、安全標記 `[CONN_AUTH]` / `[ERROR]`）及後台 `logging` 訊息不得納入 UI 多語系替換。
 - **獨立模組與 MCP 伺服器相容性**：`mcp_servers/` 腳本須保留獨立執行的能力，匯入 `pocket_agent.system.i18n.t` 時應搭配 `try / except ImportError` 提供純鍵值降級函式；既有獨立 MCP 伺服器若尚未全面多語系化，新增或修改工具時應優先遵循本規範。
