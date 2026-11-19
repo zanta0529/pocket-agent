@@ -184,9 +184,15 @@ def _step_mcp() -> None:
     cfg = yaml.safe_load(mcp_path.read_text(encoding="utf-8")) if mcp_path.exists() else {}
     servers: dict = cfg.get("servers") or {}
 
-    active = [k for k, v in servers.items() if v is not None]
-    if active:
-        console.print(f"[dim]{t('wizard.mcp_configured_list', servers=', '.join(active))}[/dim]\n")
+    from pocket_agent.extensions.mcp import is_mcp_server_enabled
+
+    configured = [
+        k if is_mcp_server_enabled(v, server_name=k) else f"{k}{t('wizard.mcp_disabled_tag')}"
+        for k, v in servers.items()
+        if v is not None
+    ]
+    if configured:
+        console.print(f"[dim]{t('wizard.mcp_configured_list', servers=', '.join(configured))}[/dim]\n")
 
     if not Confirm.ask(t("wizard.mcp_ask_add"), default=False):
         console.print(f"[dim]{t('wizard.mcp_skipped')}[/dim]\n")

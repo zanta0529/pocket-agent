@@ -263,3 +263,71 @@ def test_parallel_calls_serialize_conn_prompt():
     assert len(results) == 5
     assert len(prompt_calls) == 1
     assert fake_session.call_tool.await_count == 5
+
+
+def test_start_skips_disabled_servers():
+    from pocket_agent.extensions.mcp import is_mcp_server_enabled
+
+    assert is_mcp_server_enabled({"command": "fake"}) is True
+    assert is_mcp_server_enabled({"command": "fake", "enabled": True}) is True
+    assert is_mcp_server_enabled({"command": "fake", "enabled": False}) is False
+
+    manager = MCPManager("dummy.yaml")
+    connected = []
+    session = AsyncMock()
+    session.list_tools.return_value = MagicMock(tools=[])
+
+    async def connect(name, spec):
+        connected.append(name)
+        return session
+
+    servers = {
+        "default_on": {"command": "fake"},
+        "explicit_on": {"command": "fake", "enabled": True},
+        "explicit_off": {"command": "fake", "enabled": False},
+        "null_entry": None,
+    }
+    callback = MagicMock()
+    with (
+        patch.object(manager, "_load_config", return_value={"servers": servers}),
+        patch.object(manager, "_connect", side_effect=connect),
+    ):
+        result = asyncio.run(manager.start(on_start=callback))
+
+    assert connected == ["default_on", "explicit_on"]
+    callback.assert_called_once_with(2)
+    assert result == MCPStartupResult(2, 2, 0, 0, disabled_servers=1)
+
+
+def test_start_all_disabled_servers():
+    manager = MCPManager("dummy.yaml")
+    servers = {
+        "off_one": {"command": "fake", "enabled": False},
+        "off_two": {"command": "fake", "enabled": False},
+    }
+    callback = MagicMock()
+    with (
+        patch.object(manager, "_load_config", return_value={"servers": servers}),
+        patch.object(manager, "_connect", new_callable=AsyncMock) as connect,
+    ):
+        result = asyncio.run(manager.start(on_start=callback))
+
+    callback.assert_not_called()
+    connect.assert_not_awaited()
+    assert result == MCPStartupResult(0, 0, 0, 0, disabled_servers=2)
+
+
+@pytest.mark.parametrize("bad_value", ["false", "true", "invalid", 0, 1, None])
+def test_start_non_bool_enabled_defaults_to_disabled(bad_value, caplog):
+    manager = MCPManager("dummy.yaml")
+    servers = {"bad": {"command": "fake", "enabled": bad_value}}
+    with (
+        caplog.at_level("WARNING", logger="pocket-agent"),
+        patch.object(manager, "_load_config", return_value={"servers": servers}),
+        patch.object(manager, "_connect", new_callable=AsyncMock) as connect,
+    ):
+        result = asyncio.run(manager.start())
+
+    connect.assert_not_awaited()
+    assert result == MCPStartupResult(0, 0, 0, 0, disabled_servers=1)
+    assert "enabled" in caplog.text

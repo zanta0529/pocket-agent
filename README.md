@@ -238,7 +238,7 @@ Type any of the following `/` commands at the prompt:
 
 - **Subagents**: Define specialized personas (e.g., architect, auditor) and delegate tasks automatically or via `/parallel`.
 - **Hooks**: Attach local Python scripts to `before_send`, `after_response`, `before_tool`, and `after_tool` lifecycle events.
-- **MCP (Model Context Protocol)**: Full support for Stdio, SSE, and Streamable HTTP. Bundled MCP servers include:
+- **MCP (Model Context Protocol)**: Full support for Stdio, SSE, and Streamable HTTP. You can flexibly toggle which servers load at startup via `enabled: true/false` in `mcp_config.yaml` (defaults to `true` when omitted) without commenting out configurations. Bundled MCP servers include:
   - `browser_mcp.py`: Pure-Python browser automation driving system Edge/Chrome with CDP and session reuse.
   - `github_mcp.py`: GitHub Issue / PR / Diff / Review / CI inspection, template-aware PR creation, and commenting.
   - `sqlite_mcp.py` / `mysql_mcp.py` / `mssql_mcp.py`: Read-only schema inspection and querying for local and remote databases.

@@ -178,3 +178,30 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
   }
 }
 ```
+
+---
+
+## 4. MCP 伺服器掛載設定 (`mcp_config.yaml`)
+
+外部與內建 MCP 伺服器的掛載與權限設定獨立存放於 `mcp_config.yaml`（範本見 `mcp_config.example.yaml`）。您可在各 `servers.<name>` 區塊中使用 `enabled` 屬性彈性切換程式啟動時是否載入該伺服器：
+
+| 鍵值 (Key)               | 型別      | 預設值 | 說明                                                                                                 |
+| :----------------------- | :-------- | :----- | :--------------------------------------------------------------------------------------------------- |
+| `servers.<name>.enabled` | `boolean` | `true` | 啟動時是否連線並載入此 MCP 伺服器。設為 `false` 可暫時停用並保留設定；誤填非布林值時會記錄警告並預設停用。 |
+
+```yaml
+servers:
+  sqlite:
+    enabled: true # 可省略，預設即為啟用
+    transport: stdio
+    command: python
+    args: ['mcp_servers/sqlite_mcp.py']
+
+  github:
+    enabled: false # 啟動時略過載入，保留 env 與 safe_read_tools 設定
+    transport: stdio
+    command: python
+    args: ['mcp_servers/github_mcp.py']
+```
+
+> 💡 更多關於安全注入、白名單與連線參數設定，請參閱：[MCP 伺服器掛載與注入機制](../architecture/mcp-architecture.md)。

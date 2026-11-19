@@ -8,6 +8,17 @@
 Pocket Agent 是透過讀取根目錄下的 `mcp_config.yaml` 來決定掛載哪些 MCP 伺服器。
 請參考 `mcp_config.example.yaml`，將您需要的服務設定複製過去並解除註解，接著啟動 `agent` 即可。
 
+您也可以在各個伺服器區塊中彈性設定 `enabled: true` 或 `enabled: false`（省略時預設為 `true`），自由切換程式啟動時是否載入該 MCP 伺服器，無須反覆註解整段設定或移除既有環境變數與白名單配置。
+
+```yaml
+servers:
+  github:
+    enabled: false # 暫時停用：啟動時不載入，但保留下方設定
+    transport: stdio
+    command: python
+    args: ['mcp_servers/github_mcp.py']
+```
+
 ---
 
 ## 🛠️ 目前提供的 MCP 伺服器清單

@@ -238,7 +238,7 @@ run.bat setup       # Windows
 
 - **子代理 (Subagents)**：支援在設定中定義多元人設（如架構師、稽核員），複雜任務由主代理自動或透過 `/parallel` 委派處理。
 - **事件鉤子 (Hooks)**：支援在 `before_send`, `after_response`, `before_tool`, `after_tool` 綁定本機 Python 腳本，實現自訂攔截邏輯。
-- **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，輕鬆掛載本機檔案系統、資料庫或遠端工具。隨附提供：
+- **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，可於 `mcp_config.yaml` 透過 `enabled: true/false` 彈性切換啟動時載入的伺服器（省略預設為啟用），輕鬆掛載本機檔案系統、資料庫或遠端工具。隨附提供：
   - `browser_mcp.py`：純 Python 網頁自動化操作，直接沿用系統 Edge/Chrome，支援 CDP 連接與 Cookie 狀態繼承。
   - `github_mcp.py`：GitHub Issue / PR / Diff / Review / CI 檢索、範本感知 PR 建立與留言互動。
   - `sqlite_mcp.py` / `mysql_mcp.py` / `mssql_mcp.py`：本機與遠端資料庫結構探查與唯讀查詢。

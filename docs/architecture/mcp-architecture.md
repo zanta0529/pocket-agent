@@ -37,6 +37,14 @@ flowchart TD
 
 ## 核心機制解析
 
+### 0. 啟動開關與防呆機制 (`enabled`)
+
+在 `mcp_config.yaml` 的各伺服器設定區塊中可選填 `enabled: true/false`（省略時預設為 `true`）：
+
+- 設為 `false` 時，`MCPManager.start()` 會在連線階段前略過該伺服器，不啟動本機子行程或建立遠端連線，也不會將其工具註冊至 LLM Context，同時保留完整的設定內容。
+- 若顯式設定為非布林值（例如字串 `"false"`、`0` 或 `null`），`is_mcp_server_enabled()` 會寫入警告日誌並預設視為停用，防止因 YAML 型別誤寫而意外啟用伺服器。
+- 啟動完成後，CLI 會依 `MCPStartupResult.disabled_servers` 顯示已略過的停用伺服器數量，`setup` 精靈亦會在設定清單中標記停用狀態。
+
 ### 1. 自動注入與 Schema 抹除機制 (Security Inject)
 
 當我們串接外部 MCP Server（例如資料庫查詢、API 操作）時，經常需要提供敏感的 API Key 或連線字串。
