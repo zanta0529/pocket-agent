@@ -4,6 +4,10 @@
 #
 # mcp_config.yaml 已加入 .gitignore，不會被 commit（保護你的 server 位址和 key）
 #
+# enabled：選填布林值（true / false，省略時預設為 true）。
+# 設為 false 時，程式啟動將略過連線與工具載入，同時保留設定內容。
+# 若誤填為非布林值（如字串 "false"），系統會記錄警告並預設停用。
+#
 # inject：自動注入到工具呼叫的參數，模型看不到也不需要填寫。
 # 適合用於 api_key、auth_token 等認證參數。
 

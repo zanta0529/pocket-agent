@@ -163,6 +163,23 @@ class MCPStartupResult:
     ready_servers: int
     failed_servers: int
     tool_count: int
+    disabled_servers: int = 0
+
+
+def is_mcp_server_enabled(spec: Any, server_name: str | None = None) -> bool:
+    """判斷 mcp_config.yaml 單一 server 設定是否啟用；省略預設 True，非布林值警告並停用。"""
+    if not isinstance(spec, dict) or "enabled" not in spec:
+        return True
+    raw_enabled = spec["enabled"]
+    if isinstance(raw_enabled, bool):
+        return raw_enabled
+    logging.getLogger("pocket-agent").warning(
+        "MCP server %r 的 enabled 欄位必須為布林值 (true/false)，收到 %r (%s)，已預設停用。",
+        server_name or "<unknown>",
+        raw_enabled,
+        type(raw_enabled).__name__,
+    )
+    return False
 
 
 class MCPManager:
@@ -183,9 +200,16 @@ class MCPManager:
 
     async def start(self, *, on_start: Callable[[int], None] | None = None) -> MCPStartupResult:
         config = self._load_config()
-        servers = {name: spec for name, spec in (config.get("servers") or {}).items() if spec is not None}
+        raw_servers = {name: spec for name, spec in (config.get("servers") or {}).items() if spec is not None}
+        servers: dict[str, Any] = {}
+        disabled_servers = 0
+        for name, spec in raw_servers.items():
+            if not is_mcp_server_enabled(spec, server_name=name):
+                disabled_servers += 1
+                continue
+            servers[name] = spec
         if not servers:
-            return MCPStartupResult(0, 0, 0, 0)
+            return MCPStartupResult(0, 0, 0, 0, disabled_servers=disabled_servers)
         if on_start is not None:
             on_start(len(servers))
 
@@ -235,7 +259,13 @@ class MCPManager:
             except Exception as e:
                 failed_servers += 1
                 print(f"[MCP] ⚠ 無法連線 {name!r}: {e}")
-        return MCPStartupResult(len(servers), ready_servers, failed_servers, len(self._tools))
+        return MCPStartupResult(
+            len(servers),
+            ready_servers,
+            failed_servers,
+            len(self._tools),
+            disabled_servers=disabled_servers,
+        )
 
     async def stop(self, timeout: float = 3.0) -> None:
         runners = list(self._runners.values())

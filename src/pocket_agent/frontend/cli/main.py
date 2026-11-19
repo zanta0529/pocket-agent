@@ -384,25 +384,33 @@ class CliFrontend(FrontendStrategy):
 
             mcp = MCPManager()
             startup = await mcp.start(on_start=lambda count: renderer.message(t("cli.mcp_initializing")))
+            disabled = getattr(startup, "disabled_servers", 0)
             if startup.configured_servers == 0:
-                renderer.message(t("cli.mcp_skipped"))
-            elif startup.failed_servers == 0:
-                if startup.tool_count > 0:
-                    renderer.message(t("cli.mcp_ready", ready=startup.ready_servers, tools=startup.tool_count))
+                if disabled > 0:
+                    renderer.message(t("cli.mcp_all_disabled", disabled=disabled), "dim")
                 else:
-                    renderer.message(t("cli.mcp_ready_no_tools", ready=startup.ready_servers))
-            elif startup.ready_servers > 0:
-                renderer.message(
-                    t(
-                        "cli.mcp_partial_ready",
-                        ready=startup.ready_servers,
-                        tools=startup.tool_count,
-                        failed=startup.failed_servers,
-                    ),
-                    "yellow",
-                )
+                    renderer.message(t("cli.mcp_skipped"))
             else:
-                renderer.message(t("cli.mcp_init_failed"), "red")
+                if startup.failed_servers == 0:
+                    if startup.tool_count > 0:
+                        renderer.message(t("cli.mcp_ready", ready=startup.ready_servers, tools=startup.tool_count))
+                    else:
+                        renderer.message(t("cli.mcp_ready_no_tools", ready=startup.ready_servers))
+                elif startup.ready_servers > 0:
+                    renderer.message(
+                        t(
+                            "cli.mcp_partial_ready",
+                            ready=startup.ready_servers,
+                            tools=startup.tool_count,
+                            failed=startup.failed_servers,
+                        ),
+                        "yellow",
+                    )
+                else:
+                    renderer.message(t("cli.mcp_init_failed"), "red")
+
+                if disabled > 0:
+                    renderer.message(t("cli.mcp_disabled_hint", disabled=disabled), "dim")
 
             agent = Agent(
                 client=client, mcp=mcp, model=state.model, system_prompt=system_prompt, provider=state.provider
