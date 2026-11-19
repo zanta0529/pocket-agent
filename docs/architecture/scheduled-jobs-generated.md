@@ -2,7 +2,7 @@
 title: '排程作業文件'
 project: 'PocketAgent'
 version: '0.1.0'
-date: '2025-01-15'
+date: '2025-01-20'
 language: 'zh-TW'
 ---
 
@@ -45,19 +45,19 @@ flowchart TD
     Start[Agent 啟動 / 手動 /clean] --> CheckCoolDown{冷卻期過期?<br/>last_run + 86400s < now}
     CheckCoolDown -- 否 --> Skip[略過本次，排程下次]
     CheckCoolDown -- 是 --> ScanWorkspaces[掃描 ~/.pocket-agent/workspaces/ 所有工作區]
-    
+
     ScanWorkspaces --> ForEachWS[對每個工作區沙盒]
     ForEachWS --> CleanLogs[清理 logs/ 目錄<br/>TTL: housekeeping_ttl_days * log_ttl_multiplier<br/>預設 14 天]
     ForEachWS --> CleanScratch[清理 scratch/ 目錄<br/>TTL: housekeeping_ttl_days<br/>預設 7 天<br/>上限: max_files=100, max_size_mb=50]
     ForEachWS --> CleanSpillover[清理 scratch/outputs/ 落盤檔<br/>同 scratch 規則]
     ForEachWS --> CleanBackups[清理 backups/ 時光機備份<br/>TTL: housekeeping_ttl_days * active_backup_multiplier<br/>預設 28 天<br/>上限: backup_max_size_mb=200]
-    
+
     CleanLogs --> UpdateTimestamp[更新 last_run 時間戳]
     CleanScratch --> UpdateTimestamp
     CleanSpillover --> UpdateTimestamp
     CleanBackups --> UpdateTimestamp
     UpdateTimestamp --> Done[完成，記錄 INFO 日誌]
-    
+
     Skip --> Done
 ```
 
@@ -194,7 +194,7 @@ flowchart TD
 > **架構師風險評估**：
 >
 > - [x] 執行時間是否會與其他作業衝突：被動觸發，無排程衝突；記憶體快取避免重複提示
-> - [x] 冪等性是否保證：連線參數解析為純函式，快取寫入具冪等性；失敗清除快收保證下次重新驗證
+> - [x] 冪等性是否保證：連線參數解析為純函式，快取寫入具冪等性；失敗清除快取保證下次重新驗證
 > - [x] 資料一致性邊界是否明確：密碼僅存記憶體、Keyring 加密儲存、不寫入日誌 (遮罩 `[REDACTED]`)
 > - [x] 長時間執行是否有進度回報：SSH/RDP 連線建立有逾時保護；CLI Spinner 顯示「連線中...」
 > - [!] 潛在風險：`_prompt_mcp_conn_params` 需暫停 `rich.status` Spinner 避免渲染衝突；Windows `CONIN$` 直接讀取可能與 prompt-toolkit 衝突
@@ -205,9 +205,9 @@ flowchart TD
 
 | 元件           | 實作                                                                  | 版本        | 設定位置                              | 高可用性                                                                 |
 | -------------- | --------------------------------------------------------------------- | ----------- | ------------------------------------- | ------------------------------------------------------------------------ |
-| **內建排程器** | `asyncio.create_task()` + 冷卻期時間戳 (`housekeeping.py`)            | Python 3.14 | `config.json` `system.housekeeping_*` | 單進程單任務；Agent 重啟自動恢復排程；無分散式協調需求                   |
-| **OS 層排程**  | 無 (不使用 Cron/Windows Task Scheduler)                               | -           | -                                     | -                                                                        |
-| **CLI 指令**   | `Click` 註冊 slash command (`/clean`, `/prune`)                       | Click 8.5.0 | `src/pocket_agent/frontend/cli/commands/` | 使用者手動觸發，天然高可用                                               |
+| **內建非同步排程器** | `asyncio.create_task()` + `asyncio.sleep()` 實作固定間隔排程             | Python 3.14 | `system/housekeeping.py`, `constants.py` | 單一進程內執行，進程重啟即恢復；冷卻期持久化於 `config.json` (`last_housekeeping_run`) |
+| **CLI 互動指令**   | Click 指令註冊，使用者手動觸發                                        | Click 8.5.0 | `frontend/cli/commands/session.py`    | 無需高可用性；使用者控制觸發時機                                          |
+| **被動式健康檢查** | 工具呼叫前攔截檢查，`MCPManager._resolve_connection_params()`          | MCP SDK 1.x | `extensions/mcp.py`                   | 無持久狀態，記憶體快取隨進程生命週期                                      |
 
 ---
 
@@ -215,11 +215,10 @@ flowchart TD
 
 | 指標           | 來源                       | 告警閾值                         | 儀表板                        |
 | -------------- | -------------------------- | -------------------------------- | ----------------------------- |
-| **Housekeeping 執行成功率** | `agent.log` (INFO/WARNING/ERROR) | 連續 3 次失敗 → 人工介入          | `grep "Housekeeping" ~/.pocket-agent/workspaces/*/logs/agent.log` |
-| **Housekeeping 執行耗時**   | `agent.log` 時間戳差值     | > 30 秒 → 檢查檔案數/磁碟 IO     | 同上                          |
-| **Session 檔案總數/大小**   | `ls -la ~/.pocket-agent/sessions/` | > 1000 檔或 > 100 MB → 建議 `/prune` | `du -sh ~/.pocket-agent/sessions/` |
-| **MCP 連線失敗率**          | `agent.log` `[ERROR]` 含 `mcp` | 同一 server 連續 3 次失敗 → 檢查設定 | `grep "mcp.*ERROR" ~/.pocket-agent/workspaces/*/logs/agent.log` |
-| **沙盒目錄佔用**            | `Housekeeper` 掃描統計     | > `max_size_mb` (預設 50 MB) → 自動清理至 80% | `Housekeeper` 日誌輸出        |
+| **Housekeeping 執行成功率** | `agent.log` (INFO/WARNING) | < 100% (連續失敗 3 次告警)       | 無內建儀表板，依日誌分析      |
+| **Housekeeping 執行耗時**   | `agent.log` (DEBUG)        | > 30 秒                          | 無內建儀表板                  |
+| **Session 檔案數量** | `~/.pocket-agent/sessions/` | > 100 檔案 (建議執行 `/prune`)   | CLI `/usage` 指令顯示         |
+| **MCP 連線失敗率** | `agent.log` (ERROR)        | 連續 5 次失敗                    | 無內建儀表板                  |
 
 ---
 
@@ -227,4 +226,4 @@ flowchart TD
 
 | 版本        | 日期     | 作者       | 變更摘要 |
 | ----------- | -------- | ---------- | -------- |
-| 0.1.0       | 2025-01-15 | PocketAgent Team | 初版建立 (由 generate-system-docs 自動產生) |
+| 0.1.0       | 2025-01-20 | PocketAgent Team | 初版建立 (由 generate-system-docs 自動生成) |

@@ -2,7 +2,7 @@
 title: '運維手冊'
 project: 'PocketAgent'
 version: '0.1.0'
-date: '2025-01-15'
+date: '2025-01-20'
 language: 'zh-TW'
 ---
 
@@ -23,7 +23,7 @@ language: 'zh-TW'
 | **負責團隊** | PocketAgent 開發團隊                                                                     |
 | **值班輪換** | N/A (本機工具，無中央服務)                                                               |
 | **文件語系** | zh-TW                                                                                    |
-| **最後更新** | 2025-01-15                                                                               |
+| **最後更新** | 2025-01-20                                                                               |
 
 ---
 
@@ -40,7 +40,7 @@ flowchart TD
         Setup[pocket-agent setup\n首次設定精靈]
         Use[開始使用]
     end
-    
+
     subgraph Dev["開發模式"]
         Clone[git clone 專案]
         Venv[python -m venv venv]
@@ -49,17 +49,17 @@ flowchart TD
         SetupDev[pocket-agent setup]
         RunDev[run.bat / run.sh / run.command]
     end
-    
+
     subgraph Legacy["Legacy PyInstaller (不推薦)"]
         Build[build.bat 選擇 PyInstaller]
         ExeRun[執行 PocketAgent-cli.exe]
         Risk[防毒誤判風險高]
     end
-    
+
     Download --> Extract --> RunBat --> Setup --> Use
     Clone --> Venv --> Activate --> Install --> SetupDev --> RunDev
     Build --> ExeRun --> Risk
-    
+
     style Portable fill:#e8f5e9
     style Legacy fill:#ffebee
 ```
@@ -192,22 +192,22 @@ flowchart TD
 > ```cmd
 > :: Windows CMD
 > type ~/.pocket-agent/workspaces/*/logs/agent_*.log | findstr "ERROR"
-> type ~/.pocket-agent/workspaces/*/logs/agent_*.log | findstr "mcp"
+> type ~/.pocket-agent/workspaces/*/logs/agent_*.log | findstr "WARN"
 > 
 > :: PowerShell (若可用)
-> Get-Content ~/.pocket-agent/workspaces/*/logs/agent_*.log -Tail 100 | Select-String "ERROR"
+> Get-Content ~/.pocket-agent/workspaces/*/logs/agent_*.log | Select-String "ERROR"
 > ```
 
 ### 4.3 關鍵指標與健康檢查
 
-| 指標         | 正常範圍                    | 異常閾值                     | 檢查方式                                    |
-| ------------ | --------------------------- | ---------------------------- | ------------------------------------------- |
-| **啟動時間** | < 3 秒                      | > 10 秒                      | `Measure-Command { pocket-agent --version }` |
-| **回應延遲** | 首字 < 5 秒 (視模型/網路)   | > 30 秒無回應                | 觀察 CLI Spinner、「思考中...」動畫          |
-| **Token 用量** | 依模型/對話長度             | `/usage` 顯示 ratio > 90%    | 輸入 `/usage` 或 `/quota`                   |
-| **會話檔案數** | < 100 筆                    | > 500 筆或 > 50 MB           | `dir ~/.pocket-agent\sessions`              |
-| **沙盒目錄大小** | < 50 MB (單工作區)          | > `housekeeping_max_size_mb` | `du -sh ~/.pocket-agent/workspaces/*`       |
-| **Housekeeping** | 每 24h 執行 1 次            | 連續 3 次失敗                | `grep "Housekeeping" agent.log`             |
+| 指標           | 正常範圍          | 異常處理                          |
+| -------------- | ----------------- | --------------------------------- |
+| **啟動時間**   | < 3 秒            | > 10 秒檢查依賴、防毒軟體         |
+| **模型回應延遲** | < 30 秒 (視模型)  | > 60 秒檢查網路、降低 reasoning   |
+| **工具執行成功率** | > 95%           | 連續失敗檢查 `agent.log`、MCP 連線 |
+| **上下文使用率** | < 80%            | > 90% 觸發 `/compact` 或調整設定   |
+| **會話檔案數** | < 50              | > 100 執行 `/prune`               |
+| **沙盒目錄大小** | < 500 MB         | > 1 GB 手動清理、調整 housekeeping |
 
 ---
 
@@ -215,26 +215,24 @@ flowchart TD
 
 ### 5.1 例行維護排程
 
-| 作業        | 頻率             | 執行窗口           | 指令/步驟                                      | 負責人            | 影響範圍           |
-| ----------- | ---------------- | ------------------ | ---------------------------------------------- | ----------------- | ------------------ |
-| **Housekeeping** | 每 24 小時     | Agent 啟動後、冷卻期過期 | 自動 (背景任務) / 手動 `/clean`               | 系統自動          | 僅清理沙盒暫存檔   |
-| **Session Prune** | 依需求         | 使用者手動         | `/prune [30] [--keep 20]`                      | 使用者            | 刪除舊會話歷史     |
-| **依賴更新** | 每月/發布前      | 維護窗口           | `pip-compile requirements.in` + `pip install` | 開發者            | 需重新啟動驗證     |
-| **Portable 重建** | 重大版本/安全更新 | 發布流程           | `build.bat` → 推送 tag → GitHub Actions        | 發布工程師        | 使用者需重新下載   |
-| **日誌歸檔** | 每季             | 維護窗口           | 複製 `~/.pocket-agent/workspaces/*/logs/` 至備份 | 使用者/管理員     | 無服務影響         |
+| 作業        | 頻率             | 執行窗口           | 指令/步驟         | 負責人            | 影響範圍           |
+| ----------- | ---------------- | ------------------ | ----------------- | ----------------- | ------------------ |
+| Housekeeping 自動清理 | 每 24 小時     | 應用啟動時         | 自動 (無需手動)   | 系統              | 沙盒目錄           |
+| Session Prune | 視需求 (手動)   | 使用者決定         | `/prune`          | 使用者            | 會話歷史           |
+| 依賴更新檢查 | 每月            | 維護窗口           | `pip-compile --upgrade` | 開發團隊       | requirements.txt   |
+| 安全掃描     | 每月 / Release 前 | 維護窗口           | `pip-audit`、`bandit` | 開發團隊       | 相依套件、原始碼   |
 
 ### 5.2 版本升級檢查清單
 
-- [ ] 變更日誌審閱 (Breaking Changes：Provider 介面、Tool Schema、Config 結構)
-- [ ] 相依性安全掃描 (`pip-audit` / `safety check` / GitHub Dependabot)
-- [ ] 設定檔相容性檢查 (`config.json` 新欄位、預設值變更)
-- [ ] MCP 伺服器相容性 (`mcp_config.yaml` 結構、工具命名空間)
+- [ ] 變更日誌審閱 (Breaking Changes)
+- [ ] 相依性安全掃描 (`pip-audit`, `bandit`)
+- [ ] 設定檔相容性檢查 (`config-schema.json`)
 - [ ] 整合測試全數通過 (`pytest tests/`)
-- [ ] 手動驗證：OAuth 登入、各 Provider 切換、工具呼叫、MCP 連線
-- [ ] 效能基準測試 (啟動時間、首字延遲、記憶體用量)
-- [ ] 回滾方案確認 (保留舊版 Portable zip、Git tag)
-- [ ] 文件同步更新 (README、架構文件、CHANGELOG)
-- [ ] 利害關係人通知 (Release Notes、Discord/Slack 發布)
+- [ ] 格式與靜態分析通過 (`ruff format --check .`, `ruff check .`)
+- [ ] 匯入完整性檢查 (`scripts/check_imports.py src scripts`)
+- [ ] 手動驗證：CLI 啟動、設定精靈、基本對話、MCP 連線
+- [ ] 回滾方案確認 (保留舊版 zip / git tag)
+- [ ] 文件更新 (README、架構文件、運維手冊)
 
 ---
 
@@ -244,94 +242,84 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Detect[發現安全事件\n(日誌異常/使用者回報/自動偵測)] --> Assess[評估嚴重度\nP0/P1/P2]
-    Assess -->|P0 立即| Contain[隔離措施\n停用受影響 MCP/工具\n撤銷 Token]
-    Assess -->|P1 1小時內| Investigate[調查根因\n檢視日誌/審計/會話]
-    Assess -->|P2 24小時內| Document[記錄發現\n更新防護規則]
-    Contain --> Notify[通報團隊/使用者\n必要時向平台回報]
-    Investigate --> Remediate[修復/緩解\n更新程式碼/設定/輪換金鑰]
-    Document --> Remediate
-    Remediate --> Verify[驗證修復\n測試/滲透測試/審計]
-    Verify --> Close[結案\n發布公告/更新文件]
-    Notify --> Close
+    Detect[偵測到安全事件] --> Classify{分級}
+    Classify -- P0: 憑證洩漏/遠端執行 --> NotifyOwner[立即通知服務擁有者]
+    Classify -- P1: 權限繞過/資料外洩 --> NotifyTeam[1小時內通知團隊]
+    Classify -- P2: 資訊洩漏/DoS --> LogOnly[記錄並追蹤]
+    NotifyOwner --> Contain[遏制: 撤銷 Token、封鎖 IP、隔離環境]
+    NotifyTeam --> Contain
+    Contain --> Investigate[調查根因: 日誌、審計、腳本]
+    Investigate --> Remediate[修復: 更新、補丁、配置變更]
+    Remediate --> Verify[驗證修復: 測試、掃描、監控]
+    Verify --> Document[記錄事後報告、更新防護]
+    LogOnly --> Monitor[持續監控]
 ```
 
 ### 6.2 應變等級定義
 
-| 等級   | 定義                                                         | 響應時間        | 升級條件                    | 指揮官           |
-| ------ | ------------------------------------------------------------ | --------------- | --------------------------- | ---------------- |
-| **P0** | 主動攻擊進行中、機密外洩、RCE 漏洞被利用、大規模服務中斷     | 立即 (15 分鐘內) | 任何 P0 條件成立            | 專案負責人       |
-| **P1** | 高風險漏洞 (公開 PoC)、單一使用者資料外洩、關鍵功能失效     | 1 小時內         | P0 未解決超過 1 小時、影響擴大 | 安全工程師       |
-| **P2** | 中低風險漏洞、配置錯誤、非關鍵功能異常、資訊洩露風險        | 24 小時內        | P1 未解決超過 4 小時、可惡用 | 開發工程師       |
+| 等級   | 定義       | 響應時間        | 升級條件          | 指揮官           |
+| ------ | ---------- | --------------- | ----------------- | ---------------- |
+| **P0** | 憑證洩漏、RCE、大規模資料外洩 | 立即 (15 分鐘內) | 任何實際入侵跡象 | 服務擁有者       |
+| **P1** | 權限繞過、敏感資料存取、服務中斷 | 1 小時內         | 影響擴大、多用戶受影響 | 技術負責人       |
+| **P2** | 資訊洩漏、DoS 嘗試、異常行為 | 4 小時內         | 重複發生、規律性 | 值班工程師       |
 
-### 6.3 關鍵安全操作手冊
+### 6.3 關鍵安全操作
 
-| 操作                  | 指令/步驟                                                                 | 適用場景                      |
-| --------------------- | ------------------------------------------------------------------------- | ----------------------------- |
-| **撤銷 OAuth Token**  | `pocket-agent logout` → 重新 `setup` 登入                                 | Token 洩露、帳號被盜用         |
-| **停用 MCP Server**   | 編輯 `mcp_config.yaml` 設定 `enabled: false` → 重啟 Agent                 | MCP 供應鏈攻擊、工具行為異常   |
-| **封鎖特定工具**      | 從 `allowed_tools` 移除、或 `mcp_config.yaml` 移出 `safe_read_tools`      | 特定工具被濫用、漏洞利用       |
-| **輪換 API Key**      | 各平台 Console 撤銷舊 Key → 產生新 Key → `setup` 更新或 `config.json` 修改 | API Key 洩露、定期輪換         |
-| **清除所有本機資料**  | 刪除 `~/.pocket-agent/` 目錄 → 重新 `setup`                               | 嚴重入侵、需完全重置環境       |
-| **離線模式啟動**      | 拔網路線 / 防火牆封鎖 → 僅使用 Ollama 本地模型 + 本地工具                 | 網路被攻擊、需隔離環境繼續工作 |
+| 操作                  | 指令/步驟                                                              |
+| --------------------- | ---------------------------------------------------------------------- |
+| **撤銷 OAuth Token**  | `pocket-agent logout` (清除 Keyring/JWE)；供應商 Dashboard 撤銷       |
+| **撤銷 MCP 憑證**     | 刪除 `mcp_config.yaml` 相關 `env`/`inject`；目標系統撤銷 API Key/密碼 |
+| **清除會話歷史**      | 刪除 `~/.pocket-agent/sessions/*.json` (含 HMAC)                       |
+| **重置全域設定**      | 刪除 `~/.pocket-agent/config.json`、重新 `setup`                       |
+| **封鎖可疑網路連線**  | Windows 防火牆規則 / Linux `iptables` / 企業級 WAF                     |
 
 ---
 
 ## 7. 連絡資訊
 
-| 角色           | 聯絡方式                    | 備註                          |
-| -------------- | --------------------------- | ----------------------------- |
-| **專案維護者** | GitHub Issues / Discussions | <https://github.com/zanta0529/pocket-agent/issues> |
-| **安全回報**   | GitHub Security Advisories  | 私密回報：<https://github.com/zanta0529/pocket-agent/security/advisories/new> |
-| **功能建議**   | GitHub Discussions          | <https://github.com/zanta0529/pocket-agent/discussions> |
-| **文件問題**   | GitHub Issues (label: docs) | 標籤 `docs`、 `translation`   |
+| 角色           | 姓名            | 電話             | Email            | Slack/Teams      | 備援聯絡人        |
+| -------------- | --------------- | ---------------- | ---------------- | ---------------- | ----------------- |
+| **服務擁有者** | PocketAgent Team | -                | team@pocket-agent.dev | #pocket-agent | -                 |
+| **值班工程師** | -               | -                | -                | #pocket-agent-oncall | -              |
+| **資安團隊**   | -               | -                | security@pocket-agent.dev | #security    | -                 |
 
 ---
 
 ## 8. 運維流程圖
 
 ```mermaid
-flowchart TD
+flowchart TB
     subgraph Daily["日常運維"]
-        StartAgent[啟動 Agent] --> AutoHK[自動 Housekeeping]
-        AutoHK --> UserWork[使用者正常操作]
-        UserWork --> MonitorLog[監控 agent.log]
-        MonitorLog -->|異常| Troubleshoot[疑難排解 4.1]
-        Troubleshoot --> Resolve[解決/升級]
+        Start[啟動 PocketAgent] --> HealthCheck{健康檢查\n/usage 正常?}
+        HealthCheck -- 是 --> Monitor[監控日誌、指標]
+        HealthCheck -- 否 --> Troubleshoot[疑難排解流程]
+        Monitor --> Housekeeping[Housekeeping 自動執行]
+        Housekeeping --> End[正常運作]
+        Troubleshoot --> Fix[修復/升級/回滾]
+        Fix --> HealthCheck
     end
-    
-    subgraph Weekly["週維護"]
-        CheckSessions[檢查會話數量/大小] --> Prune[/prune 清理]
-        CheckDisk[檢查沙磁碟用量] --> CleanHK[/clean 手動清理]
-        CheckUpdates[檢查依賴/安全更新] --> UpdateDeps[更新依賴]
+
+    subgraph Incident["事件處理"]
+        Alert[告警觸發] --> Triage{分級}
+        Triage -- P0 --> P0Flow[P0 流程: 立即響應]
+        Triage -- P1 --> P1Flow[P1 流程: 1小時內]
+        Triage -- P2 --> P2Flow[P2 流程: 4小時內]
+        P0Flow --> Contain[遏制損害]
+        P1Flow --> Contain
+        P2Flow --> Contain
+        Contain --> RootCause[根因分析]
+        RootCause --> Fix[修復驗證]
+        Fix --> Postmortem[事後報告]
     end
-    
-    subgraph Monthly["月維護"]
-        ReviewSecurity[審視安全日誌/審計] --> RotateKeys[輪換 API Keys]
-        ReviewPerf[效能基準測試] --> TuneConfig[調整預算/逾時參數]
-        BackupConfig[備份設定/會話] --> VerifyRestore[驗證恢復流程]
-    end
-    
-    subgraph Incident["安全事件"]
-        Detect[偵測/接報] --> Assess[評估等級 P0/P1/P2]
-        Assess -->|P0| Immediate[立即隔離/撤銷/通報]
-        Assess -->|P1| Urgent[1小時內調查/修復]
-        Assess -->|P2| Scheduled[24小時內處理]
-        Immediate --> PostMortem[事後根因分析]
-        Urgent --> PostMortem
-        Scheduled --> PostMortem
-        PostMortem --> Improve[改善防護/更新文件]
+
+    subgraph Release["發布流程"]
+        Tag[推送 v* Tag] --> CI[GitHub Actions CI]
+        CI --> Build[建置 Portable]
+        Build --> Release[GitHub Release]
+        Release --> Verify[驗證下載、安裝、啟動]
+        Verify --> Announce[通知使用者]
     end
 ```
-
-> **架構師風險評估**：
->
-> - [x] 災難恢復演練頻率是否足夠：建議每季手動演練完整還原流程 (Portable 解壓縮 + 設定還原 + 會話載入)
-> - [x] 備份恢復時間是否符合 RTO 要求：核心功能 < 5 分鐘、完整環境 < 10 分鐘，符合預期
-> - [x] 單點故障是否已識別並緩解：Keyring 依賴 OS、JWE fallback、Portable 內建 Python 降低環境依賴
-> - [x] 憑證輪換是否自動化：OAuth Access Token 自動 Refresh (60秒前)；API Key 需手動輪換
-> - [x] 容量規劃是否有預警機制：Housekeeping `max_size_mb`、`max_files` 硬性上限；`/usage` 即時顯示 Context 用量
-> - [!] 潛在風險：無集中式監控/告警系統 (本機工具特性)；依賴使用者主動檢查日誌；企業部署建議整合 SIEM 收集 `agent.log`
 
 ---
 
@@ -339,4 +327,4 @@ flowchart TD
 
 | 版本        | 日期     | 作者       | 變更摘要 |
 | ----------- | -------- | ---------- | -------- |
-| 0.1.0       | 2025-01-15 | PocketAgent Team | 初版建立 (由 generate-system-docs 自動產生) |
+| 0.1.0       | 2025-01-20 | PocketAgent Team | 初版建立 (由 generate-system-docs 自動生成) |

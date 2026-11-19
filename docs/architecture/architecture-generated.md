@@ -2,7 +2,7 @@
 title: '系統架構文件'
 project: 'PocketAgent'
 version: '0.1.0'
-date: '2025-01-15'
+date: '2025-01-20'
 language: 'zh-TW'
 ---
 
@@ -18,11 +18,11 @@ language: 'zh-TW'
 | -------------- | ------------------------------------------------------- |
 | **專案名稱**   | PocketAgent                                             |
 | **版本**       | 0.1.0                                                   |
-| **主要技術棧** | Python 3.14+, asyncio, Click, Rich, prompt-toolkit      |
+| **主要技術棧** | Python 3.14+, asyncio, Click 8.5.0, Rich 15.0.0, prompt-toolkit 3.0.53, httpx 0.28.1, OpenAI SDK, Pydantic 2.14.2 |
 | **架構類型**   | Background Daemon / CLI Application (Local-First AI Agent) |
 | **部署環境**   | Windows 10/11, macOS (Apple Silicon / Intel), Linux (Ubuntu, Debian, RHEL, etc.) |
 | **文件語系**   | zh-TW                                                   |
-| **最後更新**   | 2025-01-15                                              |
+| **最後更新**   | 2025-01-20                                              |
 
 ---
 
@@ -182,10 +182,10 @@ flowchart TB
 | **MCPManager (extensions/mcp.py)** | 多傳輸層 MCP 連線、工具命名空間、Secret Inject、Artifact 隔離、連線參數動態詢問 | Stdio/SSE/Streamable HTTP, OAuth 2.1 PKCE, KeyringTokenStorage | `start()`, `get_tools()`, `call_tool()`, `normalize_mcp_server_name()` | 8 內建 MCP Server, Config, Auth |
 | **EngineFactory (engines/factory.py)** | 依 Provider 明確建立對應 Engine，避免 URL 推論 | `ENGINE_MAP` 註冊表, `create(provider, client, model)` | `create()` 回傳 `BaseEngine` | 4 Engine 實作, Providers |
 | **OpenAIResponsesEngine (engines/openai_engine.py)** | ChatGPT OAuth / OpenAI API 原生支援，Reasoning 內容解析 | OpenAI SDK Responses API, `reasoning_content` 獨立欄位 | `stream_chat()` 產出 `EventThinking`, `EventText`, `EventToolCallStart`, `EventUsage` | BaseEngine, OpenAI Provider |
-| **OllamaChatEngine (engines/ollama_engine.py)** | 本地/雲端 Ollama，內建 `<think>` 標籤狀態機解析 | 狀態機串流解析, `think`/`thinking` 事件分離 | `stream_chat()` 統一事件格式 | BaseEngine, Ollama Provider |
+| **OllamaChatEngine (engines/ollama_engine.py)** | 本地/雲端 Ollama，內建 `think` 標籤狀態機解析 | 狀態機串流解析, `think`/`thinking` 事件分離 | `stream_chat()` 統一事件格式 | BaseEngine, Ollama Provider |
 | **StandardChatCompletionsEngine (engines/chat_engine.py)** | Gemini/Groq/Mistral/SambaNova 統一 Chat Completions 協定 | 標準工具格式封裝, `format_chat_tools()`, `format_chat_messages()` | `stream_chat()` 統一事件格式 | BaseEngine, 各 Provider |
 | **CliFrontend (frontend/cli/main.py)** | CLI 互動渲染、指令分派、會話自動存檔、中斷處理 | Rich, prompt-toolkit, `CommandHandler`, `run_operation()` | `run(system_prompt, resume)` | Agent, Commands, Input, Render, State |
-| **ConfirmationBridge (frontend/cli/confirmation.py)** | 同步/非同步確認流程統一橋接，Accept-edits 模式同步子代理 | `on_confirm` 回呼, `Accept-edits` 全域旗標 | `confirm(command) -> bool \| str` | Agent, CliFrontend |
+| **ConfirmationBridge (frontend/cli/confirmation.py)** | 同步/非同步確認流程統一橋接，Accept-edits 模式同步子代理 | `on_confirm` 回呼, `Accept-edits` 全域旗標 | `confirm(command) -> bool | str` | Agent, CliFrontend |
 | **Config (system/config.py)** | 階層式配置：CLI > Env > config.json > Default，Keyring/Encrypted Provider | Strategy Pattern: `EnvConfigProvider`, `JsonConfigProvider`, `KeyringConfigProvider`, `EncryptedConfigProvider` | `get(key)`, `set(key, value)` | paths.py, constants.py |
 | **Auth (system/auth.py)** | OAuth 2.0 PKCE (OpenAI/Google)，Keyring 儲存，拒絕明碼降級，自動 Refresh | FastAPI + uvicorn 本機回呼, `keyring` 切塊寫入, JWE 加密庫 fallback | `get_token(provider)`, `save_token()`, `logout()` | Keyring, Config, Constants |
 | **Paths (system/paths.py)** | Bundle/使用者/工作區路徑解析，Portable 模式偵測 | `bundle_dir()`, `user_dir()`, `workspace_dir()`, `log_dir()`, `scratch_dir()` | `user_dir()`, `workspace_dir(slug)`, `log_dir()` | Config, Constants |
@@ -235,9 +235,8 @@ flowchart TB
 >
 > - [x] 認證/授權邊界是否清晰：OAuth PKCE、Keyring、JWE 三層防護；MCP Default-Deny + 確認回呼
 > - [x] 敏感資料加密傳輸與靜態：TLS 系統憑證庫、Keyring 硬體級加密、JWE AES-256-GCM + Argon2id
-> - [x] 審計日誌完整性：Agent log 含等級標記，敏感欄位自動遮罩 `[REDACTED]`；會話 HMAC 防竄改
-> - [x] 供應鏈相依性掃描：`scripts/check_imports.py` 驗證 `requirements.in` 宣告一致性；CI 含 Ruff + pytest
-> - [!] 潛在風險：`requirements.in` 仍保留 FastAPI/uvicorn (歷史殘留)；CLI 確認可被 `Accept-edits` 繞過需謹慎啟用
+> - [x] 審計日誌完整性：會話 HMAC 簽章、MCP Stdio 日誌、Agent 活動追蹤
+> - [x] 供應鏈相依性掃描：`scripts/check_imports.py` 檢查未宣告匯入、缺少依賴
 
 ---
 
@@ -245,40 +244,20 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    User[使用者輸入] --> CLI[CliFrontend]
-    CLI -->|指令分派| Commands{指令類型}
-    Commands -->|chat/image| Agent[Agent 主迴圈]
-    Commands -->|slash cmd| CmdHandler[CommandHandler]
+    User[使用者輸入] --> CLI[CLI 前端]
+    CLI --> Agent[Agent 主迴圈]
+    Agent --> Budget[ContextBudget 預算檢查]
+    Budget -->|預算充足| Engine[LLM 引擎]
+    Budget -->|預算不足| Compactor[HistoryCompactor 壓縮]
+    Compactor --> Engine
+    Engine -->|串流事件| Tools[工具層 / MCP]
+    Tools -->|結果| Agent
+    Agent -->|回應| CLI
+    CLI --> User
     
-    Agent --> Budget[ContextBudget\n預算檢查]
-    Budget -->|超標| Compact[清理舊工具輸出\n→ HistoryCompactor\n→ 滑動視窗\n→ 強制停止]
-    Budget -->|正常| Engine[EngineFactory\n選擇引擎]
-    
-    Engine --> LLM[LLM 串流請求]
-    LLM --> Events[EventThinking\nEventText\nEventToolCallStart\nEventUsage]
-    
-    Events -->|工具呼叫| ToolRegistry[ToolRegistry\n派發執行]
-    ToolRegistry -->|內建工具| BuiltinTools[FS/Shell/Web/Image/Doc/RAG/RepoMap]
-    ToolRegistry -->|MCP 工具| MCPManager[MCPManager\n轉發 MCP Server]
-    
-    MCPManager -->|Stdio| MCPServers[mcp_servers/\n8 內建伺服器]
-    MCPManager -->|SSE/HTTP| RemoteMCP[遠端 MCP Server]
-    
-    BuiltinTools --> Result[工具結果]
-    MCPServers --> Result
-    RemoteMCP --> Result
-    
-    Result -->|注入回 Context| Agent
-    Agent -->|串流回應| CLI
-    CLI -->|渲染| User
-    
-    %% Spillover path
-    ToolRegistry -.->|巨量輸出| Spillover[Spillover\n落盤沙盒]
-    Spillover -.->|頭尾預覽| Agent
-    
-    %% Session persistence
-    Agent -->|自動存檔| Sessions[Sessions\nJSON + HMAC]
-    Sessions -->|載入| Agent
+    Config[設定] -.-> Agent
+    Auth[認證] -.-> Engine
+    Sessions[會話持久化] -.-> Agent
 ```
 
 ---
@@ -287,41 +266,32 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph Dev["開發環境"]
-        Git[Git Clone]
-        Venv[python -m venv venv]
-        PipInstall[pip install -r requirements.txt]
-        PipEditable[pip install -e .]
-        RunDev[run.bat / run.sh / run.command]
-    end
-    
-    subgraph Portable["Modern Portable 發布版"]
-        GHRelease[GitHub Release\nPocketAgent-portable.zip]
+    subgraph Portable["Modern Portable (推薦)"]
+        Download[從 GitHub Releases 下載\nPocketAgent-portable.zip]
         Extract[解壓縮至任意目錄]
-        PocketBat[雙擊 pocket.bat]
-        PythonBundled[內建 python/ 官方簽章 CPython]
-        AppSrc[app/src 原始碼]
-        PortableMarker[PORTABLE 標記檔]
-        InPlaceUpdate[/update 原地更新]
+        RunBat[執行 pocket.bat]
+        Setup[pocket-agent setup]
     end
-    
-    subgraph Legacy["Legacy PyInstaller"]
-        PyInstaller[PyInstaller 打包]
-        ExeSingle[單一 PocketAgent-cli.exe]
-        InternalMCP[--internal-mcp-server 內建 MCP]
-        AntivirusRisk[防毒誤判風險高]
+
+    subgraph Dev["開發模式"]
+        Clone[git clone 專案]
+        Venv[python -m venv venv]
+        Activate[啟用虛擬環境]
+        Install[pip install -r requirements.txt\npip install -e .]
+        SetupDev[pocket-agent setup]
     end
-    
-    Git --> Venv --> PipInstall --> PipEditable --> RunDev
-    GHRelease --> Extract --> PocketBat --> PythonBundled
-    PythonBundled --> AppSrc
-    Extract --> PortableMarker
-    PocketBat --> InPlaceUpdate
-    PyInstaller --> ExeSingle --> InternalMCP
-    ExeSingle --> AntivirusRisk
-    
-    style Portable fill:#e8f5e9
-    style Legacy fill:#ffebee
+
+    subgraph Data["使用者資料目錄"]
+        ConfigDir[~/.pocket-agent/config.json]
+        SessionsDir[~/.pocket-agent/sessions/]
+        WorkspacesDir[~/.pocket-agent/workspaces/<slug>/]
+        MCPConfig[mcp_config.yaml]
+    end
+
+    Download --> Extract --> RunBat --> Setup
+    Clone --> Venv --> Activate --> Install --> SetupDev
+    Setup --> DataDir
+    SetupDev --> DataDir
 ```
 
 ---
@@ -330,4 +300,4 @@ flowchart TB
 
 | 版本        | 日期     | 作者       | 變更摘要 |
 | ----------- | -------- | ---------- | -------- |
-| 0.1.0       | 2025-01-15 | PocketAgent Team | 初版建立 (由 generate-system-docs 自動產生) |
+| 0.1.0       | 2025-01-20 | PocketAgent Team | 初版建立 (由 generate-system-docs 自動生成) |
