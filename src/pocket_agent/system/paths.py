@@ -14,6 +14,8 @@ skills/commands/agents）一律走 user_dir()。
 import sys
 from pathlib import Path
 
+from pocket_agent.system.constants import USER_DATA_DIR_NAME
+
 
 def is_frozen() -> bool:
     """是否為 PyInstaller 打包後的執行檔。"""
@@ -59,7 +61,7 @@ def build_info_path() -> Path:
 
 def user_dir() -> Path:
     """使用者資料根目錄，不存在時建立。"""
-    d = Path.home() / ".pocket-agent"
+    d = Path.home() / USER_DATA_DIR_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
 

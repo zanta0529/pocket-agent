@@ -14,7 +14,10 @@ from pocket_agent.system.constants import (
     DEFAULT_TOOL_OUTPUT_CHARS,
     MAX_FILE_SEARCH_SIZE_BYTES,
     MAX_READ_FILE_BYTES,
+    TOOL_NOT_FOUND_PREFIX,
+    USER_DATA_DIR_NAME,
 )
+from pocket_agent.system.i18n import t
 
 log = logging.getLogger("pocket-agent")
 
@@ -293,15 +296,19 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
         rel = target.relative_to(global_user_dir)
         allowed_global_subdirs = {"workspaces", "scratch", "backups", "skills"}
         if len(rel.parts) == 0 or rel.parts[0] not in allowed_global_subdirs:
-            raise ValueError("安全限制：禁止存取敏感目錄或檔案 (.pocket-agent)")
+            raise ValueError(t("fs_tool.sensitive_path_blocked", part=USER_DATA_DIR_NAME))
 
-    for part in target.parts:
-        lower_part = part.lower()
+    user_dir_name_lower = USER_DATA_DIR_NAME.lower()
+    parts_lower = [p.lower() for p in target.parts]
+    for idx, part in enumerate(target.parts):
+        lower_part = parts_lower[idx]
         if lower_part == ".git" or lower_part.startswith(".env"):
-            raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
-        # 僅當目標不在合法全域使用者目錄內時，才阻擋名為 .pocket-agent 的目錄
-        if part == ".pocket-agent" and not is_in_global:
-            raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
+            raise ValueError(t("fs_tool.sensitive_path_blocked", part=part))
+        # 僅當目標不在合法全域使用者目錄內時，才阻擋與使用者資料目錄同名之敏感目錄
+        if lower_part == user_dir_name_lower and not is_in_global:
+            if idx + 1 < len(parts_lower) and parts_lower[idx + 1] == "skills":
+                raise ValueError(t("fs_tool.sensitive_path_skill_hint", part=part))
+            raise ValueError(t("fs_tool.sensitive_path_blocked", part=part))
 
     # 工作區監禁 (Workspace Jail)
     # 將啟動目錄 (CWD) 與全域使用者目錄 (user_dir) 作為基礎工作區無條件加入
@@ -574,8 +581,13 @@ def call_fs_tool(
             target = _validate_safe_path(path_str, workspace_dirs)
 
         if name == "list_dir":
+            display_path = (
+                str(target.relative_to(Path.cwd().resolve()))
+                if target.is_relative_to(Path.cwd().resolve())
+                else path_str
+            )
             if not target.exists():
-                return f"[ERROR] 目錄不存在: {target}"
+                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.dir_not_found', path=display_path)}"
             if target.is_file():
                 return f"[ERROR] {target} 是一個檔案而非目錄。請改用 'read_file' 工具來讀取內容。"
             if not target.is_dir():
@@ -627,7 +639,7 @@ def call_fs_tool(
 
         elif name == "get_file_info":
             if not target.exists():
-                return f"[ERROR] 檔案或目錄不存在: {path_str}"
+                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.path_not_found', path=path_str)}"
 
             stat = target.stat()
             size_bytes = stat.st_size
@@ -663,7 +675,7 @@ def call_fs_tool(
                 else path_str
             )
             if not target.exists():
-                return f"[ERROR] 檔案不存在: {display_path}"
+                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.file_not_found', path=display_path)}"
             if target.is_dir():
                 return f"[ERROR] {display_path} 是一個目錄。請改用 'list_dir' 工具來查看該目錄內容。"
             if not target.is_file():

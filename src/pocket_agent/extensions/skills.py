@@ -21,6 +21,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from pocket_agent.system.constants import DEFAULT_SKILL_RESOURCE_LIST_LIMIT
 from pocket_agent.system.paths import bundle_dir, user_dir
 from pocket_agent.system.registry import MarkdownRegistry, parse_frontmatter
 
@@ -359,6 +360,43 @@ def is_skill_tool(name: str) -> bool:
     return name in ("use_skill", "search_skills")
 
 
+def _list_skill_relative_resources(name: str, workspace_dirs: list[str] | None = None) -> list[str]:
+    """列舉技能目錄底下的頂層附屬資源，僅回傳以技能名稱開頭的相對路徑。"""
+    item = next((s for s in list_skills(workspace_dirs) if s.get("name") == name), None)
+    raw_path = item.get("path") if isinstance(item, dict) else None
+    if not isinstance(raw_path, (str, Path)):
+        return []
+
+    skill_dir = Path(raw_path).parent
+    if not skill_dir.is_dir():
+        return []
+
+    try:
+        skill_dir_resolved = skill_dir.resolve()
+        raw_entries = list(skill_dir.iterdir())
+    except OSError:
+        return []
+
+    entries: list[Path] = []
+    for entry in raw_entries:
+        if entry.name.startswith(".") or entry.name.lower() == "skill.md":
+            continue
+        if entry.is_symlink():
+            try:
+                if not entry.resolve().is_relative_to(skill_dir_resolved):
+                    continue
+            except OSError:
+                continue
+        entries.append(entry)
+
+    entries.sort(key=lambda e: (not e.is_dir(), e.name.lower()))
+    resources: list[str] = []
+    for entry in entries[:DEFAULT_SKILL_RESOURCE_LIST_LIMIT]:
+        suffix = "/" if entry.is_dir() else ""
+        resources.append(f"{name}/{entry.name}{suffix}")
+    return resources
+
+
 def _call_use_skill(args: dict, workspace_dirs: list[str] | None = None) -> str:
     name = str(args.get("name", "")).strip()
     body = load_skill(name, workspace_dirs)
@@ -377,12 +415,26 @@ def _call_use_skill(args: dict, workspace_dirs: list[str] | None = None) -> str:
         roots = [os.getcwd()]
 
     roots_display = "\n".join(f"  - {r}" for r in roots)
+    resources = _list_skill_relative_resources(name, workspace_dirs)
+    if resources:
+        resources_display = "\n".join(f"  - {r}" for r in resources)
+        resource_section = (
+            "- Bundled resources within this skill "
+            "(pass these relative paths directly to read_file or list_dir):\n"
+            f"{resources_display}\n"
+        )
+    else:
+        resource_section = ""
+
     workspace_context = (
         f"[System] Skill '{name}' is active.\n"
         f"- Current workspace roots for project files:\n{roots_display}\n"
-        f"- Relative paths referencing files or subdirectories within this skill (or prefixed with '{name}/') "
-        f"can be accessed directly via read_file or list_dir. Do not guess host absolute paths.\n"
-        f"- For all project codebase files, derive paths relative to the workspace roots listed above.\n\n"
+        f"{resource_section}"
+        "- Relative paths referencing files or subdirectories within this skill "
+        f"(prefixed with '{name}/', e.g., '{name}/<subpath>') can be accessed directly via "
+        "read_file or list_dir. Do NOT prepend any workspace root or skills directory prefix. "
+        "Do not guess host absolute paths.\n"
+        "- For all project codebase files, derive paths relative to the workspace roots listed above.\n\n"
     )
 
     from pocket_agent.tools.fs import wrap_external_content

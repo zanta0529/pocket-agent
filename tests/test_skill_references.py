@@ -1,6 +1,9 @@
 from unittest.mock import patch
 
+import pytest
+
 from pocket_agent.extensions.skills import call_skill_tool
+from pocket_agent.system.i18n import set_locale
 from pocket_agent.tools.fs import _resolve_skill_reference_path, _validate_safe_path, call_fs_tool
 
 
@@ -76,3 +79,155 @@ def test_call_skill_tool_guidance_no_host_path_leak(tmp_path):
         assert "Skill 'demo' is active" in prompt
         assert "within this skill" in prompt
         assert "Do not guess host absolute paths" in prompt
+
+
+def test_call_skill_tool_lists_bundled_resources_without_hardcoded_dirs(tmp_path):
+    fake_user_dir = tmp_path / "user"
+    skill_dir = fake_user_dir / "skills" / "generate-system-docs"
+    (skill_dir / "references" / "templates").mkdir(parents=True)
+    (skill_dir / "examples").mkdir()
+    (skill_dir / ".hidden").mkdir()
+    (skill_dir / "SKILL.md").write_text("Use references/templates/", encoding="utf-8")
+    (skill_dir / "helper.txt").write_text("helper", encoding="utf-8")
+
+    with (
+        patch("pocket_agent.extensions.skills.load_skill", return_value="Use references/templates/"),
+        patch(
+            "pocket_agent.extensions.skills.list_skills",
+            return_value=[{"name": "generate-system-docs", "path": skill_dir / "SKILL.md"}],
+        ),
+    ):
+        prompt = call_skill_tool({"name": "generate-system-docs"}, workspace_dirs=[str(tmp_path / "proj")])
+        assert "Skill 'generate-system-docs' is active" in prompt
+        assert "within this skill" in prompt
+        assert "Do not guess host absolute paths" in prompt
+        assert "- generate-system-docs/examples/" in prompt
+        assert "- generate-system-docs/references/" in prompt
+        assert "- generate-system-docs/helper.txt" in prompt
+        assert (
+            prompt.index("generate-system-docs/examples/")
+            < prompt.index("generate-system-docs/references/")
+            < prompt.index("generate-system-docs/helper.txt")
+        )
+        assert "SKILL.md" not in prompt
+        assert ".hidden" not in prompt
+        assert ".pocket-agent" not in prompt
+        assert ".agents" not in prompt
+        assert str(fake_user_dir) not in prompt
+
+
+def test_call_skill_tool_resource_list_respects_limit_and_skips_escaping_symlink(tmp_path):
+    skill_dir = tmp_path / "user" / "skills" / "big-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("body", encoding="utf-8")
+    for idx in range(25):
+        (skill_dir / f"dir_{idx:02d}").mkdir()
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    try:
+        (skill_dir / "aaa_escape").symlink_to(outside_dir, target_is_directory=True)
+        symlink_created = True
+    except OSError:
+        symlink_created = False
+
+    with (
+        patch("pocket_agent.extensions.skills.load_skill", return_value="body"),
+        patch(
+            "pocket_agent.extensions.skills.list_skills",
+            return_value=[{"name": "big-skill", "path": skill_dir / "SKILL.md"}],
+        ),
+    ):
+        prompt = call_skill_tool({"name": "big-skill"}, workspace_dirs=[str(tmp_path / "proj")])
+        listed = [line.strip() for line in prompt.splitlines() if line.strip().startswith("- big-skill/")]
+        assert len(listed) == 20
+        assert "- big-skill/dir_00/" in listed
+        assert "- big-skill/dir_19/" in listed
+        assert "- big-skill/dir_20/" not in listed
+        if symlink_created:
+            assert "- big-skill/aaa_escape/" not in listed
+
+
+def test_validate_safe_path_workspace_pocket_agent_skills_gives_skill_hint(tmp_path):
+    project_dir = tmp_path / "infoman"
+    project_dir.mkdir(parents=True)
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    fake_global.mkdir(parents=True)
+    wrong_path = project_dir / ".pocket-agent" / "skills" / "generate-system-docs" / "references"
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        with pytest.raises(ValueError) as exc_info:
+            _validate_safe_path(str(wrong_path), workspace_dirs=[str(project_dir)])
+
+        msg = str(exc_info.value)
+        assert "安全限制：禁止存取敏感目錄或檔案 (.pocket-agent)" in msg
+        assert "<skill_name>/<subpath>" in msg
+        assert "read_file" in msg
+        assert "list_dir" in msg
+        assert ".pocket-agent/skills" not in msg
+        assert str(fake_global) not in msg
+
+        res = call_fs_tool(
+            "list_dir",
+            {"path": str(wrong_path)},
+            on_confirm=None,
+            workspace_dirs=[str(project_dir)],
+        )
+        assert "[ERROR]" in res
+        assert "<skill_name>/<subpath>" in res
+
+
+def test_validate_safe_path_workspace_pocket_agent_non_skill_keeps_generic_error(tmp_path):
+    project_dir = tmp_path / "infoman"
+    project_dir.mkdir(parents=True)
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    fake_global.mkdir(parents=True)
+    wrong_config = project_dir / ".pocket-agent" / "config.json"
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        with pytest.raises(ValueError) as exc_info:
+            _validate_safe_path(str(wrong_config), workspace_dirs=[str(project_dir)])
+
+        msg = str(exc_info.value)
+        assert msg == "安全限制：禁止存取敏感目錄或檔案 (.pocket-agent)"
+        assert "<skill_name>/<subpath>" not in msg
+
+
+def test_validate_safe_path_workspace_pocket_agent_i18n_en_us(tmp_path):
+    set_locale("en_US")
+    project_dir = tmp_path / "infoman"
+    project_dir.mkdir(parents=True)
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    fake_global.mkdir(parents=True)
+    wrong_path = project_dir / ".pocket-agent" / "skills" / "generate-system-docs" / "references"
+    wrong_config = project_dir / ".pocket-agent" / "config.json"
+
+    expected_prefix = "Security restriction: access to sensitive directory or file (.pocket-agent) is forbidden"
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        with pytest.raises(ValueError) as exc_info:
+            _validate_safe_path(str(wrong_path), workspace_dirs=[str(project_dir)])
+
+        msg = str(exc_info.value)
+        assert expected_prefix in msg
+        assert "<skill_name>/<subpath>" in msg
+        assert "read_file" in msg
+        assert "list_dir" in msg
+        assert ".pocket-agent/skills" not in msg
+        assert str(fake_global) not in msg
+
+        with pytest.raises(ValueError) as exc_info_cfg:
+            _validate_safe_path(str(wrong_config), workspace_dirs=[str(project_dir)])
+
+        cfg_msg = str(exc_info_cfg.value)
+        assert cfg_msg == expected_prefix
+        assert "<skill_name>/<subpath>" not in cfg_msg

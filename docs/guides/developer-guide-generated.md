@@ -2,7 +2,7 @@
 title: '開發者指南'
 project: 'PocketAgent'
 version: '0.1.0'
-date: '2025-01-15'
+date: '2025-01-20'
 language: 'zh-TW'
 ---
 
@@ -29,7 +29,7 @@ language: 'zh-TW'
 
 ### 1.2 專案克隆與設定
 
-```bash
+```cmd
 # 1. 克隆專案
 git clone https://github.com/zanta0529/pocket-agent.git
 cd pocket-agent
@@ -278,148 +278,160 @@ pocket-agent/
 
 ### 4.2 新增內建工具
 
-1. **定義 Tool Schema** (`tools/<tool>.py`):
-   - 遵循 OpenAI Function Calling 格式
-   - 標記 `_is_safe_read: True` (唯讀工具) 或預設 False (需確認)
-
-2. **實作呼叫函式** (`call_<tool>_tool`):
-   - 參數驗證、錯誤處理、取消檢查 (`check_cancelled`)
-   - 回傳字串結果 (供 LLM 繼續)
-
-3. **註冊至 ToolRegistry** (`core/tool_registry.py`):
-   - `default_tool_registry.register(TOOLS, call_tool_func)`
-   - 敏感工具判定 `is_sensitive()`、取消收尾 `on_cancel()`
-
-4. **新增測試** (`tests/test_<tool>.py`):
-   - 正常路徑、邊界條件、錯誤處理、取消行為
+1. 在 `src/pocket_agent/tools/` 建立新模組 (如 `new_tool.py`)
+2. 定義 `NEW_TOOLS: list[dict]` (OpenAI Responses 格式) 並實作 `call_new_tool()`
+3. 在 `core/tool_registry.py` 的 `default_tool_registry` 註冊
+4. 實作 `is_sensitive` 判定、`on_cancel` 收尾邏輯
+5. 新增測試 `tests/test_new_tool.py` (隔離網路/檔案系統)
 
 ### 4.3 新增 MCP Server
 
-1. **建立伺服器腳本** (`mcp_servers/<name>_mcp.py`):
-   - 實作 `async def main()`，使用 `mcp.server.Server`
-   - 定義工具函式，使用 `@server.call_tool()` 裝飾器
-   - 僅提供唯讀/安全操作，遵循 `safe_read_tools` 白名單慣例
+1. 在 `mcp_servers/` 建立 `<name>_mcp.py`
+2. 實作 `main()` 入口：`stdio_server` 為主傳輸層
+3. 使用 `_db_common.py` 共用基礎設施 (資料庫連線池、健康檢查)
+4. 在 `mcp_config.example.yaml` 新增 server 範本 (`command`, `args`, `env`, `inject`, `safe_read_tools`)
+5. **安全**：唯讀查詢、受控健康診斷、SSH/RDP 雙軌驗證、密碼不落盤
+6. 新增測試 `tests/test_<name>_mcp.py`
 
-2. **更新 MCP Config 範本** (`mcp_config.example.yaml`):
-   - 新增 `servers.<name>` 區塊，指定 `transport: stdio`、命令參數
-   - 設定 `safe_read_tools` 白名單
-   - 定義 `env` 連線參數 (留空以啟用執行期詢問)
+### 4.4 新增 CLI 指令
 
-3. **更新連線參數規格** (`extensions/mcp.py`):
-   - 在 `CONN_PARAM_SPECS` 註冊新參數 (`env_key`, `label`, `default`, `is_secret`)
+1. 在 `frontend/cli/commands/` 建立新模組 (如 `new_command.py`)
+2. 實作 `CliCommand` Protocol: `async execute(ctx, args) -> CommandResult`
+3. 在 `CliCommandRegistry` (或 `_build_registry`) 註冊
+4. 支援多語系：`pocket_agent.system.i18n.t(key)`，更新 `locales/*.json`
+5. 新增測試 `tests/test_cli_commands.py`
 
-4. **新增測試** (`tests/test_<name>_mcp.py`):
-   - Mock MCP Server、驗證工具呼叫、連線參數注入、錯誤處理
+### 4.5 新增子代理
 
-### 4.4 新增 Slash Command
-
-1. **建立 Command 類別** (`frontend/cli/commands/<category>.py`):
-   - 實作 `CliCommand` Protocol: `async execute(ctx, args) -> CommandResult`
-   - 使用 `CommandContext` 存取 `agent`、`state`、`reader`、`renderer`、`tools`
-
-2. **註冊至 Registry** (`frontend/cli/commands/__init__.py`):
-   - 在 `_build_registry()` 中 `registry.register("<name>", CommandClass())`
-
-3. **更新多語系** (`locales/zh_TW.json`, `locales/en_US.json`):
-   - 新增指令說明、提示訊息、錯誤訊息鍵值
-
-4. **新增測試** (`tests/test_cli_commands.py`):
-   - 測試指令分派、參數解析、互動流程
-
-### 4.5 修改上下文預算參數
-
-- 所有常數集中於 `system/constants.py` (單一權威來源)
-- 使用者可透過 `config.json` `system.*` 覆寫
-- 修改後須驗證：`test_context_budget.py`、實際大對話場景
+1. 在 `subagents/` 建立 `<name>.md` (遵循 `researcher.md` 格式)
+2. 在 `core/subagents.py` 的 `SUBAGENTS` 註冊
+3. 定義系統提示詞、可用工具清單、任務範疇
 
 ---
 
-## 5. 除錯技巧
+## 5. 核心開發規範
 
-| 場景         | 方法                                                                    |
-| ------------ | ----------------------------------------------------------------------- |
-| **本地除錯** | VS Code `launch.json` 設定 `module: "pocket_agent.main"`，啟動偵錯      |
-| **CLI 除錯** | `pocket-agent --log-level DEBUG` 或設定 `config.json` `log_level: "DEBUG"` |
-| **MCP 除錯** | `python mcp_servers/<name>_mcp.py` 直接執行測試；查看 `mcp_stdio.log`   |
-| **日誌分析** | `~/.pocket-agent/workspaces/<slug>/logs/agent.log` (RotatingFileHandler) |
-| **效能分析** | `python -m cProfile -o profile.stats -m pocket_agent` → `snakeviz`      |
-| **記憶體分析** | `pip install memray` → `memray run -m pocket_agent` → `memray flamegraph` |
+### 5.1 架構設計原則 (Adapter/Strategy/Factory/Command)
+
+- **Adapter**：引擎層轉換各家 SDK 為統一 `stream_chat` 契約；工具層統一透過 `ToolRegistry` 擴充
+- **Strategy**：新增 OpenAI 相容供應商優先繼承 `OpenAICompatibleProvider`；前端查詢能力旗標而非硬編碼 provider
+- **Factory**：`EngineFactory` 集中選擇及建立引擎；呼叫端顯式傳入 `provider`
+- **Command**：斜線指令透過 `CliCommandRegistry` 註冊獨立實作，禁止巨型 `if/elif` 路由器
+
+### 5.2 編碼規範
+
+- Python 4 空白縮排、UTF-8、LF、檔尾換行；行長 ≤ 120 字元
+- **Ruff E501 防範**：超過 120 字元使用隱式字串拼接拆分；含 CJK 字元預留安全餘裕
+- **常數集中管理**：所有魔術數字維護於 `system/constants.py`
+- 格式以 `pyproject.toml` Ruff 設定為準：雙引號、E/F/I 規則
+- 新增程式以 Python 3.14 相容為基準，補型別與錯誤處理
+
+### 5.3 多語系 (i18n) 開發規範
+
+- 所有使用者可見文字維護於 `src/pocket_agent/locales/*.json` (`zh_TW.json`, `en_US.json`)
+- 透過 `pocket_agent.system.i18n.t(key, **kwargs)` 讀取，**嚴禁寫死顯示文字**
+- 新增/調整文字時，**務必同步更新所有語系檔**
+- 不可翻譯：內部工具名稱、System Prompt、內部前綴比對邏輯、後台 logging
+- 獨立 MCP 伺服器：`try/except ImportError` 提供降級函式
+
+### 5.4 上下文與草稿區
+
+- `ContextBudget` 動態預算管理：`有效視窗 − 預留輸出 − 安全餘裕`
+- 送出前統一流程：清除舊工具輸出 (60%) → `HistoryCompactor` 壓縮 → 安全滑動視窗 → 強制停止
+- 使用者可微調：`system.context_window`、`system.context_reserve_output`、`system.context_safety_margin`、`system.context_compact_target_ratio`
+- `read_file` 具 500 行與 12,000 字元雙重限制，支援 `char_offset`
+- 大型任務**必須**寫入暫存區 (`~/.pocket-agent/workspaces/<slug>/scratch/notes.md`)，**嚴禁**在工作目錄建立 `.agents/scratch`
+
+### 5.5 安全不變量
+
+- **確認回呼契約 (`on_confirm`)**：檔案寫入/敏感操作僅在 `decision is True` 時放行；非 `True` 視為拒絕
+- **指令白名單 (`permissions.py`)**：保留 `strip()` 後參數與引號邊界，`shlex` 分詞失敗 fail-closed
+- **唯讀資料庫/RDP 隔離**：強制唯讀查詢、零鎖定巡檢、容量熔斷；RDP 綁定受信 `mstsc.exe`
+- **引擎工具集邊界**：Chat Completions 僅在 `finish_reason == "tool_calls"` 派發工具
+- **原生工具優先**：檔案操作必須用內建工具，**嚴禁** shell 包裝 `echo`/`sed`/`grep` 等
+- **環境限制**：Windows 僅 `cmd.exe`，PowerShell 受封鎖
+- **操作審查**：不自動執行測試/Lint/建置/安裝/Git 提交；由使用者手動執行
 
 ---
 
-## 6. 擴充指南
+## 6. 測試指南
 
-### 6.1 新增模組 (遵循 Adapter/Strategy/Factory/Command)
+### 6.1 測試架構
 
-1. 定義介面/基底類別 (抽象層)
-2. 實作具體類別 (封裝差異)
-3. 註冊至 Factory/Registry (集中選擇)
-4. 前端/呼叫端僅依賴介面 (依賴抽象)
+- **框架**：pytest + `conftest.py` 全域 fixture
+- **隔離**：`tmp_path` 隔離 `user_dir`、固定 `zh_TW` 語系、清除 `POCKET_AGENT_LANG`
+- **模式**：非同步測試使用 `pytest-asyncio`、`AsyncMock` 模擬串流
 
-### 6.2 整合外部服務
+### 6.2 關鍵測試檔案
 
-1. 在 `config.json` / `mcp_config.yaml` 新增設定項
-2. 建立 Client/Adapter (`system/providers/` 或 `mcp_servers/`)
-3. 實作介面與錯誤處理 (重試、熔斷、逾時)
-4. 使用 `constants.py` 管理逾時/緩衝區常數
-5. 更新運維手冊 (`docs/architecture/runbook-generated.md`)
+| 測試檔案 | 覆蓋範圍 |
+|---------|---------|
+| `test_agent_resilience.py` | Agent 韌性、工具派發、取消、中斷 |
+| `test_context_budget.py` | 預算計算、壓縮觸發、Spillover |
+| `test_cli_flow.py` | CLI 完整互動流程 |
+| `test_mcp_manager.py` | MCP 連線、工具命名空間、Secret Inject |
+| `test_security_agent.py` | 安全邊界、確認回呼、白名單 |
+| `test_*_mcp.py` | 各 MCP Server 功能與安全 |
+
+### 6.3 執行測試
+
+```cmd
+# 全量測試
+venv\Scripts\python.exe -m pytest tests/
+
+# 特定模組
+venv\Scripts\python.exe -m pytest tests/test_cli_flow.py
+
+# 關鍵字過濾
+venv\Scripts\python.exe -m pytest -k "mcp" tests/
+```
 
 ---
 
-## 7. 實用腳本
+## 7. 打包與發布
 
-| 腳本           | 用途              | 指令                                    |
-| -------------- | ----------------- | --------------------------------------- |
-| `run.bat`      | Windows 一鍵啟動  | `run.bat`                               |
-| `run.sh`       | Linux 一鍵啟動    | `chmod +x run.sh && ./run.sh`           |
-| `run.command`  | macOS 一鍵啟動    | `chmod +x run.command && ./run.command` |
-| `build.bat`    | 統一建置 (Portable/PyInstaller) | `build.bat`                    |
-| `check_imports.py` | 匯入完整性檢查 | `python scripts/check_imports.py src scripts` |
+### 7.1 Modern Portable (推薦)
+
+```cmd
+# 建置
+build.bat
+
+# 或手動
+venv\Scripts\python.exe build_scripts\build_portable.py
+```
+
+產出：`dist/PocketAgent-portable.zip` (含 bundled Python、官方簽章 `pythonw.exe`)
+
+### 7.2 Legacy PyInstaller (不推薦)
+
+```cmd
+build.bat
+# 選擇 PyInstaller 選項
+```
+
+風險：防毒誤判率高、啟動較慢、不支援官方簽章
+
+### 7.3 CI/CD 發布流程
+
+1. 推送 `v*` tag (如 `v0.1.0`)
+2. `.github/workflows/release.yml` 自動觸發
+3. Windows-latest + Python 3.14 執行建置
+4. 上傳 `PocketAgent-portable.zip` 至 GitHub Release
 
 ---
 
 ## 8. 參考資源
 
-- **專案 GitHub**：<https://github.com/zanta0529/pocket-agent>
-- **API 文件**：`pocket_agent/` 模組 docstring + 類型提示
-- **架構決策記錄 (ADR)**：`docs/architecture/` 6 份架構文件
-- **Agensi Skills**：<https://agensi.io/skills> (Plan-Build-Verify, Reveal.js Presentation)
-- **MCP 規範**：<https://modelcontextprotocol.io/>
+- **專案指引**：`AGENTS.md`、`docs/PROJECT_INSTRUCTIONS.md`
+- **架構文件**：`docs/architecture/*.md` (6 份)
+- **現有文件**：`README.md`、`README.zh-TW.md`
+- **MCP 開發**：`mcp_servers/README.md`
+- **GitHub Actions**：`.github/workflows/*.yml`
 
 ---
 
-## 9. 開發流程圖
-
-```mermaid
-flowchart TD
-    Start[開發開始] --> Branch[建立 feature/fix 分支]
-    Branch --> Code[編寫程式碼 + 單元測試]
-    Code --> Lint[Ruff format + check]
-    Lint --> ImportCheck[check_imports.py]
-    ImportTest --> Test[pytest tests/]
-    Test --> Commit[提交 (符合 Conventional Commits)]
-    Commit --> PR[發起 PR 到 dev/main]
-    PR --> CI[GitHub Actions CI]
-    CI -->|通過| Review[Code Review]
-    CI -->|失敗| FixCI[修復 CI 錯誤]
-    FixCI --> CI
-    Review -->|核准| Merge[合併]
-    Review -->|需修改| Code
-    Merge -->|tag v*| Release[Release Workflow 建置 Portable]
-    Release --> Done[完成]
-```
-
-> **架構師風險評估**：
->
-> - [x] 分支策略是否強制 Code Review：PR 合併需通過 CI + 人工審閱
-> - [x] CI/CD 門檻是否包含安全掃描：Ruff 靜態分析、import 完整性、pytest；無專門 SAST/DAST 工具
-> - [x] 依賴更新是否有自動化檢查：`pip-compile` 鎖定版本、Dependabot 可啟用；`check_imports.py` 防止缺漏
-> - [x] 本地開發環境與生產環境一致性：Modern Portable 使用官方 CPython，開發環境 venv 版本一致 (Python 3.14)
-
----
-
-## 10. 變更記錄
+## 9. 變更記錄
 
 | 版本        | 日期     | 作者       | 變更摘要 |
 | ----------- | -------- | ---------- | -------- |
-| 0.1.0       | 2025-01-15 | PocketAgent Team | 初版建立 (由 generate-system-docs 自動產生) |
+| 0.1.0       | 2025-01-20 | PocketAgent Team | 初版建立 (由 generate-system-docs 自動生成) |

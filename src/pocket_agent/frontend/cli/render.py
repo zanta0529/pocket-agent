@@ -328,7 +328,7 @@ class CliRenderer:
         """向後相容：從工具的 JSON arguments 字串萃取最有意義的單一摘要欄位。"""
         return self._extract_tool_target(name, args_raw, max_width=70)
 
-    def _format_tool_lines(self, prefix: tuple[str, str], info: dict) -> list[Text]:
+    def _format_tool_lines(self, prefix: tuple[str, str], info: dict, status_note: str = "") -> list[Text]:
         """格式化工具行：未超過終端寬度時單行接續，超過時改為樹狀結構兩行。"""
         parts = [prefix, (info["action"], info["action_color"])]
         if info.get("sa_name"):
@@ -339,12 +339,14 @@ class CliRenderer:
 
         target_text = info.get("target") or info.get("summary") or ""
         if not target_text:
+            if status_note:
+                parts.append((status_note, "dim"))
             return [Text.assemble(*parts)]
 
         term_w = getattr(self.console, "width", 80) or 80
         header_text = Text.assemble(*parts)
         header_w = cell_len(header_text.plain)
-        target_w = cell_len(target_text)
+        target_w = cell_len(target_text) + cell_len(status_note)
 
         # 預留 1 格空白與 1 格終端右側緩衝
         if header_w + 1 + target_w <= max(20, term_w - 1):
@@ -352,6 +354,8 @@ class CliRenderer:
                 parts.extend([(" ", ""), ("【安全警告】", "bold red"), (f" {target_text[6:]}", "dim")])
             else:
                 parts.extend([(" ", ""), (target_text, "dim")])
+            if status_note:
+                parts.append((status_note, "dim"))
             return [Text.assemble(*parts)]
 
         # 超過寬度時降級為樹狀結構兩行
@@ -363,6 +367,8 @@ class CliRenderer:
             ]
         else:
             sub_parts = [("  └─ ", "dim"), (target_text, "dim")]
+        if status_note:
+            sub_parts.append((status_note, "dim"))
         return [header_text, Text.assemble(*sub_parts)]
 
     def message(self, value: object, style: str = "dim") -> None:
@@ -683,15 +689,20 @@ class CliRenderer:
                 name = data.get("name", "")
                 call_id = data.get("call_id", name)
                 ok = data.get("ok", True)
+                status = data.get("status") or ("ok" if ok else "error")
 
                 info = self._pending_tools.pop(call_id, None)
                 if info:
-                    bullet_color = "bold green" if ok else "bold red"
-                    lines = self._format_tool_lines(("● ", bullet_color), info)
+                    from pocket_agent.system.i18n import t
+
+                    is_error = status == "error" or not ok
+                    bullet_color = "bold red" if is_error else "bold green"
+                    status_note = t("cli.tool_not_found_suffix") if status == "not_found" else ""
+                    lines = self._format_tool_lines(("● ", bullet_color), info, status_note=status_note)
                     for line in lines:
                         self.console.print(line)
 
-                if not ok:
+                if status == "error" or not ok:
                     if "::" in name:
                         sa_name, inner_name = name.split("::", 1)
                         server_tag, real_name = parse_mcp_tool_name(inner_name)

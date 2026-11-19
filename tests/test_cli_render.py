@@ -7,6 +7,7 @@ from rich.console import Console
 
 from pocket_agent.frontend.cli.render import CliRenderer, toolbar
 from pocket_agent.frontend.cli.state import CliState
+from pocket_agent.system.i18n import set_locale
 
 
 @pytest.mark.parametrize("width", [0, 1, 5, 40, 60, 80, 120])
@@ -215,3 +216,82 @@ def test_reply_not_streamed_prints_content():
     assert "● Pocket Agent" in output
     assert "answer" in output
     assert "本輪已返回" in output
+
+
+def test_tool_done_not_found_renders_soft_suffix_without_error_panel():
+    """status='not_found' 以淡灰附註單行／兩行柔和顯示，不印出紅色失敗面板。"""
+    # 1. zh_TW 寬度充足：單行顯示
+    set_locale("zh_TW")
+    stream_zh = StringIO()
+    renderer_zh = CliRenderer(Console(file=stream_zh, force_terminal=False, no_color=True, width=100))
+    renderer_zh.event(
+        "tool_start",
+        {
+            "call_id": "c1",
+            "name": "list_dir",
+            "arguments": '{"path": ".generate-system-docs"}',
+            "is_safe_read": True,
+        },
+    )
+    renderer_zh.event(
+        "tool_done",
+        {
+            "call_id": "c1",
+            "name": "list_dir",
+            "ok": True,
+            "status": "not_found",
+            "result": "[NOT_FOUND] 目錄不存在：.generate-system-docs",
+        },
+    )
+    out_zh = stream_zh.getvalue()
+    assert "● Read (list_dir)" in out_zh
+    assert ".generate-system-docs" in out_zh
+    assert "（不存在）" in out_zh
+    assert "✗" not in out_zh
+    assert "工具執行失敗" not in out_zh
+
+    # 2. en_US 寬度狹窄：單行 (51) 超過 43 觸發樹狀降級，第二行 (38 <= 44) 不斷詞折行
+    set_locale("en_US")
+    stream_en = StringIO()
+    renderer_en = CliRenderer(Console(file=stream_en, force_terminal=False, no_color=True, width=44))
+    renderer_en.event(
+        "tool_start",
+        {
+            "call_id": "c2",
+            "name": "list_dir",
+            "arguments": '{"path": ".generate-system-docs"}',
+            "is_safe_read": True,
+        },
+    )
+    renderer_en.event(
+        "tool_done",
+        {
+            "call_id": "c2",
+            "name": "list_dir",
+            "ok": True,
+            "status": "not_found",
+            "result": "[NOT_FOUND] Directory not found: .generate-system-docs",
+        },
+    )
+    out_en = stream_en.getvalue()
+    assert "● Read (list_dir)" in out_en
+    assert "└─" in out_en
+    assert "(not found)" in out_en
+    assert "✗" not in out_en
+
+    # 3. 真正錯誤 (status='error', ok=False) 仍顯示 ✗ 與失敗面板
+    stream_err = StringIO()
+    renderer_err = CliRenderer(Console(file=stream_err, force_terminal=False, no_color=True, width=100))
+    renderer_err.event(
+        "tool_done",
+        {
+            "call_id": "c3",
+            "name": "list_dir",
+            "ok": False,
+            "status": "error",
+            "result": "[ERROR] boom",
+        },
+    )
+    out_err = stream_err.getvalue()
+    assert "✗" in out_err
+    assert "boom" in out_err
