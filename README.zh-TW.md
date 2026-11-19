@@ -270,9 +270,13 @@ run.bat setup       # Windows
   - [三層式路由、分層配置與子代理機制](docs/architecture/routing-and-subagents.md)
   - [MCP 伺服器掛載與安全注入機制](docs/architecture/mcp-architecture.md)
   - [Hooks 生命週期機制](docs/architecture/hooks-lifecycle.md)
+  - [系統架構總覽](docs/architecture/architecture-generated.md)
+  - [排程作業與管家機制](docs/architecture/scheduled-jobs-generated.md)
 - **設定與操作手冊 (`docs/guides/`)**：
   - [設定檔規格說明書 (Configuration Specification)](docs/guides/configuration-specification.md)
   - [CLI 操作與限制說明 (CLI Usage & Limitations)](docs/guides/cli-usage-limitations.md)
+  - [開發者指南](docs/guides/developer-guide-generated.md)
+  - [運維手冊](docs/guides/runbook-generated.md)
 - **外部調研與演算法原理 (`docs/research/`)**：
   - [子代理權限與工作區隔離評估報告](docs/research/agent-workspace-architecture-report.md)
   - [圖解 BM25 評分與 SQLite FTS5 檢索機制](docs/research/bm25-visual-explanation.md)

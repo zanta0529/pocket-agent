@@ -368,7 +368,7 @@ def main() -> int:
             shutil.copy2(src, app / name)
 
     # 4. 啟動器與標記檔
-    print("[4/6] 產生啟動器與建置資訊 ...")
+    print("[4/5] 產生啟動器與建置資訊 ...")
     build_info = _collect_build_info()
     (OUT / "pocket.bat").write_text(POCKET_BAT, encoding="ascii", newline="\r\n")
     (app / "PORTABLE").write_text(
@@ -381,18 +381,8 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    # 5. 產生說明書
-    print("[5/6] 產生操作說明書 ...")
-    try:
-        subprocess.run([sys.executable, str(ROOT / "scripts" / "generate_manual.py")], check=True)
-        manual_src = ROOT / "dist" / "PocketAgent_Manual.md"
-        if manual_src.exists():
-            shutil.copy2(manual_src, OUT / "PocketAgent_Manual.md")
-    except Exception as e:
-        print(f"      ! 產生說明書失敗：{e}")
-
-    # 6. 打包
-    print("[6/6] 壓縮可攜式發佈包 ...")
+    # 5. 打包
+    print("[5/5] 壓縮可攜式發佈包 ...")
     zip_path = ROOT / "dist" / "PocketAgent-portable.zip"
     zip_path.unlink(missing_ok=True)
 

@@ -144,7 +144,7 @@ The interactive wizard guides you through five steps (defaults to English if `lo
 1. **Select Language**:
    - Dynamically lists available locales under `locales/` (e.g., `en_US`, `zh_TW`), writes your selection to `config.json`, and immediately switches the remaining wizard steps to that language.
 2. **Select Service Provider & Login**:
-   - **ChatGPT Plus/Pro (OpenAI OAuth PKCE)**: *No API key needed* — opens your browser to authorize and automatically returns the token to `http://localhost:1455`.
+   - **ChatGPT Plus/Pro (OpenAI OAuth PKCE)**: _No API key needed_ — opens your browser to authorize and automatically returns the token to `http://localhost:1455`.
    - **Gemini (Google AI Studio)**: Supports Google OAuth browser login or `GEMINI_API_KEY`.
    - **Cloud Inference (OpenRouter / Groq / SambaNova / Mistral / Ollama Cloud)**: Enter your API Key (protected via OS Keyring or JWE encrypted vault).
    - **Local Models (Ollama)**: Connects to `http://localhost:11434` by default, supporting offline execution.
@@ -163,15 +163,15 @@ Once started, the CLI displays an interactive conversation prompt with a live bo
 
 ### Terminal Shortcuts
 
-| Key Combination               | Description                                                                                             |
-| :---------------------------- | :------------------------------------------------------------------------------------------------------ |
-| **Enter**                     | Submit current input.                                                                                   |
-| **Esc then Enter** (Meta+Enter) | Insert a newline (multi-line paste is also preserved in the buffer).                                  |
-| **Alt+V**                     | Smart clipboard paste: supports files selected in Explorer, text paths, and **in-memory screenshots**.  |
-| **Tab / Arrow Keys**          | Auto-complete commands/paths and navigate interactive selection menus.                                  |
-| **Ctrl+L**                    | Clear terminal screen while preserving conversation history.                                            |
-| **Ctrl+C**                    | While typing: clear input buffer (keeps attachments); during execution: interrupt active agent/subagent.|
-| **Ctrl+D** or `/exit`         | Safely close and exit the application.                                                                  |
+| Key Combination                 | Description                                                                                              |
+| :------------------------------ | :------------------------------------------------------------------------------------------------------- |
+| **Enter**                       | Submit current input.                                                                                    |
+| **Esc then Enter** (Meta+Enter) | Insert a newline (multi-line paste is also preserved in the buffer).                                     |
+| **Alt+V**                       | Smart clipboard paste: supports files selected in Explorer, text paths, and **in-memory screenshots**.   |
+| **Tab / Arrow Keys**            | Auto-complete commands/paths and navigate interactive selection menus.                                   |
+| **Ctrl+L**                      | Clear terminal screen while preserving conversation history.                                             |
+| **Ctrl+C**                      | While typing: clear input buffer (keeps attachments); during execution: interrupt active agent/subagent. |
+| **Ctrl+D** or `/exit`           | Safely close and exit the application.                                                                   |
 
 ---
 
@@ -206,7 +206,7 @@ Type any of the following `/` commands at the prompt:
 #### 👥 Subagents & Custom Skills
 
 - `/subagent <name> <task>` or `/<name> <task>`: **Zero-Token Routing** — intercepts at the CLI layer and dispatches directly to the named subagent without main-agent LLM overhead (e.g., `/researcher gather competitor info`).
-- `/parallel <name:task> | <name:task>`: Run multiple subagents in parallel (Map) and automatically synthesize their reports into one final summary (Reduce). *Separate tasks with `|`*.
+- `/parallel <name:task> | <name:task>`: Run multiple subagents in parallel (Map) and automatically synthesize their reports into one final summary (Reduce). _Separate tasks with `|`_.
 - `/skills [name]`: List all available global and workspace skills, or view a specific skill's SOP.
 - `/learn`: Analyze recent conversation context and interactively extract a reusable skill.
 
@@ -270,9 +270,13 @@ Technical architecture and specification documents are available under `docs/`:
   - [Routing, Layered Config & Subagents](docs/architecture/routing-and-subagents.md)
   - [MCP Architecture & Secret Injection](docs/architecture/mcp-architecture.md)
   - [Hooks Lifecycle](docs/architecture/hooks-lifecycle.md)
+  - [System Architecture Overview](docs/architecture/architecture-generated.md)
+  - [Scheduled Jobs & Housekeeping](docs/architecture/scheduled-jobs-generated.md)
 - **Guides (`docs/guides/`)**:
   - [Configuration Specification](docs/guides/configuration-specification.md)
   - [CLI Usage & Limitations](docs/guides/cli-usage-limitations.md)
+  - [Developer Guide](docs/guides/developer-guide-generated.md)
+  - [Operations Runbook](docs/guides/runbook-generated.md)
 - **Research (`docs/research/`)**:
   - [Agent Workspace Isolation Report](docs/research/agent-workspace-architecture-report.md)
   - [BM25 Scoring & SQLite FTS5 Explained](docs/research/bm25-visual-explanation.md)
