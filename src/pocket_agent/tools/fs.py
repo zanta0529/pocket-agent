@@ -14,7 +14,9 @@ from pocket_agent.system.constants import (
     DEFAULT_TOOL_OUTPUT_CHARS,
     MAX_FILE_SEARCH_SIZE_BYTES,
     MAX_READ_FILE_BYTES,
+    USER_DATA_DIR_NAME,
 )
+from pocket_agent.system.i18n import t
 
 log = logging.getLogger("pocket-agent")
 
@@ -293,15 +295,19 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
         rel = target.relative_to(global_user_dir)
         allowed_global_subdirs = {"workspaces", "scratch", "backups", "skills"}
         if len(rel.parts) == 0 or rel.parts[0] not in allowed_global_subdirs:
-            raise ValueError("安全限制：禁止存取敏感目錄或檔案 (.pocket-agent)")
+            raise ValueError(t("fs_tool.sensitive_path_blocked", part=USER_DATA_DIR_NAME))
 
-    for part in target.parts:
-        lower_part = part.lower()
+    user_dir_name_lower = USER_DATA_DIR_NAME.lower()
+    parts_lower = [p.lower() for p in target.parts]
+    for idx, part in enumerate(target.parts):
+        lower_part = parts_lower[idx]
         if lower_part == ".git" or lower_part.startswith(".env"):
-            raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
-        # 僅當目標不在合法全域使用者目錄內時，才阻擋名為 .pocket-agent 的目錄
-        if part == ".pocket-agent" and not is_in_global:
-            raise ValueError(f"安全限制：禁止存取敏感目錄或檔案 ({part})")
+            raise ValueError(t("fs_tool.sensitive_path_blocked", part=part))
+        # 僅當目標不在合法全域使用者目錄內時，才阻擋與使用者資料目錄同名之敏感目錄
+        if lower_part == user_dir_name_lower and not is_in_global:
+            if idx + 1 < len(parts_lower) and parts_lower[idx + 1] == "skills":
+                raise ValueError(t("fs_tool.sensitive_path_skill_hint", part=part))
+            raise ValueError(t("fs_tool.sensitive_path_blocked", part=part))
 
     # 工作區監禁 (Workspace Jail)
     # 將啟動目錄 (CWD) 與全域使用者目錄 (user_dir) 作為基礎工作區無條件加入

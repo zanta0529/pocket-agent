@@ -506,5 +506,9 @@
     "wait_cancelled": "User cancelled the action. Abort the current task and ask the user how to proceed.",
     "closed": "Browser closed",
     "already_closed": "Browser was not open"
+  },
+  "fs_tool": {
+    "sensitive_path_blocked": "Security restriction: access to sensitive directory or file ({part}) is forbidden",
+    "sensitive_path_skill_hint": "Security restriction: access to sensitive directory or file ({part}) is forbidden. To read skill files, do not prepend a workspace path to a skills directory; pass a relative path (e.g., <skill_name>/<subpath>) directly to read_file or list_dir."
   }
 }
