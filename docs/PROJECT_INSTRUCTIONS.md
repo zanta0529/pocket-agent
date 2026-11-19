@@ -112,8 +112,8 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 ```cmd
 venv\Scripts\python.exe -m ruff format --check .
 venv\Scripts\python.exe -m ruff check .
-venv\Scripts\python.exe scripts\check_imports.py src scripts
-venv\Scripts\python.exe scripts\check_imports.py tests --req requirements-dev.in
+venv\Scripts\python.exe scripts\check_imports.py src scripts --req requirements.in --ignore tiktoken
+venv\Scripts\python.exe scripts\check_imports.py tests --req requirements.in --req requirements-dev.in
 venv\Scripts\python.exe -m pytest tests/
 venv\Scripts\python.exe -m pytest tests/test_cli_flow.py
 ```
