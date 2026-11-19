@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pocket_agent.system.i18n import set_locale
 from pocket_agent.tools.fs import call_fs_tool
 
 
@@ -219,3 +220,49 @@ def test_fs_write_tools_reject_string_and_non_true_confirmations(tmp_path: Path,
         assert res_other.startswith("[使用者拒絕")
         assert existing.read_text(encoding="utf-8") == "original\n"
     assert len(backup_calls) == 0
+
+
+def test_fs_read_only_not_found_returns_non_error_marker_i18n(tmp_path: Path):
+    """測試唯讀工具探測不存在路徑時回傳 [NOT_FOUND] 與雙語系訊息，真正錯誤仍維持 [ERROR]。"""
+    missing_dir = tmp_path / ".generate-system-docs"
+    missing_file = tmp_path / "missing.txt"
+    ws = [str(tmp_path)]
+
+    # 1. zh_TW 語系
+    set_locale("zh_TW")
+    res_dir = call_fs_tool("list_dir", {"path": str(missing_dir)}, on_confirm=None, workspace_dirs=ws)
+    assert res_dir.startswith("[NOT_FOUND] ")
+    assert "目錄不存在：" in res_dir
+    assert "[ERROR]" not in res_dir
+
+    res_file = call_fs_tool("read_file", {"path": str(missing_file)}, on_confirm=None, workspace_dirs=ws)
+    assert res_file.startswith("[NOT_FOUND] ")
+    assert "檔案不存在：" in res_file
+    assert "[ERROR]" not in res_file
+
+    res_info = call_fs_tool("get_file_info", {"path": str(missing_file)}, on_confirm=None, workspace_dirs=ws)
+    assert res_info.startswith("[NOT_FOUND] ")
+    assert "檔案或目錄不存在：" in res_info
+    assert "[ERROR]" not in res_info
+
+    # 2. en_US 語系
+    set_locale("en_US")
+    res_dir_en = call_fs_tool("list_dir", {"path": str(missing_dir)}, on_confirm=None, workspace_dirs=ws)
+    assert res_dir_en.startswith("[NOT_FOUND] ")
+    assert "Directory not found:" in res_dir_en
+
+    res_file_en = call_fs_tool("read_file", {"path": str(missing_file)}, on_confirm=None, workspace_dirs=ws)
+    assert res_file_en.startswith("[NOT_FOUND] ")
+    assert "File not found:" in res_file_en
+
+    res_info_en = call_fs_tool("get_file_info", {"path": str(missing_file)}, on_confirm=None, workspace_dirs=ws)
+    assert res_info_en.startswith("[NOT_FOUND] ")
+    assert "File or directory not found:" in res_info_en
+
+    # 3. 真正型別錯誤仍維持 [ERROR]
+    regular = tmp_path / "regular.txt"
+    regular.write_text("hi", encoding="utf-8")
+    err_list_file = call_fs_tool("list_dir", {"path": str(regular)}, on_confirm=None, workspace_dirs=ws)
+    assert err_list_file.startswith("[ERROR]")
+    err_read_dir = call_fs_tool("read_file", {"path": str(tmp_path)}, on_confirm=None, workspace_dirs=ws)
+    assert err_read_dir.startswith("[ERROR]")

@@ -45,6 +45,7 @@ from pocket_agent.system.constants import (
     LOG_BACKUP_COUNT,
     LOG_FILE_MAX_BYTES,
     PROVIDER_OPENAI,
+    TOOL_NOT_FOUND_PREFIX,
     WEB_RESEARCH_HARD_LIMIT,
     WEB_RESEARCH_SOFT_LIMIT,
 )
@@ -1709,8 +1710,14 @@ class Agent:
                         result.startswith("Error:") or result.startswith("[ERROR]") or result.startswith("[使用者拒絕")
                     ):
                         ok_status = False
+                        tool_status = "error"
+                    elif isinstance(result, str) and result.startswith(TOOL_NOT_FOUND_PREFIX):
+                        ok_status = True
+                        tool_status = "not_found"
+                        all_errors = False
                     else:
                         ok_status = True
+                        tool_status = "ok"
                         all_errors = False
                 except asyncio.CancelledError:
                     log.warning("TOOL cancelled during execution: name=%s", fc["name"])
@@ -1735,6 +1742,7 @@ class Agent:
                         log.error("TOOL error %s: %s", type(e).__name__, e)
                         result = f"[ERROR] {e}"
                     ok_status = False
+                    tool_status = "error"
 
                 self.activity.record_tool_result(
                     fc["name"],
@@ -1766,6 +1774,7 @@ class Agent:
                         "name": fc["name"],
                         "result": result,
                         "ok": ok_status,
+                        "status": tool_status,
                     },
                 )
 

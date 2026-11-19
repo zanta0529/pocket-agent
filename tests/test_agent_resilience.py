@@ -335,3 +335,68 @@ def test_instructions_static_prefix_invariant_across_queries():
     prefix_1 = inst_1.split(anchor, 1)[0] + anchor
     prefix_2 = inst_2.split(anchor, 1)[0] + anchor
     assert prefix_1 == prefix_2
+
+
+def test_agent_not_found_probe_emits_not_found_status_and_avoids_error_bailout(monkeypatch):
+    """連續兩輪 [NOT_FOUND] 探測應發出 status='not_found' 且不觸發連續錯誤熔斷。"""
+
+    async def _test():
+        from pocket_agent.engines.base import EventText, EventToolCallDone, EventToolCallStart
+        from pocket_agent.engines.factory import EngineFactory
+
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        rounds = [0]
+        seen_inputs: list[list] = []
+        seen_tools: list[list] = []
+
+        class MockProbeEngine(BaseEngine):
+            async def stream_chat(
+                self,
+                input_items,
+                instructions,
+                tools,
+                reasoning_param=None,
+                cancel_check=None,
+                build_tools_callback=None,
+            ):
+                rounds[0] += 1
+                seen_inputs.append(list(input_items))
+                seen_tools.append(list(tools))
+
+                if rounds[0] == 1:
+                    yield EventToolCallStart("c1", "list_dir")
+                    yield EventToolCallDone("c1", "list_dir", '{"path": ".generate-system-docs"}')
+                elif rounds[0] == 2:
+                    yield EventToolCallStart("c2", "read_file")
+                    yield EventToolCallDone("c2", "read_file", '{"path": "optional.yml"}')
+                else:
+                    yield EventText("已確認選用設定不存在，採用預設值。")
+
+        mock_engine = MockProbeEngine(mock_client, "test-model")
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: mock_engine)
+
+        def fake_fs(name, args, on_confirm, workspace_dirs=None):
+            if name == "list_dir":
+                return "[NOT_FOUND] 目錄不存在：.generate-system-docs"
+            return "[NOT_FOUND] 檔案不存在：optional.yml"
+
+        monkeypatch.setattr("pocket_agent.core.agent.call_fs_tool", fake_fs)
+
+        events: list[tuple[str, object]] = []
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="test-model", provider="openai")
+        agent.on_stream = lambda kind, data: events.append((kind, data))
+
+        _thinking, reply, _usage = await agent.chat("分析專案")
+
+        done_events = [data for kind, data in events if kind == "tool_done" and isinstance(data, dict)]
+        assert len(done_events) == 2
+        assert all(ev.get("ok") is True and ev.get("status") == "not_found" for ev in done_events)
+        assert len(seen_tools[2]) > 0
+        expected_out = "[NOT_FOUND] 目錄不存在：.generate-system-docs"
+        assert any(isinstance(item, dict) and expected_out in str(item.get("output", "")) for item in seen_inputs[1])
+        assert "已確認選用設定不存在，採用預設值。" in reply
+
+    asyncio.run(_test())

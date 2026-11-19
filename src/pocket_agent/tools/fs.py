@@ -14,6 +14,7 @@ from pocket_agent.system.constants import (
     DEFAULT_TOOL_OUTPUT_CHARS,
     MAX_FILE_SEARCH_SIZE_BYTES,
     MAX_READ_FILE_BYTES,
+    TOOL_NOT_FOUND_PREFIX,
     USER_DATA_DIR_NAME,
 )
 from pocket_agent.system.i18n import t
@@ -580,8 +581,13 @@ def call_fs_tool(
             target = _validate_safe_path(path_str, workspace_dirs)
 
         if name == "list_dir":
+            display_path = (
+                str(target.relative_to(Path.cwd().resolve()))
+                if target.is_relative_to(Path.cwd().resolve())
+                else path_str
+            )
             if not target.exists():
-                return f"[ERROR] 目錄不存在: {target}"
+                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.dir_not_found', path=display_path)}"
             if target.is_file():
                 return f"[ERROR] {target} 是一個檔案而非目錄。請改用 'read_file' 工具來讀取內容。"
             if not target.is_dir():
@@ -633,7 +639,7 @@ def call_fs_tool(
 
         elif name == "get_file_info":
             if not target.exists():
-                return f"[ERROR] 檔案或目錄不存在: {path_str}"
+                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.path_not_found', path=path_str)}"
 
             stat = target.stat()
             size_bytes = stat.st_size
@@ -669,7 +675,7 @@ def call_fs_tool(
                 else path_str
             )
             if not target.exists():
-                return f"[ERROR] 檔案不存在: {display_path}"
+                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.file_not_found', path=display_path)}"
             if target.is_dir():
                 return f"[ERROR] {display_path} 是一個目錄。請改用 'list_dir' 工具來查看該目錄內容。"
             if not target.is_file():

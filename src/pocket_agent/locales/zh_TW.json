@@ -68,7 +68,8 @@
     "stopped_main": "⏹ 已停止主代理",
     "exiting_on_sigint": "收到中斷訊號，正在離開…",
     "invalid_path": "路徑不存在或無效：{path}",
-    "attachment_index_out_of_range": "附件編號超出範圍"
+    "attachment_index_out_of_range": "附件編號超出範圍",
+    "tool_not_found_suffix": "（不存在）"
   },
   "confirmation": {
     "allow_file_write": "是否允許寫入檔案？",
@@ -509,6 +510,9 @@
   },
   "fs_tool": {
     "sensitive_path_blocked": "安全限制：禁止存取敏感目錄或檔案 ({part})",
-    "sensitive_path_skill_hint": "安全限制：禁止存取敏感目錄或檔案 ({part})。若要讀取技能附屬檔案，請勿將工作區路徑與技能目錄拼接，請直接傳入相對路徑（如 <skill_name>/<subpath>）給 read_file 或 list_dir。"
+    "sensitive_path_skill_hint": "安全限制：禁止存取敏感目錄或檔案 ({part})。若要讀取技能附屬檔案，請勿將工作區路徑與技能目錄拼接，請直接傳入相對路徑（如 <skill_name>/<subpath>）給 read_file 或 list_dir。",
+    "dir_not_found": "目錄不存在：{path}",
+    "file_not_found": "檔案不存在：{path}",
+    "path_not_found": "檔案或目錄不存在：{path}"
   }
 }

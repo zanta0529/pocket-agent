@@ -56,6 +56,7 @@ DEFAULT_SEARCH_MAX_RESULTS = 100  # search_files 檔名或關鍵字檢索最多�
 TIME_MACHINE_BACKUP_MAX_BYTES = 20 * 1024 * 1024  # 20 MB: 檔案修改前時光機備份上限
 USER_DATA_DIR_NAME = ".pocket-agent"  # 使用者資料根目錄名稱 (~/.pocket-agent)
 DEFAULT_SKILL_RESOURCE_LIST_LIMIT = 20  # use_skill 提示中最多列出的頂層附屬資源項目數
+TOOL_NOT_FOUND_PREFIX = "[NOT_FOUND]"  # 唯讀探測工具查無目標時的不可翻譯內部狀態前綴
 
 
 # ==============================================================================
