@@ -246,6 +246,9 @@ run.bat setup       # Windows
   - `rhel_mcp.py`：遠端 Linux (RHEL) 主機 SSH 結構化唯讀巡檢與系統日誌診斷。
   - `win_rdp_mcp.py`：遠端 Windows 主機 RDP (Port 3389) 視覺控制與唯讀巡檢。
 - **CLI 動態捷徑 (Zero-Token Routing)**：輸入 `/<name>` 直接啟動子代理，跳過主代理的 LLM 推理，達成零 Token 消耗的高速派發。
+- **公開技能（Agensi 技能市集）**：PocketAgent 原生支援通用的 `SKILL.md` 技能規格，能與其他主流 AI 代理工具（如 Claude Code、Cursor 等）無縫共用同一套工作流，不綁定單一平台。以下兩個由本專案作者發布的實戰技能，可作為隨插即用的參考範例，展現 PocketAgent 在嚴謹工程開發與技術簡報交付上的實際運作效果：
+  - [Plan-Build-Verify — Safe AI Coding with Approval & TDD](https://agensi.io/skills/plan-build-verify)（三階段審核開發與 TDD 驗證管線）
+  - [Reveal.js Presentation — From Notes to HTML Slides](https://agensi.io/skills/reveal-js-presentation-from-notes-to-html-slides)（筆記轉 HTML 簡報、Mermaid 圖表與 PDF 匯出）
 
 ### 4. 企業級安全治理與工作區零污染 (Enterprise Governance)
 

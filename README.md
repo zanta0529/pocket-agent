@@ -246,6 +246,9 @@ Type any of the following `/` commands at the prompt:
   - `rhel_mcp.py`: Structured read-only SSH diagnostics and log inspection for remote RHEL hosts.
   - `win_rdp_mcp.py`: Remote Windows RDP (Port 3389) visual control and read-only inspection.
 - **CLI Dynamic Shortcuts (Zero-Token Routing)**: Invoke `/<name>` to dispatch directly to a subagent without main-agent token consumption.
+- **Published Skills (Agensi Marketplace)**: PocketAgent natively follows the open `SKILL.md` specification—allowing reusable skills to work seamlessly across PocketAgent and other major AI coding agents (such as Claude Code, Cursor, and Codex-style workflows) without lock-in. The two reference skills below serve as drop-in examples demonstrating how PocketAgent handles both disciplined coding and technical presentation delivery:
+  - [Plan-Build-Verify — Safe AI Coding with Approval & TDD](https://agensi.io/skills/plan-build-verify)
+  - [Reveal.js Presentation — From Notes to HTML Slides](https://agensi.io/skills/reveal-js-presentation-from-notes-to-html-slides)
 
 ### 4. Enterprise Governance & Zero Project Pollution
 
