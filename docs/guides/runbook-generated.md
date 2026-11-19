@@ -188,6 +188,7 @@ flowchart TD
 | **審計日誌** | 會話 JSON 內含 HMAC、操作記錄                                     | 依 `/prune` (預設 30 天) | `hmac`, `signature`, `tool_call`             |
 
 > **查看日誌實用指令**：
+>
 > ```cmd
 > :: Windows CMD
 > type ~/.pocket-agent/workspaces/*/logs/agent_*.log | findstr "ERROR"
@@ -280,9 +281,9 @@ flowchart TD
 
 | 角色           | 聯絡方式                    | 備註                          |
 | -------------- | --------------------------- | ----------------------------- |
-| **專案維護者** | GitHub Issues / Discussions | https://github.com/zanta0529/pocket-agent/issues |
-| **安全回報**   | GitHub Security Advisories  | 私密回報：https://github.com/zanta0529/pocket-agent/security/advisories/new |
-| **功能建議**   | GitHub Discussions          | https://github.com/zanta0529/pocket-agent/discussions |
+| **專案維護者** | GitHub Issues / Discussions | <https://github.com/zanta0529/pocket-agent/issues> |
+| **安全回報**   | GitHub Security Advisories  | 私密回報：<https://github.com/zanta0529/pocket-agent/security/advisories/new> |
+| **功能建議**   | GitHub Discussions          | <https://github.com/zanta0529/pocket-agent/discussions> |
 | **文件問題**   | GitHub Issues (label: docs) | 標籤 `docs`、 `translation`   |
 
 ---

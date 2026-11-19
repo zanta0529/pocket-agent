@@ -73,7 +73,7 @@ pocket-agent setup
 
 ## 2. 專案結構
 
-```
+```text
 pocket-agent/
 ├── .agents/                    # 開發代理技能與上下文 (不提交給使用者)
 │   ├── context/
@@ -220,7 +220,7 @@ pocket-agent/
 
 ### 3.2 提交訊息規範
 
-```
+```text
 <type>(<scope>): <subject>
 
 <body>
@@ -380,11 +380,11 @@ pocket-agent/
 
 ## 8. 參考資源
 
-- **專案 GitHub**：https://github.com/zanta0529/pocket-agent
+- **專案 GitHub**：<https://github.com/zanta0529/pocket-agent>
 - **API 文件**：`pocket_agent/` 模組 docstring + 類型提示
 - **架構決策記錄 (ADR)**：`docs/architecture/` 6 份架構文件
-- **Agensi Skills**：https://agensi.io/skills (Plan-Build-Verify, Reveal.js Presentation)
-- **MCP 規範**：https://modelcontextprotocol.io/
+- **Agensi Skills**：<https://agensi.io/skills> (Plan-Build-Verify, Reveal.js Presentation)
+- **MCP 規範**：<https://modelcontextprotocol.io/>
 
 ---
 
