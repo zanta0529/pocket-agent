@@ -279,9 +279,9 @@ flowchart TD
 
 | 角色           | 姓名            | 電話             | Email            | Slack/Teams      | 備援聯絡人        |
 | -------------- | --------------- | ---------------- | ---------------- | ---------------- | ----------------- |
-| **服務擁有者** | PocketAgent Team | -                | team@pocket-agent.dev | #pocket-agent | -                 |
+| **服務擁有者** | PocketAgent Team | -                | `team@pocket-agent.dev` | #pocket-agent | -                 |
 | **值班工程師** | -               | -                | -                | #pocket-agent-oncall | -              |
-| **資安團隊**   | -               | -                | security@pocket-agent.dev | #security    | -                 |
+| **資安團隊**   | -               | -                | `security@pocket-agent.dev` | #security    | -                 |
 
 ---
 

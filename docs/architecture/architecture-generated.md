@@ -185,7 +185,7 @@ flowchart TB
 | **OllamaChatEngine (engines/ollama_engine.py)** | 本地/雲端 Ollama，內建 `think` 標籤狀態機解析 | 狀態機串流解析, `think`/`thinking` 事件分離 | `stream_chat()` 統一事件格式 | BaseEngine, Ollama Provider |
 | **StandardChatCompletionsEngine (engines/chat_engine.py)** | Gemini/Groq/Mistral/SambaNova 統一 Chat Completions 協定 | 標準工具格式封裝, `format_chat_tools()`, `format_chat_messages()` | `stream_chat()` 統一事件格式 | BaseEngine, 各 Provider |
 | **CliFrontend (frontend/cli/main.py)** | CLI 互動渲染、指令分派、會話自動存檔、中斷處理 | Rich, prompt-toolkit, `CommandHandler`, `run_operation()` | `run(system_prompt, resume)` | Agent, Commands, Input, Render, State |
-| **ConfirmationBridge (frontend/cli/confirmation.py)** | 同步/非同步確認流程統一橋接，Accept-edits 模式同步子代理 | `on_confirm` 回呼, `Accept-edits` 全域旗標 | `confirm(command) -> bool | str` | Agent, CliFrontend |
+| **ConfirmationBridge (frontend/cli/confirmation.py)** | 同步/非同步確認流程統一橋接，Accept-edits 模式同步子代理 | `on_confirm` 回呼, `Accept-edits` 全域旗標 | `confirm(command) -> bool \| str` | Agent, CliFrontend |
 | **Config (system/config.py)** | 階層式配置：CLI > Env > config.json > Default，Keyring/Encrypted Provider | Strategy Pattern: `EnvConfigProvider`, `JsonConfigProvider`, `KeyringConfigProvider`, `EncryptedConfigProvider` | `get(key)`, `set(key, value)` | paths.py, constants.py |
 | **Auth (system/auth.py)** | OAuth 2.0 PKCE (OpenAI/Google)，Keyring 儲存，拒絕明碼降級，自動 Refresh | FastAPI + uvicorn 本機回呼, `keyring` 切塊寫入, JWE 加密庫 fallback | `get_token(provider)`, `save_token()`, `logout()` | Keyring, Config, Constants |
 | **Paths (system/paths.py)** | Bundle/使用者/工作區路徑解析，Portable 模式偵測 | `bundle_dir()`, `user_dir()`, `workspace_dir()`, `log_dir()`, `scratch_dir()` | `user_dir()`, `workspace_dir(slug)`, `log_dir()` | Config, Constants |
