@@ -594,3 +594,25 @@ def test_scratch_dir_write_append_replace_auto_allowed_only_for_current_workspac
     )
     assert res_env.startswith("[ERROR]")
     assert len(confirm_calls) == 3
+
+
+def test_fs_tool_handler_parallel_safety_distinguishes_read_and_write():
+    """驗證 FsToolHandler.is_parallel_safe 僅對唯讀 FS 工具回傳 True，寫入型工具回傳 False。"""
+    from pocket_agent.core.tool_registry import FsToolHandler, default_tool_registry
+    from pocket_agent.tools.fs import FS_TOOLS, SAFE_READ_FS_TOOLS
+
+    handler = default_tool_registry.resolve("read_file")
+    assert isinstance(handler, FsToolHandler)
+
+    expected_read = {"read_file", "list_dir", "get_file_info", "search_files"}
+    expected_write = {"write_to_file", "append_to_file", "replace_file_content"}
+    assert SAFE_READ_FS_TOOLS == expected_read
+
+    for tool_def in FS_TOOLS:
+        t_name = tool_def["name"]
+        if t_name in expected_read:
+            assert handler.is_parallel_safe(t_name, {}, None) is True
+        elif t_name in expected_write:
+            assert handler.is_parallel_safe(t_name, {}, None) is False
+        else:
+            raise AssertionError(f"未分類的 FS 工具: {t_name}")
