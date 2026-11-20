@@ -214,6 +214,56 @@ def test_new_command_cleans_context_and_saves_old_session(tmp_path, monkeypatch)
     assert "已開啟全新對話" in renderer.message.call_args[0][0]
 
 
+def test_new_command_preserves_state_when_save_fails(tmp_path, monkeypatch):
+    from pocket_agent.core import sessions
+    from pocket_agent.frontend.cli.commands.core import CommandContext
+    from pocket_agent.frontend.cli.commands.session import NewCommand
+
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path)
+    monkeypatch.setattr(sessions, "save_session", Mock(side_effect=OSError("disk full")))
+    renderer = Mock()
+    reader = Mock()
+    original_history = [{"role": "user", "content": "未儲存的對話內容"}]
+    agent = SimpleNamespace(
+        history=list(original_history),
+        clear_history=Mock(side_effect=lambda: agent.history.clear()),
+        context_usage="some_usage",
+        last_images=["img.png"],
+        last_files=["doc.docx"],
+        accept_edits=True,
+        is_sensitive_session=False,
+    )
+    state = CliState("openai", "model")
+    old_session_id = state.session_id
+    state.pending_files = ["file.txt"]
+    state.session_tokens = 5000
+    state.last_failed_input = "failed"
+    state.session_approved_commands.add("git status")
+    state.accept_edits = True
+
+    ctx = CommandContext(agent=agent, state=state, reader=reader, renderer=renderer, tools=[])
+    res = asyncio.run(NewCommand().execute(ctx, ""))
+    assert res.action == "handled"
+
+    agent.clear_history.assert_not_called()
+    assert state.session_id == old_session_id
+    assert agent.history == original_history
+    assert state.pending_files == ["file.txt"]
+    assert state.session_tokens == 5000
+    assert state.last_failed_input == "failed"
+    assert state.session_approved_commands == {"git status"}
+    assert state.accept_edits is True
+    assert agent.accept_edits is True
+    assert agent.context_usage == "some_usage"
+    assert agent.last_images == ["img.png"]
+    assert agent.last_files == ["doc.docx"]
+    renderer.message.assert_called_once()
+    msg, style = renderer.message.call_args.args
+    assert "前次會話自動存檔失敗" in msg
+    assert "disk full" in msg
+    assert style == "red"
+
+
 def test_rename_command_updates_title_and_persists(tmp_path, monkeypatch):
     from pocket_agent.core import sessions
     from pocket_agent.frontend.cli.commands.core import CommandContext
@@ -242,6 +292,17 @@ def test_rename_command_updates_title_and_persists(tmp_path, monkeypatch):
     assert res2.action == "handled"
     data_b = sessions.load_session(state.session_id)
     assert data_b["title"] == "互動輸入的新標題"
+
+    # 3. 測試改名後再次自動存檔（不傳 title）仍保留自訂標題
+    from pocket_agent.frontend.cli.main import _autosave_session
+
+    agent.history.append({"role": "assistant", "content": "回覆"})
+    agent.history.append({"role": "user", "content": "後續的新問題"})
+    _autosave_session(agent, state, renderer, silent=True)
+    data_c = sessions.load_session(state.session_id)
+    assert data_c is not None
+    assert data_c["title"] == "互動輸入的新標題"
+    assert len(data_c["history"]) == 3
 
 
 def test_cli_confirm_with_custom_instruction(tmp_path, monkeypatch):

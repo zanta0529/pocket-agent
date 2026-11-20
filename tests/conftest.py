@@ -17,6 +17,10 @@ def _isolate_pocket_user_dir(tmp_path_factory: pytest.TempPathFactory, monkeypat
 
     monkeypatch.setattr("pocket_agent.system.paths.user_dir", _fake_user_dir)
     monkeypatch.setattr("pocket_agent.system.housekeeping.user_dir", _fake_user_dir)
+    monkeypatch.setattr("pocket_agent.core.sessions.SESSIONS_DIR", None)
+    monkeypatch.setattr("pocket_agent.core.sessions.SESSION_SALT_PATH", None)
+    monkeypatch.setattr("pocket_agent.core.sessions._CACHED_HMAC_KEY", None)
+    monkeypatch.setattr("pocket_agent.core.sessions._CACHED_LEGACY_HMAC_KEY", None)
     return fake_user_dir
 
 

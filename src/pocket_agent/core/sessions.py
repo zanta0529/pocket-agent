@@ -8,12 +8,23 @@ import tempfile
 import time
 from pathlib import Path
 
-SESSIONS_DIR = Path.home() / ".pocket-agent" / "sessions"
+from pocket_agent.system import paths
+
+SESSIONS_DIR: Path | None = None
+SESSION_SALT_PATH: Path | None = None
 PBKDF2_ITERATIONS = 600_000
 LEGACY_PBKDF2_ITERATIONS = 100_000
 
 _CACHED_HMAC_KEY: bytes | None = None
 _CACHED_LEGACY_HMAC_KEY: bytes | None = None
+
+
+def _sessions_dir() -> Path:
+    return SESSIONS_DIR if SESSIONS_DIR is not None else paths.user_dir() / "sessions"
+
+
+def _session_salt_path() -> Path:
+    return SESSION_SALT_PATH if SESSION_SALT_PATH is not None else paths.user_dir() / "session_salt"
 
 
 def _get_hmac_key(iterations: int = PBKDF2_ITERATIONS) -> bytes:
@@ -26,7 +37,7 @@ def _get_hmac_key(iterations: int = PBKDF2_ITERATIONS) -> bytes:
     import getpass
     import platform
 
-    salt_file = Path.home() / ".pocket-agent" / "session_salt"
+    salt_file = _session_salt_path()
     salt = None
     if salt_file.exists():
         try:
@@ -97,9 +108,10 @@ def _path(session_id: str) -> Path:
 
     if not re.match(r"^[a-zA-Z0-9\-_]+$", session_id):
         raise ValueError(f"無效的 Session ID 格式: {session_id}")
-    path = (SESSIONS_DIR / f"{session_id}.json").resolve()
+    sessions_dir = _sessions_dir()
+    path = (sessions_dir / f"{session_id}.json").resolve()
     try:
-        path.relative_to(SESSIONS_DIR.resolve())
+        path.relative_to(sessions_dir.resolve())
     except ValueError:
         raise ValueError(f"Session ID 超出安全路徑範圍: {session_id}")
     return path
@@ -133,8 +145,16 @@ def save_session(
     for msg in history:
         if isinstance(msg, dict) and msg.get("is_sensitive"):
             return
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    resolved_title = title or make_title(history)
+    final_path = _path(session_id)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_title = title
+    if not resolved_title:
+        existing = load_session(session_id)
+        existing_title = existing.get("title") if isinstance(existing, dict) else None
+        if isinstance(existing_title, str) and existing_title.strip() and existing_title != "（無標題）":
+            resolved_title = existing_title
+        else:
+            resolved_title = make_title(history)
     updated_at = time.time()
     payload = {
         "id": session_id,
@@ -150,8 +170,6 @@ def save_session(
         "meta": {"id": session_id, "title": resolved_title, "updated_at": updated_at},
         "payload": payload_str,
     }
-
-    final_path = _path(session_id)
     tmp_path: Path | None = None
 
     try:
@@ -184,7 +202,15 @@ def load_session(session_id: str) -> dict | None:
                     f"Session {session_id} signature mismatch. Data may be tampered."
                 )
                 return None
-            return json.loads(data["payload"])
+            payload_data = json.loads(data["payload"])
+            if not isinstance(payload_data, dict) or payload_data.get("id") != session_id:
+                import logging
+
+                logging.getLogger("pocket-agent").warning(
+                    f"Session {session_id} payload id mismatch. Data may be tampered."
+                )
+                return None
+            return payload_data
         else:
             import logging
 
@@ -198,10 +224,11 @@ def load_session(session_id: str) -> dict | None:
 
 def list_sessions() -> list[dict]:
     """回傳 [{id, title, updated_at}]，新的在前，並驗證簽章完整性。"""
-    if not SESSIONS_DIR.exists():
+    sessions_dir = _sessions_dir()
+    if not sessions_dir.exists():
         return []
     metas = []
-    for f in SESSIONS_DIR.glob("*.json"):
+    for f in sessions_dir.glob("*.json"):
         try:
             raw_data = json.loads(f.read_text(encoding="utf-8"))
             if "signature" not in raw_data or "payload" not in raw_data:
@@ -209,24 +236,26 @@ def list_sessions() -> list[dict]:
             if not _verify_payload_signature(raw_data["payload"], raw_data["signature"]):
                 continue
 
-            meta = raw_data.get("meta")
-            if isinstance(meta, dict) and "id" in meta:
-                metas.append(
-                    {
-                        "id": meta["id"],
-                        "title": meta.get("title", "（無標題）"),
-                        "updated_at": meta.get("updated_at", 0),
-                    }
-                )
+            d = json.loads(raw_data["payload"])
+            if not isinstance(d, dict):
+                continue
+            sid = d.get("id")
+            if not isinstance(sid, str) or sid != f.stem:
+                continue
+            raw_title = d.get("title")
+            title = raw_title if isinstance(raw_title, str) and raw_title else "（無標題）"
+            raw_updated_at = d.get("updated_at", 0)
+            if isinstance(raw_updated_at, (int, float)) and not isinstance(raw_updated_at, bool):
+                updated_at = raw_updated_at
             else:
-                d = json.loads(raw_data["payload"])
-                metas.append(
-                    {
-                        "id": d["id"],
-                        "title": d.get("title", "（無標題）"),
-                        "updated_at": d.get("updated_at", 0),
-                    }
-                )
+                updated_at = 0
+            metas.append(
+                {
+                    "id": sid,
+                    "title": title,
+                    "updated_at": updated_at,
+                }
+            )
         except Exception:
             continue
     return sorted(metas, key=lambda m: m["updated_at"], reverse=True)
