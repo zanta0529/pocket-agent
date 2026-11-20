@@ -16,7 +16,12 @@ from pocket_agent.core.cancellation import run_sync
 from pocket_agent.core.subagents import get_subagent, is_subagent_tool
 from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.extensions.skills import call_skill_tool, is_skill_tool
-from pocket_agent.system.constants import WEB_RESEARCH_CHECKPOINT_INTERVAL
+from pocket_agent.system.constants import (
+    TOOL_NOT_FOUND_PREFIX,
+    TOOL_OVERWRITE_REQUIRED_PREFIX,
+    TOOL_TARGET_NOT_FOUND_PREFIX,
+    WEB_RESEARCH_CHECKPOINT_INTERVAL,
+)
 from pocket_agent.tools.doc import call_doc_tool, is_doc_tool
 from pocket_agent.tools.document import call_document_tool, is_document_tool
 from pocket_agent.tools.fs import (
@@ -38,6 +43,26 @@ def _resolve_callable(attr_name: str, fallback: Any) -> Any:
     if agent_mod is not None:
         return getattr(agent_mod, attr_name, fallback)
     return fallback
+
+
+_SOFT_TOOL_STATUS_PREFIXES: tuple[tuple[str, str], ...] = (
+    (TOOL_NOT_FOUND_PREFIX, "not_found"),
+    (TOOL_OVERWRITE_REQUIRED_PREFIX, "overwrite_required"),
+    (TOOL_TARGET_NOT_FOUND_PREFIX, "target_not_found"),
+)
+_ERROR_TOOL_PREFIXES: tuple[str, ...] = ("Error:", "[ERROR]", "[使用者拒絕")
+
+
+def classify_tool_result(result: object) -> tuple[bool, str]:
+    """依統一前綴判定工具執行結果的 `(ok_status, tool_status)`。"""
+    if not isinstance(result, str):
+        return True, "ok"
+    if result.startswith(_ERROR_TOOL_PREFIXES):
+        return False, "error"
+    for prefix, status in _SOFT_TOOL_STATUS_PREFIXES:
+        if result.startswith(prefix):
+            return True, status
+    return True, "ok"
 
 
 @dataclass

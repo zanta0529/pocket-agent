@@ -355,3 +355,70 @@ def test_tool_done_overwrite_required_renders_soft_suffix_without_error_panel():
     assert "(exists, overwrite required)" in out_en
     assert "✗" not in out_en
     assert "Tool execution failed" not in out_en
+
+
+def test_tool_done_target_not_found_renders_soft_suffix_without_error_panel():
+    """replace_file_content 回傳 target_not_found 狀態時應顯示柔和後綴，不印出失敗紅框或叉號。"""
+    for locale, suffix, err_word in (
+        ("zh_TW", "（未找到相符內容）", "工具執行失敗"),
+        ("en_US", "(target not found)", "Tool execution failed"),
+    ):
+        set_locale(locale)
+        stream = StringIO()
+        renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=120))
+        renderer.event(
+            "tool_start",
+            {
+                "call_id": "tnf1",
+                "name": "replace_file_content",
+                "arguments": '{"path": "docs/guide.md", "target": "x", "replacement": "y"}',
+                "is_safe_read": False,
+            },
+        )
+        renderer.event(
+            "tool_done",
+            {
+                "call_id": "tnf1",
+                "name": "replace_file_content",
+                "ok": True,
+                "status": "target_not_found",
+                "result": "[TARGET_NOT_FOUND] missing",
+            },
+        )
+        out = stream.getvalue()
+        assert "● Write (replace_file_content)" in out
+        assert suffix in out
+        assert "✗" not in out
+        assert err_word not in out
+
+
+def test_intermediate_dim_text_wraps_with_prefix_without_splitting_ascii_words():
+    """多輪中間淡色串流在自動折行與顯式換行時皆應保留左側 │ 前綴且不切斷英文單字。"""
+    from rich.cells import cell_len
+
+    stream = StringIO()
+    renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=40))
+    renderer.event("text", "第一輪說明")
+    renderer.event("round_start", "")
+
+    chunks = [
+        "已讀取指南文件，本次將就地更新且不執行 L",
+        "int 或測試，接著修改 developer",
+        "_guide 內容。\n第二段摘要。",
+    ]
+    for ch in chunks:
+        renderer.event("text", ch)
+    renderer.reply("最終結論。", seconds=0.1, tokens=10, streamed=True)
+
+    output = stream.getvalue()
+    dim_lines = [line for line in output.splitlines() if "│" in line]
+    assert len(dim_lines) >= 3
+    assert dim_lines[0].startswith("│ 💭 ")
+    for cont in dim_lines[1:]:
+        assert cont.startswith("│ ")
+    assert all(cell_len(line) <= 40 for line in dim_lines)
+
+    joined = "\n".join(dim_lines)
+    assert "Lint" in joined
+    assert "developer_guide" in joined
+    assert "第二段摘要。" in joined
