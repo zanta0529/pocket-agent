@@ -374,7 +374,8 @@ class NewCommand(CliCommand):
                     save_session(old_session_id, ctx.agent.history)
                     saved_msg = t("session_cmd.new_prev_saved", id=old_session_id)
                 except Exception as e:
-                    saved_msg = t("session_cmd.new_prev_save_failed", error=e)
+                    ctx.renderer.message(t("session_cmd.new_prev_save_failed", error=e), "red")
+                    return CommandResult()
         else:
             saved_msg = ""
 

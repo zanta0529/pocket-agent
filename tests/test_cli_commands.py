@@ -322,3 +322,60 @@ def test_prune_sessions_and_cli_command(tmp_path, monkeypatch):
     asyncio.run(handler.dispatch("/prune --keep 0"))
     assert sess_mod.load_session("cur-sess") is not None
     assert sess_mod.load_session("mid-sess") is None
+
+
+def test_prune_ignores_forged_meta_and_mismatched_filename_id(tmp_path, monkeypatch):
+    import json
+    import time
+
+    from pocket_agent.core import sessions as sess_mod
+
+    fake_sessions_dir = tmp_path / "sessions"
+    monkeypatch.setattr(sess_mod, "SESSIONS_DIR", fake_sessions_dir)
+    monkeypatch.setattr("pocket_agent.core.sessions._CACHED_HMAC_KEY", b"test-key-32-bytes-long-enough-1234")
+
+    sess_mod.save_session("cur-sess", [{"role": "user", "content": "current"}], title="目前對話")
+    sess_mod.save_session("victim-sess", [{"role": "user", "content": "victim"}], title="受害會話")
+    sess_mod.save_session("recent-sess", [{"role": "user", "content": "recent"}], title="近期會話")
+
+    # 1. 竄改 recent-sess 的未受保護外層 meta（偽造為過期且指向 victim-sess）
+    recent_file = sess_mod._path("recent-sess")
+    recent_raw = json.loads(recent_file.read_text(encoding="utf-8"))
+    old_ts = time.time() - (40 * 86400)
+    recent_raw["meta"] = {"id": "victim-sess", "title": "偽造過期對話", "updated_at": old_ts}
+    recent_file.write_text(json.dumps(recent_raw, ensure_ascii=False), encoding="utf-8")
+
+    # 2. 建立一個簽章合法但檔名與 payload id 不符的檔案（payload 指向 victim-sess 且已過期）
+    mismatch_payload = json.dumps(
+        {
+            "id": "victim-sess",
+            "title": "假冒檔案",
+            "updated_at": old_ts,
+            "history": [{"role": "user", "content": "fake"}],
+        },
+        ensure_ascii=False,
+    )
+    mismatch_sig = sess_mod._sign_data(mismatch_payload)
+    (fake_sessions_dir / "mismatched-file.json").write_text(
+        json.dumps(
+            {
+                "signature": mismatch_sig,
+                "meta": {"id": "victim-sess", "title": "假冒檔案", "updated_at": old_ts},
+                "payload": mismatch_payload,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    state = CliState("openai", "model")
+    state.session_id = "cur-sess"
+    renderer = Mock()
+    reader = SimpleNamespace(choose=AsyncMock(return_value="確認刪除"))
+    handler = CommandHandler(Mock(), state, reader, renderer, [])
+
+    asyncio.run(handler.dispatch("/prune 30"))
+    reader.choose.assert_not_awaited()
+    assert sess_mod.load_session("victim-sess") is not None
+    assert sess_mod.load_session("recent-sess") is not None
+    assert sess_mod.load_session("cur-sess") is not None

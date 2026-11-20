@@ -99,7 +99,9 @@ def test_sessions_salt_concurrency_race(tmp_path, monkeypatch):
     monkeypatch.setattr(sessions, "_CACHED_HMAC_KEY", None)
     salt_dir = tmp_path / ".pocket-agent"
     salt_file = salt_dir / "session_salt"
-    monkeypatch.setattr(sessions.Path, "home", lambda: tmp_path)
+    sessions_dir = salt_dir / "sessions"
+    monkeypatch.setattr(sessions, "SESSION_SALT_PATH", salt_file)
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", sessions_dir)
 
     # 預先建立一個由「競爭程序」產生的 32 位元組 salt
     salt_dir.mkdir(parents=True, exist_ok=True)
@@ -109,6 +111,7 @@ def test_sessions_salt_concurrency_race(tmp_path, monkeypatch):
     # 呼叫 _get_hmac_key()，此時應直接讀取現有 salt
     key1 = sessions._get_hmac_key()
     assert sessions._CACHED_HMAC_KEY is not None
+    assert salt_file.read_bytes() == competing_salt
 
     # 重設快取，模擬同一行程再次讀取或同 salt 簽署
     sessions._CACHED_HMAC_KEY = None
@@ -118,9 +121,29 @@ def test_sessions_salt_concurrency_race(tmp_path, monkeypatch):
     # 驗證 session 簽章可被驗證
     session_id = "test-concurrency-session"
     sessions.save_session(session_id, [{"role": "user", "content": "hello"}])
+    assert (sessions_dir / f"{session_id}.json").is_file()
     loaded = sessions.load_session(session_id)
     assert loaded is not None
     assert loaded["history"][0]["content"] == "hello"
+
+
+def test_sessions_default_fixture_isolates_user_home(_isolate_pocket_user_dir):
+    """驗證預設 pytest fixture 透過 user_dir() 隔離會話目錄、salt 路徑與 HMAC 快取。"""
+    from pocket_agent.system.constants import USER_DATA_DIR_NAME
+
+    real_user_dir = Path.home() / USER_DATA_DIR_NAME
+    assert sessions.SESSIONS_DIR is None
+    assert sessions.SESSION_SALT_PATH is None
+    assert sessions._sessions_dir() == _isolate_pocket_user_dir / "sessions"
+    assert sessions._session_salt_path() == _isolate_pocket_user_dir / "session_salt"
+    assert sessions._sessions_dir().resolve() != (real_user_dir / "sessions").resolve()
+    assert sessions._session_salt_path().resolve() != (real_user_dir / "session_salt").resolve()
+    assert sessions._CACHED_HMAC_KEY is None
+    assert sessions._CACHED_LEGACY_HMAC_KEY is None
+
+    sessions.save_session("isolated-default-sess", [{"role": "user", "content": "isolated"}])
+    assert (_isolate_pocket_user_dir / "sessions" / "isolated-default-sess.json").is_file()
+    assert (_isolate_pocket_user_dir / "session_salt").is_file()
 
 
 # ============================================================================

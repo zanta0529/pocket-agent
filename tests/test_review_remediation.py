@@ -304,6 +304,65 @@ def test_list_sessions_rejects_tampered_session(tmp_path, monkeypatch):
     assert [m["id"] for m in listed] == ["valid-sess"]
 
 
+def test_list_sessions_ignores_forged_meta_and_rejects_filename_id_mismatch(tmp_path, monkeypatch):
+    import json
+
+    from pocket_agent.core import sessions
+
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path)
+    sessions.save_session("legit-sess", [{"role": "user", "content": "hello"}], title="真實標題")
+
+    legit_file = tmp_path / "legit-sess.json"
+    raw = json.loads(legit_file.read_text(encoding="utf-8"))
+    raw["meta"] = {"id": "victim-sess", "title": "偽造標題", "updated_at": 1.0}
+    raw_str = json.dumps(raw, ensure_ascii=False)
+    legit_file.write_text(raw_str, encoding="utf-8")
+
+    # 另存為不同檔名，驗證即使簽章有效但檔名與 payload id 不一致仍會被拒絕
+    (tmp_path / "copied-mismatch.json").write_text(raw_str, encoding="utf-8")
+
+    listed = sessions.list_sessions()
+    assert len(listed) == 1
+    assert listed[0]["id"] == "legit-sess"
+    assert listed[0]["title"] == "真實標題"
+    assert listed[0]["updated_at"] > 1.0
+    assert sessions.load_session("copied-mismatch") is None
+    assert sessions.load_session("legit-sess") is not None
+
+
+def test_save_session_does_not_reuse_title_from_tampered_file(tmp_path, monkeypatch):
+    import json
+
+    from pocket_agent.core import sessions
+
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path)
+    tampered_file = tmp_path / "tampered-title.json"
+    tampered_file.write_text(
+        json.dumps(
+            {
+                "signature": "00" * 32,
+                "meta": {"id": "tampered-title", "title": "遭竄改標題", "updated_at": 1.0},
+                "payload": json.dumps(
+                    {
+                        "id": "tampered-title",
+                        "title": "遭竄改標題",
+                        "updated_at": 1.0,
+                        "history": [{"role": "user", "content": "舊訊息"}],
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    sessions.save_session("tampered-title", [{"role": "user", "content": "新的使用者訊息"}])
+    loaded = sessions.load_session("tampered-title")
+    assert loaded is not None
+    assert loaded["title"] == "新的使用者訊息"
+
+
 # ==========================================
 # 7. 2026-10-20 審查修補回歸測試：SQLite MCP 唯讀防護、RHEL MCP 安全通道
 # ==========================================
