@@ -1,14 +1,20 @@
 import datetime
 import hashlib
+import json
 import logging
 import os
 import re
+import secrets
+import shutil
+import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from pocket_agent.core.cancellation import check_cancelled
+from pocket_agent.system import paths
 from pocket_agent.system.constants import (
     DEFAULT_READ_FILE_LINES,
     DEFAULT_SEARCH_MAX_RESULTS,
@@ -32,6 +38,7 @@ MAX_READ_LINES = DEFAULT_READ_FILE_LINES
 MAX_READ_CHARS = DEFAULT_TOOL_OUTPUT_CHARS
 SEARCH_MAX_RESULTS = DEFAULT_SEARCH_MAX_RESULTS
 
+_ALLOWED_GLOBAL_SUBDIRS = frozenset({"workspaces", "scratch", "backups", "skills"})
 _EXTERNAL_TAG_RE = re.compile(r"<\s*/?\s*external_content(?:\s+[^>]*)?\s*>", re.IGNORECASE)
 
 
@@ -201,8 +208,15 @@ FS_TOOLS = [
 ]
 
 
+SAFE_READ_FS_TOOLS = frozenset(tool["name"] for tool in FS_TOOLS if tool.get("_is_safe_read"))
+
+
 def is_fs_tool(name: str) -> bool:
     return any(t["name"] == name for t in FS_TOOLS)
+
+
+def is_safe_read_fs_tool(name: str) -> bool:
+    return name in SAFE_READ_FS_TOOLS
 
 
 SCRATCH_TOOLS = [
@@ -241,8 +255,6 @@ def is_scratch_tool(name: str) -> bool:
 
 def _resolve_scratch_note_path(filename: str) -> Path:
     """解析並驗證沙盒筆記路徑，強制隔離於 scratch_dir()/notes 之下。"""
-    from pocket_agent.system.paths import scratch_dir
-
     cleaned = str(filename or "").strip().strip("'\"")
     if not cleaned:
         raise ValueError("filename 不可為空")
@@ -253,7 +265,7 @@ def _resolve_scratch_note_path(filename: str) -> Path:
         if part.lower().startswith(".env") or part.lower() == ".git":
             raise ValueError(f"安全限制：禁止使用敏感檔名 ({part})")
 
-    notes_root = (scratch_dir() / "notes").resolve(strict=False)
+    notes_root = (paths.scratch_dir() / "notes").resolve(strict=False)
     target = (notes_root / rel).resolve(strict=False)
     if not target.is_relative_to(notes_root) or target == notes_root:
         raise ValueError("安全限制：路徑超出沙盒筆記目錄範圍")
@@ -296,9 +308,7 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
         raise ValueError(f"無效的路徑格式: {e}")
 
     try:
-        from pocket_agent.system.paths import user_dir
-
-        global_user_dir: Path | None = user_dir().resolve()
+        global_user_dir: Path | None = paths.user_dir().resolve()
     except Exception:
         global_user_dir = None
 
@@ -309,8 +319,7 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
     # 根目錄下的系統設定檔 (如 allowlist.json, mcp_config.yaml, config.json) 均屬敏感保護範圍
     if is_in_global and global_user_dir is not None:
         rel = target.relative_to(global_user_dir)
-        allowed_global_subdirs = {"workspaces", "scratch", "backups", "skills"}
-        if len(rel.parts) == 0 or rel.parts[0] not in allowed_global_subdirs:
+        if len(rel.parts) == 0 or rel.parts[0] not in _ALLOWED_GLOBAL_SUBDIRS:
             raise ValueError(t("fs_tool.sensitive_path_blocked", part=USER_DATA_DIR_NAME))
 
     user_dir_name_lower = USER_DATA_DIR_NAME.lower()
@@ -337,9 +346,7 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
         allowed_roots.append(global_user_dir)
 
     try:
-        from pocket_agent.system.paths import bundle_dir
-
-        bundled_skills = (bundle_dir() / "skills").resolve()
+        bundled_skills = (paths.bundle_dir() / "skills").resolve()
         if bundled_skills.exists():
             allowed_roots.append(bundled_skills)
     except Exception:
@@ -404,9 +411,6 @@ _BACKUP_MAP_LOCK = threading.Lock()
 
 def _write_backup_map_atomic(mapping_file: Path, mapping: dict[str, str]) -> None:
     """以原子替換方式寫入備份映射檔，避免讀寫競爭導致 JSON 損毀。"""
-    import json
-    import tempfile
-
     mapping_file.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=".latest_backup_map_", suffix=".tmp", dir=str(mapping_file.parent))
     tmp_path = Path(tmp_name)
@@ -429,14 +433,8 @@ def _backup_file(target: Path) -> None:
         return
 
     try:
-        import json
-        import secrets
-        import shutil
-        import time
-
-        from pocket_agent.system.paths import user_dir
-
-        backup_dir = user_dir() / "backups"
+        user_root = paths.user_dir()
+        backup_dir = user_root / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
 
         # 使用不可碰撞的備份名稱：時間戳 + 隨機後綴 + 原始路徑雜湊
@@ -444,9 +442,7 @@ def _backup_file(target: Path) -> None:
         random_suffix = secrets.token_hex(4)
         # 為區分不同目錄的同名檔案，使用相對路徑的 hash
         try:
-            from pocket_agent.system.paths import user_dir as user_dir_func
-
-            rel = target.resolve().relative_to(user_dir_func().resolve())
+            rel = target.resolve().relative_to(user_root.resolve())
             path_hash = hashlib.sha256(str(rel).encode()).hexdigest()[:8]
         except Exception:
             path_hash = hashlib.sha256(str(target).encode()).hexdigest()[:8]
@@ -479,9 +475,7 @@ def _backup_file(target: Path) -> None:
 def _is_current_workspace_scratch_target(target: Path) -> bool:
     """判定已驗證路徑是否位於目前工作區專屬的隔離暫存目錄（scratch_dir）之下。"""
     try:
-        from pocket_agent.system.paths import scratch_dir
-
-        scratch_root = scratch_dir().resolve(strict=False)
+        scratch_root = paths.scratch_dir().resolve(strict=False)
         resolved = target.resolve(strict=False)
         return resolved != scratch_root and resolved.is_relative_to(scratch_root)
     except Exception:
@@ -509,20 +503,17 @@ def _evaluate_fs_confirmation(
 
     if decision is True:
         return None
-    if isinstance(decision, str) and decision.strip():
+    custom_inst = ""
+    if isinstance(decision, str):
+        custom_inst = decision.strip()
+    elif isinstance(decision, tuple) and len(decision) == 2 and decision[0] is not True:
+        custom_inst = str(decision[1]).strip()
+    if custom_inst:
         return (
             f"[使用者拒絕執行此檔案{op_name}操作，並提供後續指示：\n"
-            f"「{decision.strip()}」\n"
+            f"「{custom_inst}」\n"
             "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的操作。]"
         )
-    if isinstance(decision, tuple) and len(decision) == 2 and decision[0] is not True:
-        custom_inst = str(decision[1]).strip()
-        if custom_inst:
-            return (
-                f"[使用者拒絕執行此檔案{op_name}操作，並提供後續指示：\n"
-                f"「{custom_inst}」\n"
-                "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的操作。]"
-            )
     return f"[使用者拒絕執行此檔案{op_name}操作]"
 
 
@@ -654,6 +645,18 @@ def _replace_line_spans(
     return "".join(parts)
 
 
+def _ambiguous_match_error(count: int, *, scoped: bool) -> str:
+    if scoped:
+        return (
+            f"[ERROR] 在指定的行數範圍內找到 {count} 處相符的 target 字串，"
+            "請設定 allow_multiple=true 或再縮小範圍以確保唯一性。"
+        )
+    return (
+        f"[ERROR] 找到 {count} 處相符的 target 字串。"
+        "請設定 allow_multiple=true、提供更多上下文，或指定 start_line/end_line 確保唯一性。"
+    )
+
+
 def _apply_replace_in_slice(
     lines: list[str],
     start_idx: int,
@@ -663,6 +666,7 @@ def _apply_replace_in_slice(
     allow_multiple: bool,
     *,
     allow_ambiguous: bool = True,
+    scoped_error: bool = True,
 ) -> tuple[str | None, str | None]:
     """在指定行切片嘗試精確匹配與忽略行尾空白兩階段替換。"""
     prefix = "".join(lines[:start_idx])
@@ -676,11 +680,7 @@ def _apply_replace_in_slice(
     if exact_count > 1:
         if not allow_ambiguous:
             return None, None
-        return (
-            None,
-            f"[ERROR] 在指定的行數範圍內找到 {exact_count} 處相符的 target 字串，"
-            "請設定 allow_multiple=true 或再縮小範圍以確保唯一性。",
-        )
+        return None, _ambiguous_match_error(exact_count, scoped=scoped_error)
 
     ws_spans = _find_trailing_ws_spans(scope_lines, target_str)
     if len(ws_spans) == 1 or (len(ws_spans) > 1 and allow_multiple):
@@ -689,11 +689,7 @@ def _apply_replace_in_slice(
     if len(ws_spans) > 1:
         if not allow_ambiguous:
             return None, None
-        return (
-            None,
-            f"[ERROR] 在指定的行數範圍內找到 {len(ws_spans)} 處相符的 target 字串，"
-            "請設定 allow_multiple=true 或再縮小範圍以確保唯一性。",
-        )
+        return None, _ambiguous_match_error(len(ws_spans), scoped=scoped_error)
     return None, None
 
 
@@ -775,32 +771,19 @@ def _resolve_replace_content(
             )
         return _ReplacePlan(matched=False, diagnostic=f"{TOOL_TARGET_NOT_FOUND_PREFIX} {msg}")
 
-    exact_count = content.count(target_str)
-    if exact_count == 1 or (exact_count > 1 and allow_multiple):
-        return _ReplacePlan(matched=True, new_content=content.replace(target_str, replacement))
-    if exact_count > 1:
-        return _ReplacePlan(
-            matched=False,
-            diagnostic=(
-                f"[ERROR] 找到 {exact_count} 處相符的 target 字串。"
-                "請設定 allow_multiple=true、提供更多上下文，或指定 start_line/end_line 確保唯一性。"
-            ),
-        )
-
-    ws_spans = _find_trailing_ws_spans(lines, target_str)
-    if len(ws_spans) == 1 or (len(ws_spans) > 1 and allow_multiple):
-        return _ReplacePlan(
-            matched=True,
-            new_content=_replace_line_spans(lines, ws_spans, target_str, replacement),
-        )
-    if len(ws_spans) > 1:
-        return _ReplacePlan(
-            matched=False,
-            diagnostic=(
-                f"[ERROR] 找到 {len(ws_spans)} 處相符的 target 字串。"
-                "請設定 allow_multiple=true、提供更多上下文，或指定 start_line/end_line 確保唯一性。"
-            ),
-        )
+    new_content, err = _apply_replace_in_slice(
+        lines,
+        0,
+        total_lines,
+        target_str,
+        replacement,
+        allow_multiple,
+        scoped_error=False,
+    )
+    if err is not None:
+        return _ReplacePlan(matched=False, diagnostic=err)
+    if new_content is not None:
+        return _ReplacePlan(matched=True, new_content=new_content)
 
     msg = t("fs_tool.replace_target_not_found", total_lines=total_lines)
     return _ReplacePlan(matched=False, diagnostic=f"{TOOL_TARGET_NOT_FOUND_PREFIX} {msg}")
@@ -842,14 +825,12 @@ def call_fs_tool(
         if target is None:
             target = _validate_safe_path(path_str, workspace_dirs)
 
+        cwd = Path.cwd().resolve()
+        rel_display_path = str(target.relative_to(cwd)) if target.is_relative_to(cwd) else path_str
+
         if name == "list_dir":
-            display_path = (
-                str(target.relative_to(Path.cwd().resolve()))
-                if target.is_relative_to(Path.cwd().resolve())
-                else path_str
-            )
             if not target.exists():
-                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.dir_not_found', path=display_path)}"
+                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.dir_not_found', path=rel_display_path)}"
             if target.is_file():
                 return f"[ERROR] {target} 是一個檔案而非目錄。請改用 'read_file' 工具來讀取內容。"
             if not target.is_dir():
@@ -907,12 +888,7 @@ def call_fs_tool(
             size_bytes = stat.st_size
             mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
 
-            display_path = (
-                str(target.relative_to(Path.cwd().resolve()))
-                if target.is_relative_to(Path.cwd().resolve())
-                else path_str
-            )
-            info = [f"路徑: {display_path}"]
+            info = [f"路徑: {rel_display_path}"]
             if target.is_dir():
                 info.append("類型: 目錄")
             else:
@@ -931,17 +907,12 @@ def call_fs_tool(
             return "\n".join(info)
 
         elif name == "read_file":
-            display_path = (
-                str(target.relative_to(Path.cwd().resolve()))
-                if target.is_relative_to(Path.cwd().resolve())
-                else path_str
-            )
             if not target.exists():
-                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.file_not_found', path=display_path)}"
+                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.file_not_found', path=rel_display_path)}"
             if target.is_dir():
-                return f"[ERROR] {display_path} 是一個目錄。請改用 'list_dir' 工具來查看該目錄內容。"
+                return f"[ERROR] {rel_display_path} 是一個目錄。請改用 'list_dir' 工具來查看該目錄內容。"
             if not target.is_file():
-                return f"[ERROR] 不是一般檔案: {display_path}"
+                return f"[ERROR] 不是一般檔案: {rel_display_path}"
 
             try:
                 fsize = target.stat().st_size
@@ -1137,9 +1108,7 @@ def call_fs_tool(
             spec = _get_ignore_spec(target) if target.is_dir() else None
 
             try:
-                from pocket_agent.system.paths import user_dir
-
-                global_user_dir: Path | None = user_dir().resolve()
+                global_user_dir: Path | None = paths.user_dir().resolve()
             except Exception:
                 global_user_dir = None
 
@@ -1151,15 +1120,14 @@ def call_fs_tool(
                 paths_to_search = target.rglob(glob_pattern)
 
             for p in paths_to_search:
-                p_in_global = global_user_dir is not None and p.is_relative_to(global_user_dir)
-                if any(part.startswith(".env") or part == ".git" for part in p.parts):
+                if any(part.startswith(".env") or part in excludes for part in p.parts):
                     continue
+                p_in_global = global_user_dir is not None and p.is_relative_to(global_user_dir)
                 if p_in_global:
                     rel_g = p.relative_to(global_user_dir)
-                    allowed_global_subdirs = {"workspaces", "scratch", "backups", "skills"}
-                    if len(rel_g.parts) == 0 or rel_g.parts[0] not in allowed_global_subdirs:
+                    if len(rel_g.parts) == 0 or rel_g.parts[0] not in _ALLOWED_GLOBAL_SUBDIRS:
                         continue
-                elif any(part == ".pocket-agent" for part in p.parts):
+                elif USER_DATA_DIR_NAME in p.parts:
                     continue
 
                 if p.is_symlink():
@@ -1169,7 +1137,7 @@ def call_fs_tool(
                     except Exception:
                         continue
 
-                if not p.is_file() or any(ex in p.parts for ex in excludes):
+                if not p.is_file():
                     continue
 
                 if target.is_file():

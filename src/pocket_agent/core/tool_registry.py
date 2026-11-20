@@ -28,6 +28,7 @@ from pocket_agent.tools.fs import (
     call_fs_tool,
     call_scratch_tool,
     is_fs_tool,
+    is_safe_read_fs_tool,
     is_scratch_tool,
     wrap_external_content,
 )
@@ -247,7 +248,7 @@ class FsToolHandler(ToolHandler):
         return is_fs_tool(name)
 
     def is_parallel_safe(self, name: str, args: dict, agent: Any) -> bool:
-        return True
+        return is_safe_read_fs_tool(name)
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
         existed_before: bool | None = None
