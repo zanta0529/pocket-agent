@@ -295,3 +295,63 @@ def test_tool_done_not_found_renders_soft_suffix_without_error_panel():
     out_err = stream_err.getvalue()
     assert "✗" in out_err
     assert "boom" in out_err
+
+
+def test_tool_done_overwrite_required_renders_soft_suffix_without_error_panel():
+    """status='overwrite_required' 以柔和附註顯示，不印出紅色失敗面板。"""
+    set_locale("zh_TW")
+    stream_zh = StringIO()
+    renderer_zh = CliRenderer(Console(file=stream_zh, force_terminal=False, no_color=True, width=120))
+    renderer_zh.event(
+        "tool_start",
+        {
+            "call_id": "ow1",
+            "name": "write_to_file",
+            "arguments": '{"path": "docs/architecture/architecture-generated.md", "content": "x"}',
+            "is_safe_read": False,
+        },
+    )
+    renderer_zh.event(
+        "tool_done",
+        {
+            "call_id": "ow1",
+            "name": "write_to_file",
+            "ok": True,
+            "status": "overwrite_required",
+            "result": "[OVERWRITE_REQUIRED] 檔案 docs/architecture/architecture-generated.md 已存在。",
+        },
+    )
+    out_zh = stream_zh.getvalue()
+    assert "● Write (write_to_file)" in out_zh
+    assert "architecture-generated.md" in out_zh
+    assert "（已存在，需確認覆寫）" in out_zh
+    assert "✗" not in out_zh
+    assert "工具執行失敗" not in out_zh
+
+    set_locale("en_US")
+    stream_en = StringIO()
+    renderer_en = CliRenderer(Console(file=stream_en, force_terminal=False, no_color=True, width=120))
+    renderer_en.event(
+        "tool_start",
+        {
+            "call_id": "ow2",
+            "name": "write_to_file",
+            "arguments": '{"path": "docs/architecture/architecture-generated.md", "content": "x"}',
+            "is_safe_read": False,
+        },
+    )
+    renderer_en.event(
+        "tool_done",
+        {
+            "call_id": "ow2",
+            "name": "write_to_file",
+            "ok": True,
+            "status": "overwrite_required",
+            "result": "[OVERWRITE_REQUIRED] File docs/architecture/architecture-generated.md already exists.",
+        },
+    )
+    out_en = stream_en.getvalue()
+    assert "● Write (write_to_file)" in out_en
+    assert "(exists, overwrite required)" in out_en
+    assert "✗" not in out_en
+    assert "Tool execution failed" not in out_en

@@ -266,3 +266,128 @@ def test_fs_read_only_not_found_returns_non_error_marker_i18n(tmp_path: Path):
     assert err_list_file.startswith("[ERROR]")
     err_read_dir = call_fs_tool("read_file", {"path": str(tmp_path)}, on_confirm=None, workspace_dirs=ws)
     assert err_read_dir.startswith("[ERROR]")
+
+
+def test_write_to_file_manual_confirm_allows_overwrite_without_flag(tmp_path: Path, monkeypatch):
+    """手動確認模式（require_overwrite_flag=False）寫入既有檔案時，不需 overwrite=true 即提示確認並覆寫。"""
+    monkeypatch.chdir(tmp_path)
+    backup_calls: list[Path] = []
+    monkeypatch.setattr("pocket_agent.tools.fs._backup_file", lambda p: backup_calls.append(p))
+
+    target = tmp_path / "docs" / "report.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("old report\n", encoding="utf-8")
+
+    # 1. 省略 overwrite：拒絕時不備份、原檔不變
+    seen_prompts: list[str] = []
+    refused = call_fs_tool(
+        "write_to_file",
+        {"path": "docs/report.md", "content": "new report\n"},
+        on_confirm=lambda msg: (seen_prompts.append(msg), False)[1],
+        workspace_dirs=[str(tmp_path)],
+    )
+    assert seen_prompts == ["覆寫既有檔案：docs/report.md"]
+    assert refused.startswith("[使用者拒絕")
+    assert target.read_text(encoding="utf-8") == "old report\n"
+    assert len(backup_calls) == 0
+
+    # 2. 顯式 overwrite=False 仍可直接進入人工確認並在核准後覆寫
+    seen_prompts.clear()
+    ok_res = call_fs_tool(
+        "write_to_file",
+        {"path": "docs/report.md", "content": "new report\n", "overwrite": False},
+        on_confirm=lambda msg: (seen_prompts.append(msg), True)[1],
+        workspace_dirs=[str(tmp_path)],
+    )
+    assert seen_prompts == ["覆寫既有檔案：docs/report.md"]
+    assert ok_res.startswith("[SUCCESS] 成功覆寫檔案 ")
+    assert target.read_text(encoding="utf-8") == "new report\n"
+    assert len(backup_calls) == 1
+
+
+def test_write_to_file_require_overwrite_flag_in_accept_edits_i18n(tmp_path: Path, monkeypatch):
+    """自動編輯模式（require_overwrite_flag=True）覆寫既有檔案須帶 overwrite=true，新檔直接建立。"""
+    monkeypatch.chdir(tmp_path)
+    existing = tmp_path / "app.py"
+    existing.write_text("v1\n", encoding="utf-8")
+    ws = [str(tmp_path)]
+    confirm_calls: list[str] = []
+
+    def auto_confirm(msg: str) -> bool:
+        confirm_calls.append(msg)
+        return True
+
+    # 1. zh_TW：未帶 overwrite=True 時回傳 [OVERWRITE_REQUIRED]，不觸發確認且不覆寫
+    set_locale("zh_TW")
+    res_zh = call_fs_tool(
+        "write_to_file",
+        {"path": "app.py", "content": "v2\n"},
+        on_confirm=auto_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+    )
+    assert res_zh.startswith("[OVERWRITE_REQUIRED] ")
+    assert "overwrite=true" in res_zh
+    assert "replace_file_content" in res_zh
+    assert existing.read_text(encoding="utf-8") == "v1\n"
+    assert confirm_calls == []
+
+    # 2. en_US：英文提示語系一致
+    set_locale("en_US")
+    res_en = call_fs_tool(
+        "write_to_file",
+        {"path": "app.py", "content": "v2\n"},
+        on_confirm=auto_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+    )
+    assert res_en.startswith("[OVERWRITE_REQUIRED] ")
+    assert "Accept-edits mode" in res_en
+    assert "overwrite=true" in res_en
+    assert existing.read_text(encoding="utf-8") == "v1\n"
+    assert confirm_calls == []
+
+    # 3. 補帶 overwrite=True 後成功覆寫
+    res_ok = call_fs_tool(
+        "write_to_file",
+        {"path": "app.py", "content": "v2\n", "overwrite": True},
+        on_confirm=auto_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+    )
+    assert res_ok.startswith("[SUCCESS] 成功覆寫檔案 ")
+    assert existing.read_text(encoding="utf-8") == "v2\n"
+
+    # 4. 不存在的新檔不需 overwrite 即可建立
+    new_file = tmp_path / "fresh.py"
+    res_new = call_fs_tool(
+        "write_to_file",
+        {"path": "fresh.py", "content": "fresh\n"},
+        on_confirm=auto_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+    )
+    assert res_new.startswith("[SUCCESS] 成功建立檔案 ")
+    assert new_file.read_text(encoding="utf-8") == "fresh\n"
+
+
+def test_write_to_file_rejects_existing_directory_i18n(tmp_path: Path):
+    """目標路徑為既有目錄時應回傳 [ERROR]，不觸發人工確認。"""
+    sub_dir = tmp_path / "folder"
+    sub_dir.mkdir()
+    ws = [str(tmp_path)]
+    confirm_calls: list[str] = []
+
+    for locale, expected in (("zh_TW", "是一個目錄"), ("en_US", "is a directory")):
+        set_locale(locale)
+        for req_flag in (False, True):
+            res = call_fs_tool(
+                "write_to_file",
+                {"path": str(sub_dir), "content": "bad"},
+                on_confirm=lambda msg: (confirm_calls.append(msg), True)[1],
+                workspace_dirs=ws,
+                require_overwrite_flag=req_flag,
+            )
+            assert res.startswith("[ERROR] ")
+            assert expected in res
+    assert confirm_calls == []

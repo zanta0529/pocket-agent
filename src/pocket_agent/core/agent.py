@@ -46,6 +46,7 @@ from pocket_agent.system.constants import (
     LOG_FILE_MAX_BYTES,
     PROVIDER_OPENAI,
     TOOL_NOT_FOUND_PREFIX,
+    TOOL_OVERWRITE_REQUIRED_PREFIX,
     WEB_RESEARCH_HARD_LIMIT,
     WEB_RESEARCH_SOFT_LIMIT,
 )
@@ -842,6 +843,8 @@ class Agent:
             dynamic_parts.append(
                 "[權限狀態] 使用者已啟用 Accept-edits mode（自動允許檔案編輯模式），"
                 "本次會話中在允許工作區內的檔案新增與修改操作將自動核准。"
+                "在此模式下若要使用 write_to_file 整檔覆寫既有檔案，必須明確設定 overwrite=true；"
+                "若僅需局部修改，請優先改用 replace_file_content。"
             )
 
         if self.user_instructions:
@@ -1714,6 +1717,10 @@ class Agent:
                     elif isinstance(result, str) and result.startswith(TOOL_NOT_FOUND_PREFIX):
                         ok_status = True
                         tool_status = "not_found"
+                        all_errors = False
+                    elif isinstance(result, str) and result.startswith(TOOL_OVERWRITE_REQUIRED_PREFIX):
+                        ok_status = True
+                        tool_status = "overwrite_required"
                         all_errors = False
                     else:
                         ok_status = True

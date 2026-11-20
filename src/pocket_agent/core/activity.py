@@ -339,7 +339,12 @@ class SessionActivityTracker:
             existed_hint: bool | None = None
             _, raw_tool_name = parse_mcp_tool_name(name.split("::")[-1])
             if raw_tool_name == "write_to_file":
-                existed_hint = bool(args.get("overwrite", False))
+                if "成功覆寫檔案" in out:
+                    existed_hint = True
+                elif "成功建立檔案" in out:
+                    existed_hint = False
+                else:
+                    existed_hint = bool(args.get("overwrite", False))
             self.record_tool_result(name, args, out, existed_before=existed_hint)
 
     def ensure_rebuilt(self, history: list[dict] | None) -> None:

@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import inspect
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -205,6 +206,17 @@ class ScratchToolHandler(ToolHandler):
         return ToolExecutionResult(output=result)
 
 
+def _callable_accepts_kwarg(fn: Any, kwarg_name: str) -> bool:
+    """檢查可呼叫物件是否接受指定關鍵字參數，以維持測試 monkeypatch 相容性。"""
+    try:
+        sig = inspect.signature(fn)
+    except TypeError, ValueError:
+        return False
+    return kwarg_name in sig.parameters or any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values()
+    )
+
+
 class FsToolHandler(ToolHandler):
     def matches(self, name: str) -> bool:
         return is_fs_tool(name)
@@ -217,9 +229,20 @@ class FsToolHandler(ToolHandler):
         if name in ("write_to_file", "append_to_file", "replace_file_content"):
             target_p = args.get("path") or args.get("target_file") or args.get("file") or ""
             existed_before = agent.activity.inspect_file_before_tool(target_p)
-        fs_confirm = (lambda _desc: True) if agent.accept_edits else agent.on_confirm
+        accept_edits = bool(getattr(agent, "accept_edits", False))
+        fs_confirm = (lambda _desc: True) if accept_edits else agent.on_confirm
         fn = _resolve_callable("call_fs_tool", call_fs_tool)
-        result = await run_sync(fn, name, args, fs_confirm, agent.workspace_dirs)
+        if name == "write_to_file" and accept_edits and _callable_accepts_kwarg(fn, "require_overwrite_flag"):
+            result = await run_sync(
+                fn,
+                name,
+                args,
+                fs_confirm,
+                agent.workspace_dirs,
+                require_overwrite_flag=True,
+            )
+        else:
+            result = await run_sync(fn, name, args, fs_confirm, agent.workspace_dirs)
         return ToolExecutionResult(output=result, existed_before=existed_before)
 
 

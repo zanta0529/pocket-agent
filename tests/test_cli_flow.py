@@ -893,3 +893,76 @@ def test_agent_sleep_with_cancel_quick_response():
             await task
 
     asyncio.run(_test())
+
+
+def test_confirmation_bridge_recognizes_overwrite_prefix():
+    """ConfirmationBridge._is_fs_edit 應辨識新的覆寫既有檔案確認前綴。"""
+    from pocket_agent.frontend.cli.confirmation import ConfirmationBridge
+
+    assert ConfirmationBridge._is_fs_edit("覆寫既有檔案：docs/architecture/architecture-generated.md") is True
+    assert ConfirmationBridge._is_fs_edit("建立新檔：docs/new.md") is True
+    assert ConfirmationBridge._is_fs_edit("修改檔案：legacy.md") is True
+    assert ConfirmationBridge._is_fs_edit("rm -rf /") is False
+
+
+def test_activity_rebuild_from_history_distinguishes_create_and_overwrite(tmp_path, monkeypatch):
+    """rebuild_from_history 應依成功覆寫／建立輸出優先判定 added／modified，並相容舊紀錄。"""
+    import json
+
+    from pocket_agent.core.activity import SessionActivityTracker
+
+    monkeypatch.chdir(tmp_path)
+    tracker = SessionActivityTracker()
+    history = [
+        {
+            "type": "function_call",
+            "call_id": "c1",
+            "name": "write_to_file",
+            "arguments": json.dumps({"path": "created_new.md", "content": "a"}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "c1",
+            "output": "[SUCCESS] 成功建立檔案 created_new.md",
+        },
+        {
+            "type": "function_call",
+            "call_id": "c2",
+            "name": "write_to_file",
+            "arguments": json.dumps({"path": "updated_existing.md", "content": "b"}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "c2",
+            "output": "[SUCCESS] 成功覆寫檔案 updated_existing.md",
+        },
+        {
+            "type": "function_call",
+            "call_id": "c3",
+            "name": "write_to_file",
+            "arguments": json.dumps({"path": "legacy_mod.md", "content": "c", "overwrite": True}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "c3",
+            "output": "[SUCCESS] 成功寫入檔案 legacy_mod.md",
+        },
+        {
+            "type": "function_call",
+            "call_id": "c4",
+            "name": "write_to_file",
+            "arguments": json.dumps({"path": "legacy_add.md", "content": "d", "overwrite": False}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "c4",
+            "output": "[SUCCESS] 成功寫入檔案 legacy_add.md",
+        },
+    ]
+
+    tracker.rebuild_from_history(history)
+    changes = tracker.get_file_changes(sync_disk=False)
+    assert "created_new.md" in changes["added"]
+    assert "legacy_add.md" in changes["added"]
+    assert "updated_existing.md" in changes["modified"]
+    assert "legacy_mod.md" in changes["modified"]

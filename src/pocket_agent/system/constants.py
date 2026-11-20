@@ -57,6 +57,7 @@ TIME_MACHINE_BACKUP_MAX_BYTES = 20 * 1024 * 1024  # 20 MB: 檔案修改前時光
 USER_DATA_DIR_NAME = ".pocket-agent"  # 使用者資料根目錄名稱 (~/.pocket-agent)
 DEFAULT_SKILL_RESOURCE_LIST_LIMIT = 20  # use_skill 提示中最多列出的頂層附屬資源項目數
 TOOL_NOT_FOUND_PREFIX = "[NOT_FOUND]"  # 唯讀探測工具查無目標時的不可翻譯內部狀態前綴
+TOOL_OVERWRITE_REQUIRED_PREFIX = "[OVERWRITE_REQUIRED]"  # 自動編輯覆寫既有檔案需顯式 overwrite=true 之內部前綴
 
 
 # ==============================================================================

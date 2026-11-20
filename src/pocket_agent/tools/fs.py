@@ -15,9 +15,11 @@ from pocket_agent.system.constants import (
     MAX_FILE_SEARCH_SIZE_BYTES,
     MAX_READ_FILE_BYTES,
     TOOL_NOT_FOUND_PREFIX,
+    TOOL_OVERWRITE_REQUIRED_PREFIX,
     USER_DATA_DIR_NAME,
 )
 from pocket_agent.system.i18n import t
+from pocket_agent.system.paths import format_display_path
 
 log = logging.getLogger("pocket-agent")
 
@@ -66,7 +68,13 @@ FS_TOOLS = [
     {
         "type": "function",
         "name": "write_to_file",
-        "description": "Create a new file or completely overwrite an existing one with new content.",
+        "description": (
+            "Create a new file or completely overwrite an existing file with new content. "
+            "For partial edits to an existing file, prefer replace_file_content. "
+            "When overwriting an existing file, set overwrite=true "
+            "(required in Accept-edits mode; in manual confirmation mode, "
+            "the user will be prompted directly to confirm overwriting)."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -74,7 +82,10 @@ FS_TOOLS = [
                 "content": {"type": "string", "description": "The full content to write."},
                 "overwrite": {
                     "type": "boolean",
-                    "description": "Must be true if you intend to overwrite an existing file.",
+                    "description": (
+                        "Set to true to overwrite an existing file in full "
+                        "(required when overwriting in Accept-edits mode)."
+                    ),
                 },
             },
             "required": ["path", "content"],
@@ -552,6 +563,8 @@ def call_fs_tool(
     args: dict,
     on_confirm: Callable[[str], bool | str | tuple[bool, str]] | None,
     workspace_dirs: list[str] | None = None,
+    *,
+    require_overwrite_flag: bool = False,
 ) -> str:
     """執行檔案操作工具。"""
     try:
@@ -783,13 +796,18 @@ def call_fs_tool(
 
         elif name == "write_to_file":
             content = args.get("content", "")
-            overwrite = args.get("overwrite", False)
+            overwrite = bool(args.get("overwrite", False))
+            display_path = format_display_path(str(target)) or path_str
 
-            if target.exists() and not overwrite:
-                return f"[ERROR] 檔案 {target} 已存在。如欲覆寫請設定 overwrite=true，或使用 replace_file_content。"
+            if target.exists() and target.is_dir():
+                return f"[ERROR] {t('fs_tool.write_target_is_dir', path=display_path)}"
+
+            existed = target.exists()
+            if existed and require_overwrite_flag and not overwrite:
+                return f"{TOOL_OVERWRITE_REQUIRED_PREFIX} {t('fs_tool.overwrite_required', path=display_path)}"
 
             # 人工確認
-            action_desc = f"修改檔案：{target.name}" if target.exists() else f"建立新檔：{target.name}"
+            action_desc = f"覆寫既有檔案：{display_path}" if existed else f"建立新檔：{display_path}"
             refusal = _evaluate_fs_confirmation(on_confirm, action_desc, "寫入")
             if refusal is not None:
                 return refusal
@@ -798,7 +816,9 @@ def call_fs_tool(
             _backup_file(target)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
-            return f"[SUCCESS] 成功寫入檔案 {target}"
+            if existed:
+                return f"[SUCCESS] 成功覆寫檔案 {target}"
+            return f"[SUCCESS] 成功建立檔案 {target}"
 
         elif name == "append_to_file":
             content = args.get("content", "")

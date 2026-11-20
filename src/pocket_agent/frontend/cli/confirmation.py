@@ -91,7 +91,7 @@ class ConfirmationBridge:
 
     @staticmethod
     def _is_fs_edit(command: str) -> bool:
-        return command.startswith(("建立新檔：", "修改檔案：", "附加內容至檔案：", "局部修改檔案："))
+        return command.startswith(("建立新檔：", "修改檔案：", "覆寫既有檔案：", "附加內容至檔案：", "局部修改檔案："))
 
     def _is_auto_allowed(self, command: str, is_fs_edit: bool) -> bool:
         if command.startswith(("動作：建立 GitHub Pull Request", t("confirmation.pr_action"))):

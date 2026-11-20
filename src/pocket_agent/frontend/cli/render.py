@@ -696,8 +696,18 @@ class CliRenderer:
                     from pocket_agent.system.i18n import t
 
                     is_error = status == "error" or not ok
-                    bullet_color = "bold red" if is_error else "bold green"
-                    status_note = t("cli.tool_not_found_suffix") if status == "not_found" else ""
+                    if is_error:
+                        bullet_color = "bold red"
+                    elif status == "overwrite_required":
+                        bullet_color = "bold yellow"
+                    else:
+                        bullet_color = "bold green"
+                    if status == "not_found":
+                        status_note = t("cli.tool_not_found_suffix")
+                    elif status == "overwrite_required":
+                        status_note = t("cli.tool_overwrite_required_suffix")
+                    else:
+                        status_note = ""
                     lines = self._format_tool_lines(("● ", bullet_color), info, status_note=status_note)
                     for line in lines:
                         self.console.print(line)
