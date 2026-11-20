@@ -689,3 +689,85 @@ def test_agent_replace_target_not_found_soft_status_avoids_error_bailout(tmp_pat
         assert done_events[2]["ok"] is True and done_events[2]["status"] == "ok"
 
     asyncio.run(_test())
+
+
+def test_agent_auto_allows_current_workspace_scratch_but_gates_sensitive_session(tmp_path, monkeypatch):
+    """非敏感會話下寫入目前工作區 scratch_dir 應免確認放行；專案檔與敏感會話仍須確認。"""
+    import json
+
+    from pocket_agent.system.paths import scratch_dir
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "docs").mkdir()
+
+    async def _test():
+        from pocket_agent.engines.base import EventText, EventToolCallDone, EventToolCallStart
+        from pocket_agent.engines.factory import EngineFactory
+
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        scratch_target = scratch_dir() / "assess" / "assess.md"
+        repo_target = tmp_path / "docs" / "out.md"
+        rounds = [0]
+
+        class MockScratchAndRepoEngine(BaseEngine):
+            async def stream_chat(
+                self,
+                input_items,
+                instructions,
+                tools,
+                reasoning_param=None,
+                cancel_check=None,
+                build_tools_callback=None,
+            ):
+                rounds[0] += 1
+                if rounds[0] == 1:
+                    yield EventToolCallStart("c1", "write_to_file")
+                    yield EventToolCallDone(
+                        "c1",
+                        "write_to_file",
+                        json.dumps({"path": str(scratch_target), "content": "scratch report"}),
+                    )
+                    yield EventToolCallStart("c2", "write_to_file")
+                    yield EventToolCallDone(
+                        "c2",
+                        "write_to_file",
+                        json.dumps({"path": str(repo_target), "content": "repo doc"}),
+                    )
+                elif rounds[0] == 2:
+                    yield EventText("第一輪完成。")
+                elif rounds[0] == 3:
+                    yield EventToolCallStart("c3", "write_to_file")
+                    yield EventToolCallDone(
+                        "c3",
+                        "write_to_file",
+                        json.dumps({"path": str(scratch_target), "content": "sensitive update", "overwrite": True}),
+                    )
+                else:
+                    yield EventText("敏感會話完成。")
+
+        mock_engine = MockScratchAndRepoEngine(mock_client, "test-model")
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: mock_engine)
+
+        confirm_prompts: list[str] = []
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="test-model", provider="openai")
+        agent.accept_edits = False
+        agent.on_confirm = lambda msg: (confirm_prompts.append(msg), True)[1]
+
+        _, reply1, _ = await agent.chat("撰寫評估與專案文件")
+        assert "第一輪完成。" in reply1
+        assert scratch_target.read_text(encoding="utf-8") == "scratch report"
+        assert repo_target.read_text(encoding="utf-8") == "repo doc"
+        assert len(confirm_prompts) == 1
+        assert "out.md" in confirm_prompts[0]
+
+        confirm_prompts.clear()
+        agent.is_sensitive_session = True
+        _, reply2, _ = await agent.chat("敏感模式寫入暫存檔")
+        assert "敏感會話完成。" in reply2
+        assert scratch_target.read_text(encoding="utf-8") == "sensitive update"
+        assert len(confirm_prompts) == 1
+
+    asyncio.run(_test())

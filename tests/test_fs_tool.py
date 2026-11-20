@@ -515,3 +515,82 @@ def test_replace_file_content_far_or_ambiguous_returns_target_not_found_with_loc
         )
         assert res_missing.startswith("[TARGET_NOT_FOUND]")
         assert total_hint in res_missing
+
+
+def test_scratch_dir_write_append_replace_auto_allowed_only_for_current_workspace(tmp_path: Path, monkeypatch):
+    """開啟 auto_allow_scratch 時，僅目前工作區 scratch_dir 內免確認；專案與其他全域目錄仍須確認。"""
+    from pocket_agent.system.paths import scratch_dir, user_dir
+
+    monkeypatch.chdir(tmp_path)
+    ws = [str(tmp_path)]
+    confirm_calls: list[str] = []
+
+    def _record_confirm(msg: str) -> bool:
+        confirm_calls.append(msg)
+        return True
+
+    # 1. 目前工作區 scratch_dir：新建、覆寫（含 require_overwrite_flag=True）、附加與替換皆免確認
+    assess_file = scratch_dir() / "assess" / "assess.md"
+    res_create = call_fs_tool(
+        "write_to_file",
+        {"path": str(assess_file), "content": "v1\n"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        auto_allow_scratch=True,
+    )
+    assert res_create.startswith("[SUCCESS]")
+
+    res_overwrite = call_fs_tool(
+        "write_to_file",
+        {"path": str(assess_file), "content": "v2\n"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+        auto_allow_scratch=True,
+    )
+    assert res_overwrite.startswith("[SUCCESS]")
+
+    res_append = call_fs_tool(
+        "append_to_file",
+        {"path": str(assess_file), "content": "v3\n"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        auto_allow_scratch=True,
+    )
+    assert res_append.startswith("[SUCCESS]")
+
+    res_replace = call_fs_tool(
+        "replace_file_content",
+        {"path": str(assess_file), "target": "v2\nv3", "replacement": "v2_updated\nv3"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        auto_allow_scratch=True,
+    )
+    assert res_replace.startswith("[SUCCESS]")
+    assert assess_file.read_text(encoding="utf-8") == "v2_updated\nv3\n"
+    assert confirm_calls == []
+
+    # 2. 專案檔、其他工作區 scratch 與 skills 目錄仍須觸發人工確認
+    other_scratch = user_dir() / "workspaces" / "other-slug" / "scratch" / "a.md"
+    skill_file = user_dir() / "skills" / "demo" / "SKILL.md"
+    for must_confirm_path in (tmp_path / "repo.py", other_scratch, skill_file):
+        res_other = call_fs_tool(
+            "write_to_file",
+            {"path": str(must_confirm_path), "content": "x\n"},
+            on_confirm=_record_confirm,
+            workspace_dirs=ws,
+            auto_allow_scratch=True,
+        )
+        assert res_other.startswith("[SUCCESS]")
+    assert len(confirm_calls) == 3
+
+    # 3. 敏感檔名 (.env) 即使在 scratch_dir 下仍應被安全限制拒絕
+    res_env = call_fs_tool(
+        "write_to_file",
+        {"path": str(scratch_dir() / ".env"), "content": "SECRET=1\n"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        auto_allow_scratch=True,
+    )
+    assert res_env.startswith("[ERROR]")
+    assert len(confirm_calls) == 3

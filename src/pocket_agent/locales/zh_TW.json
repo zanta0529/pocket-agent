@@ -80,6 +80,8 @@
     "accept_edits_enabled": "✓ 已啟用 Accept-edits 模式：本次對話自動允許檔案編輯",
     "planned_command": "預計執行：\n{command}",
     "panel_title": "【安全警告】系統要求執行指令",
+    "file_panel_title": "【檔案編輯確認】代理要求變更檔案",
+    "planned_file_edit": "預計變更：\n{command}",
     "session_approved": "✓ 已同意本次對話中自動執行指令: {command}",
     "allowlisted": "✓ 已將「{prefix}」加入指令白名單，未來將自動執行此指令。",
     "custom_instruction_empty": "未輸入指示，已取消執行指令。",

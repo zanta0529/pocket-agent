@@ -966,3 +966,36 @@ def test_activity_rebuild_from_history_distinguishes_create_and_overwrite(tmp_pa
     assert "legacy_add.md" in changes["added"]
     assert "updated_existing.md" in changes["modified"]
     assert "legacy_mod.md" in changes["modified"]
+
+
+def test_confirmation_bridge_panel_style_differs_between_file_edit_and_shell():
+    """檔案編輯確認面板應顯示溫和標題與黃色邊框，Shell 指令則維持紅色安全警告面板。"""
+    from pocket_agent.frontend.cli.confirmation import ConfirmationBridge
+    from pocket_agent.system.i18n import set_locale
+
+    for locale, fs_title, fs_body, shell_title in (
+        ("zh_TW", "【檔案編輯確認】", "預計變更：", "【安全警告】"),
+        ("en_US", "【File Edit Confirmation】", "Planned file change:", "【Security Warning】"),
+    ):
+        set_locale(locale)
+        rendered_panels = []
+        fake_console = SimpleNamespace(print=lambda obj: rendered_panels.append(obj))
+        fake_renderer = SimpleNamespace(
+            _ensure_newline=lambda: None,
+            _active_status=None,
+            console=fake_console,
+        )
+        bridge = object.__new__(ConfirmationBridge)
+        bridge.renderer = fake_renderer
+
+        bridge._render_confirm_panel("建立新檔：docs/demo.md", is_fs_edit=True)
+        bridge._render_confirm_panel("pytest tests/", is_fs_edit=False)
+
+        assert len(rendered_panels) == 2
+        fs_panel, shell_panel = rendered_panels
+        assert fs_title in fs_panel.title
+        assert shell_title not in fs_panel.title
+        assert fs_panel.border_style == "bold yellow"
+        assert fs_body in fs_panel.renderable.plain
+        assert shell_title in shell_panel.title
+        assert shell_panel.border_style == "bold red"

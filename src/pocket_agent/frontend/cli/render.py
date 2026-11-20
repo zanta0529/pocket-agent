@@ -186,144 +186,12 @@ _SOFT_TOOL_STATUS_STYLES: dict[str, tuple[str, str]] = {
 }
 
 
-class _DimQuoteStreamWriter:
-    """專責串流輸出中間 `│ 💭 ` 淡色引言，自動補齊續行前綴且不切斷英文單字。"""
-
-    FIRST_PREFIX = "│ 💭 "
-    CONT_PREFIX = "│    "
-
-    def __init__(self, console: Console) -> None:
-        self.console = console
-        self.active: bool = False
-        self._col: int = 0
-        self._line_has_content: bool = False
-        self._just_wrapped: bool = False
-        self._token_buf: str = ""
-
-    def _max_width(self) -> int:
-        raw_w = getattr(self.console, "width", 80) or 80
-        term_w = raw_w if isinstance(raw_w, int) and raw_w > 0 else 80
-        min_line = max(cell_len(self.FIRST_PREFIX), cell_len(self.CONT_PREFIX)) + 4
-        return max(min_line, term_w - 1)
-
-    def reset(self) -> None:
-        self.active = False
-        self._col = 0
-        self._line_has_content = False
-        self._just_wrapped = False
-        self._token_buf = ""
-
-    def start(self) -> None:
-        """輸出首行前綴並啟動中間淡色串流狀態。"""
-        self.reset()
-        self.console.print(Text(self.FIRST_PREFIX, style="dim"), end="", highlight=False)
-        self.active = True
-        self._col = cell_len(self.FIRST_PREFIX)
-
-    def _flush_out(self, out_buf: list[str]) -> None:
-        if out_buf:
-            self.console.print(Text("".join(out_buf), style="dim"), end="", highlight=False)
-            out_buf.clear()
-
-    def _wrap_line(self, out_buf: list[str], *, soft: bool) -> None:
-        out_buf.append("\n" + self.CONT_PREFIX)
-        self._col = cell_len(self.CONT_PREFIX)
-        self._line_has_content = False
-        self._just_wrapped = soft
-
-    def _emit_space(self, out_buf: list[str], space_str: str, max_w: int) -> None:
-        if self._just_wrapped:
-            return
-        w = cell_len(space_str)
-        if self._line_has_content and self._col + w > max_w:
-            self._wrap_line(out_buf, soft=True)
-            return
-        out_buf.append(space_str)
-        self._col += w
-        self._line_has_content = True
-
-    def _emit_atom(self, out_buf: list[str], atom: str, max_w: int) -> None:
-        if not atom:
-            return
-        self._just_wrapped = False
-        w = cell_len(atom)
-        if self._line_has_content and self._col + w > max_w:
-            self._wrap_line(out_buf, soft=True)
-        if self._col + w <= max_w:
-            out_buf.append(atom)
-            self._col += w
-            self._line_has_content = True
-            return
-        # 單一連續字元串超過整行可用寬度時，退回逐字元切分以避免超出終端寬度
-        for ch in atom:
-            ch_w = cell_len(ch)
-            if self._line_has_content and self._col + ch_w > max_w:
-                self._wrap_line(out_buf, soft=True)
-            out_buf.append(ch)
-            self._col += ch_w
-            self._line_has_content = True
-
-    def write(self, chunk: str) -> None:
-        """寫入串流片段並按詞界與可視寬度自動換行。"""
-        if not self.active:
-            self.start()
-        max_w = self._max_width()
-        out_buf: list[str] = []
-        normalized = chunk.replace("\r\n", "\n")
-
-        for ch in normalized:
-            if ch == "\r":
-                continue
-            if ch == "\n":
-                if self._token_buf:
-                    self._emit_atom(out_buf, self._token_buf, max_w)
-                    self._token_buf = ""
-                self._wrap_line(out_buf, soft=False)
-                continue
-            if ch == " ":
-                if self._token_buf:
-                    self._emit_atom(out_buf, self._token_buf, max_w)
-                    self._token_buf = ""
-                self._emit_space(out_buf, " ", max_w)
-                continue
-            if ch == "\t":
-                if self._token_buf:
-                    self._emit_atom(out_buf, self._token_buf, max_w)
-                    self._token_buf = ""
-                self._emit_space(out_buf, "  ", max_w)
-                continue
-            if ch.isascii() and ch.isprintable():
-                self._token_buf += ch
-                continue
-            if not ch.isprintable():
-                continue
-            if self._token_buf:
-                self._emit_atom(out_buf, self._token_buf, max_w)
-                self._token_buf = ""
-            self._emit_atom(out_buf, ch, max_w)
-
-        self._flush_out(out_buf)
-
-    def finish(self) -> None:
-        """輸出殘餘緩衝字元並結束本次中間淡色串流。"""
-        if not self.active:
-            return
-        if self._token_buf:
-            out_buf: list[str] = []
-            self._emit_atom(out_buf, self._token_buf, self._max_width())
-            self._token_buf = ""
-            self._flush_out(out_buf)
-        self.reset()
-
-
 class CliRenderer:
     def __init__(self, console: Console):
         self.console = console
         # 串流狀態旗標：追蹤本輪是否已開始串流輸出
         self._stream_header_printed: bool = False
         self._round_text_printed: bool = False
-        self._round_is_dim: bool = False
-        self._dim_writer = _DimQuoteStreamWriter(console)
         self._stream_has_content: bool = False
         # 思考中 spinner：由 send_turn 啟動，由 event("text") 或 send_turn 結束前停止
         self._active_status = None
@@ -350,24 +218,16 @@ class CliRenderer:
         except Exception:
             pass
 
-    def _flush_text_buffer(self, *, final: bool = False) -> None:
+    def _flush_text_buffer(self) -> None:
         """將累積的串流文字微批次輸出至終端機，降低逐字重繪背壓。"""
-        if self._text_buffer:
-            text_str = "".join(self._text_buffer)
-            self._text_buffer.clear()
-            self._text_buffer_len = 0
-            self._last_text_flush = monotonic()
-            if self._round_is_dim:
-                if not self._dim_writer.active:
-                    self._dim_writer.start()
-                self._dim_writer.write(text_str)
-            else:
-                self.console.print(text_str, end="", highlight=False, markup=False)
-            self._stream_has_content = True
-
-        if final and self._dim_writer.active:
-            self._dim_writer.finish()
-            self._stream_has_content = True
+        if not self._text_buffer:
+            return
+        text_str = "".join(self._text_buffer)
+        self._text_buffer.clear()
+        self._text_buffer_len = 0
+        self._last_text_flush = monotonic()
+        self.console.print(text_str, end="", highlight=False, markup=False)
+        self._stream_has_content = True
 
     def _ensure_newline(self) -> None:
         """若文字串流游標未換行，補一個換行確保後續輸出從行首開始。
@@ -375,7 +235,7 @@ class CliRenderer:
         text 事件以 end="" 輸出，游標停在行尾；tool_start、tool_done、
         read 等事件若緊接其後，不補換行會造成輸出黏在回應文字後方。
         """
-        self._flush_text_buffer(final=True)
+        self._flush_text_buffer()
         if self._stream_has_content:
             self.console.print()
             self._stream_has_content = False
@@ -560,7 +420,7 @@ class CliRenderer:
         self.console.print(Text("› " + "\n".join(plain(line) for line in raw.split("\n")), style="bold blue"))
 
     def reply(self, reply: str, seconds: float, tokens: int, streamed: bool = False) -> None:
-        self._flush_text_buffer(final=True)
+        self._flush_text_buffer()
         if not streamed or (streamed and not self._stream_has_content and reply):
             # 非串流模式（fallback）或沒有產生任何文字（例如純後補產出）：印標頭 + 完整 Markdown 回答
             if self._stream_has_content:
@@ -575,10 +435,8 @@ class CliRenderer:
 
         # 重置串流狀態
         self._stream_header_printed = False
-        self._stream_has_content = False
         self._round_text_printed = False
-        self._round_is_dim = False
-        self._dim_writer.reset()
+        self._stream_has_content = False
         self._thinking_buffer = ""
         from pocket_agent.system.i18n import t
 
@@ -618,19 +476,17 @@ class CliRenderer:
             self.message(t("cli.file_saved", path=data), "green")
 
         elif kind == "round_start":
-            self._flush_text_buffer(final=True)
+            self._flush_text_buffer()
             # 工具呼叫後重跑：若已串流了文字，換行確認，再開始新輪
             if self._stream_has_content:
                 self.console.print()
             # 不重置 self._stream_header_printed，讓主標頭保留
             self._round_text_printed = False
-            self._round_is_dim = False
-            self._dim_writer.reset()
             self._stream_has_content = False
             self._thinking_buffer = ""
 
         elif kind == "text":
-            # 判斷是否為「非首次」的中途輸出文字
+            # 判斷是否為「非首次」的後續輪次文字（例如工具執行完畢後的延續或最終回覆）
             is_intermediate = self._stream_header_printed and not self._round_text_printed
             is_first_token = not self._stream_header_printed or is_intermediate
 
@@ -642,13 +498,11 @@ class CliRenderer:
                 self.console.print(Text(label, style="bold #B8860B"))
                 self._stream_header_printed = True
                 self._round_text_printed = True
-                self._round_is_dim = False
             elif is_intermediate:
-                # 後續的工具迴圈中途有文字輸出
+                # 工具迴圈後續輪次文字：停止 spinner 並空一行區隔，以正常前景顏色輸出
                 self._stop_status()
-                self._dim_writer.start()
+                self.console.print()
                 self._round_text_printed = True
-                self._round_is_dim = True
 
             text_str = str(data)
             self._text_buffer.append(text_str)

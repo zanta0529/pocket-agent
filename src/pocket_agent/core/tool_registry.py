@@ -251,23 +251,20 @@ class FsToolHandler(ToolHandler):
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
         existed_before: bool | None = None
-        if name in ("write_to_file", "append_to_file", "replace_file_content"):
+        is_write_op = name in ("write_to_file", "append_to_file", "replace_file_content")
+        if is_write_op:
             target_p = args.get("path") or args.get("target_file") or args.get("file") or ""
             existed_before = agent.activity.inspect_file_before_tool(target_p)
         accept_edits = bool(getattr(agent, "accept_edits", False))
+        is_sensitive = bool(getattr(agent, "is_sensitive_session", False))
         fs_confirm = (lambda _desc: True) if accept_edits else agent.on_confirm
         fn = _resolve_callable("call_fs_tool", call_fs_tool)
+        extra_kwargs: dict[str, Any] = {}
         if name == "write_to_file" and accept_edits and _callable_accepts_kwarg(fn, "require_overwrite_flag"):
-            result = await run_sync(
-                fn,
-                name,
-                args,
-                fs_confirm,
-                agent.workspace_dirs,
-                require_overwrite_flag=True,
-            )
-        else:
-            result = await run_sync(fn, name, args, fs_confirm, agent.workspace_dirs)
+            extra_kwargs["require_overwrite_flag"] = True
+        if is_write_op and not is_sensitive and _callable_accepts_kwarg(fn, "auto_allow_scratch"):
+            extra_kwargs["auto_allow_scratch"] = True
+        result = await run_sync(fn, name, args, fs_confirm, agent.workspace_dirs, **extra_kwargs)
         return ToolExecutionResult(output=result, existed_before=existed_before)
 
 

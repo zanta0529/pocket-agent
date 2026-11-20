@@ -98,7 +98,7 @@ def test_stream_text_prints_header_once():
 
 
 def test_stream_round_start_resets_state():
-    """round_start 後保留標頭，後續 text 印出中途樣式。"""
+    """round_start 後保留標頭，後續 text 不再套用 │ 💭 淡色樣式而以正常前景輸出。"""
     stream = StringIO()
     renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=80))
     renderer.event("text", "first round")
@@ -109,7 +109,8 @@ def test_stream_round_start_resets_state():
     renderer.event("text", "second round")
     output = stream.getvalue()
     assert output.count("● Pocket Agent") == 1
-    assert "│ 💭 " in output
+    assert "second round" in output
+    assert "│ 💭 " not in output
 
 
 def test_stream_round_start_without_content_no_extra_newline():
@@ -392,33 +393,46 @@ def test_tool_done_target_not_found_renders_soft_suffix_without_error_panel():
         assert err_word not in out
 
 
-def test_intermediate_dim_text_wraps_with_prefix_without_splitting_ascii_words():
-    """多輪中間淡色串流在自動折行與顯式換行時皆應保留左側 │ 前綴且不切斷英文單字。"""
-    from rich.cells import cell_len
-
+def test_post_tool_stream_text_renders_in_normal_style_without_dim_quote():
+    """工具執行完畢後的後續與最終串流文字應以正常前景輸出，不殘留 │ 💭 與 ANSI dim 效果。"""
+    set_locale("zh_TW")
     stream = StringIO()
-    renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=40))
-    renderer.event("text", "第一輪說明")
+    renderer = CliRenderer(Console(file=stream, force_terminal=True, color_system="truecolor", width=80))
+    renderer.event("text", "先檢查工作區設定。")
+    renderer.event(
+        "tool_start",
+        {
+            "call_id": "w1",
+            "name": "write_to_file",
+            "arguments": '{"path": "assess.md", "content": "hi"}',
+            "is_safe_read": False,
+        },
+    )
+    renderer.event(
+        "tool_done",
+        {
+            "call_id": "w1",
+            "name": "write_to_file",
+            "ok": True,
+            "status": "ok",
+            "result": "[SUCCESS] 成功建立檔案 assess.md",
+        },
+    )
     renderer.event("round_start", "")
 
-    chunks = [
-        "已讀取指南文件，本次將就地更新且不執行 L",
-        "int 或測試，接著修改 developer",
-        "_guide 內容。\n第二段摘要。",
-    ]
-    for ch in chunks:
-        renderer.event("text", ch)
-    renderer.reply("最終結論。", seconds=0.1, tokens=10, streamed=True)
+    final_body = "已完成沙盒報告寫入。\n\n## 摘要\n\n- 項目 **重點**\n"
+    for chunk in ("已完成沙盒報告寫入。", "\n\n## 摘要\n\n", "- 項目 **重點**\n"):
+        renderer.event("text", chunk)
+    renderer._flush_text_buffer()
 
-    output = stream.getvalue()
-    dim_lines = [line for line in output.splitlines() if "│" in line]
-    assert len(dim_lines) >= 3
-    assert dim_lines[0].startswith("│ 💭 ")
-    for cont in dim_lines[1:]:
-        assert cont.startswith("│ ")
-    assert all(cell_len(line) <= 40 for line in dim_lines)
+    streamed_output = stream.getvalue()
+    reply_start = streamed_output.index("已完成沙盒報告寫入。")
+    reply_segment = streamed_output[reply_start:]
+    assert "項目" in reply_segment
+    assert "\x1b[2m" not in reply_segment
 
-    joined = "\n".join(dim_lines)
-    assert "Lint" in joined
-    assert "developer_guide" in joined
-    assert "第二段摘要。" in joined
+    renderer.reply(final_body, seconds=0.2, tokens=12, streamed=True)
+    full_output = stream.getvalue()
+    assert "│ 💭 " not in full_output
+    assert "│    " not in full_output
+    assert "本輪已返回" in full_output

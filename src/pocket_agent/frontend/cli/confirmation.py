@@ -109,18 +109,27 @@ class ConfirmationBridge:
             sub.accept_edits = True
         self.renderer.message(t("confirmation.accept_edits_enabled"), "green")
 
-    def _render_confirm_panel(self, command: str) -> Any:
+    def _render_confirm_panel(self, command: str, *, is_fs_edit: bool = False) -> Any:
         self.renderer._ensure_newline()
         status = getattr(self.renderer, "_active_status", None)
         if status:
             status.stop()
-        planned = t("confirmation.planned_command", command=command)
+        if is_fs_edit:
+            title = t("confirmation.file_panel_title")
+            planned = t("confirmation.planned_file_edit", command=command)
+            border_style = "bold yellow"
+            body_style = ""
+        else:
+            title = t("confirmation.panel_title")
+            planned = t("confirmation.planned_command", command=command)
+            border_style = "bold red"
+            body_style = "yellow"
         self.renderer.console.print(
             Panel(
-                Text(planned, style="yellow"),
-                title=t("confirmation.panel_title"),
+                Text(planned, style=body_style),
+                title=title,
                 title_align="left",
-                border_style="bold red",
+                border_style=border_style,
                 expand=False,
             )
         )
@@ -167,7 +176,7 @@ class ConfirmationBridge:
         if self._is_auto_allowed(command, is_fs_edit):
             return True
 
-        status = self._render_confirm_panel(command)
+        status = self._render_confirm_panel(command, is_fs_edit=is_fs_edit)
         prompt_msg = t("confirmation.prompt_options")
         try:
             if is_fs_edit and sys.stdin.isatty():
@@ -221,7 +230,7 @@ class ConfirmationBridge:
                 if self._is_auto_allowed(command, is_edit):
                     return True
 
-                status = self._render_confirm_panel(command)
+                status = self._render_confirm_panel(command, is_fs_edit=is_edit)
                 bindings = KeyBindings()
                 if is_edit:
 

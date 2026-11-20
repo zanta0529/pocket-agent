@@ -476,6 +476,23 @@ def _backup_file(target: Path) -> None:
         log.warning(f"Time Machine: 備份檔案失敗 ({target}): {e}")
 
 
+def _is_current_workspace_scratch_target(target: Path) -> bool:
+    """判定已驗證路徑是否位於目前工作區專屬的隔離暫存目錄（scratch_dir）之下。"""
+    try:
+        from pocket_agent.system.paths import scratch_dir
+
+        scratch_root = scratch_dir().resolve(strict=False)
+        resolved = target.resolve(strict=False)
+        return resolved != scratch_root and resolved.is_relative_to(scratch_root)
+    except Exception:
+        return False
+
+
+def _should_skip_fs_confirm(target: Path, auto_allow_scratch: bool) -> bool:
+    """檢查目前寫入目標是否符合當前工作區暫存目錄的免確認條件。"""
+    return auto_allow_scratch and _is_current_workspace_scratch_target(target)
+
+
 def _evaluate_fs_confirmation(
     on_confirm: Callable[[str], bool | str | tuple[bool, str]] | None,
     action_desc: str,
@@ -796,6 +813,7 @@ def call_fs_tool(
     workspace_dirs: list[str] | None = None,
     *,
     require_overwrite_flag: bool = False,
+    auto_allow_scratch: bool = False,
 ) -> str:
     """執行檔案操作工具。"""
     try:
@@ -1034,14 +1052,16 @@ def call_fs_tool(
                 return f"[ERROR] {t('fs_tool.write_target_is_dir', path=display_path)}"
 
             existed = target.exists()
-            if existed and require_overwrite_flag and not overwrite:
+            in_workspace_scratch = _should_skip_fs_confirm(target, auto_allow_scratch)
+            if existed and require_overwrite_flag and not overwrite and not in_workspace_scratch:
                 return f"{TOOL_OVERWRITE_REQUIRED_PREFIX} {t('fs_tool.overwrite_required', path=display_path)}"
 
-            # 人工確認
-            action_desc = f"覆寫既有檔案：{display_path}" if existed else f"建立新檔：{display_path}"
-            refusal = _evaluate_fs_confirmation(on_confirm, action_desc, "寫入")
-            if refusal is not None:
-                return refusal
+            if not in_workspace_scratch:
+                # 人工確認
+                action_desc = f"覆寫既有檔案：{display_path}" if existed else f"建立新檔：{display_path}"
+                refusal = _evaluate_fs_confirmation(on_confirm, action_desc, "寫入")
+                if refusal is not None:
+                    return refusal
 
             check_cancelled()
             _backup_file(target)
@@ -1057,9 +1077,10 @@ def call_fs_tool(
             if not target.exists():
                 return "[ERROR] 檔案不存在，無法附加。請使用 write_to_file 建立新檔。"
 
-            refusal = _evaluate_fs_confirmation(on_confirm, f"附加內容至檔案：{target.name}", "寫入")
-            if refusal is not None:
-                return refusal
+            if not _should_skip_fs_confirm(target, auto_allow_scratch):
+                refusal = _evaluate_fs_confirmation(on_confirm, f"附加內容至檔案：{target.name}", "寫入")
+                if refusal is not None:
+                    return refusal
 
             check_cancelled()
             _backup_file(target)
@@ -1093,10 +1114,11 @@ def call_fs_tool(
                 return plan.diagnostic
             new_content = plan.new_content
 
-            # 人工確認
-            refusal = _evaluate_fs_confirmation(on_confirm, f"局部修改檔案：{target.name}", "替換")
-            if refusal is not None:
-                return refusal
+            if not _should_skip_fs_confirm(target, auto_allow_scratch):
+                # 人工確認
+                refusal = _evaluate_fs_confirmation(on_confirm, f"局部修改檔案：{target.name}", "替換")
+                if refusal is not None:
+                    return refusal
 
             check_cancelled()
             _backup_file(target)

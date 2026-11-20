@@ -80,6 +80,8 @@
     "accept_edits_enabled": "✓ Accept-edits mode enabled: file edits will be auto-allowed for this session",
     "planned_command": "Planned command:\n{command}",
     "panel_title": "【Security Warning】Command execution requested",
+    "file_panel_title": "【File Edit Confirmation】Agent requests file change",
+    "planned_file_edit": "Planned file change:\n{command}",
     "session_approved": "✓ Auto-approved command for this session: {command}",
     "allowlisted": "✓ Added \"{prefix}\" to the command allowlist for future auto-approval.",
     "custom_instruction_empty": "No instruction entered; command execution cancelled.",
