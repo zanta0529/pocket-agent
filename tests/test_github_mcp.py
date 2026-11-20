@@ -650,11 +650,7 @@ def _make_dummy_pem(body_len: int, marker: str) -> str:
         "//evil.example.com/repos/myorg/allowed-repo/pulls",
     ],
 )
-def test_cr001_redirect_blocks_relative_traversal_unknown_path_and_post_redirect(
-    monkeypatch,
-    tmp_path,
-    redirect_loc,
-):
+def test_cr001_redirect_blocks_relative_traversal_and_unknown_path(monkeypatch, tmp_path, redirect_loc):
     monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
     monkeypatch.setenv("GITHUB_ALLOWED_REPOS", "myorg/allowed-repo")
 
@@ -671,6 +667,13 @@ def test_cr001_redirect_blocks_relative_traversal_unknown_path_and_post_redirect
 
     assert out.startswith("[ERROR] 拒絕存取")
     assert len(seen_urls) == 1
+    audit_text = (tmp_path / "agent.log").read_text(encoding="utf-8")
+    assert "status=BLOCKED" in audit_text
+
+
+def test_cr001_post_redirect_is_blocked(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+    monkeypatch.setenv("GITHUB_ALLOWED_REPOS", "myorg/allowed-repo")
 
     post_urls: list[str] = []
 
@@ -688,7 +691,6 @@ def test_cr001_redirect_blocks_relative_traversal_unknown_path_and_post_redirect
 
     assert post_out.startswith("[ERROR] 拒絕存取")
     assert len(post_urls) == 1
-
     audit_text = (tmp_path / "agent.log").read_text(encoding="utf-8")
     assert "status=BLOCKED" in audit_text
 

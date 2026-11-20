@@ -228,6 +228,7 @@ def _resolve_redirect_url_from_response(response: httpx.Response) -> httpx.URL:
     """解析 HTTP 3xx 回應的實際下一跳目標 URL（優先採用 HTTPX 建構的 next_request）。"""
     if response.next_request is not None:
         return response.next_request.url
+    # shortcut: 僅供未附 next_request 的舊單測重導向解析相容; 待舊單測改經 _request_json 後移除此備援分支
     location = response.headers.get("location", "")
     try:
         target_url = httpx.URL(location)
@@ -291,6 +292,7 @@ def _validate_redirect_url(target_url: httpx.URL) -> None:
     raise PermissionError(msg)
 
 
+# shortcut: 僅供舊單測直接呼叫之相容層，生產路徑已改由 _request_json 驗證; 待移除舊單測相容要求後刪除
 async def _validate_redirect_response(response: httpx.Response) -> None:
     """攔截 HTTP 3xx 重導向，驗證實際解析後之目標網域與 GITHUB_ALLOWED_REPOS 白名單。"""
     if not response.is_redirect or not response.has_redirect_location:
@@ -302,7 +304,6 @@ def _build_async_client() -> httpx.AsyncClient:
     """建立具備逾時、停用自動重導向與系統 TLS 憑證驗證之非同步 HTTP 客戶端。"""
     return httpx.AsyncClient(
         timeout=httpx.Timeout(NETWORK_TIMEOUT_SEC),
-        max_redirects=MAX_REDIRECTS,
         follow_redirects=False,
         verify=_ssl_verify(),
     )
@@ -336,7 +337,7 @@ async def _create_http_client() -> AsyncIterator[httpx.AsyncClient]:
 async def _read_bounded_stream(resp: httpx.Response, max_bytes: int) -> tuple[bytes, bool]:
     """以串流方式累計讀取 HTTP 回應本文，超過上限立即中止並回傳 (資料, 是否超限)。"""
     content_len = resp.headers.get("content-length")
-    if content_len and content_len.isdigit() and int(content_len) > max_bytes:
+    if content_len and content_len.isascii() and content_len.isdigit() and int(content_len) > max_bytes:
         return b"", True
     buf = bytearray()
     async for chunk in resp.aiter_bytes():
@@ -418,11 +419,12 @@ async def _request_json(
     raise httpx.TooManyRedirects("Exceeded maximum allowed redirects.")
 
 
+# shortcut: 僅供舊單測直接呼叫之相容層，生產路徑已改由 _request_json 串流讀取; 待移除舊單測相容要求後刪除
 def _parse_json_response(resp: httpx.Response) -> Any:
     """檢查 HTTP 狀態碼與回應體積上限（MAX_RESPONSE_BYTES），再解析為 JSON。"""
     resp.raise_for_status()
     content_len = resp.headers.get("content-length")
-    if content_len and content_len.isdigit() and int(content_len) > MAX_RESPONSE_BYTES:
+    if content_len and content_len.isascii() and content_len.isdigit() and int(content_len) > MAX_RESPONSE_BYTES:
         raise ValueError(f"GitHub API 回應內容過大（超過 {MAX_RESPONSE_BYTES} 位元組上限）。")
     raw_bytes = getattr(resp, "content", b"")
     if isinstance(raw_bytes, (bytes, bytearray)) and len(raw_bytes) > MAX_RESPONSE_BYTES:
@@ -474,15 +476,19 @@ def _safe_cut_index(text: str, limit: int) -> int:
     return cut
 
 
+def _clip_text(text: str, limit: int, suffix: str = "...") -> str:
+    """在不切斷 [REDACTED...] 遮罩標記的前提下，將文字裁切至指定字元上限。"""
+    if len(text) <= limit:
+        return text
+    cut = _safe_cut_index(text, limit)
+    if cut >= len(text):
+        return text
+    return text[:cut] + suffix
+
+
 def _redact_and_clip_patch(patch: str, max_chars: int, mask_val: str, notice: str) -> str:
     """先對完整單檔 Diff 執行機密遮罩，再套用安全字元上限截斷。"""
-    redacted = _redact_output(patch, mask_val)
-    if len(redacted) <= max_chars:
-        return redacted
-    cut = _safe_cut_index(redacted, max_chars)
-    if cut >= len(redacted):
-        return redacted
-    return redacted[:cut] + notice
+    return _clip_text(_redact_output(patch, mask_val), max_chars, notice)
 
 
 def _truncate_output(text: str, hint: str) -> tuple[str, bool]:
@@ -542,22 +548,12 @@ def _audit_log(
         lt = time.localtime(now_t)
         ms = int((now_t - int(now_t)) * 1000)
         ts = f"{time.strftime('%Y-%m-%d %H:%M:%S', lt)},{ms:03d}"
-        safe_cmd = " ".join(_redact_output(command, mask_val).splitlines()).strip()
-        if len(safe_cmd) > _MAX_AUDIT_FIELD_CHARS:
-            cut = _safe_cut_index(safe_cmd, _MAX_AUDIT_FIELD_CHARS)
-            if cut < len(safe_cmd):
-                safe_cmd = safe_cmd[:cut] + "..."
+        raw_cmd = " ".join(_redact_output(command, mask_val).splitlines()).strip()
+        safe_cmd = _clip_text(raw_cmd, _MAX_AUDIT_FIELD_CHARS)
         raw_target = " ".join(_redact_output(target, mask_val).splitlines()).strip()
-        safe_target = _AUDIT_TARGET_SANITIZE_RE.sub("_", raw_target)
-        if len(safe_target) > _MAX_AUDIT_FIELD_CHARS:
-            cut = _safe_cut_index(safe_target, _MAX_AUDIT_FIELD_CHARS)
-            if cut < len(safe_target):
-                safe_target = safe_target[:cut] + "..."
-        safe_detail = " ".join(_redact_output(detail, mask_val).splitlines()).strip()
-        if len(safe_detail) > _MAX_AUDIT_DETAIL_CHARS:
-            cut = _safe_cut_index(safe_detail, _MAX_AUDIT_DETAIL_CHARS)
-            if cut < len(safe_detail):
-                safe_detail = safe_detail[:cut] + "..."
+        safe_target = _clip_text(_AUDIT_TARGET_SANITIZE_RE.sub("_", raw_target), _MAX_AUDIT_FIELD_CHARS)
+        raw_detail = " ".join(_redact_output(detail, mask_val).splitlines()).strip()
+        safe_detail = _clip_text(raw_detail, _MAX_AUDIT_DETAIL_CHARS)
         parts = [f"{ts} [AUDIT] [MCP:github] tool={tool_name} status={status}"]
         if safe_target:
             parts.append(f"target={safe_target}")
@@ -760,13 +756,7 @@ def _validate_state(state: str) -> str:
 
 def _clip_error_text(text: str, mask_val: str = "", limit: int = _MAX_ERROR_OUTPUT_CHARS) -> str:
     """遮罩敏感資訊並安全裁切錯誤訊息，避免將過長內容回傳或寫入稽核日誌。"""
-    redacted = _redact_output(text, mask_val)
-    if len(redacted) <= limit:
-        return redacted
-    cut = _safe_cut_index(redacted, limit)
-    if cut >= len(redacted):
-        return redacted
-    return redacted[:cut] + "..."
+    return _clip_text(_redact_output(text, mask_val), limit)
 
 
 def _format_http_error(exc: httpx.HTTPStatusError, *, active_token: str = "") -> tuple[str, str]:
