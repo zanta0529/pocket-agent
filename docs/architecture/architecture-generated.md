@@ -19,7 +19,7 @@ language: 'zh-TW'
 | **專案名稱**   | PocketAgent                                             |
 | **版本**       | 0.1.0                                                   |
 | **主要技術棧** | Python 3.14+, asyncio, Click 8.5.0, Rich 15.0.0, prompt-toolkit 3.0.53, httpx 0.28.1, OpenAI SDK, Pydantic 2.14.2 |
-| **架構類型**   | Background Daemon / CLI Application (Local-First AI Agent) |
+| **架構類型**   | 本機互動式 CLI 應用程式（Local-First AI Agent） |
 | **部署環境**   | Windows 10/11, macOS (Apple Silicon / Intel), Linux (Ubuntu, Debian, RHEL, etc.) |
 | **文件語系**   | zh-TW                                                   |
 | **最後更新**   | 2025-01-20                                              |
@@ -207,8 +207,8 @@ flowchart TB
 
 ### 4.2 基礎設施
 
-- **容器化**：Docker (可選沙盒模式 `USE_SANDBOX=docker`)
-- **編排**：無 (單機 CLI 應用)
+- **執行型態**：[CLI 入口](../../src/pocket_agent/main.py)啟動互動式應用，背景維護隨 CLI 生命週期運作；詳見[排程作業](scheduled-jobs-generated.md)。
+- **容器與編排**：`USE_SANDBOX` 出現在[設定映射](../../src/pocket_agent/system/config.py)，但這不足以證明有受支援的 Docker 部署或工具隔離；[README](../../README.md)所列部署方式是本機 Portable 與原始碼安裝。
 - **監控**：內建 `/usage`、Housekeeping 日誌、Agent 活動追蹤
 - **日誌**：RotatingFileHandler (10MB/檔, 3 備份), `~/.pocket-agent/workspaces/<slug>/logs/agent.log`
 - **CI/CD**：GitHub Actions (Windows-latest, Python 3.14), Ruff, pytest, import check
@@ -233,10 +233,10 @@ flowchart TB
 
 > **架構師風險評估**：
 >
-> - [x] 認證/授權邊界是否清晰：OAuth PKCE、Keyring、JWE 三層防護；MCP Default-Deny + 確認回呼
-> - [x] 敏感資料加密傳輸與靜態：TLS 系統憑證庫、Keyring 硬體級加密、JWE AES-256-GCM + Argon2id
-> - [x] 審計日誌完整性：會話 HMAC 簽章、MCP Stdio 日誌、Agent 活動追蹤
-> - [x] 供應鏈相依性掃描：`scripts/check_imports.py` 檢查未宣告匯入、缺少依賴
+> - [MCP 管理器](../../src/pocket_agent/extensions/mcp.py)與[確認橋接](../../src/pocket_agent/frontend/cli/confirmation.py)負責工具邊界；唯讀豁免仍依管理者分類，擴充時應複核工具實際副作用。
+> - [會話實作](../../src/pocket_agent/core/sessions.py)使用 HMAC 驗證完整性，不等於加密會話，也不代表所有日誌都具防竄改能力。跨帳號或跨主機還原須另外驗證。
+> - 原生 Keyring 的保護程度取決於作業系統及後端，不能一概承諾硬體級保護。憑證行為與設定參閱[安全與認證](security-and-auth.md)。
+> - [CI](../../.github/workflows/standard-ci.yml)檢查未宣告匯入與缺少依賴；這不是已知漏洞掃描或完整供應鏈稽核。
 
 ---
 

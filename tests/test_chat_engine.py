@@ -109,3 +109,38 @@ def test_chat_engine_emits_tool_call_done_for_multiple_tools_only_on_tool_calls_
         assert fake_stream.closed is True
 
     asyncio.run(_run())
+
+
+def test_format_chat_messages_merges_intermediate_assistant_text_with_tool_calls():
+    """同一輪中間文字應與後續 function_call 合併為單一 assistant 訊息，不致失去上下文。"""
+    engine = StandardChatCompletionsEngine(client=MagicMock(), model="gemini-pro")
+    input_items = [
+        {"role": "user", "content": "check file"},
+        {"role": "assistant", "content": "已載入 skill，先讀取檔案。"},
+        {"type": "function_call", "call_id": "c1", "name": "read_file", "arguments": '{"path": "a.md"}'},
+        {"type": "function_call", "call_id": "c2", "name": "read_file", "arguments": '{"path": "b.md"}'},
+        {"type": "function_call_output", "call_id": "c1", "output": "content a"},
+        {"type": "function_call_output", "call_id": "c2", "output": "content b"},
+    ]
+
+    messages = engine.format_chat_messages(input_items)
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool", "tool"]
+    assistant_msg = messages[1]
+    assert assistant_msg["content"] == "已載入 skill，先讀取檔案。"
+    assert [tc["id"] for tc in assistant_msg["tool_calls"]] == ["c1", "c2"]
+
+    fc_only = [{"type": "function_call", "call_id": "c3", "name": "list_dir", "arguments": '{"path": "."}'}]
+    assert engine.format_chat_messages(fc_only) == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c3",
+                    "type": "function",
+                    "function": {"name": "list_dir", "arguments": '{"path": "."}'},
+                }
+            ],
+        }
+    ]

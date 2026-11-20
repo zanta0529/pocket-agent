@@ -98,7 +98,7 @@ def test_stream_text_prints_header_once():
 
 
 def test_stream_round_start_resets_state():
-    """round_start 後保留標頭，後續 text 印出中途樣式。"""
+    """round_start 後保留標頭，後續 text 不再套用 │ 💭 淡色樣式而以正常前景輸出。"""
     stream = StringIO()
     renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=80))
     renderer.event("text", "first round")
@@ -109,7 +109,8 @@ def test_stream_round_start_resets_state():
     renderer.event("text", "second round")
     output = stream.getvalue()
     assert output.count("● Pocket Agent") == 1
-    assert "│ 💭 " in output
+    assert "second round" in output
+    assert "│ 💭 " not in output
 
 
 def test_stream_round_start_without_content_no_extra_newline():
@@ -295,3 +296,143 @@ def test_tool_done_not_found_renders_soft_suffix_without_error_panel():
     out_err = stream_err.getvalue()
     assert "✗" in out_err
     assert "boom" in out_err
+
+
+def test_tool_done_overwrite_required_renders_soft_suffix_without_error_panel():
+    """status='overwrite_required' 以柔和附註顯示，不印出紅色失敗面板。"""
+    set_locale("zh_TW")
+    stream_zh = StringIO()
+    renderer_zh = CliRenderer(Console(file=stream_zh, force_terminal=False, no_color=True, width=120))
+    renderer_zh.event(
+        "tool_start",
+        {
+            "call_id": "ow1",
+            "name": "write_to_file",
+            "arguments": '{"path": "docs/architecture/architecture-generated.md", "content": "x"}',
+            "is_safe_read": False,
+        },
+    )
+    renderer_zh.event(
+        "tool_done",
+        {
+            "call_id": "ow1",
+            "name": "write_to_file",
+            "ok": True,
+            "status": "overwrite_required",
+            "result": "[OVERWRITE_REQUIRED] 檔案 docs/architecture/architecture-generated.md 已存在。",
+        },
+    )
+    out_zh = stream_zh.getvalue()
+    assert "● Write (write_to_file)" in out_zh
+    assert "architecture-generated.md" in out_zh
+    assert "（已存在，需確認覆寫）" in out_zh
+    assert "✗" not in out_zh
+    assert "工具執行失敗" not in out_zh
+
+    set_locale("en_US")
+    stream_en = StringIO()
+    renderer_en = CliRenderer(Console(file=stream_en, force_terminal=False, no_color=True, width=120))
+    renderer_en.event(
+        "tool_start",
+        {
+            "call_id": "ow2",
+            "name": "write_to_file",
+            "arguments": '{"path": "docs/architecture/architecture-generated.md", "content": "x"}',
+            "is_safe_read": False,
+        },
+    )
+    renderer_en.event(
+        "tool_done",
+        {
+            "call_id": "ow2",
+            "name": "write_to_file",
+            "ok": True,
+            "status": "overwrite_required",
+            "result": "[OVERWRITE_REQUIRED] File docs/architecture/architecture-generated.md already exists.",
+        },
+    )
+    out_en = stream_en.getvalue()
+    assert "● Write (write_to_file)" in out_en
+    assert "(exists, overwrite required)" in out_en
+    assert "✗" not in out_en
+    assert "Tool execution failed" not in out_en
+
+
+def test_tool_done_target_not_found_renders_soft_suffix_without_error_panel():
+    """replace_file_content 回傳 target_not_found 狀態時應顯示柔和後綴，不印出失敗紅框或叉號。"""
+    for locale, suffix, err_word in (
+        ("zh_TW", "（未找到相符內容）", "工具執行失敗"),
+        ("en_US", "(target not found)", "Tool execution failed"),
+    ):
+        set_locale(locale)
+        stream = StringIO()
+        renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=120))
+        renderer.event(
+            "tool_start",
+            {
+                "call_id": "tnf1",
+                "name": "replace_file_content",
+                "arguments": '{"path": "docs/guide.md", "target": "x", "replacement": "y"}',
+                "is_safe_read": False,
+            },
+        )
+        renderer.event(
+            "tool_done",
+            {
+                "call_id": "tnf1",
+                "name": "replace_file_content",
+                "ok": True,
+                "status": "target_not_found",
+                "result": "[TARGET_NOT_FOUND] missing",
+            },
+        )
+        out = stream.getvalue()
+        assert "● Write (replace_file_content)" in out
+        assert suffix in out
+        assert "✗" not in out
+        assert err_word not in out
+
+
+def test_post_tool_stream_text_renders_in_normal_style_without_dim_quote():
+    """工具執行完畢後的後續與最終串流文字應以正常前景輸出，不殘留 │ 💭 與 ANSI dim 效果。"""
+    set_locale("zh_TW")
+    stream = StringIO()
+    renderer = CliRenderer(Console(file=stream, force_terminal=True, color_system="truecolor", width=80))
+    renderer.event("text", "先檢查工作區設定。")
+    renderer.event(
+        "tool_start",
+        {
+            "call_id": "w1",
+            "name": "write_to_file",
+            "arguments": '{"path": "assess.md", "content": "hi"}',
+            "is_safe_read": False,
+        },
+    )
+    renderer.event(
+        "tool_done",
+        {
+            "call_id": "w1",
+            "name": "write_to_file",
+            "ok": True,
+            "status": "ok",
+            "result": "[SUCCESS] 成功建立檔案 assess.md",
+        },
+    )
+    renderer.event("round_start", "")
+
+    final_body = "已完成沙盒報告寫入。\n\n## 摘要\n\n- 項目 **重點**\n"
+    for chunk in ("已完成沙盒報告寫入。", "\n\n## 摘要\n\n", "- 項目 **重點**\n"):
+        renderer.event("text", chunk)
+    renderer._flush_text_buffer()
+
+    streamed_output = stream.getvalue()
+    reply_start = streamed_output.index("已完成沙盒報告寫入。")
+    reply_segment = streamed_output[reply_start:]
+    assert "項目" in reply_segment
+    assert "\x1b[2m" not in reply_segment
+
+    renderer.reply(final_body, seconds=0.2, tokens=12, streamed=True)
+    full_output = stream.getvalue()
+    assert "│ 💭 " not in full_output
+    assert "│    " not in full_output
+    assert "本輪已返回" in full_output

@@ -57,6 +57,10 @@ TIME_MACHINE_BACKUP_MAX_BYTES = 20 * 1024 * 1024  # 20 MB: 檔案修改前時光
 USER_DATA_DIR_NAME = ".pocket-agent"  # 使用者資料根目錄名稱 (~/.pocket-agent)
 DEFAULT_SKILL_RESOURCE_LIST_LIMIT = 20  # use_skill 提示中最多列出的頂層附屬資源項目數
 TOOL_NOT_FOUND_PREFIX = "[NOT_FOUND]"  # 唯讀探測工具查無目標時的不可翻譯內部狀態前綴
+TOOL_OVERWRITE_REQUIRED_PREFIX = "[OVERWRITE_REQUIRED]"  # 自動編輯覆寫既有檔案需顯式 overwrite=true 之內部前綴
+TOOL_TARGET_NOT_FOUND_PREFIX = "[TARGET_NOT_FOUND]"  # replace_file_content 查無相符目標之不可翻譯內部狀態前綴
+REPLACE_SCOPE_DRIFT_LINES = 20  # replace_file_content 在指定行數範圍附近容許自動對齊的最大上下行數偏移
+REPLACE_DIAGNOSTIC_MAX_MATCHES = 5  # replace_file_content 回報實際行號診斷時最多列出的位置數量
 
 
 # ==============================================================================

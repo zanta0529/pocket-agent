@@ -22,7 +22,7 @@ from pocket_agent.core.context_budget import (
 )
 from pocket_agent.core.files import FileUploader
 from pocket_agent.core.subagents import get_subagent, subagent_tools
-from pocket_agent.core.tool_registry import default_tool_registry
+from pocket_agent.core.tool_registry import classify_tool_result, default_tool_registry
 from pocket_agent.engines.base import BaseEngine
 from pocket_agent.extensions.hooks import run_hooks
 from pocket_agent.extensions.mcp import MCPManager, parse_mcp_tool_name
@@ -45,7 +45,6 @@ from pocket_agent.system.constants import (
     LOG_BACKUP_COUNT,
     LOG_FILE_MAX_BYTES,
     PROVIDER_OPENAI,
-    TOOL_NOT_FOUND_PREFIX,
     WEB_RESEARCH_HARD_LIMIT,
     WEB_RESEARCH_SOFT_LIMIT,
 )
@@ -842,6 +841,8 @@ class Agent:
             dynamic_parts.append(
                 "[權限狀態] 使用者已啟用 Accept-edits mode（自動允許檔案編輯模式），"
                 "本次會話中在允許工作區內的檔案新增與修改操作將自動核准。"
+                "在此模式下若要使用 write_to_file 整檔覆寫既有檔案，必須明確設定 overwrite=true；"
+                "若僅需局部修改，請優先改用 replace_file_content。"
             )
 
         if self.user_instructions:
@@ -991,6 +992,16 @@ class Agent:
             compact_target_ratio=target_ratio,
         )
         return self._budget
+
+    def _append_intermediate_assistant_text(self, input_items: list, text: str) -> None:
+        """將帶有工具呼叫的中間回覆文字寫入本輪輸入與歷史，避免多輪工具迴圈重複說明。"""
+        clean_text = text.strip()
+        if not clean_text:
+            return
+        item = {"role": "assistant", "content": clean_text}
+        input_items.append(item)
+        if input_items is not self.history:
+            self.history.append(dict(item))
 
     def _append_tool_pair(self, input_items: list, fc: dict, result) -> None:
         """附加 function_call 與其 output；輸出在此只截斷一次，避免事後反覆原地修改。"""
@@ -1569,10 +1580,19 @@ class Agent:
                     for cid, res, exc in gathered:
                         parallel_results[cid] = (res, exc)
 
+            round_text_recorded = False
+
+            def _commit_tool_pair(target_fc: dict, tool_result: object) -> None:
+                nonlocal round_text_recorded
+                if not round_text_recorded:
+                    self._append_intermediate_assistant_text(input_items, text)
+                    round_text_recorded = True
+                self._append_tool_pair(input_items, target_fc, tool_result)
+
             all_errors = True
             for fc in fc_list:
                 if self.cancel_requested:
-                    return thinking, self._stopped_reply(text)
+                    return thinking, self._stopped_reply("" if round_text_recorded else text)
 
                 if self.allowed_tools is not None and fc["name"] not in self.allowed_tools:
                     result = f"[ERROR] 工具 {fc['name']} 未經授權，無法執行。"
@@ -1585,7 +1605,7 @@ class Agent:
                             "ok": False,
                         },
                     )
-                    self._append_tool_pair(input_items, fc, result)
+                    _commit_tool_pair(fc, result)
                     continue
 
                 blocked_result = web_guard.check_limit(fc["name"])
@@ -1605,7 +1625,7 @@ class Agent:
                             "ok": True,
                         },
                     )
-                    self._append_tool_pair(input_items, fc, blocked_result)
+                    _commit_tool_pair(fc, blocked_result)
                     all_errors = False
                     continue
 
@@ -1656,7 +1676,7 @@ class Agent:
                                     "ok": False,
                                 },
                             )
-                            self._append_tool_pair(input_items, fc, result)
+                            _commit_tool_pair(fc, result)
                             continue
 
                     log.debug("TOOL calling %s", fc["name"])
@@ -1675,7 +1695,7 @@ class Agent:
                             )
 
                         if self.cancel_requested:
-                            return thinking, self._stopped_reply(text)
+                            return thinking, self._stopped_reply("" if round_text_recorded else text)
 
                         exec_res = await handler.execute(fc["name"], args, fc["call_id"], self)
                         existed_before = exec_res.existed_before
@@ -1695,9 +1715,9 @@ class Agent:
                                         "ok": exec_res.ok_override,
                                     },
                                 )
-                                self._append_tool_pair(input_items, fc, result)
+                                _commit_tool_pair(fc, result)
                                 continue
-                            return thinking, self._stopped_reply(text)
+                            return thinking, self._stopped_reply("" if round_text_recorded else text)
                     log.debug("TOOL result name=%s chars=%d", fc["name"], len(result) if isinstance(result, str) else 0)
 
                     if not self._is_subagent:
@@ -1706,18 +1726,8 @@ class Agent:
                             "after_tool",
                             {"tool_name": fc["name"], "tool_result": result},
                         )
-                    if isinstance(result, str) and (
-                        result.startswith("Error:") or result.startswith("[ERROR]") or result.startswith("[使用者拒絕")
-                    ):
-                        ok_status = False
-                        tool_status = "error"
-                    elif isinstance(result, str) and result.startswith(TOOL_NOT_FOUND_PREFIX):
-                        ok_status = True
-                        tool_status = "not_found"
-                        all_errors = False
-                    else:
-                        ok_status = True
-                        tool_status = "ok"
+                    ok_status, tool_status = classify_tool_result(result)
+                    if ok_status:
                         all_errors = False
                 except asyncio.CancelledError:
                     log.warning("TOOL cancelled during execution: name=%s", fc["name"])
@@ -1731,7 +1741,7 @@ class Agent:
                             "ok": False,
                         },
                     )
-                    self._append_tool_pair(input_items, fc, result)
+                    _commit_tool_pair(fc, result)
                     raise
                 except Exception as e:
                     if handler.is_sensitive(fc["name"], self):
@@ -1780,7 +1790,7 @@ class Agent:
 
                 if not ok_status and web_guard.is_soft_error(fc["name"], result):
                     all_errors = False
-                self._append_tool_pair(input_items, fc, result)
+                _commit_tool_pair(fc, result)
 
             div_state = divergence_guard.observe_round(fc_list)
             if div_state == "stop":

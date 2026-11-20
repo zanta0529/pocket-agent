@@ -179,13 +179,19 @@ def toolbar(state: CliState, width: int) -> FormattedText:
     return FormattedText([("", clip(line, width))])
 
 
+_SOFT_TOOL_STATUS_STYLES: dict[str, tuple[str, str]] = {
+    "not_found": ("bold green", "cli.tool_not_found_suffix"),
+    "overwrite_required": ("bold yellow", "cli.tool_overwrite_required_suffix"),
+    "target_not_found": ("bold yellow", "cli.tool_target_not_found_suffix"),
+}
+
+
 class CliRenderer:
     def __init__(self, console: Console):
         self.console = console
         # 串流狀態旗標：追蹤本輪是否已開始串流輸出
         self._stream_header_printed: bool = False
         self._round_text_printed: bool = False
-        self._round_is_dim: bool = False
         self._stream_has_content: bool = False
         # 思考中 spinner：由 send_turn 啟動，由 event("text") 或 send_turn 結束前停止
         self._active_status = None
@@ -220,19 +226,7 @@ class CliRenderer:
         self._text_buffer.clear()
         self._text_buffer_len = 0
         self._last_text_flush = monotonic()
-        if self._round_is_dim:
-            if "\n" in text_str:
-                parts = text_str.split("\n", 1)
-                if parts[0]:
-                    self.console.print(Text(parts[0], style="dim"), end="", highlight=False)
-                self.console.print("\n", end="", highlight=False, markup=False)
-                if parts[1]:
-                    self.console.print(parts[1], end="", highlight=False, markup=False)
-                self._round_is_dim = False
-            else:
-                self.console.print(Text(text_str, style="dim"), end="", highlight=False)
-        else:
-            self.console.print(text_str, end="", highlight=False, markup=False)
+        self.console.print(text_str, end="", highlight=False, markup=False)
         self._stream_has_content = True
 
     def _ensure_newline(self) -> None:
@@ -441,6 +435,7 @@ class CliRenderer:
 
         # 重置串流狀態
         self._stream_header_printed = False
+        self._round_text_printed = False
         self._stream_has_content = False
         self._thinking_buffer = ""
         from pocket_agent.system.i18n import t
@@ -487,12 +482,11 @@ class CliRenderer:
                 self.console.print()
             # 不重置 self._stream_header_printed，讓主標頭保留
             self._round_text_printed = False
-            self._round_is_dim = False
             self._stream_has_content = False
             self._thinking_buffer = ""
 
         elif kind == "text":
-            # 判斷是否為「非首次」的中途輸出文字
+            # 判斷是否為「非首次」的後續輪次文字（例如工具執行完畢後的延續或最終回覆）
             is_intermediate = self._stream_header_printed and not self._round_text_printed
             is_first_token = not self._stream_header_printed or is_intermediate
 
@@ -504,13 +498,11 @@ class CliRenderer:
                 self.console.print(Text(label, style="bold #B8860B"))
                 self._stream_header_printed = True
                 self._round_text_printed = True
-                self._round_is_dim = False
             elif is_intermediate:
-                # 後續的工具迴圈中途有文字輸出
+                # 工具迴圈後續輪次文字：停止 spinner 並空一行區隔，以正常前景顏色輸出
                 self._stop_status()
-                self.console.print("[dim]│ 💭 [/dim]", end="", highlight=False, markup=True)
+                self.console.print()
                 self._round_text_printed = True
-                self._round_is_dim = True
 
             text_str = str(data)
             self._text_buffer.append(text_str)
@@ -696,8 +688,15 @@ class CliRenderer:
                     from pocket_agent.system.i18n import t
 
                     is_error = status == "error" or not ok
-                    bullet_color = "bold red" if is_error else "bold green"
-                    status_note = t("cli.tool_not_found_suffix") if status == "not_found" else ""
+                    if is_error:
+                        bullet_color = "bold red"
+                        status_note = ""
+                    elif status in _SOFT_TOOL_STATUS_STYLES:
+                        bullet_color, i18n_key = _SOFT_TOOL_STATUS_STYLES[status]
+                        status_note = t(i18n_key)
+                    else:
+                        bullet_color = "bold green"
+                        status_note = ""
                     lines = self._format_tool_lines(("● ", bullet_color), info, status_note=status_note)
                     for line in lines:
                         self.console.print(line)

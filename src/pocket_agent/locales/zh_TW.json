@@ -69,7 +69,9 @@
     "exiting_on_sigint": "收到中斷訊號，正在離開…",
     "invalid_path": "路徑不存在或無效：{path}",
     "attachment_index_out_of_range": "附件編號超出範圍",
-    "tool_not_found_suffix": "（不存在）"
+    "tool_not_found_suffix": "（不存在）",
+    "tool_overwrite_required_suffix": "（已存在，需確認覆寫）",
+    "tool_target_not_found_suffix": "（未找到相符內容）"
   },
   "confirmation": {
     "allow_file_write": "是否允許寫入檔案？",
@@ -78,6 +80,8 @@
     "accept_edits_enabled": "✓ 已啟用 Accept-edits 模式：本次對話自動允許檔案編輯",
     "planned_command": "預計執行：\n{command}",
     "panel_title": "【安全警告】系統要求執行指令",
+    "file_panel_title": "【檔案編輯確認】代理要求變更檔案",
+    "planned_file_edit": "預計變更：\n{command}",
     "session_approved": "✓ 已同意本次對話中自動執行指令: {command}",
     "allowlisted": "✓ 已將「{prefix}」加入指令白名單，未來將自動執行此指令。",
     "custom_instruction_empty": "未輸入指示，已取消執行指令。",
@@ -513,6 +517,11 @@
     "sensitive_path_skill_hint": "安全限制：禁止存取敏感目錄或檔案 ({part})。若要讀取技能附屬檔案，請勿將工作區路徑與技能目錄拼接，請直接傳入相對路徑（如 <skill_name>/<subpath>）給 read_file 或 list_dir。",
     "dir_not_found": "目錄不存在：{path}",
     "file_not_found": "檔案不存在：{path}",
-    "path_not_found": "檔案或目錄不存在：{path}"
+    "path_not_found": "檔案或目錄不存在：{path}",
+    "overwrite_required": "檔案 {path} 已存在。目前處於自動編輯模式，如欲整檔覆寫請重新呼叫 write_to_file 並設定 overwrite=true；若僅需局部修改，請優先改用 replace_file_content。",
+    "write_target_is_dir": "{path} 是一個目錄，無法直接寫入檔案。",
+    "replace_target_not_found_in_range": "在指定的行數範圍內 ({start}-{end}，全檔共 {total_lines} 行) 找不到 target 字串。請先使用 read_file 確認該區段實際內容與行號。",
+    "replace_target_not_found_elsewhere": "在指定的行數範圍內 ({start}-{end}，全檔共 {total_lines} 行) 找不到 target 字串，但偵測到相符內容位於 {locations}；請調整 start_line/end_line 或使用 read_file 確認後重試。",
+    "replace_target_not_found": "找不到指定的 target 字串（全檔共 {total_lines} 行）。請先使用 read_file 確認實際內容與縮排。"
   }
 }

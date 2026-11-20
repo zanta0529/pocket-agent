@@ -400,3 +400,374 @@ def test_agent_not_found_probe_emits_not_found_status_and_avoids_error_bailout(m
         assert "已確認選用設定不存在，採用預設值。" in reply
 
     asyncio.run(_test())
+
+
+def test_agent_accept_edits_overwrite_required_avoids_bailout_and_recovers(tmp_path, monkeypatch):
+    """Accept-edits 模式下連續漏帶 overwrite=true 應發出 overwrite_required 且不觸發錯誤熔斷。"""
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "file_a.md").write_text("old a", encoding="utf-8")
+    (tmp_path / "file_b.md").write_text("old b", encoding="utf-8")
+
+    async def _test():
+        from pocket_agent.engines.base import EventText, EventToolCallDone, EventToolCallStart
+        from pocket_agent.engines.factory import EngineFactory
+
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        rounds = [0]
+        seen_instructions: list[str] = []
+        seen_tools: list[list] = []
+
+        class MockOverwriteEngine(BaseEngine):
+            async def stream_chat(
+                self,
+                input_items,
+                instructions,
+                tools,
+                reasoning_param=None,
+                cancel_check=None,
+                build_tools_callback=None,
+            ):
+                rounds[0] += 1
+                seen_instructions.append(instructions)
+                seen_tools.append(list(tools))
+
+                if rounds[0] == 1:
+                    yield EventToolCallStart("c1", "write_to_file")
+                    yield EventToolCallDone(
+                        "c1",
+                        "write_to_file",
+                        json.dumps({"path": "file_a.md", "content": "new a"}),
+                    )
+                elif rounds[0] == 2:
+                    yield EventToolCallStart("c2", "write_to_file")
+                    yield EventToolCallDone(
+                        "c2",
+                        "write_to_file",
+                        json.dumps({"path": "file_b.md", "content": "new b"}),
+                    )
+                elif rounds[0] == 3:
+                    yield EventToolCallStart("c3", "write_to_file")
+                    yield EventToolCallDone(
+                        "c3",
+                        "write_to_file",
+                        json.dumps({"path": "file_a.md", "content": "new a", "overwrite": True}),
+                    )
+                else:
+                    yield EventText("已完成覆寫。")
+
+        mock_engine = MockOverwriteEngine(mock_client, "test-model")
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: mock_engine)
+
+        confirm_mock = MagicMock(return_value=False)
+        events: list[tuple[str, object]] = []
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="test-model", provider="openai")
+        agent.accept_edits = True
+        agent.on_confirm = confirm_mock
+        agent.on_stream = lambda kind, data: events.append((kind, data))
+
+        _thinking, reply, _usage = await agent.chat("覆寫檔案")
+
+        assert "已完成覆寫。" in reply
+        assert "overwrite=true" in seen_instructions[0]
+        assert len(seen_tools[2]) > 0
+        done_events = [data for kind, data in events if kind == "tool_done" and isinstance(data, dict)]
+        assert len(done_events) == 3
+        assert done_events[0]["ok"] is True and done_events[0]["status"] == "overwrite_required"
+        assert done_events[1]["ok"] is True and done_events[1]["status"] == "overwrite_required"
+        assert done_events[2]["ok"] is True and done_events[2]["status"] == "ok"
+        assert (tmp_path / "file_a.md").read_text(encoding="utf-8") == "new a"
+        assert (tmp_path / "file_b.md").read_text(encoding="utf-8") == "old b"
+        assert agent.activity.get_file_changes()["modified"] == ["file_a.md"]
+        confirm_mock.assert_not_called()
+
+    asyncio.run(_test())
+
+
+def test_agent_manual_confirm_overwrites_existing_file_in_single_round(tmp_path, monkeypatch):
+    """手動確認模式下（accept_edits=False）未帶 overwrite=true 寫入既有檔案應單輪確認並覆寫成功。"""
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    doc = tmp_path / "docs" / "architecture" / "architecture-generated.md"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("old doc", encoding="utf-8")
+
+    async def _test():
+        from pocket_agent.engines.base import EventText, EventToolCallDone, EventToolCallStart
+        from pocket_agent.engines.factory import EngineFactory
+
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        rounds = [0]
+
+        class MockManualOverwriteEngine(BaseEngine):
+            async def stream_chat(
+                self,
+                input_items,
+                instructions,
+                tools,
+                reasoning_param=None,
+                cancel_check=None,
+                build_tools_callback=None,
+            ):
+                rounds[0] += 1
+                if rounds[0] == 1:
+                    yield EventToolCallStart("c1", "write_to_file")
+                    yield EventToolCallDone(
+                        "c1",
+                        "write_to_file",
+                        json.dumps({"path": "docs/architecture/architecture-generated.md", "content": "new doc"}),
+                    )
+                else:
+                    yield EventText("已更新架構文件。")
+
+        mock_engine = MockManualOverwriteEngine(mock_client, "test-model")
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: mock_engine)
+
+        confirm_prompts: list[str] = []
+        events: list[tuple[str, object]] = []
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="test-model", provider="openai")
+        agent.accept_edits = False
+        agent.on_confirm = lambda msg: (confirm_prompts.append(msg), True)[1]
+        agent.on_stream = lambda kind, data: events.append((kind, data))
+
+        _thinking, reply, _usage = await agent.chat("更新架構文件")
+
+        assert "已更新架構文件。" in reply
+        assert confirm_prompts == ["覆寫既有檔案：docs/architecture/architecture-generated.md"]
+        assert doc.read_text(encoding="utf-8") == "new doc"
+        done_events = [data for kind, data in events if kind == "tool_done" and isinstance(data, dict)]
+        assert len(done_events) == 1
+        assert done_events[0]["ok"] is True
+        assert done_events[0]["status"] == "ok"
+        assert "docs/architecture/architecture-generated.md" in agent.activity.get_file_changes()["modified"]
+
+    asyncio.run(_test())
+
+
+def test_agent_preserves_intermediate_assistant_text_across_tool_rounds(tmp_path, monkeypatch):
+    """多輪工具迴圈中模型於工具呼叫前輸出的文字應保留在下一輪輸入與對話歷史中。"""
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "note.txt").write_text("hello", encoding="utf-8")
+
+    async def _test():
+        from pocket_agent.engines.base import EventText, EventToolCallDone, EventToolCallStart
+        from pocket_agent.engines.factory import EngineFactory
+
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        seen_inputs: list[list[dict]] = []
+        rounds = [0]
+
+        class MockMultiRoundEngine(BaseEngine):
+            async def stream_chat(
+                self,
+                input_items,
+                instructions,
+                tools,
+                reasoning_param=None,
+                cancel_check=None,
+                build_tools_callback=None,
+            ):
+                seen_inputs.append([dict(item) for item in input_items if isinstance(item, dict)])
+                rounds[0] += 1
+                if rounds[0] == 1:
+                    yield EventText("已載入規則，先讀取筆記檔案。")
+                    yield EventToolCallStart("c1", "read_file")
+                    yield EventToolCallDone("c1", "read_file", json.dumps({"path": "note.txt"}))
+                else:
+                    yield EventText("已完成檢查。")
+
+        mock_engine = MockMultiRoundEngine(mock_client, "test-model")
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: mock_engine)
+
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="test-model", provider="openai")
+        _thinking, reply, _usage = await agent.chat("檢視筆記")
+
+        assert "已完成檢查。" in reply
+        assert len(seen_inputs) == 2
+        round2_roles = [m.get("role") or m.get("type") for m in seen_inputs[1]]
+        assert round2_roles == ["user", "assistant", "function_call", "function_call_output"]
+        assert seen_inputs[1][1]["content"] == "已載入規則，先讀取筆記檔案。"
+        history_contents = [m.get("content") for m in agent.history if m.get("role") == "assistant"]
+        assert "已載入規則，先讀取筆記檔案。" in history_contents
+        assert any("已完成檢查。" in str(c) for c in history_contents)
+
+    asyncio.run(_test())
+
+
+def test_agent_replace_target_not_found_soft_status_avoids_error_bailout(tmp_path, monkeypatch):
+    """replace_file_content 連續兩輪回傳 [TARGET_NOT_FOUND] 時屬可復原診斷，不應觸發雙錯誤迫停。"""
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    sample = tmp_path / "sample.py"
+    sample.write_text("line\n" * 44 + "gamma = 1\n", encoding="utf-8")
+
+    async def _test():
+        from pocket_agent.engines.base import EventText, EventToolCallDone, EventToolCallStart
+        from pocket_agent.engines.factory import EngineFactory
+
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        rounds = [0]
+
+        class MockRecoverReplaceEngine(BaseEngine):
+            async def stream_chat(
+                self,
+                input_items,
+                instructions,
+                tools,
+                reasoning_param=None,
+                cancel_check=None,
+                build_tools_callback=None,
+            ):
+                rounds[0] += 1
+                if rounds[0] <= 2:
+                    yield EventToolCallStart(f"c{rounds[0]}", "replace_file_content")
+                    yield EventToolCallDone(
+                        f"c{rounds[0]}",
+                        "replace_file_content",
+                        json.dumps(
+                            {
+                                "path": "sample.py",
+                                "start_line": 1,
+                                "end_line": 2,
+                                "target": "gamma = 1",
+                                "replacement": "gamma = 2",
+                            }
+                        ),
+                    )
+                elif rounds[0] == 3:
+                    yield EventToolCallStart("c3", "replace_file_content")
+                    yield EventToolCallDone(
+                        "c3",
+                        "replace_file_content",
+                        json.dumps(
+                            {
+                                "path": "sample.py",
+                                "start_line": 40,
+                                "end_line": 46,
+                                "target": "gamma = 1",
+                                "replacement": "gamma = 2",
+                            }
+                        ),
+                    )
+                else:
+                    yield EventText("已完成替換。")
+
+        mock_engine = MockRecoverReplaceEngine(mock_client, "test-model")
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: mock_engine)
+
+        events: list[tuple[str, object]] = []
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="test-model", provider="openai")
+        agent.accept_edits = True
+        agent.on_stream = lambda kind, data: events.append((kind, data))
+
+        _thinking, reply, _usage = await agent.chat("更新 gamma")
+
+        assert "已完成替換。" in reply
+        assert rounds[0] == 4
+        assert "gamma = 2" in sample.read_text(encoding="utf-8")
+        done_events = [data for kind, data in events if kind == "tool_done" and isinstance(data, dict)]
+        assert len(done_events) == 3
+        assert done_events[0]["ok"] is True and done_events[0]["status"] == "target_not_found"
+        assert done_events[1]["ok"] is True and done_events[1]["status"] == "target_not_found"
+        assert done_events[2]["ok"] is True and done_events[2]["status"] == "ok"
+
+    asyncio.run(_test())
+
+
+def test_agent_auto_allows_current_workspace_scratch_but_gates_sensitive_session(tmp_path, monkeypatch):
+    """非敏感會話下寫入目前工作區 scratch_dir 應免確認放行；專案檔與敏感會話仍須確認。"""
+    import json
+
+    from pocket_agent.system.paths import scratch_dir
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "docs").mkdir()
+
+    async def _test():
+        from pocket_agent.engines.base import EventText, EventToolCallDone, EventToolCallStart
+        from pocket_agent.engines.factory import EngineFactory
+
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        scratch_target = scratch_dir() / "assess" / "assess.md"
+        repo_target = tmp_path / "docs" / "out.md"
+        rounds = [0]
+
+        class MockScratchAndRepoEngine(BaseEngine):
+            async def stream_chat(
+                self,
+                input_items,
+                instructions,
+                tools,
+                reasoning_param=None,
+                cancel_check=None,
+                build_tools_callback=None,
+            ):
+                rounds[0] += 1
+                if rounds[0] == 1:
+                    yield EventToolCallStart("c1", "write_to_file")
+                    yield EventToolCallDone(
+                        "c1",
+                        "write_to_file",
+                        json.dumps({"path": str(scratch_target), "content": "scratch report"}),
+                    )
+                    yield EventToolCallStart("c2", "write_to_file")
+                    yield EventToolCallDone(
+                        "c2",
+                        "write_to_file",
+                        json.dumps({"path": str(repo_target), "content": "repo doc"}),
+                    )
+                elif rounds[0] == 2:
+                    yield EventText("第一輪完成。")
+                elif rounds[0] == 3:
+                    yield EventToolCallStart("c3", "write_to_file")
+                    yield EventToolCallDone(
+                        "c3",
+                        "write_to_file",
+                        json.dumps({"path": str(scratch_target), "content": "sensitive update", "overwrite": True}),
+                    )
+                else:
+                    yield EventText("敏感會話完成。")
+
+        mock_engine = MockScratchAndRepoEngine(mock_client, "test-model")
+        monkeypatch.setattr(EngineFactory, "create", lambda *args, **kwargs: mock_engine)
+
+        confirm_prompts: list[str] = []
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="test-model", provider="openai")
+        agent.accept_edits = False
+        agent.on_confirm = lambda msg: (confirm_prompts.append(msg), True)[1]
+
+        _, reply1, _ = await agent.chat("撰寫評估與專案文件")
+        assert "第一輪完成。" in reply1
+        assert scratch_target.read_text(encoding="utf-8") == "scratch report"
+        assert repo_target.read_text(encoding="utf-8") == "repo doc"
+        assert len(confirm_prompts) == 1
+        assert "out.md" in confirm_prompts[0]
+
+        confirm_prompts.clear()
+        agent.is_sensitive_session = True
+        _, reply2, _ = await agent.chat("敏感模式寫入暫存檔")
+        assert "敏感會話完成。" in reply2
+        assert scratch_target.read_text(encoding="utf-8") == "sensitive update"
+        assert len(confirm_prompts) == 1
+
+    asyncio.run(_test())

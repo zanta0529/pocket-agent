@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -14,10 +15,15 @@ from pocket_agent.system.constants import (
     DEFAULT_TOOL_OUTPUT_CHARS,
     MAX_FILE_SEARCH_SIZE_BYTES,
     MAX_READ_FILE_BYTES,
+    REPLACE_DIAGNOSTIC_MAX_MATCHES,
+    REPLACE_SCOPE_DRIFT_LINES,
     TOOL_NOT_FOUND_PREFIX,
+    TOOL_OVERWRITE_REQUIRED_PREFIX,
+    TOOL_TARGET_NOT_FOUND_PREFIX,
     USER_DATA_DIR_NAME,
 )
 from pocket_agent.system.i18n import t
+from pocket_agent.system.paths import format_display_path
 
 log = logging.getLogger("pocket-agent")
 
@@ -66,7 +72,13 @@ FS_TOOLS = [
     {
         "type": "function",
         "name": "write_to_file",
-        "description": "Create a new file or completely overwrite an existing one with new content.",
+        "description": (
+            "Create a new file or completely overwrite an existing file with new content. "
+            "For partial edits to an existing file, prefer replace_file_content. "
+            "When overwriting an existing file, set overwrite=true "
+            "(required in Accept-edits mode; in manual confirmation mode, "
+            "the user will be prompted directly to confirm overwriting)."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -74,7 +86,10 @@ FS_TOOLS = [
                 "content": {"type": "string", "description": "The full content to write."},
                 "overwrite": {
                     "type": "boolean",
-                    "description": "Must be true if you intend to overwrite an existing file.",
+                    "description": (
+                        "Set to true to overwrite an existing file in full "
+                        "(required when overwriting in Accept-edits mode)."
+                    ),
                 },
             },
             "required": ["path", "content"],
@@ -461,6 +476,23 @@ def _backup_file(target: Path) -> None:
         log.warning(f"Time Machine: 備份檔案失敗 ({target}): {e}")
 
 
+def _is_current_workspace_scratch_target(target: Path) -> bool:
+    """判定已驗證路徑是否位於目前工作區專屬的隔離暫存目錄（scratch_dir）之下。"""
+    try:
+        from pocket_agent.system.paths import scratch_dir
+
+        scratch_root = scratch_dir().resolve(strict=False)
+        resolved = target.resolve(strict=False)
+        return resolved != scratch_root and resolved.is_relative_to(scratch_root)
+    except Exception:
+        return False
+
+
+def _should_skip_fs_confirm(target: Path, auto_allow_scratch: bool) -> bool:
+    """檢查目前寫入目標是否符合當前工作區暫存目錄的免確認條件。"""
+    return auto_allow_scratch and _is_current_workspace_scratch_target(target)
+
+
 def _evaluate_fs_confirmation(
     on_confirm: Callable[[str], bool | str | tuple[bool, str]] | None,
     action_desc: str,
@@ -547,11 +579,241 @@ def _resolve_skill_reference_path(path_str: str, workspace_dirs: list[str] | Non
     return None
 
 
+@dataclass(frozen=True)
+class _ReplacePlan:
+    """封裝 replace_file_content 多策略匹配與診斷結果。"""
+
+    matched: bool
+    new_content: str = ""
+    diagnostic: str = ""
+
+
+def _find_exact_match_locations(content: str, target_str: str) -> list[tuple[int, int]]:
+    """回傳 target_str 在全文中所有精確匹配的 (start_line, end_line)（1-based）。"""
+    locations: list[tuple[int, int]] = []
+    pos = 0
+    step = max(len(target_str), 1)
+    while True:
+        idx = content.find(target_str, pos)
+        if idx == -1:
+            break
+        start_ln = content.count("\n", 0, idx) + 1
+        end_ln = content.count("\n", 0, idx + max(len(target_str) - 1, 0)) + 1
+        locations.append((start_ln, max(start_ln, end_ln)))
+        pos = idx + step
+    return locations
+
+
+def _find_trailing_ws_spans(lines: list[str], target_str: str) -> list[tuple[int, int]]:
+    """忽略每行行尾空白與換行差異，回傳相符區間 [start_idx, end_idx)。"""
+    target_lines = target_str.splitlines()
+    if not target_lines:
+        return []
+    norm_target = [line.rstrip(" \t") for line in target_lines]
+    if len(norm_target) == 1 and not norm_target[0]:
+        return []
+
+    norm_lines = [line.rstrip("\r\n").rstrip(" \t") for line in lines]
+    span_len = len(norm_target)
+    if span_len > len(norm_lines):
+        return []
+
+    spans: list[tuple[int, int]] = []
+    idx = 0
+    limit = len(norm_lines) - span_len
+    while idx <= limit:
+        if norm_lines[idx : idx + span_len] == norm_target:
+            spans.append((idx, idx + span_len))
+            idx += span_len
+        else:
+            idx += 1
+    return spans
+
+
+def _replace_line_spans(
+    lines: list[str],
+    spans: list[tuple[int, int]],
+    target_str: str,
+    replacement: str,
+) -> str:
+    """依行區間替換命中段落，並於必要時保留原末尾換行符號。"""
+    target_ends_with_nl = target_str.endswith(("\n", "\r"))
+    rep_ends_with_nl = replacement.endswith(("\n", "\r"))
+
+    parts: list[str] = []
+    cursor = 0
+    for s_idx, e_idx in spans:
+        parts.extend(lines[cursor:s_idx])
+        span_text = "".join(lines[s_idx:e_idx])
+        rep_text = replacement
+        if span_text.endswith("\n") and not target_ends_with_nl and not rep_ends_with_nl:
+            rep_text = replacement + "\n"
+        parts.append(rep_text)
+        cursor = e_idx
+    parts.extend(lines[cursor:])
+    return "".join(parts)
+
+
+def _apply_replace_in_slice(
+    lines: list[str],
+    start_idx: int,
+    end_idx: int,
+    target_str: str,
+    replacement: str,
+    allow_multiple: bool,
+    *,
+    allow_ambiguous: bool = True,
+) -> tuple[str | None, str | None]:
+    """在指定行切片嘗試精確匹配與忽略行尾空白兩階段替換。"""
+    prefix = "".join(lines[:start_idx])
+    scope_lines = lines[start_idx:end_idx]
+    scope = "".join(scope_lines)
+    suffix = "".join(lines[end_idx:])
+
+    exact_count = scope.count(target_str)
+    if exact_count == 1 or (exact_count > 1 and allow_multiple):
+        return prefix + scope.replace(target_str, replacement) + suffix, None
+    if exact_count > 1:
+        if not allow_ambiguous:
+            return None, None
+        return (
+            None,
+            f"[ERROR] 在指定的行數範圍內找到 {exact_count} 處相符的 target 字串，"
+            "請設定 allow_multiple=true 或再縮小範圍以確保唯一性。",
+        )
+
+    ws_spans = _find_trailing_ws_spans(scope_lines, target_str)
+    if len(ws_spans) == 1 or (len(ws_spans) > 1 and allow_multiple):
+        new_scope = _replace_line_spans(scope_lines, ws_spans, target_str, replacement)
+        return prefix + new_scope + suffix, None
+    if len(ws_spans) > 1:
+        if not allow_ambiguous:
+            return None, None
+        return (
+            None,
+            f"[ERROR] 在指定的行數範圍內找到 {len(ws_spans)} 處相符的 target 字串，"
+            "請設定 allow_multiple=true 或再縮小範圍以確保唯一性。",
+        )
+    return None, None
+
+
+def _format_match_locations(locations: list[tuple[int, int]]) -> str:
+    """將行號區間清單格式化為簡潔的位置字串。"""
+    shown = [f"L{s}" if s == e else f"L{s}-L{e}" for s, e in locations[:REPLACE_DIAGNOSTIC_MAX_MATCHES]]
+    suffix = ", ..." if len(locations) > REPLACE_DIAGNOSTIC_MAX_MATCHES else ""
+    return ", ".join(shown) + suffix
+
+
+def _find_all_match_locations(content: str, lines: list[str], target_str: str) -> list[tuple[int, int]]:
+    """搜尋全文所有精確或忽略行尾空白匹配的 1-based 行號區間。"""
+    exact_locs = _find_exact_match_locations(content, target_str)
+    if exact_locs:
+        return exact_locs
+    return [(s_idx + 1, e_idx) for s_idx, e_idx in _find_trailing_ws_spans(lines, target_str)]
+
+
+def _resolve_replace_content(
+    content: str,
+    target_str: str,
+    replacement: str,
+    start_line: int | None,
+    end_line: int | None,
+    allow_multiple: bool,
+) -> _ReplacePlan:
+    """依序執行精確、容錯空白、有界偏移自動對齊與診斷回報四階段策略。"""
+    lines = content.splitlines(keepends=True)
+    total_lines = len(lines)
+
+    if start_line or end_line:
+        start_idx = min(total_lines, max(0, int(start_line) - 1)) if start_line else 0
+        end_idx = min(total_lines, max(start_idx, int(end_line))) if end_line else total_lines
+
+        new_content, err = _apply_replace_in_slice(
+            lines,
+            start_idx,
+            end_idx,
+            target_str,
+            replacement,
+            allow_multiple,
+        )
+        if err is not None:
+            return _ReplacePlan(matched=False, diagnostic=err)
+        if new_content is not None:
+            return _ReplacePlan(matched=True, new_content=new_content)
+
+        # 指定行數未命中時，僅於非多重替換且上下有界偏移範圍內唯一相符才自動對齊
+        exp_start = max(0, start_idx - REPLACE_SCOPE_DRIFT_LINES)
+        exp_end = min(total_lines, end_idx + REPLACE_SCOPE_DRIFT_LINES)
+        if not allow_multiple and (exp_start, exp_end) != (start_idx, end_idx):
+            aligned_content, _ = _apply_replace_in_slice(
+                lines,
+                exp_start,
+                exp_end,
+                target_str,
+                replacement,
+                allow_multiple=False,
+                allow_ambiguous=False,
+            )
+            if aligned_content is not None:
+                return _ReplacePlan(matched=True, new_content=aligned_content)
+
+        locations = _find_all_match_locations(content, lines, target_str)
+        if locations:
+            msg = t(
+                "fs_tool.replace_target_not_found_elsewhere",
+                start=start_idx + 1,
+                end=end_idx,
+                total_lines=total_lines,
+                locations=_format_match_locations(locations),
+            )
+        else:
+            msg = t(
+                "fs_tool.replace_target_not_found_in_range",
+                start=start_idx + 1,
+                end=end_idx,
+                total_lines=total_lines,
+            )
+        return _ReplacePlan(matched=False, diagnostic=f"{TOOL_TARGET_NOT_FOUND_PREFIX} {msg}")
+
+    exact_count = content.count(target_str)
+    if exact_count == 1 or (exact_count > 1 and allow_multiple):
+        return _ReplacePlan(matched=True, new_content=content.replace(target_str, replacement))
+    if exact_count > 1:
+        return _ReplacePlan(
+            matched=False,
+            diagnostic=(
+                f"[ERROR] 找到 {exact_count} 處相符的 target 字串。"
+                "請設定 allow_multiple=true、提供更多上下文，或指定 start_line/end_line 確保唯一性。"
+            ),
+        )
+
+    ws_spans = _find_trailing_ws_spans(lines, target_str)
+    if len(ws_spans) == 1 or (len(ws_spans) > 1 and allow_multiple):
+        return _ReplacePlan(
+            matched=True,
+            new_content=_replace_line_spans(lines, ws_spans, target_str, replacement),
+        )
+    if len(ws_spans) > 1:
+        return _ReplacePlan(
+            matched=False,
+            diagnostic=(
+                f"[ERROR] 找到 {len(ws_spans)} 處相符的 target 字串。"
+                "請設定 allow_multiple=true、提供更多上下文，或指定 start_line/end_line 確保唯一性。"
+            ),
+        )
+
+    msg = t("fs_tool.replace_target_not_found", total_lines=total_lines)
+    return _ReplacePlan(matched=False, diagnostic=f"{TOOL_TARGET_NOT_FOUND_PREFIX} {msg}")
+
+
 def call_fs_tool(
     name: str,
     args: dict,
     on_confirm: Callable[[str], bool | str | tuple[bool, str]] | None,
     workspace_dirs: list[str] | None = None,
+    *,
+    require_overwrite_flag: bool = False,
+    auto_allow_scratch: bool = False,
 ) -> str:
     """執行檔案操作工具。"""
     try:
@@ -783,22 +1045,31 @@ def call_fs_tool(
 
         elif name == "write_to_file":
             content = args.get("content", "")
-            overwrite = args.get("overwrite", False)
+            overwrite = bool(args.get("overwrite", False))
+            display_path = format_display_path(str(target)) or path_str
 
-            if target.exists() and not overwrite:
-                return f"[ERROR] 檔案 {target} 已存在。如欲覆寫請設定 overwrite=true，或使用 replace_file_content。"
+            if target.exists() and target.is_dir():
+                return f"[ERROR] {t('fs_tool.write_target_is_dir', path=display_path)}"
 
-            # 人工確認
-            action_desc = f"修改檔案：{target.name}" if target.exists() else f"建立新檔：{target.name}"
-            refusal = _evaluate_fs_confirmation(on_confirm, action_desc, "寫入")
-            if refusal is not None:
-                return refusal
+            existed = target.exists()
+            in_workspace_scratch = _should_skip_fs_confirm(target, auto_allow_scratch)
+            if existed and require_overwrite_flag and not overwrite and not in_workspace_scratch:
+                return f"{TOOL_OVERWRITE_REQUIRED_PREFIX} {t('fs_tool.overwrite_required', path=display_path)}"
+
+            if not in_workspace_scratch:
+                # 人工確認
+                action_desc = f"覆寫既有檔案：{display_path}" if existed else f"建立新檔：{display_path}"
+                refusal = _evaluate_fs_confirmation(on_confirm, action_desc, "寫入")
+                if refusal is not None:
+                    return refusal
 
             check_cancelled()
             _backup_file(target)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
-            return f"[SUCCESS] 成功寫入檔案 {target}"
+            if existed:
+                return f"[SUCCESS] 成功覆寫檔案 {target}"
+            return f"[SUCCESS] 成功建立檔案 {target}"
 
         elif name == "append_to_file":
             content = args.get("content", "")
@@ -806,9 +1077,10 @@ def call_fs_tool(
             if not target.exists():
                 return "[ERROR] 檔案不存在，無法附加。請使用 write_to_file 建立新檔。"
 
-            refusal = _evaluate_fs_confirmation(on_confirm, f"附加內容至檔案：{target.name}", "寫入")
-            if refusal is not None:
-                return refusal
+            if not _should_skip_fs_confirm(target, auto_allow_scratch):
+                refusal = _evaluate_fs_confirmation(on_confirm, f"附加內容至檔案：{target.name}", "寫入")
+                if refusal is not None:
+                    return refusal
 
             check_cancelled()
             _backup_file(target)
@@ -830,44 +1102,23 @@ def call_fs_tool(
                 return "[ERROR] 缺少必填參數 'target'"
 
             content = target.read_text(encoding="utf-8")
+            plan = _resolve_replace_content(
+                content,
+                target_str,
+                replacement,
+                start_line,
+                end_line,
+                allow_multiple,
+            )
+            if not plan.matched:
+                return plan.diagnostic
+            new_content = plan.new_content
 
-            if start_line or end_line:
-                lines = content.splitlines(keepends=True)
-                total_lines = len(lines)
-                start_idx = max(0, int(start_line) - 1) if start_line else 0
-                end_idx = min(total_lines, int(end_line)) if end_line else total_lines
-
-                # 範圍外的內容
-                prefix_content = "".join(lines[:start_idx])
-                target_scope = "".join(lines[start_idx:end_idx])
-                suffix_content = "".join(lines[end_idx:])
-
-                count = target_scope.count(target_str)
-                if count == 0:
-                    return f"[ERROR] 在指定的行數範圍內 ({start_idx + 1}-{end_idx}) 找不到 target 字串。"
-                elif count > 1 and not allow_multiple:
-                    return (
-                        f"[ERROR] 在指定的行數範圍內找到 {count} 處相符的 target 字串，"
-                        "請設定 allow_multiple=true 或再縮小範圍以確保唯一性。"
-                    )
-
-                new_scope = target_scope.replace(target_str, replacement)
-                new_content = prefix_content + new_scope + suffix_content
-            else:
-                count = content.count(target_str)
-                if count == 0:
-                    return "[ERROR] 找不到指定的 target 字串。請確保字元與空白完全相符。"
-                elif count > 1 and not allow_multiple:
-                    return (
-                        f"[ERROR] 找到 {count} 處相符的 target 字串。"
-                        "請設定 allow_multiple=true、提供更多上下文，或指定 start_line/end_line 確保唯一性。"
-                    )
-                new_content = content.replace(target_str, replacement)
-
-            # 人工確認
-            refusal = _evaluate_fs_confirmation(on_confirm, f"局部修改檔案：{target.name}", "替換")
-            if refusal is not None:
-                return refusal
+            if not _should_skip_fs_confirm(target, auto_allow_scratch):
+                # 人工確認
+                refusal = _evaluate_fs_confirmation(on_confirm, f"局部修改檔案：{target.name}", "替換")
+                if refusal is not None:
+                    return refusal
 
             check_cancelled()
             _backup_file(target)

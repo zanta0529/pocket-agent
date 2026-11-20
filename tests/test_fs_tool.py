@@ -266,3 +266,331 @@ def test_fs_read_only_not_found_returns_non_error_marker_i18n(tmp_path: Path):
     assert err_list_file.startswith("[ERROR]")
     err_read_dir = call_fs_tool("read_file", {"path": str(tmp_path)}, on_confirm=None, workspace_dirs=ws)
     assert err_read_dir.startswith("[ERROR]")
+
+
+def test_write_to_file_manual_confirm_allows_overwrite_without_flag(tmp_path: Path, monkeypatch):
+    """手動確認模式（require_overwrite_flag=False）寫入既有檔案時，不需 overwrite=true 即提示確認並覆寫。"""
+    monkeypatch.chdir(tmp_path)
+    backup_calls: list[Path] = []
+    monkeypatch.setattr("pocket_agent.tools.fs._backup_file", lambda p: backup_calls.append(p))
+
+    target = tmp_path / "docs" / "report.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("old report\n", encoding="utf-8")
+
+    # 1. 省略 overwrite：拒絕時不備份、原檔不變
+    seen_prompts: list[str] = []
+    refused = call_fs_tool(
+        "write_to_file",
+        {"path": "docs/report.md", "content": "new report\n"},
+        on_confirm=lambda msg: (seen_prompts.append(msg), False)[1],
+        workspace_dirs=[str(tmp_path)],
+    )
+    assert seen_prompts == ["覆寫既有檔案：docs/report.md"]
+    assert refused.startswith("[使用者拒絕")
+    assert target.read_text(encoding="utf-8") == "old report\n"
+    assert len(backup_calls) == 0
+
+    # 2. 顯式 overwrite=False 仍可直接進入人工確認並在核准後覆寫
+    seen_prompts.clear()
+    ok_res = call_fs_tool(
+        "write_to_file",
+        {"path": "docs/report.md", "content": "new report\n", "overwrite": False},
+        on_confirm=lambda msg: (seen_prompts.append(msg), True)[1],
+        workspace_dirs=[str(tmp_path)],
+    )
+    assert seen_prompts == ["覆寫既有檔案：docs/report.md"]
+    assert ok_res.startswith("[SUCCESS] 成功覆寫檔案 ")
+    assert target.read_text(encoding="utf-8") == "new report\n"
+    assert len(backup_calls) == 1
+
+
+def test_write_to_file_require_overwrite_flag_in_accept_edits_i18n(tmp_path: Path, monkeypatch):
+    """自動編輯模式（require_overwrite_flag=True）覆寫既有檔案須帶 overwrite=true，新檔直接建立。"""
+    monkeypatch.chdir(tmp_path)
+    existing = tmp_path / "app.py"
+    existing.write_text("v1\n", encoding="utf-8")
+    ws = [str(tmp_path)]
+    confirm_calls: list[str] = []
+
+    def auto_confirm(msg: str) -> bool:
+        confirm_calls.append(msg)
+        return True
+
+    # 1. zh_TW：未帶 overwrite=True 時回傳 [OVERWRITE_REQUIRED]，不觸發確認且不覆寫
+    set_locale("zh_TW")
+    res_zh = call_fs_tool(
+        "write_to_file",
+        {"path": "app.py", "content": "v2\n"},
+        on_confirm=auto_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+    )
+    assert res_zh.startswith("[OVERWRITE_REQUIRED] ")
+    assert "overwrite=true" in res_zh
+    assert "replace_file_content" in res_zh
+    assert existing.read_text(encoding="utf-8") == "v1\n"
+    assert confirm_calls == []
+
+    # 2. en_US：英文提示語系一致
+    set_locale("en_US")
+    res_en = call_fs_tool(
+        "write_to_file",
+        {"path": "app.py", "content": "v2\n"},
+        on_confirm=auto_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+    )
+    assert res_en.startswith("[OVERWRITE_REQUIRED] ")
+    assert "Accept-edits mode" in res_en
+    assert "overwrite=true" in res_en
+    assert existing.read_text(encoding="utf-8") == "v1\n"
+    assert confirm_calls == []
+
+    # 3. 補帶 overwrite=True 後成功覆寫
+    res_ok = call_fs_tool(
+        "write_to_file",
+        {"path": "app.py", "content": "v2\n", "overwrite": True},
+        on_confirm=auto_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+    )
+    assert res_ok.startswith("[SUCCESS] 成功覆寫檔案 ")
+    assert existing.read_text(encoding="utf-8") == "v2\n"
+
+    # 4. 不存在的新檔不需 overwrite 即可建立
+    new_file = tmp_path / "fresh.py"
+    res_new = call_fs_tool(
+        "write_to_file",
+        {"path": "fresh.py", "content": "fresh\n"},
+        on_confirm=auto_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+    )
+    assert res_new.startswith("[SUCCESS] 成功建立檔案 ")
+    assert new_file.read_text(encoding="utf-8") == "fresh\n"
+
+
+def test_write_to_file_rejects_existing_directory_i18n(tmp_path: Path):
+    """目標路徑為既有目錄時應回傳 [ERROR]，不觸發人工確認。"""
+    sub_dir = tmp_path / "folder"
+    sub_dir.mkdir()
+    ws = [str(tmp_path)]
+    confirm_calls: list[str] = []
+
+    for locale, expected in (("zh_TW", "是一個目錄"), ("en_US", "is a directory")):
+        set_locale(locale)
+        for req_flag in (False, True):
+            res = call_fs_tool(
+                "write_to_file",
+                {"path": str(sub_dir), "content": "bad"},
+                on_confirm=lambda msg: (confirm_calls.append(msg), True)[1],
+                workspace_dirs=ws,
+                require_overwrite_flag=req_flag,
+            )
+            assert res.startswith("[ERROR] ")
+            assert expected in res
+    assert confirm_calls == []
+
+
+def test_replace_file_content_trailing_whitespace_fallback(tmp_path: Path, monkeypatch):
+    """行尾多餘空白與 CRLF 差異不應阻止 replace_file_content 唯一匹配與替換。"""
+    monkeypatch.chdir(tmp_path)
+
+    def _auto_confirm(_msg: str) -> bool:
+        return True
+
+    sample = tmp_path / "ws.py"
+    sample.write_text("def foo():   \n    return 1\t \nend = True\n", encoding="utf-8")
+    ws = [str(tmp_path)]
+
+    res = call_fs_tool(
+        "replace_file_content",
+        {
+            "path": "ws.py",
+            "start_line": 1,
+            "end_line": 2,
+            "target": "def foo():\r\n    return 1",
+            "replacement": "def foo():\n    return 2",
+        },
+        on_confirm=_auto_confirm,
+        workspace_dirs=ws,
+    )
+    assert res.startswith("[SUCCESS]")
+    assert sample.read_text(encoding="utf-8") == "def foo():\n    return 2\nend = True\n"
+
+
+def test_replace_file_content_bounded_drift_auto_align(tmp_path: Path, monkeypatch):
+    """行號在上下 20 行內偏移且唯一時應自動對齊，但展開範圍內若有多處相符則不得誤替換。"""
+    monkeypatch.chdir(tmp_path)
+
+    def _auto_confirm(_msg: str) -> bool:
+        return True
+
+    ws = [str(tmp_path)]
+    drift_file = tmp_path / "drift.py"
+    lines = [f"x_{i} = {i}\n" for i in range(60)]
+    lines[47] = "def target_fn():\n"
+    lines[48] = "    return 42\n"
+    drift_file.write_text("".join(lines), encoding="utf-8")
+
+    res_ok = call_fs_tool(
+        "replace_file_content",
+        {
+            "path": "drift.py",
+            "start_line": 25,
+            "end_line": 35,
+            "target": "def target_fn():\n    return 42",
+            "replacement": "def target_fn():\n    return 99",
+        },
+        on_confirm=_auto_confirm,
+        workspace_dirs=ws,
+    )
+    assert res_ok.startswith("[SUCCESS]")
+    assert "return 99" in drift_file.read_text(encoding="utf-8")
+
+    ambig_file = tmp_path / "ambig_drift.py"
+    ambig_lines = [f"row_{i}\n" for i in range(40)]
+    ambig_lines[8] = "dup_marker = 1\n"
+    ambig_lines[16] = "dup_marker = 1\n"
+    ambig_file.write_text("".join(ambig_lines), encoding="utf-8")
+
+    res_ambig = call_fs_tool(
+        "replace_file_content",
+        {
+            "path": "ambig_drift.py",
+            "start_line": 1,
+            "end_line": 3,
+            "target": "dup_marker = 1",
+            "replacement": "dup_marker = 2",
+        },
+        on_confirm=_auto_confirm,
+        workspace_dirs=ws,
+    )
+    assert res_ambig.startswith("[TARGET_NOT_FOUND]")
+    assert "L9" in res_ambig and "L17" in res_ambig
+    assert ambig_file.read_text(encoding="utf-8").count("dup_marker = 1") == 2
+
+
+def test_replace_file_content_far_or_ambiguous_returns_target_not_found_with_locations(tmp_path: Path, monkeypatch):
+    """超出偏移範圍或全檔找不到目標時，應回傳 [TARGET_NOT_FOUND] 與實際行號線索（雙語皆然）。"""
+    monkeypatch.chdir(tmp_path)
+
+    def _auto_confirm(_msg: str) -> bool:
+        return True
+
+    ws = [str(tmp_path)]
+    far_file = tmp_path / "far.py"
+    lines = [f"line_{i}\n" for i in range(80)]
+    lines[74] = "target_token = 1\n"
+    far_file.write_text("".join(lines), encoding="utf-8")
+
+    for locale, total_hint in (("zh_TW", "全檔共 80 行"), ("en_US", "80 lines")):
+        set_locale(locale)
+        res_far = call_fs_tool(
+            "replace_file_content",
+            {
+                "path": "far.py",
+                "start_line": 1,
+                "end_line": 20,
+                "target": "target_token = 1",
+                "replacement": "target_token = 2",
+            },
+            on_confirm=_auto_confirm,
+            workspace_dirs=ws,
+        )
+        assert res_far.startswith("[TARGET_NOT_FOUND]")
+        assert "L75" in res_far
+        assert total_hint in res_far
+
+        res_missing = call_fs_tool(
+            "replace_file_content",
+            {
+                "path": "far.py",
+                "target": "never_present_symbol",
+                "replacement": "updated",
+            },
+            on_confirm=_auto_confirm,
+            workspace_dirs=ws,
+        )
+        assert res_missing.startswith("[TARGET_NOT_FOUND]")
+        assert total_hint in res_missing
+
+
+def test_scratch_dir_write_append_replace_auto_allowed_only_for_current_workspace(tmp_path: Path, monkeypatch):
+    """開啟 auto_allow_scratch 時，僅目前工作區 scratch_dir 內免確認；專案與其他全域目錄仍須確認。"""
+    from pocket_agent.system.paths import scratch_dir, user_dir
+
+    monkeypatch.chdir(tmp_path)
+    ws = [str(tmp_path)]
+    confirm_calls: list[str] = []
+
+    def _record_confirm(msg: str) -> bool:
+        confirm_calls.append(msg)
+        return True
+
+    # 1. 目前工作區 scratch_dir：新建、覆寫（含 require_overwrite_flag=True）、附加與替換皆免確認
+    assess_file = scratch_dir() / "assess" / "assess.md"
+    res_create = call_fs_tool(
+        "write_to_file",
+        {"path": str(assess_file), "content": "v1\n"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        auto_allow_scratch=True,
+    )
+    assert res_create.startswith("[SUCCESS]")
+
+    res_overwrite = call_fs_tool(
+        "write_to_file",
+        {"path": str(assess_file), "content": "v2\n"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        require_overwrite_flag=True,
+        auto_allow_scratch=True,
+    )
+    assert res_overwrite.startswith("[SUCCESS]")
+
+    res_append = call_fs_tool(
+        "append_to_file",
+        {"path": str(assess_file), "content": "v3\n"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        auto_allow_scratch=True,
+    )
+    assert res_append.startswith("[SUCCESS]")
+
+    res_replace = call_fs_tool(
+        "replace_file_content",
+        {"path": str(assess_file), "target": "v2\nv3", "replacement": "v2_updated\nv3"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        auto_allow_scratch=True,
+    )
+    assert res_replace.startswith("[SUCCESS]")
+    assert assess_file.read_text(encoding="utf-8") == "v2_updated\nv3\n"
+    assert confirm_calls == []
+
+    # 2. 專案檔、其他工作區 scratch 與 skills 目錄仍須觸發人工確認
+    other_scratch = user_dir() / "workspaces" / "other-slug" / "scratch" / "a.md"
+    skill_file = user_dir() / "skills" / "demo" / "SKILL.md"
+    for must_confirm_path in (tmp_path / "repo.py", other_scratch, skill_file):
+        res_other = call_fs_tool(
+            "write_to_file",
+            {"path": str(must_confirm_path), "content": "x\n"},
+            on_confirm=_record_confirm,
+            workspace_dirs=ws,
+            auto_allow_scratch=True,
+        )
+        assert res_other.startswith("[SUCCESS]")
+    assert len(confirm_calls) == 3
+
+    # 3. 敏感檔名 (.env) 即使在 scratch_dir 下仍應被安全限制拒絕
+    res_env = call_fs_tool(
+        "write_to_file",
+        {"path": str(scratch_dir() / ".env"), "content": "SECRET=1\n"},
+        on_confirm=_record_confirm,
+        workspace_dirs=ws,
+        auto_allow_scratch=True,
+    )
+    assert res_env.startswith("[ERROR]")
+    assert len(confirm_calls) == 3

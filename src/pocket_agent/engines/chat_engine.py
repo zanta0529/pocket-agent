@@ -114,19 +114,25 @@ class StandardChatCompletionsEngine(BaseEngine):
 
             item_type = msg.get("type")
             if item_type == "function_call":
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": msg.get("call_id"),
-                                "type": "function",
-                                "function": {"name": msg.get("name"), "arguments": msg.get("arguments", "{}")},
-                            }
-                        ],
-                    }
-                )
+                tool_call = {
+                    "id": msg.get("call_id"),
+                    "type": "function",
+                    "function": {"name": msg.get("name"), "arguments": msg.get("arguments", "{}")},
+                }
+                # 同一輪中間文字（assistant）須與後續工具呼叫合併為單一 assistant 訊息，
+                # 避免連續出現多個 assistant 角色或遺失工具呼叫前的中間說明文字。
+                if messages and messages[-1].get("role") == "assistant":
+                    if messages[-1].get("content") == "":
+                        messages[-1]["content"] = None
+                    messages[-1].setdefault("tool_calls", []).append(tool_call)
+                else:
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [tool_call],
+                        }
+                    )
             elif item_type == "function_call_output":
                 messages.append({"role": "tool", "tool_call_id": msg.get("call_id"), "content": msg.get("output", "")})
             else:
@@ -153,6 +159,7 @@ class StandardChatCompletionsEngine(BaseEngine):
         build_tools_callback: Optional[Callable[[], list]] = None,
     ) -> AsyncGenerator[Any, None]:
 
+        input_items = self.sanitize_input_items(input_items)
         messages = self.format_chat_messages(input_items)
         if instructions:
             messages.insert(0, {"role": "system", "content": instructions})

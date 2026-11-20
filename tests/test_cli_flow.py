@@ -893,3 +893,109 @@ def test_agent_sleep_with_cancel_quick_response():
             await task
 
     asyncio.run(_test())
+
+
+def test_confirmation_bridge_recognizes_overwrite_prefix():
+    """ConfirmationBridge._is_fs_edit 應辨識新的覆寫既有檔案確認前綴。"""
+    from pocket_agent.frontend.cli.confirmation import ConfirmationBridge
+
+    assert ConfirmationBridge._is_fs_edit("覆寫既有檔案：docs/architecture/architecture-generated.md") is True
+    assert ConfirmationBridge._is_fs_edit("建立新檔：docs/new.md") is True
+    assert ConfirmationBridge._is_fs_edit("修改檔案：legacy.md") is True
+    assert ConfirmationBridge._is_fs_edit("rm -rf /") is False
+
+
+def test_activity_rebuild_from_history_distinguishes_create_and_overwrite(tmp_path, monkeypatch):
+    """rebuild_from_history 應依成功覆寫／建立輸出優先判定 added／modified，並相容舊紀錄。"""
+    import json
+
+    from pocket_agent.core.activity import SessionActivityTracker
+
+    monkeypatch.chdir(tmp_path)
+    tracker = SessionActivityTracker()
+    history = [
+        {
+            "type": "function_call",
+            "call_id": "c1",
+            "name": "write_to_file",
+            "arguments": json.dumps({"path": "created_new.md", "content": "a"}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "c1",
+            "output": "[SUCCESS] 成功建立檔案 created_new.md",
+        },
+        {
+            "type": "function_call",
+            "call_id": "c2",
+            "name": "write_to_file",
+            "arguments": json.dumps({"path": "updated_existing.md", "content": "b"}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "c2",
+            "output": "[SUCCESS] 成功覆寫檔案 updated_existing.md",
+        },
+        {
+            "type": "function_call",
+            "call_id": "c3",
+            "name": "write_to_file",
+            "arguments": json.dumps({"path": "legacy_mod.md", "content": "c", "overwrite": True}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "c3",
+            "output": "[SUCCESS] 成功寫入檔案 legacy_mod.md",
+        },
+        {
+            "type": "function_call",
+            "call_id": "c4",
+            "name": "write_to_file",
+            "arguments": json.dumps({"path": "legacy_add.md", "content": "d", "overwrite": False}),
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "c4",
+            "output": "[SUCCESS] 成功寫入檔案 legacy_add.md",
+        },
+    ]
+
+    tracker.rebuild_from_history(history)
+    changes = tracker.get_file_changes(sync_disk=False)
+    assert "created_new.md" in changes["added"]
+    assert "legacy_add.md" in changes["added"]
+    assert "updated_existing.md" in changes["modified"]
+    assert "legacy_mod.md" in changes["modified"]
+
+
+def test_confirmation_bridge_panel_style_differs_between_file_edit_and_shell():
+    """檔案編輯確認面板應顯示溫和標題與黃色邊框，Shell 指令則維持紅色安全警告面板。"""
+    from pocket_agent.frontend.cli.confirmation import ConfirmationBridge
+    from pocket_agent.system.i18n import set_locale
+
+    for locale, fs_title, fs_body, shell_title in (
+        ("zh_TW", "【檔案編輯確認】", "預計變更：", "【安全警告】"),
+        ("en_US", "【File Edit Confirmation】", "Planned file change:", "【Security Warning】"),
+    ):
+        set_locale(locale)
+        rendered_panels = []
+        fake_console = SimpleNamespace(print=lambda obj: rendered_panels.append(obj))
+        fake_renderer = SimpleNamespace(
+            _ensure_newline=lambda: None,
+            _active_status=None,
+            console=fake_console,
+        )
+        bridge = object.__new__(ConfirmationBridge)
+        bridge.renderer = fake_renderer
+
+        bridge._render_confirm_panel("建立新檔：docs/demo.md", is_fs_edit=True)
+        bridge._render_confirm_panel("pytest tests/", is_fs_edit=False)
+
+        assert len(rendered_panels) == 2
+        fs_panel, shell_panel = rendered_panels
+        assert fs_title in fs_panel.title
+        assert shell_title not in fs_panel.title
+        assert fs_panel.border_style == "bold yellow"
+        assert fs_body in fs_panel.renderable.plain
+        assert shell_title in shell_panel.title
+        assert shell_panel.border_style == "bold red"

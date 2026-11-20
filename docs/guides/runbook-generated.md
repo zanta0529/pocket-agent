@@ -78,28 +78,12 @@ flowchart TD
 
 #### 2.2.1 Modern Portable 離線部署
 
-```bash
-# 線上環境：下載發布包
-# 1. 從 GitHub Releases 下載 PocketAgent-portable.zip
-# 2. 透過 USB/內網傳輸至離線主機
+1. 在可連網的受信任環境準備核准的 `PocketAgent-portable.zip`、符合目標平台的 Ollama 安裝檔或既有服務，以及已預載的模型。Portable ZIP 包含 Python 與應用程式依賴，不包含 Ollama 或模型。依組織政策核對來源及檔案完整性後移轉。
+2. 在目標機解壓縮至獨立目錄；依組織部署程序啟動已備妥的 Ollama。不要到離線機才執行需要下載的模型拉取操作。
+3. 按[設定規格](configuration-specification.md)停用 `system.auto_update`，只掛載可達且經核准的 MCP 伺服器。執行 `pocket.bat`，在精靈選擇本機 Ollama 與已預載模型。預設端點為 `http://localhost:11434`。
+4. 使用非敏感的短提示驗證模型回應，再測試需要的本機功能。雲端模型、OAuth、GitHub MCP 與線上更新需要相應的網路連線；MySQL、MSSQL、RHEL 與 RDP 若用於隔離內網，仍需能連到目標。SQLite 是本機資料庫，不需內網服務。
 
-# 離線環境：解壓縮並使用
-# 1. 解壓縮至任意目錄
-# 2. 雙擊 pocket.bat 啟動
-# 3. 執行 pocket-agent setup 設定
-
-# 注意：離線環境無法使用：
-# - ChatGPT OAuth (需瀏覽器存取 auth.openai.com)
-# - OpenRouter / Groq / SambaNova / Mistral API (需網路)
-# - GitHub MCP (需網路存取 api.github.com)
-# - 線上更新 (/update)
-
-# 可用功能：
-# - Ollama 本地模型 (http://localhost:11434)
-# - 本地檔案操作、Shell、RAG、RepoMap
-# - 內建 SQLite/MySQL/MSSQL MCP (需內網資料庫)
-# - RHEL/Win RDP MCP (需內網 SSH/RDP)
-```
+來源：[Portable 安裝與 Ollama 設定](../../README.md)、[Portable 打包程式](../../build_scripts/build_portable.py)。未在氣隙環境執行驗證；若以原始碼離線安裝，除執行依賴外，還需準備符合目標 OS、架構及 Python 版本的建置依賴與必要套件。
 
 #### 2.2.2 依賴套件離線安裝 (開發模式)
 
@@ -112,18 +96,18 @@ flowchart TD
 
 - Modern Portable 內建官方簽章 `pythonw.exe`，**不需要**安裝 Python
 - `pocket.bat` 設定 `PYTHONNOUSERSITE=1`、`PYTHONPATH=%~dp0app\src` 完全隔離
-- 防毒軟體可能誤判 `pythonw.exe` 子行程，**需加入例外**：解壓縮目錄 `PocketAgent/python/`
+- 若端點防護攔截套件，先保留告警並核對來源與完整性，交由安全管理者審查；不要自行加入例外或關閉端點防護。
 - 群組原則封鎖 PowerShell 時，`pocket.bat` 使用 `cmd.exe` 可正常運作
 
 ### 2.3 更新與回滾程序
 
 | 觸發條件               | 更新指令         | 驗證方式              | 回滾方式                                      |
 | ---------------------- | ---------------- | --------------------- | --------------------------------------------- |
-| **Modern Portable**    | CLI 內建 `/update` | 重啟後版本號更新、功能正常 | 刪除 `dist/PocketAgent` 重新解壓縮舊版本 zip |
+| **Modern Portable**    | CLI 內建 `/update` | 重啟後核對建置 commit，執行基本功能檢查 | 關閉 CLI，將已知良好的 ZIP 解壓至另一個目錄；驗證後再切換，不先刪除原安裝 |
 | **開發模式**           | `git pull` + `pip install -r requirements.txt` | 測試通過、功能正常 | `git checkout <舊commit>` + 重新安裝          |
 | **PyInstaller Legacy** | 重新下載新版 exe  | 功能正常              | 保留舊版 exe 覆蓋回來                         |
 
-> **注意**：Modern Portable `/update` 追蹤 GitHub 主分支最新 Commit，非正式 Release。生產環境建議鎖定 Release 版本。
+> **注意**：Modern Portable 更新器追蹤設定的儲存庫與分支 commit，不一定是 `main`，也不等於 `v*` tag 的 Release。啟動時的背景作業只準備更新；固定版本或隔離環境可關閉 `system.auto_update`，由維護者佈署核准的 Release。來源：[更新器](../../src/pocket_agent/system/updater.py)、[CLI 啟動流程](../../src/pocket_agent/frontend/cli/main.py)、[發布流程](../../.github/workflows/release.yml)。
 
 ---
 
@@ -144,10 +128,12 @@ flowchart TD
 
 | 層級         | RTO              | RPO              | 說明                                              |
 | ------------ | ---------------- | ---------------- | ------------------------------------------------- |
-| **核心功能** | < 5 分鐘         | 0 (即時同步)     | Portable 版解壓縮即用；設定檔手動備份可秒級恢復   |
-| **會話歷史** | < 1 分鐘         | 最後一次自動存檔 | JSON 檔案直接複製；HMAC 驗證確保完整性            |
-| **MCP 連線** | < 2 分鐘         | 即時 (記憶體快取) | 重新輸入密碼/憑證；Keyring 儲存可自動恢復         |
-| **完整環境** | < 10 分鐘        | 最後備份點       | Portable zip + 設定檔 + 會話歷史 完整還原         |
+| **核心功能** | 尚未實測 | 取決於最後一次可用設定備份 | 使用已知良好的 Portable ZIP 啟動，確認設定與供應商可用 |
+| **會話歷史** | 尚未實測 | 取決於最後一次可還原的備份 | 同一環境備份會話與 `session_salt`；依下方說明驗證還原 |
+| **MCP 連線** | 尚未實測 | 取決於可用設定及重新認證能力 | 執行期連線快取不是可還原的備份 |
+| **完整環境** | 尚未實測 | 取決於最後一次成功的還原演練 | 由部署方量測並設定 RTO／RPO |
+
+[會話簽章實作](../../src/pocket_agent/core/sessions.py)的驗證與 `session_salt`、主機名稱及登入使用者有關。請在原環境或核准的還原演練環境確認會話可載入；不能保證只複製 JSON 就能跨主機還原。發生簽章錯誤時先保留原檔，不要略過驗證。
 
 ### 3.3 常見災難場景與恢復
 
@@ -155,10 +141,10 @@ flowchart TD
 | ------------------------ | ----------------------------- | ---------------------------------------------------------------------------- | -------- |
 | **設定檔損毀**           | 啟動報錯、精靈無法讀取設定    | 1. 備份舊 `config.json` 2. 刪除或改名 3. 重新執行 `setup` 精靈              | 3 分鐘   |
 | **Keyring 無法存取**     | OAuth 登入失敗、Token 讀取錯誤 | 1. `pocket-agent logout` 清除 2. 檢查 Keyring 服務 3. 重新 `setup` 登入     | 5 分鐘   |
-| **會話檔案損毀/HMAC 失敗** | `/session` 無法載入、報簽章錯誤 | 1. 刪除損毀的 `sessions/*.json` 2. 重新開始對話 (歷史遺失)                  | 1 分鐘   |
+| **會話檔案損毀／HMAC 失敗** | 會話無法載入或驗證失敗 | 先保留原始資料，核對還原環境與備份；無可驗證副本時另開會話 | 未實測 |
 | **Portable 版執行檔損壞** | `pocket.bat` 報 Python 錯誤   | 1. 刪除 `PocketAgent/` 目錄 2. 重新解壓縮 zip 或下載新版                    | 3 分鐘   |
 | **沙盒目錄佔滿磁碟**     | 寫入失敗、Housekeeping 失敗   | 1. 手動清理 `~/.pocket-agent/workspaces/` 2. 調整 `housekeeping_max_size_mb` | 5 分鐘   |
-| **防毒軟體隔離執行檔**   | `pythonw.exe` 被隔離、無法啟動 | 1. 加入防毒例外 2. 從隔離區還原 3. 或重新解壓縮 Portable 版                 | 10 分鐘  |
+| **防毒軟體隔離執行檔**   | `pythonw.exe` 被隔離、無法啟動 | 保留告警，由安全管理者核對發布來源及完整性，依組織程序處理隔離項目                 | 10 分鐘  |
 
 ---
 

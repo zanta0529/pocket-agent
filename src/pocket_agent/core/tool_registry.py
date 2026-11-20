@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import inspect
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -15,7 +16,12 @@ from pocket_agent.core.cancellation import run_sync
 from pocket_agent.core.subagents import get_subagent, is_subagent_tool
 from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.extensions.skills import call_skill_tool, is_skill_tool
-from pocket_agent.system.constants import WEB_RESEARCH_CHECKPOINT_INTERVAL
+from pocket_agent.system.constants import (
+    TOOL_NOT_FOUND_PREFIX,
+    TOOL_OVERWRITE_REQUIRED_PREFIX,
+    TOOL_TARGET_NOT_FOUND_PREFIX,
+    WEB_RESEARCH_CHECKPOINT_INTERVAL,
+)
 from pocket_agent.tools.doc import call_doc_tool, is_doc_tool
 from pocket_agent.tools.document import call_document_tool, is_document_tool
 from pocket_agent.tools.fs import (
@@ -37,6 +43,26 @@ def _resolve_callable(attr_name: str, fallback: Any) -> Any:
     if agent_mod is not None:
         return getattr(agent_mod, attr_name, fallback)
     return fallback
+
+
+_SOFT_TOOL_STATUS_PREFIXES: tuple[tuple[str, str], ...] = (
+    (TOOL_NOT_FOUND_PREFIX, "not_found"),
+    (TOOL_OVERWRITE_REQUIRED_PREFIX, "overwrite_required"),
+    (TOOL_TARGET_NOT_FOUND_PREFIX, "target_not_found"),
+)
+_ERROR_TOOL_PREFIXES: tuple[str, ...] = ("Error:", "[ERROR]", "[使用者拒絕")
+
+
+def classify_tool_result(result: object) -> tuple[bool, str]:
+    """依統一前綴判定工具執行結果的 `(ok_status, tool_status)`。"""
+    if not isinstance(result, str):
+        return True, "ok"
+    if result.startswith(_ERROR_TOOL_PREFIXES):
+        return False, "error"
+    for prefix, status in _SOFT_TOOL_STATUS_PREFIXES:
+        if result.startswith(prefix):
+            return True, status
+    return True, "ok"
 
 
 @dataclass
@@ -205,6 +231,17 @@ class ScratchToolHandler(ToolHandler):
         return ToolExecutionResult(output=result)
 
 
+def _callable_accepts_kwarg(fn: Any, kwarg_name: str) -> bool:
+    """檢查可呼叫物件是否接受指定關鍵字參數，以維持測試 monkeypatch 相容性。"""
+    try:
+        sig = inspect.signature(fn)
+    except TypeError, ValueError:
+        return False
+    return kwarg_name in sig.parameters or any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values()
+    )
+
+
 class FsToolHandler(ToolHandler):
     def matches(self, name: str) -> bool:
         return is_fs_tool(name)
@@ -214,12 +251,20 @@ class FsToolHandler(ToolHandler):
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
         existed_before: bool | None = None
-        if name in ("write_to_file", "append_to_file", "replace_file_content"):
+        is_write_op = name in ("write_to_file", "append_to_file", "replace_file_content")
+        if is_write_op:
             target_p = args.get("path") or args.get("target_file") or args.get("file") or ""
             existed_before = agent.activity.inspect_file_before_tool(target_p)
-        fs_confirm = (lambda _desc: True) if agent.accept_edits else agent.on_confirm
+        accept_edits = bool(getattr(agent, "accept_edits", False))
+        is_sensitive = bool(getattr(agent, "is_sensitive_session", False))
+        fs_confirm = (lambda _desc: True) if accept_edits else agent.on_confirm
         fn = _resolve_callable("call_fs_tool", call_fs_tool)
-        result = await run_sync(fn, name, args, fs_confirm, agent.workspace_dirs)
+        extra_kwargs: dict[str, Any] = {}
+        if name == "write_to_file" and accept_edits and _callable_accepts_kwarg(fn, "require_overwrite_flag"):
+            extra_kwargs["require_overwrite_flag"] = True
+        if is_write_op and not is_sensitive and _callable_accepts_kwarg(fn, "auto_allow_scratch"):
+            extra_kwargs["auto_allow_scratch"] = True
+        result = await run_sync(fn, name, args, fs_confirm, agent.workspace_dirs, **extra_kwargs)
         return ToolExecutionResult(output=result, existed_before=existed_before)
 
 

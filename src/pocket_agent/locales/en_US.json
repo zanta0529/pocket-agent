@@ -69,7 +69,9 @@
     "exiting_on_sigint": "Interrupt received, exiting...",
     "invalid_path": "Path does not exist or is invalid: {path}",
     "attachment_index_out_of_range": "Attachment index out of range",
-    "tool_not_found_suffix": " (not found)"
+    "tool_not_found_suffix": " (not found)",
+    "tool_overwrite_required_suffix": " (exists, overwrite required)",
+    "tool_target_not_found_suffix": " (target not found)"
   },
   "confirmation": {
     "allow_file_write": "Allow file write?",
@@ -78,6 +80,8 @@
     "accept_edits_enabled": "✓ Accept-edits mode enabled: file edits will be auto-allowed for this session",
     "planned_command": "Planned command:\n{command}",
     "panel_title": "【Security Warning】Command execution requested",
+    "file_panel_title": "【File Edit Confirmation】Agent requests file change",
+    "planned_file_edit": "Planned file change:\n{command}",
     "session_approved": "✓ Auto-approved command for this session: {command}",
     "allowlisted": "✓ Added \"{prefix}\" to the command allowlist for future auto-approval.",
     "custom_instruction_empty": "No instruction entered; command execution cancelled.",
@@ -513,6 +517,11 @@
     "sensitive_path_skill_hint": "Security restriction: access to sensitive directory or file ({part}) is forbidden. To read skill files, do not prepend a workspace path to a skills directory; pass a relative path (e.g., <skill_name>/<subpath>) directly to read_file or list_dir.",
     "dir_not_found": "Directory not found: {path}",
     "file_not_found": "File not found: {path}",
-    "path_not_found": "File or directory not found: {path}"
+    "path_not_found": "File or directory not found: {path}",
+    "overwrite_required": "File {path} already exists. In Accept-edits mode, call write_to_file again with overwrite=true to overwrite the whole file, or prefer replace_file_content for partial edits.",
+    "write_target_is_dir": "{path} is a directory and cannot be overwritten as a file.",
+    "replace_target_not_found_in_range": "Target text was not found within lines {start}-{end} (file has {total_lines} lines). Use read_file to inspect the actual content and line numbers first.",
+    "replace_target_not_found_elsewhere": "Target text was not found within lines {start}-{end} (file has {total_lines} lines), but matching content was found at {locations}; adjust start_line/end_line or inspect with read_file before retrying.",
+    "replace_target_not_found": "Target text was not found (file has {total_lines} lines). Use read_file to verify the exact content and indentation."
   }
 }
