@@ -4,13 +4,14 @@
 1. 嚴格驗證 owner / repo / ref 識別字格式並編碼路徑，杜絕 `#` 片段截斷與 `..` 路徑穿越。
 2. 支援 GITHUB_ALLOWED_REPOS 儲存庫白名單控管，並於 HTTP 重導向時複核目標網域與白名單。
 3. 支援彈性憑證解析：動態隱藏注入、環境變數或安全終端機隱藏輸入（非互動管道快速失敗防死鎖）。
-4. 雙向機密防護：回傳文字先預裁切再自動遮罩機密；外發留言與 Issue 偵測到機密時直接阻斷。
+4. 雙向機密防護：於回應大小上限內先完整遮罩機密再截斷；外發留言與 Issue 偵測到機密時直接阻斷。
 5. 單次回應受 MAX_RESPONSE_BYTES 與 MAX_OUTPUT_CHARS 限制，共用連線池、truststore 與稽核日誌。
 """
 
 import asyncio
 import base64
 import getpass
+import json
 import os
 import re
 import sys
@@ -21,7 +22,7 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote
 
 import certifi
 import httpx
@@ -60,15 +61,19 @@ except ImportError:
         return default if default is not None else key
 
 
-mcp = MCPServer("github")
-
 GITHUB_API_BASE = "https://api.github.com"
 _ALLOWED_PR_STATES = frozenset({"open", "closed", "all"})
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _REF_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
 _SEARCH_SCOPE_OVERRIDE_RE = re.compile(r"(?i)\b(?:repo|org|user)\s*:")
-_REDACT_BOUNDARY_BUFFER = 2048
+_REDACT_BOUNDARY_BUFFER = 20480
 _MAX_SINGLE_PATCH_CHARS = 3000
+_MAX_PR_CTX_PATCH_CHARS = 600
+_MAX_ERROR_DETAIL_CHARS = 800
+_MAX_ERROR_OUTPUT_CHARS = 1500
+_MAX_AUDIT_DETAIL_CHARS = 1000
+_MAX_AUDIT_FIELD_CHARS = 300
+_MAX_422_ERROR_ITEMS = 10
 
 _LOCAL_PR_TEMPLATE_PATHS: tuple[str, ...] = (
     ".github/pull_request_template.md",
@@ -113,20 +118,30 @@ _TOKEN_PATTERN = (
     r"|hf_[A-Za-z0-9]{20,})\b"
 )
 _BEARER_PATTERN = r"(?i)(\bauthorization\s*[:=]\s*(?:bearer|token)\s+)([^\s\"',;]+)"
+_SENSITIVE_KV_KEYS = (
+    r"(?:password|passwd|secret|github_token|(?:access|auth|refresh|bearer|session|api)[_-]token"
+    r"|api[_-]?key|client_secret|passphrase|connectionstring)"
+)
+_OUTBOUND_PLACEHOLDER_RE = (
+    r"(?!(?:null|none|true|false|yes|no|todo|changeme|example|xxx+|\*+|\.+|<[^>]+>|\$\{[^}]+\})"
+    r"(?:\b|['\"\s,}\]]|$))"
+)
 
 _REDACT_PEM_RE = re.compile(_PEM_PATTERN)
-_REDACT_URL_RE = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@\"']+:[^\s/@\"']+@")
+_REDACT_URL_RE = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,31}://)[^\s/@\"':]+:[^\s/@\"']+@")
 _REDACT_TOKEN_RE = re.compile(_TOKEN_PATTERN)
 _REDACT_AUTH_BEARER_RE = re.compile(_BEARER_PATTERN)
 _REDACT_KV_RE = re.compile(
-    r"(?i)(\b(?:password|passwd|secret|token|github_token|api[_-]?key|client_secret"
-    r"|passphrase|connectionstring)\b\s*[:=]\s*)([^\s#;\"',)]+|\"[^\"]*\"|'[^']*')",
+    rf"(?i)((?:['\"])?\b(?:token|{_SENSITIVE_KV_KEYS})\b['\"]?\s*[:=]\s*)"
+    r"(?!\[REDACTED(?:_[A-Z_]+)?\](?:$|[\s#;\"',)}\]]))"
+    r"([^\s#;\"',)}\]]+|\"[^\"]*\"|'[^']*')",
 )
 _OUTBOUND_KV_SECRET_RE = re.compile(
-    r"(?i)\b(?:password|passwd|secret|github_token|api[_-]?key|client_secret"
-    r"|passphrase|connectionstring)\b\s*[:=]\s*['\"]?"
-    r"(?!(?:null|none|true|false|yes|no|todo|changeme|example|xxx+|\*+|\.+|<[^>]+>|\$\{[^}]+\})\b)"
-    r"[A-Za-z0-9_./+=-]{8,}",
+    r"(?i)(?:"
+    rf"(?:['\"]{_SENSITIVE_KV_KEYS}['\"]|\b{_SENSITIVE_KV_KEYS}\b)\s*[:=]\s*['\"]?"
+    r"|(?:['\"]token['\"]\s*[:=]\s*['\"]?|\btoken\s*=\s*['\"]?"
+    r"|\btoken\s*:\s*['\"]|(?:^|\n)[ \t]*token\s*:\s*['\"]?)"
+    rf"){_OUTBOUND_PLACEHOLDER_RE}[A-Za-z0-9_./+=-]{{8,}}",
 )
 _AUDIT_TARGET_SANITIZE_RE = re.compile(r"[\s='\"\\]+")
 
@@ -136,11 +151,34 @@ class _ConnAuthError(RuntimeError):
 
 
 def _clear_creds_cache() -> None:
-    global _RUNTIME_CREDS_TS, _SHARED_CLIENT, _SHARED_CLIENT_LOOP
+    global _RUNTIME_CREDS_TS
     _RUNTIME_CREDS.clear()
     _RUNTIME_CREDS_TS = 0.0
+    if _SHARED_CLIENT is not None and not _SHARED_CLIENT.is_closed:
+        _SHARED_CLIENT.cookies.clear()
+
+
+async def _close_shared_client() -> None:
+    global _SHARED_CLIENT, _SHARED_CLIENT_LOOP
+    client = _SHARED_CLIENT
     _SHARED_CLIENT = None
     _SHARED_CLIENT_LOOP = None
+    if client is not None and not client.is_closed:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+
+
+@asynccontextmanager
+async def _server_lifespan(_server: Any) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        await _close_shared_client()
+
+
+mcp = MCPServer("github", lifespan=_server_lifespan)
 
 
 def _ensure_creds_ttl() -> None:
@@ -186,38 +224,87 @@ def _get_allowed_repos() -> frozenset[str] | None:
     return _parse_allowed_repos(allowed)
 
 
-async def _validate_redirect_response(response: httpx.Response) -> None:
-    """攔截 HTTP 3xx 重導向，確保目標網域為官方 api.github.com 且不繞過 GITHUB_ALLOWED_REPOS 白名單。"""
-    if not response.is_redirect or not response.has_redirect_location:
-        return
+def _resolve_redirect_url_from_response(response: httpx.Response) -> httpx.URL:
+    """解析 HTTP 3xx 回應的實際下一跳目標 URL（優先採用 HTTPX 建構的 next_request）。"""
+    if response.next_request is not None:
+        return response.next_request.url
     location = response.headers.get("location", "")
-    parsed = urlparse(location)
-    if parsed.scheme and parsed.scheme.lower() != "https":
+    try:
+        target_url = httpx.URL(location)
+    except httpx.InvalidURL as exc:
+        raise PermissionError(f"拒絕存取：無效的重導向目標網址 ({exc})。") from exc
+    if getattr(response, "_request", None) is not None:
+        base_url = response.request.url
+    else:
+        base_url = httpx.URL(GITHUB_API_BASE)
+    if target_url.scheme and not target_url.host:
+        target_url = target_url.copy_with(host=base_url.host)
+    if target_url.is_relative_url:
+        target_url = base_url.join(target_url)
+    return target_url
+
+
+def _validate_redirect_url(target_url: httpx.URL) -> None:
+    """驗證 HTTPX 解析後之實際重導向目標 URL，確保為官方 HTTPS 端點且受白名單約束。"""
+    if target_url.scheme.lower() != "https":
         raise PermissionError("拒絕存取：禁止重導向至非 HTTPS 端點。")
-    if parsed.netloc and parsed.netloc.lower() != "api.github.com":
-        raise PermissionError(f"拒絕存取：禁止重導向至外部網域 {parsed.netloc!r}。")
+    if target_url.userinfo:
+        raise PermissionError("拒絕存取：禁止重導向至含使用者憑證資訊之端點。")
+    if target_url.host.lower() != "api.github.com":
+        raise PermissionError(f"拒絕存取：禁止重導向至外部網域 {target_url.host!r}。")
+    if target_url.port not in (None, 443):
+        raise PermissionError(f"拒絕存取：禁止重導向至非標準連接埠 {target_url.port}。")
 
     allowed_set = _get_allowed_repos()
-    if allowed_set is not None:
-        path_parts = [p for p in (parsed.path or "").split("/") if p]
-        if len(path_parts) >= 3 and path_parts[0].lower() == "repos":
-            redirect_target = f"{path_parts[1]}/{path_parts[2]}".lower()
-            if redirect_target not in allowed_set:
-                msg = f"拒絕存取：重導向目標儲存庫 {redirect_target} 不在允許的 GITHUB_ALLOWED_REPOS 白名單內。"
+    if allowed_set is None:
+        return
+
+    raw_path = target_url.raw_path.decode("ascii", errors="replace").split("?", 1)[0]
+    raw_parts = [p for p in raw_path.split("/") if p]
+    if not raw_parts:
+        msg = "拒絕存取：啟用 GITHUB_ALLOWED_REPOS 時，禁止重導向至無法確認儲存庫歸屬的路徑。"
+        raise PermissionError(msg)
+
+    first_decoded = unquote(raw_parts[0]).lower()
+    if first_decoded == "repositories":
+        msg = "拒絕存取：啟用 GITHUB_ALLOWED_REPOS 時，禁止重導向至未具名之 /repositories/:id 端點。"
+        raise PermissionError(msg)
+
+    if len(raw_parts) >= 3 and first_decoded == "repos":
+        for seg in raw_parts:
+            decoded_seg = unquote(seg)
+            if "/" in decoded_seg or "\\" in decoded_seg or decoded_seg in (".", ".."):
+                msg = "拒絕存取：重導向路徑包含無效的路徑穿越或編碼分隔字元。"
                 raise PermissionError(msg)
-        elif path_parts and path_parts[0].lower() == "repositories":
-            msg = "拒絕存取：啟用 GITHUB_ALLOWED_REPOS 時，禁止重導向至未具名之 /repositories/:id 端點。"
+        owner_seg = unquote(raw_parts[1])
+        repo_seg = unquote(raw_parts[2])
+        if not _SEGMENT_RE.match(owner_seg) or not _SEGMENT_RE.match(repo_seg):
+            msg = "拒絕存取：重導向目標儲存庫識別字格式無效。"
             raise PermissionError(msg)
+        redirect_target = f"{owner_seg}/{repo_seg}".lower()
+        if redirect_target not in allowed_set:
+            msg = f"拒絕存取：重導向目標儲存庫 {redirect_target} 不在允許的 GITHUB_ALLOWED_REPOS 白名單內。"
+            raise PermissionError(msg)
+        return
+
+    msg = "拒絕存取：啟用 GITHUB_ALLOWED_REPOS 時，禁止重導向至無法確認儲存庫歸屬的路徑。"
+    raise PermissionError(msg)
+
+
+async def _validate_redirect_response(response: httpx.Response) -> None:
+    """攔截 HTTP 3xx 重導向，驗證實際解析後之目標網域與 GITHUB_ALLOWED_REPOS 白名單。"""
+    if not response.is_redirect or not response.has_redirect_location:
+        return
+    _validate_redirect_url(_resolve_redirect_url_from_response(response))
 
 
 def _build_async_client() -> httpx.AsyncClient:
-    """建立具備逾時、重導向白名單檢查與系統 TLS 憑證驗證之非同步 HTTP 客戶端。"""
+    """建立具備逾時、停用自動重導向與系統 TLS 憑證驗證之非同步 HTTP 客戶端。"""
     return httpx.AsyncClient(
         timeout=httpx.Timeout(NETWORK_TIMEOUT_SEC),
         max_redirects=MAX_REDIRECTS,
-        follow_redirects=True,
+        follow_redirects=False,
         verify=_ssl_verify(),
-        event_hooks={"response": [_validate_redirect_response]},
     )
 
 
@@ -230,16 +317,105 @@ async def _create_http_client() -> AsyncIterator[httpx.AsyncClient]:
     except RuntimeError:
         current_loop = None
 
+    old_client: httpx.AsyncClient | None = None
     if _SHARED_CLIENT is None or _SHARED_CLIENT.is_closed or _SHARED_CLIENT_LOOP is not current_loop:
-        if _SHARED_CLIENT is not None and not _SHARED_CLIENT.is_closed:
-            try:
-                await _SHARED_CLIENT.aclose()
-            except Exception:
-                pass
+        old_client = _SHARED_CLIENT
         _SHARED_CLIENT = _build_async_client()
         _SHARED_CLIENT_LOOP = current_loop
+    client = _SHARED_CLIENT
 
-    yield _SHARED_CLIENT
+    if old_client is not None and not old_client.is_closed:
+        try:
+            await old_client.aclose()
+        except Exception:
+            pass
+
+    yield client
+
+
+async def _read_bounded_stream(resp: httpx.Response, max_bytes: int) -> tuple[bytes, bool]:
+    """以串流方式累計讀取 HTTP 回應本文，超過上限立即中止並回傳 (資料, 是否超限)。"""
+    content_len = resp.headers.get("content-length")
+    if content_len and content_len.isdigit() and int(content_len) > max_bytes:
+        return b"", True
+    buf = bytearray()
+    async for chunk in resp.aiter_bytes():
+        buf.extend(chunk)
+        if len(buf) > max_bytes:
+            return b"", True
+    return bytes(buf), False
+
+
+async def _request_json(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    params: dict[str, str | int] | None = None,
+    json_body: dict[str, Any] | None = None,
+    allow_not_found: bool = False,
+) -> Any:
+    """執行具備手動重導向白名單驗證與串流大小硬上限的 GitHub REST API 請求。"""
+    upper_method = method.upper()
+    current_url: str | httpx.URL = url
+    current_headers = dict(headers)
+    current_params: dict[str, str | int] | None = params
+    current_json: dict[str, Any] | None = json_body
+
+    for hops in range(MAX_REDIRECTS + 1):
+        stream_kwargs: dict[str, Any] = {
+            "headers": current_headers,
+            "follow_redirects": False,
+        }
+        if current_params is not None:
+            stream_kwargs["params"] = current_params
+        if current_json is not None:
+            stream_kwargs["json"] = current_json
+
+        async with client.stream(upper_method, current_url, **stream_kwargs) as resp:
+            if resp.is_redirect and resp.has_redirect_location:
+                if upper_method != "GET":
+                    raise PermissionError("拒絕存取：寫入請求禁止自動重導向，請確認目標儲存庫與分支狀態。")
+                if hops >= MAX_REDIRECTS:
+                    raise httpx.TooManyRedirects(
+                        "Exceeded maximum allowed redirects.",
+                        request=resp.request,
+                    )
+                target_url = _resolve_redirect_url_from_response(resp)
+                _validate_redirect_url(target_url)
+                current_url = target_url
+                if resp.next_request is not None:
+                    current_headers = dict(resp.next_request.headers)
+                current_params = None
+                current_json = None
+                continue
+
+            if allow_not_found and resp.status_code == 404:
+                return None
+
+            body_bytes, exceeded = await _read_bounded_stream(resp, MAX_RESPONSE_BYTES)
+            if not resp.is_success:
+                safe_headers = [
+                    (k, v)
+                    for k, v in resp.headers.multi_items()
+                    if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")
+                ]
+                bounded_resp = httpx.Response(
+                    status_code=resp.status_code,
+                    headers=safe_headers,
+                    content=b"" if exceeded else body_bytes,
+                    request=resp.request,
+                )
+                bounded_resp.raise_for_status()
+
+            if exceeded:
+                raise ValueError(f"GitHub API 回應內容過大（超過 {MAX_RESPONSE_BYTES} 位元組上限）。")
+            if not body_bytes:
+                return None
+            return json.loads(body_bytes)
+
+    raise httpx.TooManyRedirects("Exceeded maximum allowed redirects.")
 
 
 def _parse_json_response(resp: httpx.Response) -> Any:
@@ -259,8 +435,10 @@ def _redact_output(text: str, mask_val: str = "") -> str:
     if not text:
         return text
     out = text.replace(mask_val, "[REDACTED_TOKEN]") if mask_val else text
-    out = _REDACT_PEM_RE.sub("[REDACTED_PRIVATE_KEY]", out)
-    out = _REDACT_URL_RE.sub(r"\1[REDACTED]@", out)
+    if "-----END " in out:
+        out = _REDACT_PEM_RE.sub("[REDACTED_PRIVATE_KEY]", out)
+    if "://" in out and "@" in out:
+        out = _REDACT_URL_RE.sub(r"\1[REDACTED]@", out)
     out = _REDACT_TOKEN_RE.sub("[REDACTED_TOKEN]", out)
     out = _REDACT_AUTH_BEARER_RE.sub(r"\1[REDACTED]", out)
     return _REDACT_KV_RE.sub(r"\1[REDACTED]", out)
@@ -270,11 +448,11 @@ def _check_outbound_content(body: str, mask_val: str = "") -> str | None:
     """掃描準備發送至外部 GitHub 的留言或 Issue 內容，偵測高風險機密以防憑證外洩。"""
     if mask_val and mask_val in body:
         return "目前使用中的 GITHUB_TOKEN"
-    if _REDACT_PEM_RE.search(body):
+    if "-----END " in body and _REDACT_PEM_RE.search(body):
         return "PEM 私鑰區塊"
     if _REDACT_TOKEN_RE.search(body):
         return "API 金鑰或 Personal Access Token"
-    if _REDACT_URL_RE.search(body):
+    if "://" in body and "@" in body and _REDACT_URL_RE.search(body):
         return "包含內嵌帳密的連線 URL"
     if _REDACT_AUTH_BEARER_RE.search(body):
         return "Authorization 認證標頭憑證"
@@ -283,30 +461,54 @@ def _check_outbound_content(body: str, mask_val: str = "") -> str | None:
     return None
 
 
-def _truncate_output(text: str, hint: str) -> tuple[str, bool]:
-    """限制單次輸出不超過 MAX_OUTPUT_CHARS，超限時附加引導提示（保留邊界完整遮罩標記）。"""
-    if len(text) <= MAX_OUTPUT_CHARS:
-        return text, False
-    cut = MAX_OUTPUT_CHARS
+def _safe_cut_index(text: str, limit: int) -> int:
+    """計算不超過上限的安全裁切索引，避免截斷 [REDACTED...] 遮罩標記。"""
+    if len(text) <= limit:
+        return len(text)
+    cut = limit
     bracket_start = text.rfind("[REDACTED", max(0, cut - 32), cut + 9)
     if bracket_start != -1 and bracket_start < cut:
         bracket_end = text.find("]", bracket_start, cut + 32)
         if bracket_end != -1 and bracket_end >= cut:
             cut = bracket_end + 1
+    return cut
+
+
+def _redact_and_clip_patch(patch: str, max_chars: int, mask_val: str, notice: str) -> str:
+    """先對完整單檔 Diff 執行機密遮罩，再套用安全字元上限截斷。"""
+    redacted = _redact_output(patch, mask_val)
+    if len(redacted) <= max_chars:
+        return redacted
+    cut = _safe_cut_index(redacted, max_chars)
+    if cut >= len(redacted):
+        return redacted
+    return redacted[:cut] + notice
+
+
+def _truncate_output(text: str, hint: str) -> tuple[str, bool]:
+    """限制單次輸出不超過 MAX_OUTPUT_CHARS，超限時附加引導提示（保留邊界完整遮罩標記）。"""
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text, False
+    cut = _safe_cut_index(text, MAX_OUTPUT_CHARS)
+    if cut >= len(text):
+        return text, False
     notice = f"\n\n... [輸出已截斷：超過單次 {MAX_OUTPUT_CHARS} 字元上限。{hint}]"
     return text[:cut] + notice, True
 
 
 def _sanitize_and_truncate(raw_output: str, mask_val: str, hint: str) -> tuple[str, bool]:
-    """先以安全邊界緩衝預裁切超長文字（防止巨量內容觸發 ReDoS），遮罩機密後再截斷至上限。"""
-    pre_limit = MAX_OUTPUT_CHARS + _REDACT_BOUNDARY_BUFFER
-    was_pre_sliced = len(raw_output) > pre_limit
+    """對受大小上限約束的完整輸出先遮罩再截斷；若觸發預裁切則捨棄無法判定安全性的尾段。"""
+    pre_limit = MAX_RESPONSE_BYTES
+    was_pre_sliced = pre_limit > 0 and len(raw_output) > pre_limit
     sliced = raw_output[:pre_limit] if was_pre_sliced else raw_output
     redacted = _redact_output(sliced, mask_val)
+    if was_pre_sliced:
+        safe_end = max(0, len(redacted) - _REDACT_BOUNDARY_BUFFER)
+        redacted = redacted[:safe_end]
     output, was_truncated = _truncate_output(redacted, hint)
     if was_pre_sliced and not was_truncated:
         notice = f"\n\n... [輸出已截斷：超過單次 {MAX_OUTPUT_CHARS} 字元上限。{hint}]"
-        return output[:MAX_OUTPUT_CHARS] + notice, True
+        return output + notice, True
     return output, was_truncated
 
 
@@ -330,6 +532,7 @@ def _audit_log(
     target: str = "",
     status: str = "OK",
     detail: str = "",
+    mask_val: str = "",
 ) -> None:
     """將查詢、寫入與攔截事件寫入集中化 agent.log 供稽核使用（含防日誌注入清洗）。"""
     try:
@@ -339,10 +542,22 @@ def _audit_log(
         lt = time.localtime(now_t)
         ms = int((now_t - int(now_t)) * 1000)
         ts = f"{time.strftime('%Y-%m-%d %H:%M:%S', lt)},{ms:03d}"
-        safe_cmd = " ".join(_redact_output(command).splitlines()).strip()
-        raw_target = " ".join(_redact_output(target).splitlines()).strip()
+        safe_cmd = " ".join(_redact_output(command, mask_val).splitlines()).strip()
+        if len(safe_cmd) > _MAX_AUDIT_FIELD_CHARS:
+            cut = _safe_cut_index(safe_cmd, _MAX_AUDIT_FIELD_CHARS)
+            if cut < len(safe_cmd):
+                safe_cmd = safe_cmd[:cut] + "..."
+        raw_target = " ".join(_redact_output(target, mask_val).splitlines()).strip()
         safe_target = _AUDIT_TARGET_SANITIZE_RE.sub("_", raw_target)
-        safe_detail = " ".join(_redact_output(detail).splitlines()).strip()
+        if len(safe_target) > _MAX_AUDIT_FIELD_CHARS:
+            cut = _safe_cut_index(safe_target, _MAX_AUDIT_FIELD_CHARS)
+            if cut < len(safe_target):
+                safe_target = safe_target[:cut] + "..."
+        safe_detail = " ".join(_redact_output(detail, mask_val).splitlines()).strip()
+        if len(safe_detail) > _MAX_AUDIT_DETAIL_CHARS:
+            cut = _safe_cut_index(safe_detail, _MAX_AUDIT_DETAIL_CHARS)
+            if cut < len(safe_detail):
+                safe_detail = safe_detail[:cut] + "..."
         parts = [f"{ts} [AUDIT] [MCP:github] tool={tool_name} status={status}"]
         if safe_target:
             parts.append(f"target={safe_target}")
@@ -462,8 +677,7 @@ async def _resolve_base_branch(
     if cleaned:
         return _validate_git_ref(cleaned)
     repo_url = f"{GITHUB_API_BASE}/repos/{safe_path}"
-    resp = await client.get(repo_url, headers=headers)
-    repo_data = _parse_json_response(resp)
+    repo_data = await _request_json(client, "GET", repo_url, headers=headers)
     default_branch = "main"
     if isinstance(repo_data, dict) and isinstance(repo_data.get("default_branch"), str):
         candidate = repo_data["default_branch"].strip()
@@ -503,14 +717,14 @@ async def _load_pr_template(
 
     remote_url = f"{GITHUB_API_BASE}/repos/{safe_path}/contents/.github/pull_request_template.md"
     try:
-        resp = await client.get(remote_url, headers=headers)
-        if resp.status_code == 200:
-            data = _parse_json_response(resp)
-            if isinstance(data, dict) and isinstance(data.get("content"), str):
-                raw_b64 = data["content"]
-                decoded = base64.b64decode(raw_b64).decode("utf-8", errors="replace").strip()
-                if decoded:
-                    return decoded, "遠端儲存庫範本 (.github/pull_request_template.md)"
+        data = await _request_json(client, "GET", remote_url, headers=headers, allow_not_found=True)
+        if isinstance(data, dict) and isinstance(data.get("content"), str):
+            raw_b64 = data["content"]
+            decoded = base64.b64decode(raw_b64).decode("utf-8", errors="replace").strip()
+            if decoded:
+                return decoded, "遠端儲存庫範本 (.github/pull_request_template.md)"
+    except PermissionError:
+        raise
     except Exception:
         pass
 
@@ -544,16 +758,29 @@ def _validate_state(state: str) -> str:
     return norm_state
 
 
-def _format_http_error(exc: httpx.HTTPStatusError) -> tuple[str, str]:
+def _clip_error_text(text: str, mask_val: str = "", limit: int = _MAX_ERROR_OUTPUT_CHARS) -> str:
+    """遮罩敏感資訊並安全裁切錯誤訊息，避免將過長內容回傳或寫入稽核日誌。"""
+    redacted = _redact_output(text, mask_val)
+    if len(redacted) <= limit:
+        return redacted
+    cut = _safe_cut_index(redacted, limit)
+    if cut >= len(redacted):
+        return redacted
+    return redacted[:cut] + "..."
+
+
+def _format_http_error(exc: httpx.HTTPStatusError, *, active_token: str = "") -> tuple[str, str]:
     """將 GitHub HTTP 狀態碼轉換為明確且不含機密的中文訊息與稽核狀態碼。"""
     status_code = exc.response.status_code
-    api_msg = ""
+    payload: Any = None
     try:
         payload = exc.response.json()
-        if isinstance(payload, dict) and payload.get("message"):
-            api_msg = _redact_output(str(payload["message"]))[:200]
     except Exception:
-        api_msg = ""
+        payload = None
+
+    api_msg = ""
+    if isinstance(payload, dict) and payload.get("message"):
+        api_msg = _clip_error_text(str(payload["message"]), active_token, limit=200)
 
     if status_code == 401:
         _clear_creds_cache()
@@ -562,7 +789,8 @@ def _format_http_error(exc: httpx.HTTPStatusError) -> tuple[str, str]:
     if status_code == 403:
         remaining = exc.response.headers.get("x-ratelimit-remaining", "")
         if remaining == "0" or "rate limit" in api_msg.lower():
-            reset_ts = exc.response.headers.get("x-ratelimit-reset", "")
+            reset_raw = (exc.response.headers.get("x-ratelimit-reset") or "").strip()
+            reset_ts = reset_raw if (reset_raw.isascii() and reset_raw.isdigit() and len(reset_raw) <= 20) else ""
             reset_note = f"，重置時間戳：{reset_ts}" if reset_ts else ""
             return f"GitHub API 已達速率限制 (HTTP 403 Rate Limit Exceeded{reset_note})。", "ERROR"
         suffix = f"（{api_msg}）" if api_msg else ""
@@ -572,18 +800,17 @@ def _format_http_error(exc: httpx.HTTPStatusError) -> tuple[str, str]:
         return msg, "ERROR"
     if status_code == 422:
         err_details: list[str] = []
-        try:
-            payload = exc.response.json()
-            if isinstance(payload, dict) and isinstance(payload.get("errors"), list):
-                for item in payload["errors"]:
-                    if isinstance(item, dict):
-                        if item.get("message"):
-                            err_details.append(_redact_output(str(item["message"]))[:160])
-                        elif item.get("field") and item.get("code"):
-                            err_details.append(f"{item['field']}:{item['code']}")
-        except Exception:
-            pass
-        joined_err = "；".join(err_details) if err_details else api_msg
+        if isinstance(payload, dict) and isinstance(payload.get("errors"), list):
+            for item in payload["errors"][:_MAX_422_ERROR_ITEMS]:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("message"):
+                    err_details.append(_clip_error_text(str(item["message"]), active_token, limit=160))
+                elif item.get("field") and item.get("code"):
+                    raw_pair = f"{item['field']}:{item['code']}"
+                    err_details.append(_clip_error_text(raw_pair, active_token, limit=160))
+        raw_joined = "；".join(err_details) if err_details else api_msg
+        joined_err = _clip_error_text(raw_joined, active_token, limit=_MAX_ERROR_DETAIL_CHARS) if raw_joined else ""
         suffix = f"（{joined_err}）" if joined_err else ""
         msg = (
             f"GitHub 驗證失敗 (HTTP 422 Unprocessable Entity){suffix}。"
@@ -600,31 +827,45 @@ def _handle_tool_error(
     target: str,
     exc: Exception,
     action_label: str,
+    *,
+    active_token: str = "",
 ) -> str:
-    """統一記錄失敗稽核日誌並格式化為 [ERROR] 字串回傳。"""
+    """統一記錄失敗稽核日誌並格式化為 [ERROR] 字串回傳（一致套用機密遮罩與長度上限）。"""
     if isinstance(exc, PermissionError):
-        _audit_log(tool_name, cmd_desc, target=target, status="BLOCKED", detail=str(exc))
-        return f"[ERROR] {exc}"
+        safe_detail = _clip_error_text(str(exc), active_token)
+        _audit_log(tool_name, cmd_desc, target=target, status="BLOCKED", detail=safe_detail, mask_val=active_token)
+        return f"[ERROR] {safe_detail}"
     if isinstance(exc, _ConnAuthError):
-        _audit_log(tool_name, cmd_desc, target=target, status="AUTH_FAIL", detail="conn_auth_failed")
-        return f"[ERROR] {exc}"
+        safe_err = _clip_error_text(str(exc), active_token)
+        _audit_log(
+            tool_name,
+            cmd_desc,
+            target=target,
+            status="AUTH_FAIL",
+            detail="conn_auth_failed",
+            mask_val=active_token,
+        )
+        return f"[ERROR] {safe_err}"
     if isinstance(exc, httpx.HTTPStatusError):
-        msg, status_label = _format_http_error(exc)
+        msg, status_label = _format_http_error(exc, active_token=active_token)
+        safe_msg = _clip_error_text(msg, active_token)
         _audit_log(
             tool_name,
             cmd_desc,
             target=target,
             status=status_label,
-            detail=msg,
+            detail=safe_msg,
+            mask_val=active_token,
         )
-        return f"[ERROR] {action_label}：{msg}"
-    safe_err = _redact_output(str(exc))
+        return f"[ERROR] {action_label}：{safe_msg}"
+    safe_err = _clip_error_text(str(exc), active_token)
     _audit_log(
         tool_name,
         cmd_desc,
         target=target,
         status="ERROR",
         detail=safe_err,
+        mask_val=active_token,
     )
     return f"[ERROR] {action_label}：{safe_err}"
 
@@ -675,12 +916,13 @@ async def github_list_prs(
         url = f"{GITHUB_API_BASE}/repos/{safe_path}/pulls"
 
         async with _create_http_client() as client:
-            resp = await client.get(
+            prs = await _request_json(
+                client,
+                "GET",
                 url,
                 headers=headers,
                 params={"state": norm_state, "per_page": clean_per_page, "page": clean_page},
             )
-            prs = _parse_json_response(resp)
 
         if not isinstance(prs, list) or not prs:
             _audit_log("github_list_prs", cmd_desc, target=target, status="OK")
@@ -718,7 +960,14 @@ async def github_list_prs(
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_list_prs", cmd_desc, target, exc, "無法取得 PR 列表")
+        return _handle_tool_error(
+            "github_list_prs",
+            cmd_desc,
+            target,
+            exc,
+            "無法取得 PR 列表",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -743,8 +992,7 @@ async def github_read_issue(
         url = f"{GITHUB_API_BASE}/repos/{safe_path}/issues/{clean_num}"
 
         async with _create_http_client() as client:
-            resp = await client.get(url, headers=headers)
-            data = _parse_json_response(resp)
+            data = await _request_json(client, "GET", url, headers=headers)
 
         if not isinstance(data, dict):
             raise ValueError("GitHub API 回傳的 Issue 資料格式異常。")
@@ -779,7 +1027,14 @@ async def github_read_issue(
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_read_issue", cmd_desc, target, exc, "無法取得 Issue 內容")
+        return _handle_tool_error(
+            "github_read_issue",
+            cmd_desc,
+            target,
+            exc,
+            "無法取得 Issue 內容",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -808,12 +1063,13 @@ async def github_read_comments(
         url = f"{GITHUB_API_BASE}/repos/{safe_path}/issues/{clean_num}/comments"
 
         async with _create_http_client() as client:
-            resp = await client.get(
+            comments = await _request_json(
+                client,
+                "GET",
                 url,
                 headers=headers,
                 params={"per_page": clean_per_page, "page": clean_page},
             )
-            comments = _parse_json_response(resp)
 
         if not isinstance(comments, list) or not comments:
             _audit_log("github_read_comments", cmd_desc, target=target, status="OK")
@@ -842,7 +1098,14 @@ async def github_read_comments(
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_read_comments", cmd_desc, target, exc, "無法取得留言列表")
+        return _handle_tool_error(
+            "github_read_comments",
+            cmd_desc,
+            target,
+            exc,
+            "無法取得留言列表",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -872,12 +1135,13 @@ async def github_get_pr_files(
         url = f"{GITHUB_API_BASE}/repos/{safe_path}/pulls/{clean_num}/files"
 
         async with _create_http_client() as client:
-            resp = await client.get(
+            files_data = await _request_json(
+                client,
+                "GET",
                 url,
                 headers=headers,
                 params={"per_page": clean_per_page, "page": clean_page},
             )
-            files_data = _parse_json_response(resp)
 
         if not isinstance(files_data, list) or not files_data:
             _audit_log("github_get_pr_files", cmd_desc, target=target, status="OK")
@@ -894,9 +1158,13 @@ async def github_get_pr_files(
             header = f"檔案：{filename} [{status}] (+{additions} / -{deletions})"
             patch_text = f_item.get("patch")
             if include_patch and isinstance(patch_text, str) and patch_text.strip():
-                if len(patch_text) > _MAX_SINGLE_PATCH_CHARS:
-                    patch_text = patch_text[:_MAX_SINGLE_PATCH_CHARS] + "\n... [單一檔案 Diff 過長已截斷]"
-                sections.append(f"{header}\n```diff\n{patch_text}\n```")
+                clipped_patch = _redact_and_clip_patch(
+                    patch_text,
+                    _MAX_SINGLE_PATCH_CHARS,
+                    active_token,
+                    "\n... [單一檔案 Diff 過長已截斷]",
+                )
+                sections.append(f"{header}\n```diff\n{clipped_patch}\n```")
             else:
                 sections.append(header)
 
@@ -914,7 +1182,14 @@ async def github_get_pr_files(
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_get_pr_files", cmd_desc, target, exc, "無法取得 PR 變更檔案")
+        return _handle_tool_error(
+            "github_get_pr_files",
+            cmd_desc,
+            target,
+            exc,
+            "無法取得 PR 變更檔案",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -957,8 +1232,7 @@ async def github_list_issues(
             params["labels"] = clean_labels
 
         async with _create_http_client() as client:
-            resp = await client.get(url, headers=headers, params=params)
-            items = _parse_json_response(resp)
+            items = await _request_json(client, "GET", url, headers=headers, params=params)
 
         if not isinstance(items, list):
             raise ValueError("GitHub API 回傳的 Issues 清單格式異常。")
@@ -994,7 +1268,14 @@ async def github_list_issues(
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_list_issues", cmd_desc, target, exc, "無法取得 Issue 列表")
+        return _handle_tool_error(
+            "github_list_issues",
+            cmd_desc,
+            target,
+            exc,
+            "無法取得 Issue 列表",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -1035,12 +1316,13 @@ async def github_search_issues(
         url = f"{GITHUB_API_BASE}/search/issues"
 
         async with _create_http_client() as client:
-            resp = await client.get(
+            data = await _request_json(
+                client,
+                "GET",
                 url,
                 headers=headers,
                 params={"q": scoped_q, "per_page": clean_per_page, "page": clean_page},
             )
-            data = _parse_json_response(resp)
 
         if not isinstance(data, dict):
             raise ValueError("GitHub API 回傳的搜尋結果格式異常。")
@@ -1049,7 +1331,7 @@ async def github_search_issues(
         total_count = data.get("total_count", 0)
         if not isinstance(items, list) or not items:
             _audit_log("github_search_issues", cmd_desc, target=target, status="OK")
-            return f"在 {target} 中找不到符合 {clean_query!r} 的 Issue 或 PR。"
+            return f"在 {target} 中找不到符合查詢條件的 Issue 或 PR（第 {clean_page} 頁）。"
 
         lines: list[str] = [f"搜尋結果（共 {total_count} 筆，目前顯示第 {clean_page} 頁）："]
         for item in items:
@@ -1075,7 +1357,14 @@ async def github_search_issues(
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_search_issues", cmd_desc, target, exc, "無法搜尋 Issue/PR")
+        return _handle_tool_error(
+            "github_search_issues",
+            cmd_desc,
+            target,
+            exc,
+            "無法搜尋 Issue/PR",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -1104,12 +1393,13 @@ async def github_get_pr_reviews(
         url = f"{GITHUB_API_BASE}/repos/{safe_path}/pulls/{clean_num}/reviews"
 
         async with _create_http_client() as client:
-            resp = await client.get(
+            reviews = await _request_json(
+                client,
+                "GET",
                 url,
                 headers=headers,
                 params={"per_page": clean_per_page, "page": clean_page},
             )
-            reviews = _parse_json_response(resp)
 
         if not isinstance(reviews, list) or not reviews:
             _audit_log("github_get_pr_reviews", cmd_desc, target=target, status="OK")
@@ -1140,7 +1430,14 @@ async def github_get_pr_reviews(
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_get_pr_reviews", cmd_desc, target, exc, "無法取得 PR 審查紀錄")
+        return _handle_tool_error(
+            "github_get_pr_reviews",
+            cmd_desc,
+            target,
+            exc,
+            "無法取得 PR 審查紀錄",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -1170,12 +1467,13 @@ async def github_get_pr_checks(
         url = f"{GITHUB_API_BASE}/repos/{safe_path}/commits/{safe_ref}/check-runs"
 
         async with _create_http_client() as client:
-            resp = await client.get(
+            data = await _request_json(
+                client,
+                "GET",
                 url,
                 headers=headers,
                 params={"per_page": clean_per_page, "page": clean_page},
             )
-            data = _parse_json_response(resp)
 
         if not isinstance(data, dict):
             raise ValueError("GitHub API 回傳的 Check Runs 資料格式異常。")
@@ -1214,7 +1512,14 @@ async def github_get_pr_checks(
         )
         return output
     except Exception as exc:
-        return _handle_tool_error("github_get_pr_checks", cmd_desc, target, exc, "無法取得 CI Check 狀態")
+        return _handle_tool_error(
+            "github_get_pr_checks",
+            cmd_desc,
+            target,
+            exc,
+            "無法取得 CI Check 狀態",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -1275,8 +1580,7 @@ async def github_create_issue(
             payload["labels"] = clean_labels
 
         async with _create_http_client() as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            created = _parse_json_response(resp)
+            created = await _request_json(client, "POST", url, headers=headers, json_body=payload)
 
         issue_num = created.get("number", "?") if isinstance(created, dict) else "?"
         _audit_log(
@@ -1288,7 +1592,14 @@ async def github_create_issue(
         )
         return f"成功在 {clean_owner}/{clean_repo} 建立 Issue #{issue_num}：{clean_title}"
     except Exception as exc:
-        return _handle_tool_error("github_create_issue", cmd_desc, target, exc, "無法建立 Issue")
+        return _handle_tool_error(
+            "github_create_issue",
+            cmd_desc,
+            target,
+            exc,
+            "無法建立 Issue",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -1328,8 +1639,7 @@ async def github_create_comment(
         safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
         url = f"{GITHUB_API_BASE}/repos/{safe_path}/issues/{clean_num}/comments"
         async with _create_http_client() as client:
-            resp = await client.post(url, headers=headers, json={"body": body})
-            _parse_json_response(resp)
+            await _request_json(client, "POST", url, headers=headers, json_body={"body": body})
 
         _audit_log(
             "github_create_comment",
@@ -1340,7 +1650,14 @@ async def github_create_comment(
         )
         return f"成功在 {clean_owner}/{clean_repo}#{clean_num} 新增留言。"
     except Exception as exc:
-        return _handle_tool_error("github_create_comment", cmd_desc, target, exc, "無法新增留言")
+        return _handle_tool_error(
+            "github_create_comment",
+            cmd_desc,
+            target,
+            exc,
+            "無法新增留言",
+            active_token=active_token,
+        )
 
 
 @mcp.tool()
@@ -1377,8 +1694,7 @@ async def github_prepare_pr_context(
                 safe_head = quote(clean_head, safe="")
 
             compare_url = f"{GITHUB_API_BASE}/repos/{safe_path}/compare/{safe_base}...{safe_head}"
-            resp = await client.get(compare_url, headers=headers)
-            compare_data = _parse_json_response(resp)
+            compare_data = await _request_json(client, "GET", compare_url, headers=headers)
 
         if not isinstance(compare_data, dict):
             raise ValueError("GitHub API 回傳的分支比較資料格式異常。")
@@ -1409,9 +1725,12 @@ async def github_prepare_pr_context(
             line = f"- {fname} [{fstatus}] (+{fadd} / -{fdel})"
             patch_str = f_item.get("patch")
             if isinstance(patch_str, str) and patch_str.strip():
-                snippet = patch_str.strip()[:600]
-                if len(patch_str.strip()) > 600:
-                    snippet += "\n... [Diff 摘要已截斷]"
+                snippet = _redact_and_clip_patch(
+                    patch_str.strip(),
+                    _MAX_PR_CTX_PATCH_CHARS,
+                    active_token,
+                    "\n... [Diff 摘要已截斷]",
+                )
                 line += f"\n```diff\n{snippet}\n```"
             file_lines.append(line)
 
@@ -1455,6 +1774,7 @@ async def github_prepare_pr_context(
             target,
             exc,
             t("github_mcp.pr_ctx_failed"),
+            active_token=active_token,
         )
 
 
@@ -1513,8 +1833,7 @@ async def github_create_pr(
                 "body": clean_body,
                 "draft": bool(draft),
             }
-            resp = await client.post(url, headers=headers, json=payload)
-            created = _parse_json_response(resp)
+            created = await _request_json(client, "POST", url, headers=headers, json_body=payload)
 
         pr_num = created.get("number", "?") if isinstance(created, dict) else "?"
         html_url = created.get("html_url", "") if isinstance(created, dict) else ""
@@ -1538,6 +1857,7 @@ async def github_create_pr(
             target,
             exc,
             t("github_mcp.pr_create_failed"),
+            active_token=active_token,
         )
 
 
