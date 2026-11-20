@@ -8,222 +8,61 @@ language: 'zh-TW'
 
 # PocketAgent 排程作業文件
 
-> **語系說明**：本文件語系遵循使用者提問語系（預設繁體中文）。若使用者以英文提問，請切換為英文輸出。
+本文區分 CLI 啟動時的背景作業、互動式維護與 GitHub Actions 事件。以下為靜態查核結果；執行時間、重試行為與現場告警未經實測。
 
----
+## 1. 作業總覽
 
-## 1. 排程作業總覽
+| 作業 | 類型 | 觸發條件 | 來源 |
+| --- | --- | --- | --- |
+| Housekeeping | CLI 背景作業 | 啟動時檢查是否啟用及是否已過冷卻期；`/clean` 可手動執行 | [CLI 啟動流程](../../src/pocket_agent/frontend/cli/main.py)、[Housekeeper](../../src/pocket_agent/system/housekeeping.py) |
+| Portable 自動更新準備 | CLI 背景作業 | Windows Portable 啟動且 `system.auto_update` 啟用 | [CLI 啟動流程](../../src/pocket_agent/frontend/cli/main.py)、[UpdateManager](../../src/pocket_agent/system/updater.py) |
+| 會話修剪 | 手動維護 | `/prune` 選擇條件並確認 | [會話指令](../../src/pocket_agent/frontend/cli/commands/session.py) |
+| MCP 連線參數解析 | 隨工具呼叫處理 | 已設定的 MCP 工具有連線參數需求 | [MCPManager](../../src/pocket_agent/extensions/mcp.py) |
+| CI／發布 | GitHub 事件 | CI 支援手動觸發及 `main`、`dev` 的 push／PR；發布由 `v*` tag 的 push 觸發 | [CI](../../.github/workflows/standard-ci.yml)、[發布](../../.github/workflows/release.yml) |
 
-| 作業名稱       | 排程類型       | 執行頻率       | 觸發條件          | 負責模組                  | 失敗處理                    |
-| -------------- | -------------- | -------------- | ----------------- | ------------------------- | --------------------------- |
-| Housekeeping 自動管家 | 內建非同步排程器 | 每 24 小時 (可配置) | 應用啟動後、冷卻期過後 | `pocket_agent.system.housekeeping` | 記錄錯誤日誌、不中斷主流程、下次冷卻期重試 |
-| Session Prune 手動清理 | CLI 互動指令 (`/prune`) | 使用者手動觸發 | 使用者輸入 `/prune` | `pocket_agent.core.sessions` | 互動式確認、失敗顯示錯誤訊息 |
-| MCP 連線健康檢查 | 被動式 (工具呼叫時) | 每次 MCP 工具呼叫前 | 工具被 LLM 呼叫時 | `pocket_agent.extensions.mcp.MCPManager` | 連線失敗清除快取、提示重新輸入憑證 |
+RHEL 的 cron／systemd timer 探查屬於[遠端唯讀工具](../../mcp_servers/rhel_mcp.py)，不替 PocketAgent 建立排程。上述 CLI 作業與所查閱的 Workflow 未顯示 `cron` 或 Windows Task Scheduler 註冊流程；實際部署端是否另行配置，未查證。
 
----
+> **架構師風險評估**：24 小時是冷卻門檻，不是固定執行週期。若 CLI 持續開啟或長時間未啟動，不能據此承諾每日維護。CI 與發布同樣不提供定時健康檢查。
 
 ## 2. 作業詳細規格
 
 ### 2.1 Housekeeping 自動管家
 
-| 項目                   | 說明                                                                                                     |
-| ---------------------- | -------------------------------------------------------------------------------------------------------- |
-| **作業 ID**            | `housekeeping`                                                                                           |
-| **排程類型**           | 內建非同步排程器 (asyncio background task)                                                                |
-| **Cron 表達式 / 間隔** | 固定間隔：`DEFAULT_HOUSEKEEPING_COOLDOWN_SECONDS = 86400` (24 小時)，啟動後立即檢查冷卻期是否過期          |
-| **時區**               | 系統本地時間 (UTC offset 依作業系統)                                                                     |
-| **執行逾時**           | 無硬性逾時；單一目錄掃描受 `MAX_FILE_SEARCH_SIZE_BYTES` (5 MB) 與檔案數上限保護                          |
-| **重試策略**           | 失敗記錄警告日誌，不重試；下次冷卻期自然觸發                                                             |
-| **並發控制**           | 單一背景任務，`housekeeping_task` 唯一引用，防止重複執行                                                 |
-| **負責模組/服務**      | `pocket_agent.system.housekeeping.Housekeeper`                                                           |
-| **入口點**             | `Housekeeper.start()` → `Agent.__init__` 啟動時自動排程；`/clean` CLI 指令可手動觸發 `Housekeeper.run_once()` |
+- CLI 啟動後透過 `asyncio.create_task` 搭配 `run_sync` 呼叫 `run_cleanup(force=False)`。停用或仍在冷卻期時會略過；`/clean` 呼叫 `force=True`，不受兩項條件限制。
+- 冷卻期預設為 24 小時。時間戳通常存於使用者目錄的 `cache/last_housekeeping.timestamp`，無法建立快取目錄時回退至 scratch；不是 `config.json` 欄位。讀取錯誤或格式無效視為不在冷卻期，寫入失敗記錄 debug 訊息。
+- 清理範圍包括舊版根目錄日誌、暫存輸出、剪貼簿、研究檢查點、研究筆記、工作區日誌及備份，也涵蓋其他已管理工作區及程式指定的回退目錄。預設 TTL 為 7 天，日誌與活躍備份分別為 14 天及 28 天。暫存預設配額為每目錄 100 個檔案及 50 MB；備份容量預設上限為 200 MB。配額不是掃描逾時。
+- 有清除檔案才記錄完成的 info 訊息；`/clean` 另回報清除容量或剩餘狀態。參閱 [Housekeeper](../../src/pocket_agent/system/housekeeping.py)、[預設常數](../../src/pocket_agent/system/constants.py)、[手動維護指令](../../src/pocket_agent/frontend/cli/commands/misc.py)與[設定規格](../guides/configuration-specification.md)。
 
-#### 業務邏輯流程
+> **架構師風險評估**：程式內的鎖不代表跨多個 CLI 程序互斥。時間戳寫入失敗可能讓後續啟動再次清理；保留期也不等於備份策略，不應在 scratch 保存唯一副本。
 
-```mermaid
-flowchart TD
-    Start[Agent 啟動 / 手動 /clean] --> CheckCoolDown{冷卻期過期?<br/>last_run + 86400s < now}
-    CheckCoolDown -- 否 --> Skip[略過本次，排程下次]
-    CheckCoolDown -- 是 --> ScanWorkspaces[掃描 ~/.pocket-agent/workspaces/ 所有工作區]
+### 2.2 Portable 自動更新準備
 
-    ScanWorkspaces --> ForEachWS[對每個工作區沙盒]
-    ForEachWS --> CleanLogs[清理 logs/ 目錄<br/>TTL: housekeeping_ttl_days * log_ttl_multiplier<br/>預設 14 天]
-    ForEachWS --> CleanScratch[清理 scratch/ 目錄<br/>TTL: housekeeping_ttl_days<br/>預設 7 天<br/>上限: max_files=100, max_size_mb=50]
-    ForEachWS --> CleanSpillover[清理 scratch/outputs/ 落盤檔<br/>同 scratch 規則]
-    ForEachWS --> CleanBackups[清理 backups/ 時光機備份<br/>TTL: housekeeping_ttl_days * active_backup_multiplier<br/>預設 28 天<br/>上限: backup_max_size_mb=200]
+- 支援條件為 Windows 及 Portable，`system.auto_update` 預設啟用。CLI 背景呼叫 `download_and_stage()`，成功時填入待更新的短 commit SHA；此背景呼叫本身不直接套用更新。
+- 更新器依 `system.update_repo`、`system.update_branch` 或建置資訊查詢 GitHub 上的目標分支，再以 commit SHA 取得來源封存。這與由 `v*` tag 建置的 GitHub Release 不同。
+- CLI 背景例外記在 debug，離開時會對未完成的背景任務提出取消。手動操作與回滾見[運維手冊](../guides/runbook-generated.md)。來源：[CLI 啟動流程](../../src/pocket_agent/frontend/cli/main.py)、[更新器](../../src/pocket_agent/system/updater.py)。
 
-    CleanLogs --> UpdateTimestamp[更新 last_run 時間戳]
-    CleanScratch --> UpdateTimestamp
-    CleanSpillover --> UpdateTimestamp
-    CleanBackups --> UpdateTimestamp
-    UpdateTimestamp --> Done[完成，記錄 INFO 日誌]
+> **架構師風險評估**：分支會移動，版本號也可能不變。要求固定版本的部署宜使用核准的 Release，並用 commit SHA 區分實際執行的建置。
 
-    Skip --> Done
-```
+### 2.3 Session Prune 手動清理（`/prune`）
 
-#### 失敗處理與告警
+`/prune <days>` 與 `/prune --keep <count>` 是兩種擇一的規則；未提供參數時，選單提供 30 天或保留 20 筆的預設選項。程式先列候選，取得確認後才刪除，並排除目前會話、回報刪除筆數與釋放空間。參閱[指令流程](../../src/pocket_agent/frontend/cli/commands/session.py)與[會話持久化](../../src/pocket_agent/core/sessions.py)。
 
-| 失敗情境         | 偵測方式           | 自動恢復         | 人工介入           | 告警管道          |
-| ---------------- | ------------------ | ---------------- | ------------------ | ----------------- |
-| 工作區目錄權限錯誤 | `OSError` (PermissionError) | 無 (下次冷卻期重試) | 檢查目錄權限、以管理員執行 | `agent.log` WARNING 等級 |
-| 檔案被佔用無法刪除 | `OSError` (PermissionError/AccessDenied) | 略過該檔案，繼續下一個 | 關閉佔用進程、手動清理 | `agent.log` WARNING 等級 |
-| 磁碟空間不足 | `OSError` (ENOSPC) | 無 | 清理磁碟空間 | `agent.log` ERROR 等級 |
-| 背景任務例外中斷 | `asyncio.CancelledError` / 任意例外 | 任務結束，下次冷卻期重建 | 檢查 `agent.log` 堆疊追蹤 | `agent.log` ERROR 等級 |
+> **架構師風險評估**：保留 20 筆不是套用天數規則時的額外保護。刪除前先核對規則與候選清單；目前會話排除不代表其他程序開啟的會話也受保護。
 
-#### 相依資源
+### 2.4 MCP 連線處理（非排程）
 
-- **檔案系統**：`~/.pocket-agent/workspaces/<slug>/logs/`、`scratch/`、`scratch/outputs/`、`backups/`
-- **設定檔**：`config.json` 的 `system.housekeeping_*` 參數
-- **路徑解析**：`pocket_agent.system.paths.user_dir()`、`workspace_dir()`
+連線參數解析屬於 [MCPManager](../../src/pocket_agent/extensions/mcp.py) 的工具呼叫流程；依伺服器設定與前端回呼處理，不應解讀為對 SSH、RDP 或資料庫定時探測。設定與權限見 [MCP 架構](mcp-architecture.md)。
 
-> **架構師風險評估**：
->
-> - [x] 執行時間是否會與其他作業衝突：單一背景任務，冷卻期機制防止頻繁執行，不佔用主執行緒
-> - [x] 冪等性是否保證：掃描時機為「目前時間 - TTL」，多次執行結果一致；檔案刪除具冪等性
-> - [x] 資料一致性邊界是否明確：僅清理沙盒目錄，不觸碰專案原始碼、使用者資料、會話 JSON (含 HMAC)
-> - [x] 長時間執行是否有進度回報：大量檔案時無進度回報，但受 `max_files`/`max_size_mb` 上限保護，單次掃描通常 < 1 秒
-> - [!] 潛在風險：Windows 上檔案被防毒軟體掃描佔用可能導致刪除失敗；大量工作區時依序掃描可能累積耗時
+> **架構師風險評估**：沒有背景健康指標可用來證明服務可用。排障時應以該次工具結果與允許查閱的日誌為準，不能將失敗視為可以無條件重送操作。
 
----
+## 3. 監控與可觀測性
 
-### 2.2 Session Prune 手動清理 (`/prune`)
+手動清理可核對 CLI 回報，自動清理及背景更新可查閱工作區日誌（路徑由[路徑模組](../../src/pocket_agent/system/paths.py)解析），CI 和發布可在 GitHub Actions 查看個別執行結果。未從上述實作確認集中儀表板、固定告警門檻或自動重試服務。若需要監控，請由部署方另行定義「預期執行但未完成」的判定方式。
 
-| 項目                   | 說明                                                                                                     |
-| ---------------------- | -------------------------------------------------------------------------------------------------------- |
-| **作業 ID**            | `session_prune`                                                                                          |
-| **排程類型**           | CLI 互動指令 (使用者手動觸發)                                                                            |
-| **觸發條件**           | 使用者輸入 `/prune [<days> \| --keep <count>]`                                                           |
-| **執行逾時**           | 受 `DEFAULT_CLI_TIMEOUT_SEC = 60` 秒限制                                                                 |
-| **重試策略**           | 無自動重試；使用者可重新輸入指令                                                                         |
-| **並發控制**           | CLI 互動模式下單一執行緒，無並發問題                                                                     |
-| **負責模組/服務**      | `pocket_agent.core.sessions.prune_sessions()`                                                            |
-| **入口點**             | `CliCommandRegistry` 註冊 `SessionPruneCommand` → `CommandHandler.dispatch()`                            |
+> **架構師風險評估**：沒有成功日誌不一定是失敗，也可能是停用、冷卻期或沒有檔案可清。調查前先區分這些情況，並在分享日誌前遮罩敏感資料。
 
-#### 業務邏輯流程
+## 4. 變更記錄
 
-```mermaid
-flowchart TD
-    Start[使用者輸入 /prune] --> ParseArgs[解析參數: days=30, keep=20]
-    ParseArgs --> Confirm{確認刪除?<br/>[y: once / a: session / A: allowlist / N: deny]}
-    Confirm -- 否 --> Cancel[取消操作]
-    Confirm -- 是 --> ScanSessions[掃描 ~/.pocket-agent/sessions/*.json]
-    ScanSessions --> FilterExpired[篩選: mtime > days 天前<br/>保護: 目前活躍 session、最新 keep 筆]
-    FilterExpired --> DeleteFiles[刪除符合條件的 session 檔案]
-    DeleteFiles --> Report[回報刪除筆數、釋放空間]
-    Cancel --> Done[結束]
-    Report --> Done
-```
-
-#### 失敗處理與告警
-
-| 失敗情境         | 偵測方式           | 自動恢復         | 人工介入           | 告警管道          |
-| ---------------- | ------------------ | ---------------- | ------------------ | ----------------- |
-| Session 檔案損毀/無法讀取 | `json.JSONDecodeError` / `OSError` | 略過該檔案 | 手動檢查/刪除損毀檔案 | CLI 紅色錯誤訊息 |
-| HMAC 簽章驗證失敗 | 簽章不符 | 略過該檔案 (視為損毀) | 檢查是否被竄改 | CLI 紅色錯誤訊息 + `agent.log` WARNING |
-| 刪除權限不足 | `PermissionError` | 無 | 以管理員權限執行 | CLI 紅色錯誤訊息 |
-
-#### 相依資源
-
-- **檔案系統**：`~/.pocket-agent/sessions/*.json` (含 HMAC-SHA256 簽章)
-- **設定檔**：無專用設定，使用預設值 `DEFAULT_SESSION_PRUNE_DAYS=30`、`DEFAULT_SESSION_PRUNE_KEEP=20`
-
-> **架構師風險評估**：
->
-> - [x] 執行時間是否會與其他作業衝突：使用者手動觸發，無排程衝突
-> - [x] 冪等性是否保證：依檔案修改時間與保留筆數判斷，重複執行不會重複刪除
-> - [x] 資料一致性邊界是否明確：保護目前活躍 session、保留最新 N 筆，HMAC 驗證防竄改
-> - [x] 長時間執行是否有進度回報：session 檔案通常 < 100 筆，執行極快，無需進度回報
-
----
-
-### 2.3 MCP 連線健康檢查 (被動式)
-
-| 項目                   | 說明                                                                                                     |
-| ---------------------- | -------------------------------------------------------------------------------------------------------- |
-| **作業 ID**            | `mcp_connection_health`                                                                                  |
-| **排程類型**           | 被動式 (工具呼叫前檢查)                                                                                  |
-| **觸發條件**           | LLM 呼叫 MCP 工具時，`MCPManager.call_tool()` 執行前                                                     |
-| **執行逾時**           | 受工具本身逾時限制 (SSH: ~30s, RDP: ~60s, 資料庫: ~15s)                                                  |
-| **重試策略**           | 連線失敗/認證失敗 → 清除記憶體快取 → 下次呼叫重新提示輸入憑證                                          |
-| **並發控制**           | 每工具呼叫獨立檢查，`_runtime_conn_cache` 以 server_name 隔離                                           |
-| **負責模組/服務**      | `pocket_agent.extensions.mcp.MCPManager`、`pocket_agent.frontend.cli.main._prompt_mcp_conn_params()`     |
-| **入口點**             | `MCPManager.call_tool()` → `_resolve_connection_params()` → 缺漏參數觸發前端回呼 `_prompt_mcp_conn_params()` |
-
-#### 業務邏輯流程
-
-```mermaid
-flowchart TD
-    CallTool[LLM 呼叫 MCP 工具] --> ResolveParams[_resolve_connection_params<br/>server_name, tool_name]
-    ResolveParams --> CheckCache{記憶體快取有參數?}
-    CheckCache -- 是 --> UseCache[使用快取參數]
-    CheckCache -- 否 --> CheckConfig{config.yaml env 有參數?}
-    CheckConfig -- 是 --> UseConfig[使用設定檔參數]
-    CheckConfig -- 否 --> CheckEnv{環境變數有參數?}
-    CheckEnv -- 是 --> UseEnv[使用環境變數]
-    CheckEnv -- 否 --> PromptUser[前端回呼 _prompt_mcp_conn_params<br/>暫停 Spinner、安全詢問密碼]
-    PromptUser --> CacheParams[寫入記憶體快取 _runtime_conn_cache]
-    UseCache --> ExecTool[執行 MCP 工具]
-    UseConfig --> ExecTool
-    UseEnv --> ExecTool
-    CacheParams --> ExecTool
-    ExecTool --> CheckResult{執行成功?}
-    CheckResult -- 失敗 (認證/連線錯誤) --> ClearCache[清除該 server 快取]
-    ClearCache --> ReturnError[回傳錯誤給 LLM]
-    CheckResult -- 成功 --> ReturnResult[回傳結果給 LLM]
-    ReturnError --> Done[結束]
-    ReturnResult --> Done
-```
-
-#### 失敗處理與告警
-
-| 失敗情境         | 偵測方式           | 自動恢復         | 人工介入           | 告警管道          |
-| ---------------- | ------------------ | ---------------- | ------------------ | ----------------- |
-| SSH 連線逾時/拒絕 | `ssh` 非零退出碼、stderr 關鍵字 | 清除快取，下次重新提示 | 檢查主機/埠/防火牆/金鑰 | 工具結果 `[ERROR]` + `agent.log` WARNING |
-| SSH 認證失敗 | `Permission denied`、密碼/金鑰錯誤 | 清除快取，下次重新提示 | 確認帳密/金鑰/Passphrase | 工具結果 `[ERROR]` + `agent.log` WARNING |
-| RDP 連線失敗 | `mstsc.exe` 異常退出、視窗類別不符 | 清除快取，下次重新提示 | 檢查主機/埠/帳密/網路 | 工具結果 `[ERROR]` + `agent.log` WARNING |
-| 資料庫連線失敗 | `pymysql`/`pymssql` 例外 | 清除快取，下次重新提示 | 檢查主機/埠/帳密/資料庫名 | 工具結果 `[ERROR]` + `agent.log` WARNING |
-| 使用者取消輸入 | `KeyboardInterrupt`/`EOFError` | 回傳已收集參數 (可能不完整) | 重新呼叫工具 | CLI 黃色提示 `操作已取消` |
-
-#### 相依資源
-
-- **網路**：SSH (Port 22)、RDP (Port 3389)、MySQL (Port 3306)、SQL Server (Port 1433)
-- **設定檔**：`mcp_config.yaml` 的 `servers.<name>.env`、`inject`、`safe_read_tools`
-- **OS Keyring**：MCP OAuth 2.1 Token 儲存 (`mcp-oauth-<server>`, `mcp-client-<server>`)
-- **記憶體快取**：`MCPManager._runtime_conn_cache` (執行期唯一，不落盤)
-
-> **架構師風險評估**：
->
-> - [x] 執行時間是否會與其他作業衝突：被動觸發，無排程衝突；記憶體快取避免重複提示
-> - [x] 冪等性是否保證：連線參數解析為純函式，快取寫入具冪等性；失敗清除快取保證下次重新驗證
-> - [x] 資料一致性邊界是否明確：密碼僅存記憶體、Keyring 加密儲存、不寫入日誌 (遮罩 `[REDACTED]`)
-> - [x] 長時間執行是否有進度回報：SSH/RDP 連線建立有逾時保護；CLI Spinner 顯示「連線中...」
-> - [!] 潛在風險：`_prompt_mcp_conn_params` 需暫停 `rich.status` Spinner 避免渲染衝突；Windows `CONIN$` 直接讀取可能與 prompt-toolkit 衝突
-
----
-
-## 3. 排程器基礎設施
-
-| 元件           | 實作                                                                  | 版本        | 設定位置                              | 高可用性                                                                 |
-| -------------- | --------------------------------------------------------------------- | ----------- | ------------------------------------- | ------------------------------------------------------------------------ |
-| **內建非同步排程器** | `asyncio.create_task()` + `asyncio.sleep()` 實作固定間隔排程             | Python 3.14 | `system/housekeeping.py`, `constants.py` | 單一進程內執行，進程重啟即恢復；冷卻期持久化於 `config.json` (`last_housekeeping_run`) |
-| **CLI 互動指令**   | Click 指令註冊，使用者手動觸發                                        | Click 8.5.0 | `frontend/cli/commands/session.py`    | 無需高可用性；使用者控制觸發時機                                          |
-| **被動式健康檢查** | 工具呼叫前攔截檢查，`MCPManager._resolve_connection_params()`          | MCP SDK 1.x | `extensions/mcp.py`                   | 無持久狀態，記憶體快取隨進程生命週期                                      |
-
----
-
-## 4. 監控與可觀測性
-
-| 指標           | 來源                       | 告警閾值                         | 儀表板                        |
-| -------------- | -------------------------- | -------------------------------- | ----------------------------- |
-| **Housekeeping 執行成功率** | `agent.log` (INFO/WARNING) | < 100% (連續失敗 3 次告警)       | 無內建儀表板，依日誌分析      |
-| **Housekeeping 執行耗時**   | `agent.log` (DEBUG)        | > 30 秒                          | 無內建儀表板                  |
-| **Session 檔案數量** | `~/.pocket-agent/sessions/` | > 100 檔案 (建議執行 `/prune`)   | CLI `/usage` 指令顯示         |
-| **MCP 連線失敗率** | `agent.log` (ERROR)        | 連續 5 次失敗                    | 無內建儀表板                  |
-
----
-
-## 5. 變更記錄
-
-| 版本        | 日期     | 作者       | 變更摘要 |
-| ----------- | -------- | ---------- | -------- |
-| 0.1.0       | 2025-01-20 | PocketAgent Team | 初版建立 (由 generate-system-docs 自動生成) |
+| 版本 | 日期 | 作者 | 變更摘要 |
+| --- | --- | --- | --- |
+| 0.1.0 | 2025-01-20 | PocketAgent Team | 初版建立（由 generate-system-docs 自動生成） |

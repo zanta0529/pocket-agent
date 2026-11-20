@@ -29,35 +29,22 @@ language: 'zh-TW'
 
 ### 1.2 專案克隆與設定
 
-```cmd
-# 1. 克隆專案
-git clone https://github.com/zanta0529/pocket-agent.git
-cd pocket-agent
+先取得原始碼、進入專案根目錄，確認 `python --version` 為 3.14 以上，再建立虛擬環境。
 
-# 2. 建立並啟用虛擬環境
+```text
 python -m venv venv
-# Windows (CMD):
-venv\Scripts\activate.bat
-# Linux / macOS:
-source venv/bin/activate
+```
 
-# 3. 升級 pip 並安裝執行期依賴
-pip install --upgrade pip
-pip install -r requirements.txt
+Windows（CMD）執行 `venv\Scripts\activate.bat`；Linux／macOS 終端機執行 `source venv/bin/activate`。啟用之後手動執行：
 
-# 4. 安裝開發依賴
-pip install -r requirements-dev.txt
-
-# 5. 以可編輯模式安裝
-pip install -e .
-
-# 6. (可選) 複製環境變數範本
-copy .env.example .env
-# 編輯 .env 填入必要設定 (如 API Keys)
-
-# 7. 執行設定精靈 (首次使用)
+```text
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install -e .
 pocket-agent setup
 ```
+
+第一次設定透過精靈選擇模型供應商與認證方式；MCP 設定可參考 [YAML 範本](../../mcp_config.example.yaml)。不要將實際 API 金鑰、Token 或私人日誌提交至版本庫。來源：[安裝說明](../../README.md)、[套件與 CLI 入口](../../pyproject.toml)、[設定規格](configuration-specification.md)。
 
 ### 1.3 驗證安裝
 
@@ -67,7 +54,8 @@ pocket-agent setup
 - **單元測試**：`venv\Scripts\python.exe -m pytest tests/`
 - **格式檢查**：`venv\Scripts\python.exe -m ruff format --check .`
 - **靜態分析**：`venv\Scripts\python.exe -m ruff check .`
-- **匯入完整性**：`venv\Scripts\python.exe scripts\check_imports.py src scripts`
+- **匯入完整性**：依[專案規範](../PROJECT_INSTRUCTIONS.md#7-驗證方式與手動命令)分別檢查執行期與測試依賴。
+- **文件檢查**：修改 `docs/` 請依 [Markdown lint 設定](../../.markdownlint-cli2.jsonc)檢查；[CI](../../.github/workflows/standard-ci.yml)在 Ubuntu 執行 Markdown lint，Python 驗證則在 Windows／Python 3.14 執行。CI 排程不等同本機已通過。
 
 ---
 
