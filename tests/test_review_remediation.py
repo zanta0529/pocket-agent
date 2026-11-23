@@ -97,7 +97,7 @@ def test_read_url_escapes_external_content_tag(monkeypatch):
 
 
 def test_search_web_wraps_and_escapes_external_content(monkeypatch):
-    """CR-001：search_web 回傳之外部搜尋結果應包裹於 <external_content> 並跳脫內嵌偽造標籤。"""
+    """驗證 search_web 回傳之外部搜尋結果包裹於 <external_content> 並跳脫內嵌偽造標籤。"""
     monkeypatch.setattr(
         web,
         "_search_ddg_snippets",
@@ -114,7 +114,7 @@ def test_search_web_wraps_and_escapes_external_content(monkeypatch):
 
 
 def test_read_url_allows_exact_max_redirects_and_rejects_empty_redirect_without_location(monkeypatch):
-    """CR-003：允許剛好 MAX_REDIRECTS 次重導向（第 MAX_REDIRECTS+1 跳為 200 OK），且無 Location 的空 302 視為錯誤。"""
+    """驗證允許剛好 MAX_REDIRECTS 次重導向（第 MAX_REDIRECTS+1 跳為 200 OK），且無 Location 的空 302 視為錯誤。"""
     monkeypatch.setattr(web, "_resolve_public_ip", lambda host, port: "8.8.8.8")
     hops = [0]
 
@@ -139,7 +139,7 @@ def test_read_url_allows_exact_max_redirects_and_rejects_empty_redirect_without_
 
 
 def test_strip_html_preserves_block_boundaries_and_unescapes_ddg_links():
-    """CR-004 & CR-006：區塊標籤應保持換行不黏連，且 DuckDuckGo 連結應正確反跳脫 HTML 實體。"""
+    """驗證區塊標籤保持換行不黏連，且 DuckDuckGo 連結正確反跳脫 HTML 實體。"""
     raw_html = "<div><p>Hello</p><p>World</p><script>alert(1)</script></div>"
     stripped = web._strip_html(raw_html)
     assert "Hello\n\nWorld" == stripped
@@ -150,7 +150,7 @@ def test_strip_html_preserves_block_boundaries_and_unescapes_ddg_links():
 
 
 def test_read_url_catches_os_error_with_warning_msg(monkeypatch):
-    """CR-007：_fetch_pinned 拋出底層 OSError 時，_read_url 應一致攔截並回傳 [ERROR]。"""
+    """驗證 _fetch_pinned 拋出底層 OSError 時，_read_url 一致攔截並回傳 [ERROR]。"""
     monkeypatch.setattr(web, "_resolve_public_ip", lambda host, port: "8.8.8.8")
 
     def raise_os_error(url, ip, headers):

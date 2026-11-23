@@ -53,6 +53,7 @@ DB_AUTOINC_WARN_RATIO = 0.75  # 自動遞增 (AUTO_INCREMENT / IDENTITY) 欄位�
 # ==============================================================================
 DEFAULT_READ_FILE_LINES = 500  # read_file 單次讀取的預設最大行數
 DEFAULT_SEARCH_MAX_RESULTS = 100  # search_files 檔名或關鍵字檢索最多回傳筆數
+DEFAULT_SEARCH_LINE_MAX_CHARS = 500  # search_files 全文檢索單行命中顯示的最大字元上限
 TIME_MACHINE_BACKUP_MAX_BYTES = 20 * 1024 * 1024  # 20 MB: 檔案修改前時光機備份上限
 USER_DATA_DIR_NAME = ".pocket-agent"  # 使用者資料根目錄名稱 (~/.pocket-agent)
 DEFAULT_SKILL_RESOURCE_LIST_LIMIT = 20  # use_skill 提示中最多列出的頂層附屬資源項目數
