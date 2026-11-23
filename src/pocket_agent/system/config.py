@@ -100,6 +100,7 @@ DEFAULT_CONFIG = {
         },
         "ollama": {"base_url": "http://localhost:11434"},
         "ollama_cloud": {"api_key": "", "base_url": "https://ollama.com/v1"},
+        "openai_compatible": {"base_url": "", "api_key": ""},
     },
 }
 
@@ -135,6 +136,8 @@ class EnvConfigProvider(ConfigProvider):
         "providers.ollama.base_url": "OLLAMA_BASE_URL",
         "providers.openrouter.api_key": "OPENROUTER_API_KEY",
         "providers.openrouter.base_url": "OPENROUTER_BASE_URL",
+        "providers.openai_compatible.base_url": "OPENAI_COMPATIBLE_BASE_URL",
+        "providers.openai_compatible.api_key": "OPENAI_COMPATIBLE_API_KEY",
         "system.max_tool_rounds": "MAX_TOOL_ROUNDS",
         "system.reasoning_effort": "POCKET_AGENT_REASONING_EFFORT",
         "system.log_level": "POCKET_AGENT_LOG_LEVEL",

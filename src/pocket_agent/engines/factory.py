@@ -16,6 +16,7 @@ from pocket_agent.system.constants import (
     PROVIDER_OLLAMACLOUD,
     PROVIDER_OPENAI,
     PROVIDER_OPENAI_API,
+    PROVIDER_OPENAI_COMPATIBLE,
     PROVIDER_OPENROUTER,
     PROVIDER_SAMBANOVA,
 )
@@ -33,6 +34,7 @@ ENGINE_MAP = {
     PROVIDER_GROQ: StandardChatCompletionsEngine,
     PROVIDER_MISTRAL: StandardChatCompletionsEngine,
     PROVIDER_SAMBANOVA: StandardChatCompletionsEngine,
+    PROVIDER_OPENAI_COMPATIBLE: StandardChatCompletionsEngine,
 }
 
 

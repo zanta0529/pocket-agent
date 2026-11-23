@@ -148,6 +148,7 @@ The interactive wizard guides you through five steps (defaults to English if `lo
    - **Gemini (Google AI Studio)**: Supports Google OAuth browser login or `GEMINI_API_KEY`.
    - **Cloud Inference (OpenRouter / Groq / SambaNova / Mistral / Ollama Cloud)**: Enter your API Key (protected via OS Keyring or JWE encrypted vault).
    - **Local Models (Ollama)**: Connects to `http://localhost:11434` by default, supporting offline execution.
+   - **OpenAI-Compatible (Local / Gateway)**: Connect to LM Studio, vLLM, llama.cpp, or an internal enterprise AI gateway (custom Base URL with optional API Key; include `/v1` in the URL when required. For unauthenticated Ollama, prefer **Ollama (Local)** for automatic context-window detection).
 3. **Select Default Model**:
    - Attempts to fetch available models dynamically from the provider, with support for custom model names.
 4. **Optional External MCP Tools**:
@@ -181,7 +182,7 @@ Type any of the following `/` commands at the prompt:
 
 #### 🤖 Model & Session Management
 
-- `/model`: Open an interactive selector to switch providers and models (`openai`, `gemini`, `openrouter`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`).
+- `/model`: Open an interactive selector to switch providers and models (`openai`, `gemini`, `openrouter`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`, `openai-compatible`).
 - `/reasoning [auto|high|medium|low|none]` (or `/effort`): Adjust LLM reasoning effort on the fly (defaults to `auto`; opens an interactive menu when called without arguments).
 - `/session`: Open a paginated interactive session manager to browse, load, or delete saved conversations.
 - `/prune [<days> | --keep <count>]` (or `/session prune`): Clean up expired or excess session history (defaults to older than 30 days or keeping latest 20; protects active session and requires confirmation).
