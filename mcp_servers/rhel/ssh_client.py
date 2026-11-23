@@ -89,7 +89,7 @@ def resolve_connection_params(
         if not password:
             password = CREDS_CACHE.get_target_secret(target)
         if not password and target == cached_target:
-            password = CREDS_CACHE.get("RHEL_SSH_PASSWORD")
+            password = CREDS_CACHE.get_secret("RHEL_SSH_PASSWORD")
         if not password and target == env_target:
             env_name = "RHEL_SSH_KEY_PASSPHRASE" if key_path else "RHEL_SSH_PASSWORD"
             password = os.getenv(env_name) or ""
@@ -105,10 +105,10 @@ def resolve_connection_params(
                 "RHEL_HOST": host,
                 "RHEL_SSH_PORT": port,
                 "RHEL_SSH_USER": user,
-                "RHEL_SSH_PASSWORD": password,
                 "RHEL_SSH_KEY_PATH": key_path,
             }
         )
+        CREDS_CACHE.set_secret("RHEL_SSH_PASSWORD", password)
         CREDS_CACHE.set_target_secret(target, password)
         return host, port, user, password, key_path
 

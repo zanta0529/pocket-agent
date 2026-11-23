@@ -68,7 +68,7 @@ def resolve_connection_params(
 
         password = rdp_password
         if not password and target == cached_target:
-            password = CREDS_CACHE.get("WIN_RDP_PASSWORD")
+            password = CREDS_CACHE.get_secret("WIN_RDP_PASSWORD")
         if not password and target == env_target:
             password = os.getenv("WIN_RDP_PASSWORD") or ""
 
@@ -82,9 +82,9 @@ def resolve_connection_params(
                 "WIN_HOST": host,
                 "WIN_RDP_PORT": port,
                 "WIN_RDP_USER": user,
-                "WIN_RDP_PASSWORD": password,
             }
         )
+        CREDS_CACHE.set_secret("WIN_RDP_PASSWORD", password)
         return host, port, user, password
 
 

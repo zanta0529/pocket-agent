@@ -24,6 +24,7 @@ class CredentialCache:
         self._clock = clock
         self._lock = threading.RLock()
         self._store: dict[str, str] = {}
+        self._secret_store: dict[str, str] = {}
         self._target_store: dict[tuple[str, ...], tuple[str, float]] = {}
         self._updated_at: float = 0.0
 
@@ -34,8 +35,9 @@ class CredentialCache:
 
     def _evict_if_expired_locked(self) -> None:
         now = self._clock()
-        if self._store and self._updated_at > 0 and (now - self._updated_at > self.ttl_seconds):
+        if (self._store or self._secret_store) and self._updated_at > 0 and (now - self._updated_at > self.ttl_seconds):
             self._store.clear()
+            self._secret_store.clear()
             self._updated_at = 0.0
         expired = [key for key, (_, ts) in self._target_store.items() if now - ts > self.ttl_seconds]
         for key in expired:
@@ -58,9 +60,23 @@ class CredentialCache:
             self._store.update(values)
             self._updated_at = self._clock()
 
+    def get_secret(self, key: str, default: str = "") -> str:
+        """讀取敏感憑證（與一般連線中繼資料隔離存放）。"""
+        with self._lock:
+            self._evict_if_expired_locked()
+            return self._secret_store.get(key, default)
+
+    def set_secret(self, key: str, value: str) -> None:
+        """寫入敏感憑證（僅存於獨立記憶體雜湊表，與一般連線中繼資料隔離）。"""
+        with self._lock:
+            self._evict_if_expired_locked()
+            self._secret_store[key] = value
+            self._updated_at = self._clock()
+
     def pop(self, key: str, default: str | None = None) -> str | None:
         with self._lock:
             self._evict_if_expired_locked()
+            self._secret_store.pop(key, None)
             return self._store.pop(key, default)
 
     def get_target_secret(self, target_key: tuple[str, ...]) -> str:
@@ -80,6 +96,7 @@ class CredentialCache:
             clean_host = target_host.strip()
             if not clean_host:
                 self._store.clear()
+                self._secret_store.clear()
                 self._target_store.clear()
                 self._updated_at = 0.0
                 return
@@ -87,6 +104,7 @@ class CredentialCache:
                 self._target_store.pop(key, None)
             if host_env_key and self._store.get(host_env_key) == clean_host:
                 self._store.clear()
+                self._secret_store.clear()
                 self._updated_at = 0.0
 
 
@@ -128,7 +146,7 @@ class CredentialResolver:
         if spec.is_secret:
             raw = injected if not is_empty_or_null(injected) else ""
             if not raw and allow_cache:
-                raw = self.cache.get(spec.env_key, "")
+                raw = self.cache.get_secret(spec.env_key, "")
             if not raw and allow_env:
                 env_val = os.getenv(spec.env_key)
                 if not is_empty_or_null(env_val):

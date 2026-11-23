@@ -127,15 +127,19 @@ def test_credential_cache_ttl_and_target_clear():
     clock = _FakeClock()
     cache = CredentialCache(ttl_seconds=60.0, clock=clock)
 
-    cache.update({"HOST": "10.0.0.1", "PASSWORD": "pw1"})
+    cache.update({"HOST": "10.0.0.1"})
+    cache.set_secret("PASSWORD", "pw1")
     cache.set_target_secret(("10.0.0.1", "22", "ops"), "pw1")
     cache.set_target_secret(("10.0.0.2", "22", "ops"), "pw2")
 
     assert cache.get("HOST") == "10.0.0.1"
+    assert cache.get("PASSWORD") == ""
+    assert cache.get_secret("PASSWORD") == "pw1"
     assert cache.get_target_secret(("10.0.0.1", "22", "ops")) == "pw1"
 
     cache.clear(target_host="10.0.0.1", host_env_key="HOST")
     assert cache.get("HOST") == ""
+    assert cache.get_secret("PASSWORD") == ""
     assert cache.get_target_secret(("10.0.0.1", "22", "ops")) == ""
     assert cache.get_target_secret(("10.0.0.2", "22", "ops")) == "pw2"
 

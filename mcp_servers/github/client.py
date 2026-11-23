@@ -117,7 +117,7 @@ def resolve_token(github_token: str = "") -> str:
         if not is_empty_or_null(env_val):
             raw = (env_val or "").strip().strip("'\"")
         else:
-            cached = CREDS_CACHE.get("GITHUB_TOKEN")
+            cached = CREDS_CACHE.get_secret("GITHUB_TOKEN")
             if not is_empty_or_null(cached):
                 raw = cached
             else:
@@ -145,7 +145,7 @@ def resolve_token(github_token: str = "") -> str:
         clear_creds_cache()
         raise ConnAuthError("[CONN_AUTH] GITHUB_TOKEN 包含無效的控制字元。")
 
-    CREDS_CACHE.set("GITHUB_TOKEN", raw)
+    CREDS_CACHE.set_secret("GITHUB_TOKEN", raw)
     return raw
 
 

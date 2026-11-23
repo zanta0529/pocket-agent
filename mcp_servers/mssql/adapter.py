@@ -165,7 +165,7 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
 
             password = mssql_password if not is_empty_or_null(mssql_password) else ""
             if not password and target_auth == cached_auth:
-                password = self.cache.get("MSSQL_PASSWORD")
+                password = self.cache.get_secret("MSSQL_PASSWORD")
             if not password and env_matches:
                 env_pw = os.getenv("MSSQL_PASSWORD")
                 if not is_empty_or_null(env_pw):
@@ -185,10 +185,10 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     "MSSQL_HOST": host,
                     "MSSQL_PORT": port,
                     "MSSQL_USER": user,
-                    "MSSQL_PASSWORD": password,
                     "MSSQL_DATABASE": database,
                 }
             )
+            self.cache.set_secret("MSSQL_PASSWORD", password)
             return host, port, user, password, database
 
     def connect(

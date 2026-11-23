@@ -127,7 +127,7 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
 
             password = mysql_password if not is_empty_or_null(mysql_password) else ""
             if not password and target_auth == cached_auth:
-                password = self.cache.get("MYSQL_PASSWORD")
+                password = self.cache.get_secret("MYSQL_PASSWORD")
             if not password and env_matches:
                 env_pw = os.getenv("MYSQL_PASSWORD")
                 if not is_empty_or_null(env_pw):
@@ -143,10 +143,10 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     "MYSQL_HOST": host,
                     "MYSQL_PORT": port,
                     "MYSQL_USER": user,
-                    "MYSQL_PASSWORD": password,
                     "MYSQL_DATABASE": database,
                 }
             )
+            self.cache.set_secret("MYSQL_PASSWORD", password)
             return host, port, user, password, database
 
     def connect(
