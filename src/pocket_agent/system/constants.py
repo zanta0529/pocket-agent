@@ -72,6 +72,13 @@ REPLACE_DIAGNOSTIC_MAX_MATCHES = 5  # replace_file_content 回報實際行號診
 DEFAULT_NETWORK_TIMEOUT_SEC = 15.0  # HTTP 請求逾時秒數
 DEFAULT_MAX_REDIRECTS = 5  # 防範重新導向循環 (Redirect Loop) 的跳轉次數上限
 DEFAULT_WEB_CONTENT_MAX_CHARS = 15000  # read_url_content 抽取純文字後回傳模型的字元上限
+DEFAULT_WEB_SEARCH_MAX_RESULTS = 5  # search_web 預設擷取的搜尋結果筆數上限
+DEFAULT_WEB_FALLBACK_MAX_RESULTS = 3  # HTTP 404 自動退避搜尋時擷取的建議結果筆數上限
+DEFAULT_WEB_STREAM_CHUNK_BYTES = 8192  # Web 工具串流讀取單次區塊大小 (8 KB)
+DEFAULT_ALLOWED_SSRF_DOMAINS: tuple[str, ...] = (
+    "github.com",
+    "raw.githubusercontent.com",
+)  # 預設允許企業代理解析之受信任網域
 DEFAULT_STREAM_READ_TIMEOUT_SEC = 120.0  # LLM SSE 串流單區塊最大閒置讀取逾時秒數
 
 
