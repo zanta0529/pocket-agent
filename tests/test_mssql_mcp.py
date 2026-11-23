@@ -7,13 +7,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mcp_servers import mssql_mcp
+from mcp_servers._shared import DEFAULT_REDACTION_POLICY, format_cell_value
+from mcp_servers.mssql import adapter as mssql_adapter
 from pocket_agent.extensions.mcp import MCPManager
 
 
 @pytest.fixture(autouse=True)
 def _clean_mssql_env_and_cache(monkeypatch, tmp_path):
     """每次測試前清空 MSSQL MCP 執行期記憶體快取、環境變數並隔離測試用 agent.log。"""
-    mssql_mcp._clear_creds_cache()
+    mssql_adapter.MSSQL_ADAPTER.clear_cache()
     monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     for key in (
         "MSSQL_HOST",
@@ -28,7 +30,7 @@ def _clean_mssql_env_and_cache(monkeypatch, tmp_path):
     ):
         monkeypatch.delenv(key, raising=False)
     yield
-    mssql_mcp._clear_creds_cache()
+    mssql_adapter.MSSQL_ADAPTER.clear_cache()
 
 
 def _set_full_mssql_env(monkeypatch):
@@ -69,7 +71,7 @@ def test_mssql_list_databases(monkeypatch):
     conn, _ = _make_fake_conn(rows=[("erp_db",), ("hr_db",)])
     fake_driver = SimpleNamespace(connect=MagicMock(return_value=conn))
 
-    with patch("mcp_servers.mssql_mcp._load_mssql_driver", return_value=("pymssql", fake_driver)):
+    with patch("mcp_servers.mssql.adapter.load_mssql_driver", return_value=("pymssql", fake_driver)):
         out = mssql_mcp.mssql_list_databases()
 
     assert out == "erp_db\nhr_db"
@@ -83,7 +85,7 @@ def test_mssql_list_tables(monkeypatch):
     conn, cursor = _make_fake_conn(rows=[("dbo", "customers"), ("sales", "invoices")])
     fake_driver = SimpleNamespace(connect=MagicMock(return_value=conn))
 
-    with patch("mcp_servers.mssql_mcp._load_mssql_driver", return_value=("pymssql", fake_driver)):
+    with patch("mcp_servers.mssql.adapter.load_mssql_driver", return_value=("pymssql", fake_driver)):
         out = mssql_mcp.mssql_list_tables()
 
     assert out == "customers\nsales.invoices"
@@ -105,7 +107,7 @@ def test_mssql_describe_schema(monkeypatch):
     conn, cursor = _make_fake_conn(rows=schema_rows)
     fake_driver = SimpleNamespace(connect=MagicMock(return_value=conn))
 
-    with patch("mcp_servers.mssql_mcp._load_mssql_driver", return_value=("pymssql", fake_driver)):
+    with patch("mcp_servers.mssql.adapter.load_mssql_driver", return_value=("pymssql", fake_driver)):
         out = mssql_mcp.mssql_describe_schema("sales.invoices")
 
     assert "id (INT [PK] NOT NULL)" in out
@@ -117,11 +119,11 @@ def test_mssql_describe_schema(monkeypatch):
     # 測試查無資料表
     conn_empty, _ = _make_fake_conn(rows=[])
     fake_driver_empty = SimpleNamespace(connect=MagicMock(return_value=conn_empty))
-    with patch("mcp_servers.mssql_mcp._load_mssql_driver", return_value=("pymssql", fake_driver_empty)):
+    with patch("mcp_servers.mssql.adapter.load_mssql_driver", return_value=("pymssql", fake_driver_empty)):
         assert "找不到資料表" in mssql_mcp.mssql_describe_schema("missing_tbl")
 
     # 測試非法資料表名稱攔截
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection") as mock_conn:
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect") as mock_conn:
         bad_out = mssql_mcp.mssql_describe_schema("users; EXEC xp_cmdshell 'whoami'")
         assert bad_out.startswith("[ERROR]")
         mock_conn.assert_not_called()
@@ -134,7 +136,7 @@ def test_mssql_run_select_query_basic_and_cte(monkeypatch):
         rows=[(1, "cust_a"), (2, "cust_b")],
         description=[("id",), ("name",)],
     )
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
         out = mssql_mcp.mssql_run_select_query("SELECT TOP 2 id, name FROM customers;")
     assert "id, name" in out
     assert "1, cust_a" in out
@@ -145,7 +147,7 @@ def test_mssql_run_select_query_basic_and_cte(monkeypatch):
         description=[("id",), ("name",)],
     )
     cte_sql = "WITH top_c AS (SELECT id, name FROM customers) SELECT * FROM top_c;"
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn_cte):
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn_cte):
         out_cte = mssql_mcp.mssql_run_select_query(cte_sql)
     assert "1, cust_a" in out_cte
 
@@ -168,7 +170,7 @@ def test_mssql_run_select_query_basic_and_cte(monkeypatch):
 def test_mssql_blocks_mutation_and_dangerous_queries(monkeypatch, bad_query):
     """驗證嚴格阻擋非唯讀、SELECT INTO、EXEC、OPENROWSET、WAITFOR 與多重語句指令。"""
     _set_full_mssql_env(monkeypatch)
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection") as mock_conn:
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect") as mock_conn:
         out = mssql_mcp.mssql_run_select_query(bad_query)
         assert out.startswith("[ERROR]")
         mock_conn.assert_not_called()
@@ -181,7 +183,7 @@ def test_mssql_secret_redaction(monkeypatch):
         rows=[(1, "admin", "hash_99887766", "SecretTokenValue", "ConnectionString=Server=db;Password=pwn;")],
         description=[("id",), ("username",), ("passwd_hash",), ("access_token",), ("config_note",)],
     )
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
         out = mssql_mcp.mssql_run_select_query(
             "SELECT id, username, passwd_hash, access_token, config_note FROM accounts;"
         )
@@ -201,7 +203,7 @@ def test_mssql_streaming_truncation_anti_oom(monkeypatch):
         rows=large_rows,
         description=[("id",), ("title",), ("detail",)],
     )
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
         out = mssql_mcp.mssql_run_select_query("SELECT id, title, detail FROM logs;")
 
     assert "查詢結果已截斷" in out
@@ -216,13 +218,13 @@ def test_mssql_empty_or_null_env_prompts_and_caches(monkeypatch, empty_val):
     monkeypatch.setenv("MSSQL_DATABASE", empty_val)
     prompts = iter(["sql.corp.local", "", r"CORP\dbuser", "PromptedSqlPass!1"])
 
-    with patch("mcp_servers.mssql_mcp._tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
-        resolved = mssql_mcp._resolve_connection_params()
+    with patch("mcp_servers.mssql.adapter.tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
+        resolved = mssql_adapter.MSSQL_ADAPTER.resolve_connection_params()
         assert resolved == ("sql.corp.local", "1433", r"CORP\dbuser", "PromptedSqlPass!1", "")
         assert mock_prompt.call_count == 4
 
         # 第二次呼叫直接命中快取，不再詢問
-        resolved2 = mssql_mcp._resolve_connection_params()
+        resolved2 = mssql_adapter.MSSQL_ADAPTER.resolve_connection_params()
         assert resolved2 == resolved
         assert mock_prompt.call_count == 4
 
@@ -234,7 +236,7 @@ def test_mssql_missing_driver_preserves_cached_creds(monkeypatch):
         out = mssql_mcp.mssql_list_databases()
         assert "[CONN_AUTH]" not in out
         assert "pip install pymssql" in out
-        assert mssql_mcp._RUNTIME_CREDS.get("MSSQL_HOST") == "10.20.30.50"
+        assert mssql_adapter.MSSQL_ADAPTER.cache.get("MSSQL_HOST") == "10.20.30.50"
 
 
 def test_mssql_pyodbc_fallback_and_placeholder_adaptation(monkeypatch):
@@ -350,13 +352,13 @@ def test_mssql_audit_log_records_queries_and_blocks_without_leaking_password(mon
     log_file = tmp_path / "agent.log"
     conn, _ = _make_fake_conn(rows=[(1, "cust_a")], description=[("id",), ("name",)])
 
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
         mssql_mcp.mssql_run_select_query("SELECT TOP 1 id, name FROM customers;")
         mssql_mcp.mssql_run_select_query("EXEC xp_cmdshell 'whoami';")
 
     content = log_file.read_text(encoding="utf-8")
     assert "[AUDIT] [MCP:mssql] tool=mssql_run_select_query status=OK" in content
-    assert r"target=CORP\sql_reader@10.20.30.50:1433/erp_db" in content
+    assert "target=CORP_sql_reader@10.20.30.50:1433/erp_db" in content
     assert "SELECT TOP 1 id, name FROM customers" in content
     assert "[AUDIT] [MCP:mssql] tool=mssql_run_select_query status=BLOCKED" in content
     assert "EXEC xp_cmdshell 'whoami';" in content
@@ -370,8 +372,8 @@ def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port_tolerance(
     monkeypatch.setenv("MSSQL_USER", "sa_reader")
     monkeypatch.setenv("MSSQL_PASSWORD", "Ipv6Secret!99")
 
-    with patch("mcp_servers.mssql_mcp._tty_prompt") as mock_prompt:
-        host, port, user, pw, _ = mssql_mcp._resolve_connection_params(
+    with patch("mcp_servers.mssql.adapter.tty_prompt") as mock_prompt:
+        host, port, user, pw, _ = mssql_adapter.MSSQL_ADAPTER.resolve_connection_params(
             mssql_host="fe80::1",
             mssql_port="1433",
         )
@@ -385,20 +387,20 @@ def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port_tolerance(
 def test_redact_url_pem_and_format_cell_null_multiline():
     """驗證 URI 帳密、PEM 私鑰遮罩，以及 NULL 與多行文字單行化格式。"""
     uri_text = "conn=mssql://sa:TopSecret123@10.0.0.5:1433/prod"
-    redacted_uri = mssql_mcp._redact_output(uri_text)
+    redacted_uri = DEFAULT_REDACTION_POLICY.redact(uri_text)
     assert "TopSecret123" not in redacted_uri
     assert "mssql://[REDACTED]@10.0.0.5:1433/prod" in redacted_uri
 
     pem_text = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
-    assert mssql_mcp._redact_output(pem_text) == "[REDACTED_PRIVATE_KEY]"
+    assert DEFAULT_REDACTION_POLICY.redact(pem_text) == "[REDACTED_PRIVATE_KEY]"
 
-    assert mssql_mcp._format_cell_value(None) == "NULL"
-    assert mssql_mcp._format_cell_value("raw_secret", is_sensitive=True) == "[REDACTED]"
+    assert format_cell_value(None) == "NULL"
+    assert format_cell_value("raw_secret", is_sensitive=True) == "[REDACTED]"
     multiline_cell = "header_ok\npassword=MySecret789\nfooter_ok"
-    formatted = mssql_mcp._format_cell_value(multiline_cell)
+    formatted = format_cell_value(multiline_cell)
     assert "\n" not in formatted
     assert "MySecret789" not in formatted
-    assert formatted == "header_ok\\n[REDACTED]\\nfooter_ok"
+    assert formatted == "header_ok\\npassword=[REDACTED]\\nfooter_ok"
 
 
 def test_mssql_list_tables_marks_views(monkeypatch):
@@ -411,7 +413,7 @@ def test_mssql_list_tables_marks_views(monkeypatch):
             ("sales", "v_MonthlySummary", "VIEW"),
         ]
     )
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
         out = mssql_mcp.mssql_list_tables()
 
     assert "Users" in out
@@ -437,7 +439,7 @@ def test_mssql_describe_schema_includes_length_precision_default_indexes_and_fks
     ]
     cursor.fetchall.side_effect = [col_rows, idx_rows, fk_rows]
 
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
         out = mssql_mcp.mssql_describe_schema("dbo.Orders")
 
     assert "id (INT [PK] NOT NULL)" in out
@@ -474,7 +476,7 @@ def test_mssql_inspect_health_detects_heap_missing_pk_disabled_index_and_untrust
     ]
     cursor.fetchall.side_effect = [table_rows, idx_rows, cons_rows, ident_rows]
 
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
         out = mssql_mcp.mssql_inspect_health()
 
     assert "[MSSQL Health Summary]" in out
@@ -494,7 +496,7 @@ def test_mssql_inspect_health_dmv_permission_degradation_and_identifier_guard(mo
     _set_full_mssql_env(monkeypatch)
 
     # 1. 攔截非法識別字
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection") as mock_conn:
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect") as mock_conn:
         bad_out = mssql_mcp.mssql_inspect_health(table_name="Orders; DROP TABLE Users")
         assert bad_out.startswith("[ERROR]")
         mock_conn.assert_not_called()
@@ -517,7 +519,7 @@ def test_mssql_inspect_health_dmv_permission_degradation_and_identifier_guard(mo
         [],
     ]
 
-    with patch("mcp_servers.mssql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
         out = mssql_mcp.mssql_inspect_health(table_name="dbo.Customers")
 
     assert "VIEW DATABASE STATE 權限，已自動降級" in out

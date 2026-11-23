@@ -187,7 +187,9 @@ def test_win_rdp_rejects_command_injection_characters():
 def test_mssql_forbidden_rejects_sequence():
     import pytest
 
-    from mcp_servers.mssql_mcp import _validate_select_query
+    from mcp_servers.mssql.sql_guard import MSSQL_SQL_GUARD
+
+    _validate_select_query = MSSQL_SQL_GUARD.validate_select
 
     # 允許正常 SELECT
     assert _validate_select_query("SELECT 1") == "SELECT 1"
