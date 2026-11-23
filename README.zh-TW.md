@@ -148,6 +148,7 @@ run.bat setup       # Windows
    - **Gemini (Google AI Studio)**：支援 Google OAuth 瀏覽器登入或直接輸入 `GEMINI_API_KEY`。
    - **雲端推理平台 (OpenRouter / Groq / SambaNova / Mistral / Ollama Cloud)**：直接輸入對應的 API Key（敏感資訊將自動透過作業系統 Keyring 加密保護）。
    - **本機端開源模型 (Ollama)**：預設連線 `http://localhost:11434`，離線亦可運行。
+   - **通用 OpenAI-Compatible 端點 (Local / Gateway)**：支援 LM Studio、vLLM、llama.cpp 或企業內部 AI Gateway（自訂 Base URL，API Key 選填；URL 須自行包含 `/v1`。若為免驗證的純 Ollama，建議優先使用 **Ollama (Local)** 以自動偵測上下文視窗）。
 3. **設定預設模型 (Model)**：
    - 精靈會嘗試動態向伺服器查詢可用模型清單供您挑選，亦支援自訂模型名稱。
 4. **選配外部 MCP 工具**：
@@ -181,7 +182,7 @@ run.bat setup       # Windows
 
 #### 🤖 模型與工作階段管理
 
-- `/model`：啟動互動式選單，即時切換服務供應商與模型（支援 `openai`, `gemini`, `openrouter`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`）。
+- `/model`：啟動互動式選單，即時切換服務供應商與模型（支援 `openai`, `gemini`, `openrouter`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`, `openai-compatible`）。
 - `/reasoning [auto|high|medium|low|none]` (或 `/effort`)：即時調整 LLM 推理強度（預設 `auto` 交由模型／供應商決定；不帶參數時開啟互動選單，目前狀態同步顯示於底部狀態列）。
 - `/session`：啟動歷史對話光棒管理選單，支援分頁檢視、載入與刪除。
 - `/prune [<天數> | --keep <筆數>]` (或 `/session prune`)：手動清理過期或過多的歷史對話（預設清理超過 30 天或僅保留最近 20 筆，永遠保護進行中的對話並須二次確認）。

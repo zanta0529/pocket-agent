@@ -170,7 +170,11 @@
     "current_base_url": "Current Base URL: {url}",
     "enter_ollama_url": "Enter Ollama URL",
     "ollama_updated": "✓ Ollama settings updated",
-    "enter_base_url": "Enter Base URL"
+    "enter_base_url": "Enter Base URL",
+    "enter_openai_compatible_url": "Enter Base URL (e.g., http://localhost:1234/v1 or enterprise gateway URL)",
+    "invalid_base_url": "✗ Invalid Base URL. It must start with http:// or https:// and include a hostname.",
+    "openai_compatible_missing_url": "OpenAI-Compatible Base URL is not configured. Run `pocket-agent setup` or set `OPENAI_COMPATIBLE_BASE_URL`.",
+    "optional_api_key_hint": "Tip: For unauthenticated local servers (e.g., LM Studio / vLLM), press Enter to skip the API Key."
   },
   "commands": {
     "activity": "List files created/modified/deleted and URLs fetched in this session",

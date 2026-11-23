@@ -170,7 +170,11 @@
     "current_base_url": "目前 Base URL: {url}",
     "enter_ollama_url": "請輸入 Ollama 連線位址",
     "ollama_updated": "✓ Ollama 設定已更新",
-    "enter_base_url": "請輸入 Base URL"
+    "enter_base_url": "請輸入 Base URL",
+    "enter_openai_compatible_url": "請輸入 Base URL（例如 http://localhost:1234/v1 或企業 Gateway 位址）",
+    "invalid_base_url": "✗ Base URL 格式無效，必須以 http:// 或 https:// 開頭且包含主機名稱。",
+    "openai_compatible_missing_url": "尚未設定 OpenAI-Compatible Base URL。請執行 `pocket-agent setup` 或設定 `OPENAI_COMPATIBLE_BASE_URL`。",
+    "optional_api_key_hint": "提示：若為免認證的本機伺服器（如 LM Studio／vLLM），可直接按 Enter 略過 API Key。"
   },
   "commands": {
     "activity": "列出本次會話新增／修改／刪除的檔案與上網查詢網址清單",

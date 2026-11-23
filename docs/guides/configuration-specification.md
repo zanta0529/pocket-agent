@@ -23,7 +23,7 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 
 | 鍵值 (Key)        | 型別     | 預設值          | 環境變數                | 說明                                                                                                                     |
 | :---------------- | :------- | :-------------- | :---------------------- | :----------------------------------------------------------------------------------------------------------------------- |
-| `active_provider` | `string` | `"openai"`      | `POCKET_AGENT_PROVIDER` | 目前啟用的主要模型供應商（如 `openai`, `openrouter`, `ollama`, `ollamacloud`, `sambanova`, `groq`, `mistral`, `gemini`） |
+| `active_provider` | `string` | `"openai"`      | `POCKET_AGENT_PROVIDER` | 目前啟用的主要模型供應商（如 `openai`, `openrouter`, `ollama`, `ollamacloud`, `sambanova`, `groq`, `mistral`, `gemini`, `openai-compatible`） |
 | `active_model`    | `string` | `"gpt-6-astra"` | `OPENAI_MODEL`          | 目前啟用的模型名稱                                                                                                       |
 | `locale`          | `string` | `"zh_TW"`       | `POCKET_AGENT_LANG`     | 介面顯示語系（對應 `src/pocket_agent/locales/*.json`，如 `zh_TW`、`en_US`）；可透過 `setup` 或 `/config` 選單切換。     |
 
@@ -141,6 +141,22 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 #### 5. SambaNova / Groq / Mistral / Gemini
 
 - 可直接在 `providers` 下設定 `api_key` 與 `base_url`，或使用對應環境變數（如 `GROQ_API_KEY`, `MISTRAL_API_KEY`, `SAMBANOVA_API_KEY`, `GEMINI_API_KEY`）。
+
+#### 6. 通用 OpenAI-Compatible 端點 (`providers.openai_compatible`)
+
+適用於 LM Studio、vLLM、llama.cpp 或企業內部 AI Gateway（如 LiteLLM）：
+
+- `base_url`: 完整 OpenAI 相容端點位址（環境變數: `OPENAI_COMPATIBLE_BASE_URL`，例如 `"http://localhost:1234/v1"` 或 `"https://gateway.corp.internal/v1"`）。不會自動補 `/v1`，請依目標服務實際路徑填寫。
+- `api_key`: 選填存取金鑰（環境變數: `OPENAI_COMPATIBLE_API_KEY`）；若為免驗證之本機端點可留空。
+
+> 💡 **`ollama` 與 `openai-compatible` 選型差異**：
+>
+> | 項目 | `ollama`（Ollama Local） | `openai-compatible`（Local / Gateway） |
+> | :--- | :--- | :--- |
+> | **路徑處理** | 自動補 `/v1`；模型清單走 Ollama 專屬 `/api/tags` | 保留原始 URL（連 Ollama 須自行加 `/v1`）；模型清單走標準 `/models` |
+> | **API Key** | 不支援（固定使用本機佔位值） | 選填（支援 Keyring／JWE 保護之 Bearer Token） |
+> | **Proxy 行為** | 固定略過系統 Proxy（`trust_env=False`） | 本機迴路（`localhost`／`127.0.0.1`／`::1`）略過 Proxy；其餘位址遵循系統 Proxy（若企業有全域 `HTTP_PROXY`，連內網伺服器請設定 `NO_PROXY`） |
+> | **視窗探測** | 自動呼叫 `/api/show` 讀取實際 `context_length` | 不呼叫 `/api/show`，使用保底值（`128,000`）；小視窗模型建議手動設定 `system.context_window` |
 
 ---
 
