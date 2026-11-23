@@ -523,5 +523,19 @@
     "replace_target_not_found_in_range": "在指定的行數範圍內 ({start}-{end}，全檔共 {total_lines} 行) 找不到 target 字串。請先使用 read_file 確認該區段實際內容與行號。",
     "replace_target_not_found_elsewhere": "在指定的行數範圍內 ({start}-{end}，全檔共 {total_lines} 行) 找不到 target 字串，但偵測到相符內容位於 {locations}；請調整 start_line/end_line 或使用 read_file 確認後重試。",
     "replace_target_not_found": "找不到指定的 target 字串（全檔共 {total_lines} 行）。請先使用 read_file 確認實際內容與縮排。"
+  },
+  "shell_tool": {
+    "empty_command": "沒有提供指令。",
+    "security_floor_blocked": "觸發安全底線限制（{reason}），拒絕執行該高風險指令：{command}",
+    "invalid_cwd": "工作目錄不存在或不是目錄：{cwd}",
+    "cancelled_before_exec": "[操作已由使用者取消中斷，指令未建立與執行]",
+    "refused_with_instruction": "[使用者拒絕執行此指令，並提供後續指示：\n「{instruction}」\n請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的指令。]",
+    "refused_generic": "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]",
+    "output_truncated_notice": "\n…（輸出過長，已提早截斷至前 {max_chars} 字元）\n[系統提示：若需檢視後續內容或特定錯誤，請透過 grep、head/tail 或加上更精確的過濾指令再次執行]",
+    "timeout_confirmed": "指令逾時（{timeout} 秒），已強制終止（輸出可能不完整）。",
+    "timeout_tree_unconfirmed": "指令逾時（{timeout} 秒），主程序已退出但程序樹清理未確認（後端：{backend}，輸出可能不完整）。",
+    "timeout_exit_unconfirmed": "指令逾時（{timeout} 秒），已請求終止但尚未確認程序退出（後端：{backend}，輸出可能不完整）。",
+    "partial_output_header": "已收集的輸出：",
+    "no_output": "(沒有輸出)"
   }
 }

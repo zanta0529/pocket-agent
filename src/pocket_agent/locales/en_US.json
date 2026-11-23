@@ -523,5 +523,19 @@
     "replace_target_not_found_in_range": "Target text was not found within lines {start}-{end} (file has {total_lines} lines). Use read_file to inspect the actual content and line numbers first.",
     "replace_target_not_found_elsewhere": "Target text was not found within lines {start}-{end} (file has {total_lines} lines), but matching content was found at {locations}; adjust start_line/end_line or inspect with read_file before retrying.",
     "replace_target_not_found": "Target text was not found (file has {total_lines} lines). Use read_file to verify the exact content and indentation."
+  },
+  "shell_tool": {
+    "empty_command": "No command provided.",
+    "security_floor_blocked": "Security floor triggered ({reason}); refusing high-risk command: {command}",
+    "invalid_cwd": "Working directory does not exist or is not a directory: {cwd}",
+    "cancelled_before_exec": "[操作已由使用者取消中斷，指令未建立與執行]",
+    "refused_with_instruction": "[使用者拒絕執行此指令，並提供後續指示：\n「{instruction}」\n請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的指令。]",
+    "refused_generic": "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]",
+    "output_truncated_notice": "\n… (Output truncated to the first {max_chars} characters)\n[System hint: To inspect further content or specific errors, re-run with more targeted filters]",
+    "timeout_confirmed": "Command timed out ({timeout}s) and was forcibly terminated (output may be incomplete).",
+    "timeout_tree_unconfirmed": "Command timed out ({timeout}s); main process exited but process tree cleanup is unconfirmed (backend: {backend}, output may be incomplete).",
+    "timeout_exit_unconfirmed": "Command timed out ({timeout}s); termination requested but process exit is unconfirmed (backend: {backend}, output may be incomplete).",
+    "partial_output_header": "Collected output:",
+    "no_output": "(no output)"
   }
 }

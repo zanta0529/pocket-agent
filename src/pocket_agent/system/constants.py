@@ -30,6 +30,7 @@ MIN_TOOL_OUTPUT_CHARS = 500
 # 消耗主機 RAM 造成 DoS 攻擊。1 MB 緩衝區可充分容納常規編譯輸出與長日誌。
 # ==============================================================================
 DEFAULT_PROCESS_BUFFER_BYTES = 1024 * 1024  # 1 MB 安全串流排空上限
+DEFAULT_PROCESS_READ_CHUNK_BYTES = 4096  # 4 KB: 子行程 stdout 單次讀取區塊大小
 MAX_READ_FILE_BYTES = 10 * 1024 * 1024  # 10 MB: 本機讀檔保護底線，超過此大小拒絕直接讀入
 MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024  # 20 MB: /image 單張參考圖最大檔案大小
 MAX_IMAGE_INPUT_COUNT = 10  # /image 單次請求最多允許的參考圖數量
