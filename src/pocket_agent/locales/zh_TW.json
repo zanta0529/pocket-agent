@@ -560,5 +560,13 @@
     "slide_header": "\n--- 投影片 {index} ---",
     "notes_header": "[演講者備忘稿]",
     "truncated_notice": "\n\n...（文件內容過長，已達單次讀取上限 {max_chars} 字元，已自動截斷。）"
+  },
+  "rag_tool": {
+    "missing_query": "缺少必填參數 'query'",
+    "invalid_keywords": "搜尋字串不包含有效的關鍵字",
+    "no_results": "找不到包含 '{query}' 的相關程式碼。",
+    "result_header": "【RAG 檢索結果】",
+    "result_item": "檔案: {path}\n相關片段:\n{snippet}\n",
+    "search_failed": "檢索失敗: {error}"
   }
 }

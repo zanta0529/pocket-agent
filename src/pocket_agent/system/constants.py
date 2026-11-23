@@ -104,6 +104,7 @@ DEFAULT_COMPACTION_KEEP_MESSAGES = 6  # /compact 摘要時保留的最近對話�
 DEFAULT_REPO_MAP_BUDGET_TOKENS = 1024  # AST 鳥瞰地圖佔用的 Token 預算
 DEFAULT_RAG_TOP_K = 5  # 本機 FTS5 檢索預設回傳代碼片段數
 MAX_RAG_TOP_K = 10  # 本機 FTS5 檢索最大片段數
+DEFAULT_RAG_MAX_FILE_LINES = 2000  # 本機 FTS5 索引單一原始碼檔案最多擷取行數上限
 
 
 # ==============================================================================

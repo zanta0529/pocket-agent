@@ -560,5 +560,13 @@
     "slide_header": "\n--- Slide {index} ---",
     "notes_header": "[Speaker Notes]",
     "truncated_notice": "\n\n... (Document content too long, truncated to the first {max_chars} characters.)"
+  },
+  "rag_tool": {
+    "missing_query": "Missing required parameter 'query'",
+    "invalid_keywords": "Search query does not contain valid keywords",
+    "no_results": "No relevant code found matching '{query}'.",
+    "result_header": "【RAG Search Results】",
+    "result_item": "File: {path}\nRelevant snippet:\n{snippet}\n",
+    "search_failed": "Search failed: {error}"
   }
 }
