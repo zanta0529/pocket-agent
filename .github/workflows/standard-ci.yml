@@ -54,3 +54,77 @@ jobs:
         uses: DavidAnson/markdownlint-cli2-action@v19
         with:
           config: .markdownlint-cli2.jsonc
+
+  publish-portable:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-and-lint, docs-lint]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    concurrency:
+      group: portable-rolling-release
+      cancel-in-progress: false
+    env:
+      PYTHONUTF8: 1
+
+    steps:
+      - name: Checkout the tested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Build Modern Portable ZIP
+        run: |
+          python -m venv venv
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the build environment.' }
+          venv\Scripts\python.exe -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upgrade pip.' }
+          venv\Scripts\python.exe -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install runtime dependencies.' }
+          venv\Scripts\python.exe build_scripts/build_portable.py
+
+      - name: Extract the ZIP and verify build metadata
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP 'portable-smoke'
+          Expand-Archive -LiteralPath 'dist/PocketAgent-portable.zip' -DestinationPath $destination
+          $infoPath = Join-Path $destination 'PocketAgent/app/BUILD_INFO.json'
+          $info = Get-Content -LiteralPath $infoPath -Raw | ConvertFrom-Json
+          if ($info.commit -ne $env:GITHUB_SHA) {
+            throw 'The portable ZIP does not identify the tested commit.'
+          }
+
+      - name: Smoke-test the extracted portable launcher
+        shell: cmd
+        run: call "%RUNNER_TEMP%\portable-smoke\PocketAgent\pocket.bat" --help < nul
+
+      - name: Publish the rolling portable ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $mainSha = gh api "repos/$env:GITHUB_REPOSITORY/commits/main" --jq '.sha'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the current main commit.' }
+          if ($mainSha -ne $env:GITHUB_SHA) {
+            Write-Output 'Skipping publication: main has advanced since this build.'
+            exit 0
+          }
+
+          $asset = 'dist/PocketAgent-portable.zip'
+          gh release view rolling --repo "$env:GITHUB_REPOSITORY" --json tagName | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload rolling $asset --repo "$env:GITHUB_REPOSITORY" --clobber
+          } else {
+            gh release create rolling $asset --repo "$env:GITHUB_REPOSITORY" `
+              --target "$env:GITHUB_SHA" --title 'PocketAgent Modern Portable (rolling)' `
+              --notes 'Windows portable ZIP, refreshed from main after CI passes. See app/BUILD_INFO.json for the build commit.' `
+              --prerelease --latest=false
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the rolling portable ZIP.' }
