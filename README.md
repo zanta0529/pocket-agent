@@ -55,7 +55,7 @@ Its key advantage is **OAuth PKCE authentication directly integrated with the Ch
 
 Ideal for Windows users or enterprise environments where global Python installation is restricted or strict antivirus policies are enforced:
 
-1. Download the latest [**`PocketAgent-portable.zip`**](https://github.com/zanta0529/pocket-agent/releases/download/rolling/PocketAgent-portable.zip) directly (or visit [**GitHub Releases**](https://github.com/zanta0529/pocket-agent/releases)).
+1. Download the latest [**`PocketAgent-portable.zip`**](https://github.com/zanta0529/pocket-agent/releases/latest/download/PocketAgent-portable.zip) directly (or visit [**GitHub Releases**](https://github.com/zanta0529/pocket-agent/releases)).
 2. Extract it to any folder (e.g., `D:\PocketAgent`).
 3. Open the extracted folder and double-click **`pocket.bat`** to launch immediately!
 

@@ -55,7 +55,7 @@
 
 如果您是在 Windows 環境，或身處無法隨意安裝全域 Python／受嚴格防毒政策控管的企業環境：
 
-1. 直接下載最新的 [**`PocketAgent-portable.zip`**](https://github.com/zanta0529/pocket-agent/releases/download/rolling/PocketAgent-portable.zip)（或前往 [**GitHub Releases**](https://github.com/zanta0529/pocket-agent/releases) 頁面）。
+1. 直接下載最新的 [**`PocketAgent-portable.zip`**](https://github.com/zanta0529/pocket-agent/releases/latest/download/PocketAgent-portable.zip)（或前往 [**GitHub Releases**](https://github.com/zanta0529/pocket-agent/releases) 頁面）。
 2. 解壓縮至任意資料夾（例如 `D:\PocketAgent`）。
 3. 進入解壓縮目錄，雙擊執行 **`pocket.bat`** 即可立即啟動！
 

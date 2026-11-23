@@ -118,16 +118,16 @@ jobs:
           }
 
           $asset = 'dist/PocketAgent-portable.zip'
-          $notes = "Windows portable ZIP, refreshed from main after CI passes. Latest commit: $env:GITHUB_SHA (see app/BUILD_INFO.json inside the archive)."
-          gh release view rolling --repo "$env:GITHUB_REPOSITORY" --json tagName | Out-Null
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          $tag = "rolling-$shortSha"
+          $notes = "Windows portable ZIP, refreshed from main after CI passes. Commit: $env:GITHUB_SHA (see app/BUILD_INFO.json inside the archive)."
+          gh release view "$tag" --repo "$env:GITHUB_REPOSITORY" --json tagName | Out-Null
           if ($LASTEXITCODE -eq 0) {
-            gh release edit rolling --repo "$env:GITHUB_REPOSITORY" --prerelease=false --latest --notes "$notes" | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Could not update the rolling release metadata.' }
-            gh release upload rolling $asset --repo "$env:GITHUB_REPOSITORY" --clobber
-          } else {
-            gh release create rolling $asset --repo "$env:GITHUB_REPOSITORY" `
-              --target "$env:GITHUB_SHA" --title 'PocketAgent Modern Portable (rolling)' `
-              --notes "$notes" `
-              --latest
+            Write-Output "Release $tag already exists; skipping immutable release recreation."
+            exit 0
           }
-          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the rolling portable ZIP.' }
+          gh release create "$tag" $asset --repo "$env:GITHUB_REPOSITORY" `
+            --target "$env:GITHUB_SHA" --title "PocketAgent Modern Portable ($shortSha)" `
+            --notes "$notes" `
+            --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the portable ZIP release.' }
