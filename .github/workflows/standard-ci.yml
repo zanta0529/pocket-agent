@@ -118,17 +118,16 @@ jobs:
           }
 
           $asset = 'dist/PocketAgent-portable.zip'
+          $notes = "Windows portable ZIP, refreshed from main after CI passes. Latest commit: $env:GITHUB_SHA (see app/BUILD_INFO.json inside the archive)."
           gh release view rolling --repo "$env:GITHUB_REPOSITORY" --json tagName | Out-Null
           if ($LASTEXITCODE -eq 0) {
-            gh api "repos/$env:GITHUB_REPOSITORY/git/refs/tags/rolling" -X PATCH -f sha="$env:GITHUB_SHA" -F force=true | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Could not update the rolling tag target.' }
-            gh release edit rolling --repo "$env:GITHUB_REPOSITORY" --prerelease=false --latest | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Could not mark the rolling release as latest.' }
+            gh release edit rolling --repo "$env:GITHUB_REPOSITORY" --prerelease=false --latest --notes "$notes" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not update the rolling release metadata.' }
             gh release upload rolling $asset --repo "$env:GITHUB_REPOSITORY" --clobber
           } else {
             gh release create rolling $asset --repo "$env:GITHUB_REPOSITORY" `
               --target "$env:GITHUB_SHA" --title 'PocketAgent Modern Portable (rolling)' `
-              --notes 'Windows portable ZIP, refreshed from main after CI passes. See app/BUILD_INFO.json for the build commit.' `
+              --notes "$notes" `
               --latest
           }
           if ($LASTEXITCODE -ne 0) { throw 'Could not publish the rolling portable ZIP.' }
