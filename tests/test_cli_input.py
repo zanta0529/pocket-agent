@@ -58,6 +58,14 @@ def test_slash_command_completion_returns_all_candidates(isolated_slash_complete
     assert all(completion.style != "class:completion-menu.more" for completion in completions)
 
 
+@pytest.mark.parametrize("prefix", ["/code-", "/cs"])
+def test_code_search_completion(isolated_slash_completer: SlashCommandCompleter, prefix: str) -> None:
+    completions = list(isolated_slash_completer.get_completions(Document(prefix), CompleteEvent()))
+    assert [(completion.text, completion.display_text) for completion in completions] == [
+        ("code-search", "code-search (cs)")
+    ]
+
+
 @pytest.mark.parametrize("prefix", ["/", "/model", "/no-such-command", "/m"])
 def test_slash_command_completion_refilters_without_pages(
     isolated_slash_completer: SlashCommandCompleter, prefix: str

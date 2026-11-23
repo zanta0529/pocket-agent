@@ -179,7 +179,7 @@
     "attachments": "查看／移除待送附件",
     "clean": "手動清理過期日誌與暫存檔 (Housekeeping)",
     "clear": "清除對話，保留附件",
-    "codesearch": "搜尋程式碼片段並加入對話上下文",
+    "code-search": "搜尋程式碼片段並加入對話上下文",
     "compact": "摘要並壓縮中間對話歷史，回收 context 空間",
     "config": "顯示或更改全域設定檔 (/config set <key> <value>)",
     "exit": "離開",

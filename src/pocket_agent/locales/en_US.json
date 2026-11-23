@@ -179,7 +179,7 @@
     "attachments": "View or remove pending attachments",
     "clean": "Manually clean expired logs and temporary files (Housekeeping)",
     "clear": "Clear conversation history while keeping attachments",
-    "codesearch": "Search code snippets and inject into conversation context",
+    "code-search": "Search code snippets and inject into conversation context",
     "compact": "Summarize and compact conversation history to free context space",
     "config": "View or edit global configuration (/config set <key> <value>)",
     "exit": "Exit",

@@ -45,6 +45,16 @@ def test_invalid_commands_preserve_attachments(raw):
     assert state.pending_files == ["pending"]
 
 
+@pytest.mark.parametrize("name", ["code-search", "cs"])
+def test_code_search_dispatch(name: str) -> None:
+    handler = CommandHandler(Mock(), CliState("openai", "model"), Mock(), Mock(), [])
+    with patch("pocket_agent.frontend.cli.commands.CodeSearchCommand.execute", new_callable=AsyncMock) as execute:
+        result = asyncio.run(handler.dispatch(f"/{name} example query"))
+
+    execute.assert_awaited_once_with(handler.context, "example query")
+    assert result is execute.return_value
+
+
 def test_clear_and_add_dir_do_not_consume_attachments():
     agent, renderer = Mock(), Mock()
     agent.workspace_dirs = []

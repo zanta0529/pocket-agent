@@ -196,7 +196,7 @@ Type any of the following `/` commands at the prompt:
 
 - `/file <path>`: Add a local file (text, code, PDF, etc.) to pending attachments. Inline `@filename` references are also supported.
 - `/image <prompt>`: Generate an image (automatically switches to image-to-image / edit mode if image attachments are queued).
-- `/codesearch <query>` (or `/cs`): Search workspace code via local SQLite FTS5 and inject matching snippets into context.
+- `/code-search <query>` (or `/cs`): Search workspace code via local SQLite FTS5 and inject matching snippets into context.
 - `/add-dir <path>`: Authorize and add an extra workspace directory for the current session.
 - `/rm-dir [path]`: Remove an extra authorized directory (interactive menu if omitted).
 - `/attachments`: List currently queued pending attachments.
