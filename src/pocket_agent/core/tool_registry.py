@@ -32,6 +32,7 @@ from pocket_agent.tools.fs import (
     is_scratch_tool,
     wrap_external_content,
 )
+from pocket_agent.tools.rag import call_indexed_search, is_rag_tool
 from pocket_agent.tools.shell import call_shell_tool, is_shell_tool
 from pocket_agent.tools.web import call_web_tool, is_soft_web_error, is_web_tool
 
@@ -317,15 +318,14 @@ class DocGenToolHandler(ToolHandler):
 
 class IndexedSearchToolHandler(ToolHandler):
     def matches(self, name: str) -> bool:
-        return name == "indexed_search"
+        return is_rag_tool(name)
 
     def is_parallel_safe(self, name: str, args: dict, agent: Any) -> bool:
         return True
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
-        from pocket_agent.tools.rag import call_indexed_search
-
-        result = await run_sync(call_indexed_search, args, agent.workspace_dirs)
+        fn = _resolve_callable("call_indexed_search", call_indexed_search)
+        result = await run_sync(fn, args, agent.workspace_dirs)
         return ToolExecutionResult(output=result)
 
 

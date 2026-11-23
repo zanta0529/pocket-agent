@@ -568,5 +568,27 @@
     "result_header": "【RAG Search Results】",
     "result_item": "File: {path}\nRelevant snippet:\n{snippet}\n",
     "search_failed": "Search failed: {error}"
+  },
+  "image_tool": {
+    "invalid_output_path": "Invalid or unsafe output path (empty or UNC/network paths are forbidden).",
+    "sensitive_output_path": "Security restriction: cannot write image to sensitive directory or file ({part})",
+    "output_is_dir": "Output path cannot be a directory (specify a full filename, e.g., {example}): {path}",
+    "parent_not_dir": "Parent of output path is not a directory: {parent}",
+    "mkdir_failed": "Failed to create output directory {parent}: {error}",
+    "write_failed": "Failed to write image file",
+    "no_available_path": "Unable to acquire an available output path",
+    "ref_not_found": "Image not found: {path}",
+    "ref_not_regular": "Reference image path is not a regular file (remove it from pending attachments): {name}",
+    "ref_unsupported_format": "Unsupported reference image format \"{name}\" (only PNG, JPEG, WEBP, GIF supported).",
+    "ref_empty": "Reference image file is empty \"{name}\", please remove it from pending attachments.",
+    "ref_too_large": "Reference image \"{name}\" exceeds size limit ({limit_mb} MB), please remove or compress it.",
+    "ref_header_mismatch": "File \"{name}\" header does not match extension {ext}, please provide a valid image.",
+    "invalid_size": "size must be one of {valid}, got: {size}",
+    "invalid_quality": "quality must be one of {valid}, got: {quality}",
+    "too_many_refs": "Too many reference images (max {max_count}), please remove excess attachments.",
+    "rescued_to_scratch": "Failed to write target path {target} ({error}); rescued generated image to sandbox scratch: {rescued}",
+    "gen_failed": "Image generation failed: {error}",
+    "gen_incomplete": "Image generation incomplete: {reason}",
+    "gen_empty_result": "Image generation failed: backend returned no image data"
   }
 }

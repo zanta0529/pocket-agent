@@ -46,15 +46,24 @@ _SEARCH_EXCLUDED_DIRS = frozenset({".git", "node_modules", "venv", "__pycache__"
 _EXTERNAL_TAG_RE = re.compile(r"<\s*/?\s*external_content(?:\s+[^>]*)?\s*>", re.IGNORECASE)
 
 
-def _is_sensitive_part(part: str) -> bool:
+def is_sensitive_part(part: str) -> bool:
     """不分大小寫檢查路徑區段是否為敏感版本控制或環境變數檔案（.git 或 .env*）。"""
     low = part.lower()
     return low == ".git" or low.startswith(".env")
 
 
+# 向後相容別名
+_is_sensitive_part = is_sensitive_part
+
+
+def escape_external_content_tags(text: str) -> str:
+    """跳脫文字中內嵌的偽造 <external_content> 標籤。"""
+    return _EXTERNAL_TAG_RE.sub("[escaped_tag]", text)
+
+
 def wrap_external_content(text: str, source: str | None = None) -> str:
     """將外部不可信內容包裹於 <external_content> 標籤中，並跳脫內嵌的偽造標籤。"""
-    safe_text = _EXTERNAL_TAG_RE.sub("[escaped_tag]", text)
+    safe_text = escape_external_content_tags(text)
     open_tag = f'<external_content source="{source}">' if source else "<external_content>"
     return f"{open_tag}\n{safe_text}\n</external_content>"
 
@@ -309,7 +318,7 @@ def call_scratch_tool(name: str, args: dict) -> str:
         return f"[ERROR] 沙盒筆記寫入發生未預期錯誤: {e}"
 
 
-def _validate_safe_path(
+def validate_safe_path(
     requested_path: str,
     workspace_dirs: list[str] | None = None,
     *,
@@ -391,6 +400,10 @@ def _validate_safe_path(
         )
 
     return target
+
+
+# 向後相容別名
+_validate_safe_path = validate_safe_path
 
 
 def _get_ignore_spec(target_dir: Path):
@@ -509,7 +522,16 @@ def _should_skip_fs_confirm(target: Path, auto_allow_scratch: bool) -> bool:
     return auto_allow_scratch and _is_current_workspace_scratch_target(target)
 
 
-def _evaluate_fs_confirmation(
+def extract_refusal_instruction(decision: object) -> str:
+    """從非 True 的確認回傳值（str 或 (False, str)）提取使用者自訂拒絕指示。"""
+    if isinstance(decision, str):
+        return decision.strip()
+    if isinstance(decision, tuple) and len(decision) == 2 and decision[0] is not True:
+        return str(decision[1]).strip()
+    return ""
+
+
+def evaluate_fs_confirmation(
     on_confirm: Callable[[str], bool | str | tuple[bool, str]] | None,
     action_desc: str,
     op_name: str,
@@ -525,11 +547,7 @@ def _evaluate_fs_confirmation(
 
     if decision is True:
         return None
-    custom_inst = ""
-    if isinstance(decision, str):
-        custom_inst = decision.strip()
-    elif isinstance(decision, tuple) and len(decision) == 2 and decision[0] is not True:
-        custom_inst = str(decision[1]).strip()
+    custom_inst = extract_refusal_instruction(decision)
     if custom_inst:
         return (
             f"[使用者拒絕執行此檔案{op_name}操作，並提供後續指示：\n"
@@ -537,6 +555,10 @@ def _evaluate_fs_confirmation(
             "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的操作。]"
         )
     return f"[使用者拒絕執行此檔案{op_name}操作]"
+
+
+# 向後相容別名
+_evaluate_fs_confirmation = evaluate_fs_confirmation
 
 
 def _resolve_skill_reference_path(path_str: str, workspace_dirs: list[str] | None = None) -> Path | None:

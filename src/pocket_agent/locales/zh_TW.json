@@ -568,5 +568,27 @@
     "result_header": "【RAG 檢索結果】",
     "result_item": "檔案: {path}\n相關片段:\n{snippet}\n",
     "search_failed": "檢索失敗: {error}"
+  },
+  "image_tool": {
+    "invalid_output_path": "無效或不安全的輸出路徑（禁止空白或 UNC／網路路徑）。",
+    "sensitive_output_path": "安全限制：禁止將圖片輸出至敏感目錄或檔案 ({part})",
+    "output_is_dir": "輸出路徑不能是資料夾（請指定完整檔名，例如 {example}）：{path}",
+    "parent_not_dir": "輸出路徑的父路徑不是資料夾：{parent}",
+    "mkdir_failed": "無法建立輸出目錄 {parent}：{error}",
+    "write_failed": "無法寫入圖片檔案",
+    "no_available_path": "無法取得可用輸出路徑",
+    "ref_not_found": "找不到圖片：{path}",
+    "ref_not_regular": "參考圖路徑不是一般檔案（請先從待送附件移除）：{name}",
+    "ref_unsupported_format": "不支援的參考圖格式「{name}」（僅支援 PNG、JPEG、WEBP、GIF，請先從待送附件移除）。",
+    "ref_empty": "參考圖檔案為空「{name}」，請先從待送附件移除。",
+    "ref_too_large": "參考圖「{name}」超過大小上限（{limit_mb} MB），請先移除或壓縮後再試。",
+    "ref_header_mismatch": "檔案「{name}」內容與副檔名 {ext} 格式不符，請確認為有效圖片後再試。",
+    "invalid_size": "size 必須是 {valid}，收到：{size}",
+    "invalid_quality": "quality 必須是 {valid}，收到：{quality}",
+    "too_many_refs": "參考圖數量超過上限（最多 {max_count} 張），請先移除多餘附件。",
+    "rescued_to_scratch": "無法寫入目標路徑 {target}（{error}）；已將生成的圖片緊急保存至沙盒暫存區：{rescued}",
+    "gen_failed": "生圖失敗：{error}",
+    "gen_incomplete": "生圖未完成 (incomplete)：{reason}",
+    "gen_empty_result": "生圖失敗：後端沒有回傳圖片資料"
   }
 }

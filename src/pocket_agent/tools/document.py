@@ -9,7 +9,7 @@ from pocket_agent.system.constants import (
     TOOL_NOT_FOUND_PREFIX,
 )
 from pocket_agent.system.i18n import t
-from pocket_agent.tools.fs import _validate_safe_path, wrap_external_content
+from pocket_agent.tools.fs import validate_safe_path, wrap_external_content
 
 log = logging.getLogger("pocket-agent")
 
@@ -133,7 +133,7 @@ def call_document_tool(name: str, args: dict, workspace_dirs: list[str] | None =
 
     # 驗證路徑與套用工作區監禁 (Workspace Jail)
     try:
-        target = _validate_safe_path(str(path_str), workspace_dirs)
+        target = validate_safe_path(str(path_str), workspace_dirs)
     except Exception as e:
         return f"[ERROR] {e}"
 

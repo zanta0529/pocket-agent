@@ -16,7 +16,7 @@ from pocket_agent.system.constants import (
 )
 from pocket_agent.system.i18n import t
 from pocket_agent.system.paths import format_display_path, user_dir
-from pocket_agent.tools.fs import _is_sensitive_part, wrap_external_content
+from pocket_agent.tools.fs import is_sensitive_part, wrap_external_content
 
 log = logging.getLogger("pocket-agent")
 
@@ -66,7 +66,7 @@ def _collect_indexable_files(workspace_dirs: list[str] | None) -> list[tuple[Pat
     for root in _resolve_workspace_roots(workspace_dirs):
         for p in root.rglob("*"):
             check_cancelled()
-            if any(_is_sensitive_part(part) or part.lower() in _RAG_EXCLUDED_DIRS for part in p.parts):
+            if any(is_sensitive_part(part) or part.lower() in _RAG_EXCLUDED_DIRS for part in p.parts):
                 continue
             if p.is_symlink() or not p.is_file() or p.suffix.lower() not in _RAG_ALLOWED_EXTS:
                 continue
@@ -214,3 +214,9 @@ INDEXED_SEARCH_TOOL = {
     },
     "_is_safe_read": True,
 }
+
+RAG_TOOLS = [INDEXED_SEARCH_TOOL]
+
+
+def is_rag_tool(name: str) -> bool:
+    return any(tool["name"] == name for tool in RAG_TOOLS)

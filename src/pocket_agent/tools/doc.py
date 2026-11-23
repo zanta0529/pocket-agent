@@ -12,8 +12,8 @@ from xml.sax.saxutils import escape
 
 from pocket_agent.core.cancellation import check_cancelled
 from pocket_agent.system.i18n import t
-from pocket_agent.tools.fs import _evaluate_fs_confirmation, _validate_safe_path
-from pocket_agent.tools.image import _next_available
+from pocket_agent.tools.fs import evaluate_fs_confirmation, validate_safe_path
+from pocket_agent.tools.image import next_available_path
 
 OUTPUT_DIR = Path("generated_files")
 
@@ -142,13 +142,13 @@ def call_doc_tool(
     try:
         spec = _DOC_SPECS.get(name)
         if spec is None:
-            return f"Error: ValueError: {t('doc_tool.unknown_tool', name=name)}", None
+            return f"[ERROR] ValueError: {t('doc_tool.unknown_tool', name=name)}", None
         ext, handler = spec
         raw_filename = args.get("filename")
         if raw_filename is None or not str(raw_filename).strip():
-            return f"Error: ValueError: {t('doc_tool.missing_filename')}", None
+            return f"[ERROR] ValueError: {t('doc_tool.missing_filename')}", None
         path = _out_path(str(raw_filename), ext, workspace_dirs)
-        denied = _evaluate_fs_confirmation(on_confirm, t("doc_tool.confirm_create", path=path), "寫入")
+        denied = evaluate_fs_confirmation(on_confirm, t("doc_tool.confirm_create", path=path), "寫入")
         if denied is not None:
             return denied, None
         if cancel_check is not None and cancel_check():
@@ -156,16 +156,16 @@ def call_doc_tool(
         handler(args, path)
         return t("doc_tool.created", path=path), path
     except Exception as e:
-        return f"Error: {type(e).__name__}: {e}", None
+        return f"[ERROR] {type(e).__name__}: {e}", None
 
 
 def _out_path(filename: str, ext: str, workspace_dirs: list[str] | None = None) -> Path:
     name = Path(str(filename)).name or f"document{ext}"  # 去除路徑，只留檔名
     if not name.lower().endswith(ext):
         name += ext
-    directory = _validate_safe_path(str(OUTPUT_DIR), workspace_dirs, is_write=True)
-    path = _next_available(directory / name)
-    return _validate_safe_path(str(path), workspace_dirs, is_write=True)
+    directory = validate_safe_path(str(OUTPUT_DIR), workspace_dirs, is_write=True)
+    path = next_available_path(directory / name)
+    return validate_safe_path(str(path), workspace_dirs, is_write=True)
 
 
 # ── Word ─────────────────────────────────────────

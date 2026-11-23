@@ -195,3 +195,20 @@ def test_get_access_token_respects_active_cancellation_scope():
             mock_browser.assert_not_called()
     finally:
         current_scope.reset(token)
+
+
+def test_image_output_path_blocks_sensitive_names_and_supports_i18n(tmp_path):
+    """驗證 save_image_b64 / _prepare_output_path 阻擋敏感路徑 (.env / .git) 並支援雙語系錯誤訊息。"""
+    from pocket_agent.system.i18n import set_locale
+
+    payload = base64.b64encode(b"fake-png-bytes").decode()
+
+    set_locale("zh_TW")
+    with pytest.raises(ValueError, match="安全限制：禁止將圖片輸出至敏感目錄或檔案"):
+        image_tool_mod.save_image_b64(payload, tmp_path / ".env" / "out.png")
+
+    set_locale("en_US")
+    with pytest.raises(ValueError, match="Security restriction: cannot write image to sensitive directory"):
+        image_tool_mod.save_image_b64(payload, tmp_path / ".git" / "out.png")
+    with pytest.raises(ValueError, match="Output path cannot be a directory"):
+        image_tool_mod._prepare_output_path(tmp_path)

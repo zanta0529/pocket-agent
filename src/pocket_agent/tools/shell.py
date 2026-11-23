@@ -30,7 +30,7 @@ from pocket_agent.system.constants import (
 )
 from pocket_agent.system.i18n import t
 from pocket_agent.system.permissions import CommandVerdict, classify_command_safety
-from pocket_agent.tools.fs import _EXTERNAL_TAG_RE
+from pocket_agent.tools.fs import escape_external_content_tags, extract_refusal_instruction
 
 log = logging.getLogger("pocket-agent")
 
@@ -461,11 +461,7 @@ def _evaluate_shell_confirmation(
     if allowed is True:
         return None
 
-    custom_inst = ""
-    if isinstance(allowed, str):
-        custom_inst = allowed.strip()
-    elif isinstance(allowed, tuple) and len(allowed) == 2 and allowed[0] is not True:
-        custom_inst = str(allowed[1]).strip()
+    custom_inst = extract_refusal_instruction(allowed)
     if custom_inst:
         return t("shell_tool.refused_with_instruction", instruction=custom_inst)
     return t("shell_tool.refused_generic")
@@ -582,7 +578,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
             raw = bytes(output_buf[:MAX_OUTPUT_BYTES]) if truncated[0] else bytes(output_buf)
             if truncated[0]:
                 raw = _trim_partial_utf8(raw)
-            text = _EXTERNAL_TAG_RE.sub("[escaped_tag]", _decode(raw))
+            text = escape_external_content_tags(_decode(raw))
             if len(text) > MAX_OUTPUT:
                 text = text[:MAX_OUTPUT]
                 truncated[0] = True
