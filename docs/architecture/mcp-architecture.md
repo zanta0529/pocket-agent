@@ -90,6 +90,14 @@ Pocket Agent 的解決方案：
 3. **自訂 HTTP Headers 與環境變數展開**：若遠端伺服器採用靜態金鑰或 Bearer Token，可在設定檔配置 `headers`（支援 `${ENV_VAR}` 語法從 `env` 或系統環境變數代入）或 `bearer_token`；當已明確指定 `Authorization` 標頭時，預設略過 OAuth 動態流程。
 4. **Windows `stdio` 子行程 `stderr` 安全導向**：針對本機 `stdio` 伺服器，`MCPManager` 會將 `errlog` 導向工作區沙盒日誌 `mcp_stdio.log` 的實體檔案控制代碼，避免 Windows `CREATE_NO_WINDOW` 旗標導致 `.cmd`／Node.js 子行程因主控台 `stderr` 失效而發生 `Connection closed` 異常退出。
 
+### 6. 隨附 MCP 伺服器模組化分層架構（`mcp_servers/`）
+
+所有隨附之 Stdio MCP 伺服器採用「**共用基礎設施（`_shared/`）＋ 領域子套件（`<domain>/`）＋ 頂層薄入口（`<name>_mcp.py`）**」三層設計：
+
+- **`mcp_servers/_shared/`**：集中維護 `bootstrap`（路徑初始化、系統常數對齊 `CONSTANTS` 與純鍵值降級 `t()`）、`redaction`、`audit`、`tty`、`validation`、`credentials`、`registry`（Factory `create_mcp_server`）與 `db_base`（`SqlGuard` Strategy 與資料庫共用基底）。
+- **領域子套件（`sqlite/`、`mysql/`、`mssql/`、`github/`、`rhel/`、`win_rdp/`）**：內部按安全守門／連線轉接（Adapter）／工具群組（`tools/*.py` 的 `register(mcp)` Command-Registrar）／組裝器（`server.py`）切分職責。
+- **頂層薄入口（`*_mcp.py`）與輕量單檔（`browser_mcp.py`、`memory_mcp.py`）**：維持既有 `mcp_config.yaml` 與 `--internal-mcp-server`（`runpy.run_path`）之穩定啟動契約。
+
 ---
 
 ## 內建 RHEL 遠端巡檢與維運伺服器 (`mcp_servers/rhel_mcp.py`)
@@ -189,10 +197,9 @@ Pocket Agent 的解決方案：
 | :--- | :--- | :--- | :--- |
 | `sqlite_list_tables` | 是 | 列出資料庫中的所有非系統資料表與檢視表（`VIEW`）清單 | 無 |
 | `sqlite_describe_schema` | 是 | 顯示指定資料表或檢視表的 Schema（欄位、型別、主鍵、`NOT NULL`、`DEFAULT` 預設值、索引與外鍵） | `table_name`（必填） |
+| `sqlite_inspect_health` | 是 | 執行唯讀健康診斷（檔案大小、分頁／碎片率統計與受 500 MB 熔斷保護之 `PRAGMA quick_check`） | `run_quick_check`（選填，預設 `False`） |
 | `sqlite_run_select_query` | 是 | 執行唯讀的 `SELECT`、`WITH` 或 `EXPLAIN` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填，僅限 `SELECT`／`WITH`／`EXPLAIN SELECT` 語句） |
 | `sqlite_switch_database` | 是（路徑動態授權） | 於對話中切換目前連線的 SQLite 資料庫檔案；以唯讀連線驗證為合法 SQLite 後才生效，失敗時保留原連線 | `target_db_path`（必填） |
-
-> 註：為維持向下相容性，亦提供 `db_list_tables`、`db_describe_schema`、`db_run_select_query` 與 `db_switch_database` 之別名支援。
 
 #### 切換資料庫的兩種方式
 
@@ -230,10 +237,13 @@ Pocket Agent 的解決方案：
 | `mysql` | `mysql_list_databases` | 是 | 列出遠端 MySQL／MariaDB 主機上目前帳號可見的所有資料庫清單 | 無 |
 | `mysql` | `mysql_list_tables` | 是 | 列出目標資料庫（或所有非系統資料庫）中的所有基底資料表與檢視表（`VIEW`） | `database`（選填） |
 | `mysql` | `mysql_describe_schema` | 是 | 透過參數化查詢 `INFORMATION_SCHEMA` 顯示欄位、型別、主鍵、`NOT NULL`、`DEFAULT` 預設值、索引與外鍵 | `table_name`（必填）、`database`（選填） |
+| `mysql` | `mysql_inspect_health` | 是 | 透過 `INFORMATION_SCHEMA` 零鎖定巡檢碎片率、無主鍵資料表與 `AUTO_INCREMENT` 水位 | `database`（選填） |
+| `mysql` | `mysql_check_table` | **否（涉及索引頁讀取鎖）** | 針對單一資料表執行 `CHECK TABLE ... QUICK / FAST` 完整性檢查（具 2 GB 容量熔斷） | `table_name`（必填）、`mode`（`QUICK`/`FAST`）、`database`（選填） |
 | `mysql` | `mysql_run_select_query` | 是 | 執行唯讀的單一 `SELECT`、`WITH` 或 `EXPLAIN` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
 | `mssql` | `mssql_list_databases` | 是 | 列出遠端 SQL Server 主機上所有線上（ONLINE）資料庫清單 | 無 |
 | `mssql` | `mssql_list_tables` | 是 | 列出目標 SQL Server 資料庫中的所有基底資料表與檢視表（`VIEW`） | `database`（選填） |
 | `mssql` | `mssql_describe_schema` | 是 | 透過參數化查詢顯示欄位、完整型別（含長度與精度）、主鍵、`NOT NULL`、`DEFAULT` 預設值、索引與外鍵 | `table_name`（必填，支援 `table` 或 `schema.table`）、`database`（選填） |
+| `mssql` | `mssql_inspect_health` | 是 | 透過零鎖定 DMV 檢視資料表空間、檔案容量、缺索引建議與近期備份健康狀態 | `database`（選填） |
 | `mssql` | `mssql_run_select_query` | 是 | 執行唯讀的單一 `SELECT` 或 `WITH` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
 
 ### 2. 安全防禦邊界
@@ -269,7 +279,7 @@ Pocket Agent 的解決方案：
 
 - **嚴格路徑驗證、搜尋範圍鎖定與重導向白名單**：強制驗證 `owner`、`repo` 與 `ref` 格式並執行 URL 路徑分段百分比編碼，徹底防範 `#` 片段截斷與 `..` 路徑穿越；`github_search_issues` 阻斷 `query` 內夾帶 `repo:`／`org:`／`user:` 範圍覆寫；支援 `GITHUB_ALLOWED_REPOS` 儲存庫白名單，並透過 `httpx` 事件鉤子攔截 HTTP `3xx` 重導向，阻斷跨網域、非 HTTPS 或未授權儲存庫之重導向繞過。
 - **PR 建立強制預覽確認與人工合併把關（No Auto-Merge）**：`github_create_pr` 由 `ConfirmationBridge` 強制攔截（不適用自動放行），於終端機面板完整列出預計執行的動作、目標儲存庫、`head -> base` 分支方向、PR 模式、標題與完整多行內文，須經使用者同意後才送出；伺服器故意不提供任何 Merge 工具，確保最終合併（Merge）永遠由人工於 GitHub 網站把關。
-- **彈性憑證解析、非互動防死鎖與連線池重用**：`GITHUB_TOKEN` 支援透過 `MCPManager` 隱藏參數（`github_token`）於執行期動態詢問並快取於記憶體（閒置 10 分鐘或遭遇 HTTP `401` 自動清除）；子行程在非互動 Stdio 管道下快速失敗拋出 `_ConnAuthError` 交由主行程詢問，防止終端機 Spinner 競態死鎖；單一 Event Loop 下共用 `httpx.AsyncClient` TCP/TLS 連線池並單例快取 `truststore` 系統憑證庫注入。
+- **彈性憑證解析、非互動防死鎖與連線池重用**：`GITHUB_TOKEN` 支援透過 `MCPManager` 隱藏參數（`github_token`）於執行期動態詢問並快取於記憶體（閒置 10 分鐘或遭遇 HTTP `401` 自動清除）；子行程在非互動 Stdio 管道下快速失敗拋出 `ConnAuthError` 交由主行程詢問，防止終端機 Spinner 競態死鎖；單一 Event Loop 下共用 `httpx.AsyncClient` TCP/TLS 連線池並單例快取 `truststore` 系統憑證庫注入。
 - **雙向機密防護、預裁切防 ReDoS 與集中稽核**：單次回應受 `MAX_RESPONSE_BYTES`（2 MB）與 `MAX_OUTPUT_CHARS`（預設 12,000 字元）雙重限制，超長文字先以安全邊界緩衝預裁切再執行機密遮罩（保留邊界完整 `[REDACTED...]` 標記）；外發寫入工具（`github_create_pr`、`github_create_issue`、`github_create_comment`）於送出前自動掃描私鑰、各雲端／AI 平台 Token、內嵌帳密 URL 與敏感鍵值對，偵測到時立即阻斷外發，並將所有操作寫入防日誌注入清洗之 `agent.log` `[AUDIT] [MCP:github]` 紀錄。
 
 ### 3. 環境變數與配置參數表 (`servers.github.env`)

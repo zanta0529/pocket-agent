@@ -81,15 +81,21 @@ pocket-agent/
 │   ├── guides/                 # 使用指南 (2 份)
 │   └── research/               # 研究報告 (3 份)
 ├── mcp_servers/                # 內建 MCP 伺服器 (Stdio)
-│   ├── browser_mcp.py          # 瀏覽器自動化 (Playwright)
-│   ├── github_mcp.py           # GitHub 整合
-│   ├── sqlite_mcp.py           # SQLite 唯讀
-│   ├── mysql_mcp.py            # MySQL/MariaDB 唯讀
-│   ├── mssql_mcp.py            # SQL Server 唯讀
-│   ├── memory_mcp.py           # 跨對話記憶
-│   ├── rhel_mcp.py             # RHEL 巡檢 (SSH)
-│   ├── win_rdp_mcp.py          # Windows RDP 視覺控制
-│   └── _db_common.py           # 資料庫共用基礎設施
+│   ├── _shared/                # 跨伺服器共用基礎設施 (bootstrap/redaction/audit/tty/credentials/db_base)
+│   ├── sqlite/                 # SQLite 領域子套件 (sql_guard/adapter/server/tools/)
+│   ├── mysql/                  # MySQL/MariaDB 領域子套件 (sql_guard/adapter/server/tools/)
+│   ├── mssql/                  # SQL Server 領域子套件 (sql_guard/adapter/server/tools/)
+│   ├── github/                 # GitHub 領域子套件 (security/client/templates/server/tools/)
+│   ├── rhel/                   # RHEL SSH 領域子套件 (security/ssh_client/server/tools/)
+│   ├── win_rdp/                # Windows RDP 領域子套件 (security/win32_api/session/server/tools/)
+│   ├── sqlite_mcp.py           # SQLite 薄入口
+│   ├── mysql_mcp.py            # MySQL/MariaDB 薄入口
+│   ├── mssql_mcp.py            # SQL Server 薄入口
+│   ├── github_mcp.py           # GitHub 薄入口
+│   ├── rhel_mcp.py             # RHEL 巡檢薄入口
+│   ├── win_rdp_mcp.py          # Windows RDP 薄入口
+│   ├── browser_mcp.py          # 瀏覽器自動化 (Playwright 輕量單檔)
+│   └── memory_mcp.py           # 跨對話記憶 (JSON 輕量單檔)
 ├── scripts/                    # 開發工具腳本
 │   ├── check_imports.py        # 匯入完整性檢查
 │   └── convert_to_md.py        # 文件轉換
