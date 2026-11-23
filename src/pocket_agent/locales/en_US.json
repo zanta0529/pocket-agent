@@ -590,5 +590,23 @@
     "gen_failed": "Image generation failed: {error}",
     "gen_incomplete": "Image generation incomplete: {reason}",
     "gen_empty_result": "Image generation failed: backend returned no image data"
+  },
+  "mcp_shared": {
+    "invalid_port": "Invalid {env_name} port value (must be an integer between 1 and 65535).",
+    "invalid_identifier": "Invalid {field_name} format (only safe identifier characters allowed and cannot start with '-').",
+    "invalid_host": "Invalid {field_name} format (only valid IPv4, IPv6, or hostname allowed).",
+    "invalid_positive_int": "Invalid {field_name} parameter: {value} (must be a positive integer).",
+    "invalid_positive_int_range": "Invalid {field_name} parameter: {value} (must be between 1 and {max_val}).",
+    "tty_password_unavailable": "No secure interactive terminal available; please inject connection parameters from the parent process.",
+    "tty_password_read_failed": "Unable to read password securely; please inject connection parameters from the parent process.",
+    "tty_unavailable": "No interactive terminal available; configure {hint} via environment variables or mcp_config.yaml (MCP stdin is never read).",
+    "output_truncated": "\n\n... [Output truncated: exceeded single-response limit of {max_chars} chars. {hint}]",
+    "db_no_columns": "Query produced no columns.",
+    "db_empty_result": "Query returned no rows.",
+    "db_query_truncated": "\n\n... (Query output truncated at {max_chars} chars; showing first {shown_rows} rows)\n[Hint: add WHERE filters or LIMIT/OFFSET pagination to inspect specific slices]",
+    "db_health_truncated": "\n\n... (Health report truncated at {max_chars} chars; specify table_name or database to narrow the scope)",
+    "db_redundant_exact": "{name_a} ({cols_a}) duplicates exact columns of {name_b} ({cols_b})",
+    "db_redundant_prefix": "{name_a} ({cols_a}) is a redundant prefix index of {name_b} ({cols_b})",
+    "missing_required_param": "Missing required connection parameter: {env_key}."
   }
 }

@@ -1,14 +1,13 @@
 # Pocket Agent MCP 工具擴充指南
 
-本目錄 (`mcp_servers/`) 包含了專為 Pocket Agent 設計與擴充的 Model Context Protocol (MCP) 伺服器腳本。
-透過這些擴充，AI 代理可以安全地與您的本機環境、外部服務或瀏覽器進行互動。
+本目錄（`mcp_servers/`）包含專為 Pocket Agent 設計的 Model Context Protocol（MCP）Stdio 伺服器。透過這些擴充，AI 代理可在受控的安全邊界內與本機環境、資料庫、遠端主機、GitHub 或瀏覽器互動。
 
-## ⚙️ 如何啟用這些 MCP？
+## 如何啟用 MCP 伺服器
 
-Pocket Agent 是透過讀取根目錄下的 `mcp_config.yaml` 來決定掛載哪些 MCP 伺服器。
-請參考 `mcp_config.example.yaml`，將您需要的服務設定複製過去並解除註解，接著啟動 `agent` 即可。
+Pocket Agent 透過專案根目錄（或使用者目錄）的 `mcp_config.yaml` 決定掛載哪些 MCP 伺服器。
+請參考 `mcp_config.example.yaml`，將需要的服務設定複製過去並調整環境變數或參數，再啟動 Pocket Agent 即可。
 
-您也可以在各個伺服器區塊中彈性設定 `enabled: true` 或 `enabled: false`（省略時預設為 `true`），自由切換程式啟動時是否載入該 MCP 伺服器，無須反覆註解整段設定或移除既有環境變數與白名單配置。
+各伺服器區塊皆支援 `enabled: true`／`enabled: false`（省略時預設為 `true`），可快速切換是否載入，無須反覆註解整段設定：
 
 ```yaml
 servers:
@@ -21,62 +20,90 @@ servers:
 
 ---
 
-## 🛠️ 目前提供的 MCP 伺服器清單
+## 目錄架構與設計原則
 
-### 1. 🌐 瀏覽器自動化 (Browser MCP)
+本目錄採用「共用基礎設施（`_shared/`）＋領域子套件（`<domain>/`）＋薄入口（`<name>_mcp.py`）」的模組化分層設計，同時維持 `mcp_config.yaml` 與 `--internal-mcp-server`（`runpy.run_path`）的直接啟動能力：
 
-**檔案：** `browser_mcp.py`
-**用途：** 讓 AI 具備開啟網頁、點擊按鈕、輸入文字等操作真實瀏覽器的能力。
-**特色：**
+```text
+mcp_servers/
+├── _shared/              # 跨伺服器共用基礎設施（bootstrap、constants、i18n、遮罩、稽核、TTY、憑證快取、DB 基底）
+├── sqlite/               # SQLite 領域子套件（sql_guard、adapter、server、tools/）
+├── mysql/                # MySQL / MariaDB 領域子套件（sql_guard、adapter、server、tools/）
+├── mssql/                # Microsoft SQL Server 領域子套件（sql_guard、adapter、server、tools/）
+├── github/               # GitHub 領域子套件（security、client、templates、server、tools/）
+├── rhel/                 # RHEL SSH 領域子套件（security、ssh_client、server、tools/）
+├── win_rdp/              # Windows RDP 領域子套件（security、win32_api、session、server、tools/）
+├── sqlite_mcp.py         # 薄入口（對應 sqlite/）
+├── mysql_mcp.py          # 薄入口（對應 mysql/）
+├── mssql_mcp.py          # 薄入口（對應 mssql/）
+├── github_mcp.py         # 薄入口（對應 github/）
+├── rhel_mcp.py           # 薄入口（對應 rhel/）
+├── win_rdp_mcp.py        # 薄入口（對應 win_rdp/）
+├── browser_mcp.py        # 輕量單檔伺服器（Playwright 瀏覽器自動化）
+└── memory_mcp.py         # 輕量單檔伺服器（本機 JSON 長期記憶）
+```
 
-- 純 Python 實作 (基於 Playwright)，不需依賴 Node.js。
-- 支援開啟使用者電腦中既有的 Edge / Chrome，保留登入狀態。
-- 支援在遇到 CAPTCHA 或雙重驗證時，彈出對話框暫停，等待人類親自操作後再繼續。
-  **使用情境：**
-- 「幫我打開 Google 搜尋今天的台北天氣。」
-- 「幫我登入內部系統，然後讀取第一篇文章的內容。」
+### 核心設計模式
 
-### 2. 🧠 長期記憶管理 (Memory MCP)
-
-**檔案：** `memory_mcp.py`
-**用途：** 讓 AI 能跨對話 (Cross-session) 記住您的個人偏好、專案設定與過往習慣。
-**特色：**
-
-- 記憶會永久儲存於本機的 `~/.pocket-agent/memory.json`。
-- 具備輕量化的**關鍵字搜尋 (`memory_search`)** 功能，AI 可精準提取所需上下文，大幅節省 Token 消耗。
-  **使用情境：**
-- 「請幫我記住一件事：這個專案的測試框架一律使用 pytest。」
-- (新對話) 「請搜尋我的記憶，看看我習慣用哪個測試框架，然後幫我寫一段程式碼。」
-
-### 3. 🐙 GitHub 整合 (GitHub MCP)
-
-**檔案：** `github_mcp.py`
-**用途：** 讓 AI 能夠直接與 GitHub API 互動，獲取 Pull Request、Issue 等協作資訊。
-**特色：**
-
-- 透過 `mcp_config.yaml` 的 `inject` 機制注入 `GITHUB_TOKEN`，確保機密金鑰對 LLM 保持隱藏。
-  **使用情境：**
-- 「請幫我列出 `owner/repo` 狀態為 open 的 PR，並讀取編號 #42 的詳細內容與使用者留言。」
-- 「請幫我在 #105 Issue 加上一段回覆：『這個問題我們已經在最新版本修復囉！』」
-
-### 4. 🗄️ 本機資料庫檢索 (Database MCP)
-
-**檔案：** `database_mcp.py`
-**用途：** 讓 AI 在開發過程中，能幫您查詢本機開發用的 SQLite 資料庫結構與測試資料。
-**特色：**
-
-- 具備**唯讀安全防護**，底層強制限制只能執行字首為 `SELECT` 的查詢語法，不用擔心 AI 誤刪資料。
-- 透過 `mcp_config.yaml` 的環境變數 `DB_PATH` 動態指定資料庫位置。
-  **使用情境：**
-- 「請幫我看看資料庫裡面有哪幾個資料表？」
-- 「幫我查詢 `users` 資料表的 Schema 設計，然後用語意化的方式幫我找出前五筆帳號資料。」
+- **Factory（工廠）**：透過 `mcp_servers._shared.create_mcp_server(name, registrars)` 統一建立 `MCPServer` 實例並依序掛載工具群組。
+- **Command / Registrar（指令註冊）**：各領域在 `tools/*.py` 依功能切分工具群組，每個模組提供 `register(mcp)` 函式，新增工具時無須修改既有工具檔案。
+- **Adapter（轉接器）**：資料庫（`SqliteAdapter`、`MysqlAdapter`、`MssqlAdapter`）、外部 API（`GitHubClient`）、遠端傳輸（`rhel/ssh_client.py`、`win_rdp/win32_api.py`、`win_rdp/session.py`）將底層協定差異封裝於獨立層，與工具介面解耦。
+- **Strategy（策略）**：資料庫 SQL 唯讀守門員（`SqlGuard` + 各方言策略）、稽核策略與輸出遮罩規則皆集中於共用層或領域 `security.py`／`sql_guard.py`。
+- **i18n 相容**：統一由 `mcp_servers._shared.t(key, **kwargs)` 代理 `pocket_agent.system.i18n.t`，獨立執行缺少主套件時自動降級為純鍵值回傳，不硬編碼備援文案。
 
 ---
 
-## 💡 給開發者的注意事項
+## 目前提供的 MCP 伺服器清單（共 8 座）
 
-如果您想要自行開發新的 MCP Server 並放入此目錄：
+### 1. 瀏覽器自動化（Browser MCP）
 
-1. 本專案使用官方 **MCP 2.x SDK**，請務必使用 `from mcp.server.mcpserver import MCPServer`。
-2. 開發完成後，請至 `mcp_config.yaml` 中使用 `stdio` 傳輸模式將其掛載。
-3. 若您的工具需要金鑰，強烈建議利用 `pocket-agent` 的 `inject` 機制，不要將密碼寫死在程式碼中。
+- **入口**：`browser_mcp.py`（輕量單檔）
+- **用途**：基於 Playwright 操作本機 Edge／Chrome，支援導覽、點擊、填表、擷取內容與人工驗證暫停。
+
+### 2. 長期記憶管理（Memory MCP）
+
+- **入口**：`memory_mcp.py`（輕量單檔）
+- **用途**：將個人偏好、專案慣例與跨對話筆記儲存於 `~/.pocket-agent/memory.json`，提供關鍵字檢索、更新與刪除。
+
+### 3. GitHub 整合（GitHub MCP）
+
+- **入口**：`github_mcp.py` → `mcp_servers/github/`
+- **用途**：檢索 Issue、PR、Diff、Review 與 CI 狀態，支援範本感知 PR 建立與留言；透過 `inject` 隱藏 `GITHUB_TOKEN`，不提供自動 Merge 工具。
+
+### 4. 本機 SQLite 資料庫（SQLite MCP）
+
+- **入口**：`sqlite_mcp.py` → `mcp_servers/sqlite/`
+- **用途**：本機 SQLite 結構探查、唯讀 `SELECT` 查詢（Authorizer + `ro` URI 雙重防護）與唯讀健康診斷（`PRAGMA quick_check` 具 500 MB 熔斷）。
+
+### 5. 遠端 MySQL／MariaDB 資料庫（MySQL MCP）
+
+- **入口**：`mysql_mcp.py` → `mcp_servers/mysql/`
+- **用途**：透過 `pymysql` 提供唯讀結構探查、引號感知註解正規化之單一 `SELECT` 串流查詢（`SSCursor`）、詮釋資料健康診斷與單表 `CHECK TABLE`（2 GB 熔斷）。
+
+### 6. 遠端 Microsoft SQL Server 資料庫（MSSQL MCP）
+
+- **入口**：`mssql_mcp.py` → `mcp_servers/mssql/`
+- **用途**：透過 `pymssql` 提供 T-SQL 唯讀結構探查、單一 `SELECT`／`WITH` 查詢與零鎖定 DMV 健康診斷。
+
+### 7. 遠端 RHEL 主機維運巡檢（RHEL MCP）
+
+- **入口**：`rhel_mcp.py` → `mcp_servers/rhel/`
+- **用途**：透過系統 OpenSSH（支援指定私鑰與 `SSH_ASKPASS` 密碼驗證）執行 12 項結構化唯讀巡檢（系統概況、儲存、網路、服務、日誌、SELinux／防火牆與設定檔安全讀取）。
+
+### 8. 遠端 Windows 主機 RDP 操控與巡檢（Win RDP MCP）
+
+- **入口**：`win_rdp_mcp.py` → `mcp_servers/win_rdp/`
+- **用途**：透過 Port 3389 與系統可信 `mstsc.exe` 提供 Layer A 視覺截圖與前景保護鍵鼠操作，以及 Layer B 剪貼簿 Enveloped Sentinel 唯讀巡檢（自動備份與還原剪貼簿）。
+
+---
+
+## 開發新工具或新 MCP 伺服器指南
+
+1. **擴充既有伺服器的工具**：
+   - 在對應領域的 `mcp_servers/<domain>/tools/` 新增函式（或新增子模組），於該模組的 `register(mcp)` 註冊，並在 `tools/__init__.py` 加入 `REGISTRARS`。
+   - 若需要讓測試或外部直接由薄入口匯入，在 `mcp_servers/<name>_mcp.py` 補上 re-export。
+2. **新增獨立 MCP 伺服器**：
+   - 依複雜度選擇單檔（工具數少、無複雜安全層）或子套件結構（`security.py` + 傳輸／轉接層 + `tools/` + `server.py` + 薄入口）。
+   - 使用官方 **MCP 2.x SDK**，並優先透過 `mcp_servers._shared.create_mcp_server`、`CONSTANTS`、`CredentialCache`、`tty_prompt` 與 `t` 複用共用設施。
+   - 敏感憑證請透過 `mcp_config.yaml` 的 `inject` 或執行期互動提示（`CONN_PARAM_SPECS`）傳遞，切勿硬編碼於程式碼中。
+   - 僅供 MCP 使用的第三方依賴（例如 `pymysql`、`pymssql`、`playwright`）應限制於 `mcp_servers/` 內匯入，不得流入 `src/pocket_agent/` 核心套件。

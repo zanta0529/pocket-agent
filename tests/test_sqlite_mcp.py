@@ -7,12 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from mcp_servers import sqlite_mcp
+from mcp_servers.sqlite import adapter as sqlite_adapter
+from mcp_servers.sqlite.tools import health as sqlite_health_tools
 from pocket_agent.extensions.mcp import MCPManager
 
 
 @pytest.fixture(autouse=True)
 def _clean_sqlite_env_and_cache(monkeypatch, tmp_path):
-    sqlite_mcp._clear_creds_cache()
+    sqlite_adapter.SQLITE_ADAPTER.clear_cache()
     monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     monkeypatch.delenv("DB_PATH", raising=False)
 
@@ -125,7 +127,7 @@ def test_sqlite_blocks_non_readonly_queries_and_records_audit(tmp_path, blocked_
 
 def test_sqlite_authorizer_blocks_dangerous_pragma_at_connection_level(tmp_path):
     db_file = _create_sample_db(tmp_path / "sample.db")
-    conn = sqlite_mcp._get_readonly_connection("test", "PRAGMA database_list", db_path=str(db_file))
+    conn = sqlite_adapter.SQLITE_ADAPTER.connect("test", "PRAGMA database_list", db_path=str(db_file))
     try:
         with pytest.raises(sqlite3.DatabaseError):
             conn.execute("PRAGMA database_list;")
@@ -219,7 +221,7 @@ def test_sqlite_switch_database_failure_keeps_previous_db(tmp_path, bad_name):
 
     out = sqlite_mcp.sqlite_switch_database(str(tmp_path / bad_name))
     assert out.startswith("[ERROR]")
-    assert sqlite_mcp._RUNTIME_CREDS["DB_PATH"] == str(first.resolve())
+    assert sqlite_adapter.SQLITE_ADAPTER.cache.get("DB_PATH") == str(first.resolve())
     assert "users" in sqlite_mcp.sqlite_list_tables().splitlines()
 
 
@@ -228,7 +230,7 @@ def test_sqlite_switch_database_invalid_file_without_previous_db_is_not_cached(t
     bad.write_text("this is not a sqlite database " * 10, encoding="utf-8")
 
     assert sqlite_mcp.sqlite_switch_database(str(bad)).startswith("[ERROR]")
-    assert "DB_PATH" not in sqlite_mcp._RUNTIME_CREDS
+    assert sqlite_adapter.SQLITE_ADAPTER.cache.get("DB_PATH") == ""
 
 
 @pytest.mark.parametrize("unc_path", ["\\\\attacker\\share\\a.db", "//attacker/share/a.db", "'\\\\host\\s\\b.db'"])
@@ -236,9 +238,9 @@ def test_sqlite_switch_database_blocks_unc_without_touching_filesystem(monkeypat
     def _fail(*_args, **_kwargs):
         raise AssertionError("UNC 路徑不應觸發任何連線或檔案系統操作")
 
-    monkeypatch.setattr(sqlite_mcp.sqlite3, "connect", _fail)
-    monkeypatch.setattr(sqlite_mcp, "_get_readonly_connection", _fail)
-    monkeypatch.setattr(sqlite_mcp, "get_db_path", _fail)
+    monkeypatch.setattr(sqlite_adapter.sqlite3, "connect", _fail)
+    monkeypatch.setattr(sqlite_adapter.SQLITE_ADAPTER, "connect", _fail)
+    monkeypatch.setattr(sqlite_adapter.SQLITE_ADAPTER, "get_db_path", _fail)
 
     out = sqlite_mcp.sqlite_switch_database(unc_path)
     assert out.startswith("[ERROR]")
@@ -249,9 +251,9 @@ def test_sqlite_get_db_path_blocks_unc_custom_path(monkeypatch):
     def _fail(*_args, **_kwargs):
         raise AssertionError("UNC 路徑不應觸發 resolve()")
 
-    monkeypatch.setattr(sqlite_mcp.Path, "resolve", _fail)
+    monkeypatch.setattr(sqlite_adapter.Path, "resolve", _fail)
     with pytest.raises(ValueError, match="UNC"):
-        sqlite_mcp.get_db_path("\\\\attacker\\share\\a.db")
+        sqlite_adapter.SQLITE_ADAPTER.get_db_path("\\\\attacker\\share\\a.db")
 
 
 def _make_switch_manager(call_text: str) -> tuple[MCPManager, SimpleNamespace]:
@@ -406,7 +408,7 @@ def test_sqlite_inspect_health_size_guard_and_authorizer_isolation(tmp_path, mon
     db_file = _create_sample_db(tmp_path / "sample.db")
 
     # 1. 一般連線仍嚴格封鎖 PRAGMA quick_check 與 database_list
-    conn_normal = sqlite_mcp._get_readonly_connection("test", "PRAGMA quick_check", db_path=str(db_file))
+    conn_normal = sqlite_adapter.SQLITE_ADAPTER.connect("test", "PRAGMA quick_check", db_path=str(db_file))
     try:
         with pytest.raises(sqlite3.DatabaseError):
             conn_normal.execute("PRAGMA quick_check;")
@@ -414,7 +416,7 @@ def test_sqlite_inspect_health_size_guard_and_authorizer_isolation(tmp_path, mon
         conn_normal.close()
 
     # 2. 診斷連線仍封鎖 database_list 等敏感 PRAGMA
-    conn_diag = sqlite_mcp._get_readonly_connection(
+    conn_diag = sqlite_adapter.SQLITE_ADAPTER.connect(
         "test",
         "PRAGMA database_list",
         db_path=str(db_file),
@@ -427,7 +429,7 @@ def test_sqlite_inspect_health_size_guard_and_authorizer_isolation(tmp_path, mon
         conn_diag.close()
 
     # 3. 檔案大小超過安全上限時自動略過實體頁掃描
-    monkeypatch.setattr(sqlite_mcp, "SQLITE_QUICK_CHECK_MAX_BYTES", 10)
+    monkeypatch.setattr(sqlite_health_tools, "SQLITE_QUICK_CHECK_MAX_BYTES", 10)
     out_guarded = sqlite_mcp.sqlite_inspect_health(db_path=str(db_file))
     assert "超過安全門檻" in out_guarded
 

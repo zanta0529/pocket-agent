@@ -469,9 +469,9 @@ def test_sqlite_mcp_readonly_and_block_writes(tmp_path, monkeypatch):
 def test_rhel_mcp_no_plink_pw_leakage():
     import inspect
 
-    from mcp_servers import rhel_mcp
+    from mcp_servers.rhel import ssh_client as rhel_ssh
 
-    src = inspect.getsource(rhel_mcp._run_remote)
+    src = inspect.getsource(rhel_ssh.run_remote)
     # 確保原始碼中已無 -pw 命令列參數傳遞密碼之呼叫邏輯
     assert 'plink_args = [plink_bin, "-batch", "-ssh", "-noagent", "-P", port, "-l", user, "-pw", password]' not in src
     assert "'-pw'" not in src and '"-pw"' not in src

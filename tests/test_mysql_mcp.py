@@ -5,12 +5,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mcp_servers import mysql_mcp
+from mcp_servers.mysql import adapter as mysql_adapter
+from mcp_servers.mysql import sql_guard as mysql_sql_guard
+from mcp_servers.mysql.tools import query as mysql_query_tools
 from pocket_agent.extensions.mcp import MCPManager
 
 
 @pytest.fixture(autouse=True)
 def _clean_mysql_env_and_cache(monkeypatch, tmp_path):
-    mysql_mcp._clear_creds_cache()
+    mysql_adapter.MYSQL_ADAPTER.clear_cache()
     monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     for key in (
         "MYSQL_HOST",
@@ -51,13 +54,13 @@ def _make_fake_conn(rows=None, description=None):
 
 def test_validate_select_query_supports_hash_comments_and_explain():
     q1 = "# MySQL comment\n-- Standard comment\n/* Block */ SELECT id, name FROM users;"
-    assert mysql_mcp._validate_select_query(q1) == "SELECT id, name FROM users"
+    assert mysql_sql_guard.MYSQL_SQL_GUARD.validate_select(q1) == "SELECT id, name FROM users"
 
     q2 = "EXPLAIN SELECT * FROM orders WHERE id = 1"
-    assert mysql_mcp._validate_select_query(q2) == q2
+    assert mysql_sql_guard.MYSQL_SQL_GUARD.validate_select(q2) == q2
 
     q3 = "EXPLAIN FORMAT=JSON SELECT * FROM orders"
-    assert mysql_mcp._validate_select_query(q3) == q3
+    assert mysql_sql_guard.MYSQL_SQL_GUARD.validate_select(q3) == q3
 
 
 @pytest.mark.parametrize(
@@ -75,7 +78,7 @@ def test_validate_select_query_supports_hash_comments_and_explain():
 )
 def test_validate_select_query_blocks_dangerous_queries(bad_query):
     with pytest.raises(ValueError):
-        mysql_mcp._validate_select_query(bad_query)
+        mysql_sql_guard.MYSQL_SQL_GUARD.validate_select(bad_query)
 
 
 def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port(monkeypatch):
@@ -84,8 +87,11 @@ def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port(monkeypatc
     monkeypatch.setenv("MYSQL_USER", "db_reader")
     monkeypatch.setenv("MYSQL_PASSWORD", "Ipv6MySqlPw!")
 
-    with patch("mcp_servers.mysql_mcp._tty_prompt") as mock_prompt:
-        host, port, user, pw, _ = mysql_mcp._resolve_connection_params(
+    with (
+        patch("mcp_servers.mysql.adapter.tty_prompt_text") as mock_text,
+        patch("mcp_servers.mysql.adapter.tty_prompt_secret") as mock_secret,
+    ):
+        host, port, user, pw, _ = mysql_adapter.MYSQL_ADAPTER.resolve_connection_params(
             mysql_host="2001:0db8::1",
             mysql_port="3306",
         )
@@ -93,7 +99,8 @@ def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port(monkeypatc
         assert port == "3306"
         assert user == "db_reader"
         assert pw == "Ipv6MySqlPw!"
-        mock_prompt.assert_not_called()
+        mock_text.assert_not_called()
+        mock_secret.assert_not_called()
 
 
 def test_readonly_connection_enforces_read_only_transaction_and_rollback(monkeypatch):
@@ -101,7 +108,7 @@ def test_readonly_connection_enforces_read_only_transaction_and_rollback(monkeyp
     conn, cursor = _make_fake_conn(rows=[("users", "BASE TABLE")])
     fake_pymysql = SimpleNamespace(connect=MagicMock(return_value=conn))
 
-    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("pymysql", fake_pymysql)):
+    with patch("mcp_servers.mysql.adapter.load_mysql_driver", return_value=("pymysql", fake_pymysql)):
         out = mysql_mcp.mysql_list_tables()
 
     assert out == "users"
@@ -120,7 +127,7 @@ def test_mysql_list_tables_includes_views(monkeypatch):
             ("v_order_summary", "VIEW"),
         ]
     )
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
         out = mysql_mcp.mysql_list_tables()
 
     assert out.splitlines() == ["orders", "v_order_summary (VIEW)"]
@@ -142,7 +149,7 @@ def test_mysql_describe_schema_includes_default_indexes_and_fks(monkeypatch):
     ]
     cursor.fetchall.side_effect = [col_rows, idx_rows, fk_rows]
 
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
         out = mysql_mcp.mysql_describe_schema("orders")
 
     assert "id (BIGINT(20) [PK] NOT NULL)" in out
@@ -174,7 +181,7 @@ def test_mysql_run_select_query_redacts_sensitive_cols_urls_and_formats_null(mon
             ("config_note",),
         ],
     )
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
         out = mysql_mcp.mysql_run_select_query("SELECT * FROM users")
 
     lines = out.splitlines()
@@ -242,7 +249,7 @@ def test_mcp_manager_strips_mysql_params():
 )
 def test_mysql_blocks_comment_split_outfile_and_executable_comments_before_connect(monkeypatch, comment_bypass_query):
     _set_full_mysql_env(monkeypatch)
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection") as mock_conn:
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect") as mock_conn:
         out = mysql_mcp.mysql_run_select_query(comment_bypass_query)
         assert out.startswith("[ERROR]")
         mock_conn.assert_not_called()
@@ -250,7 +257,7 @@ def test_mysql_blocks_comment_split_outfile_and_executable_comments_before_conne
 
 def test_validate_select_query_preserves_comment_markers_inside_string_literals():
     q = "SELECT '/* keep */ -- also keep # hash', `col_name` /* strip me */ FROM users WHERE a = '''';"
-    cleaned = mysql_mcp._validate_select_query(q)
+    cleaned = mysql_sql_guard.MYSQL_SQL_GUARD.validate_select(q)
     assert "'/* keep */ -- also keep # hash'" in cleaned
     assert "a = ''''" in cleaned
     assert "strip me" not in cleaned
@@ -263,8 +270,8 @@ def test_mysql_run_select_query_uses_streaming_cursor_and_aborts_on_truncation(m
     huge_rows = [(i, "x" * 200) for i in range(500)]
     conn, cursor = _make_fake_conn(rows=huge_rows, description=[("id",), ("payload",)])
 
-    monkeypatch.setattr(mysql_mcp, "MAX_OUTPUT_CHARS", 600)
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn):
+    monkeypatch.setattr(mysql_query_tools, "MAX_OUTPUT_CHARS", 600)
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
         out = mysql_mcp.mysql_run_select_query("SELECT id, payload FROM big_table")
 
     assert "查詢結果已截斷" in out
@@ -284,8 +291,8 @@ def test_mysql_run_select_query_mysql_connector_uses_unbuffered_cursor_and_norma
     fake_driver = SimpleNamespace()
 
     with (
-        patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("mysql_connector", fake_driver)),
-        patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn),
+        patch("mcp_servers.mysql.adapter.load_mysql_driver", return_value=("mysql_connector", fake_driver)),
+        patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn),
     ):
         out = mysql_mcp.mysql_run_select_query("SELECT id, status FROM items")
 
@@ -312,8 +319,8 @@ def test_open_streaming_cursor_pymysql_returns_sscursor(monkeypatch):
         connect=MagicMock(return_value=conn),
     )
 
-    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("pymysql", fake_pymysql)):
-        result = mysql_mcp._open_streaming_cursor(conn)
+    with patch("mcp_servers.mysql.adapter.load_mysql_driver", return_value=("pymysql", fake_pymysql)):
+        result = mysql_adapter.MYSQL_ADAPTER.open_streaming_cursor(conn)
 
     conn.cursor.assert_called_once_with(pymysql.cursors.SSCursor)
     assert result is cursor
@@ -326,8 +333,8 @@ def test_open_streaming_cursor_mysql_connector_returns_unbuffered(monkeypatch):
     conn.cursor.return_value = cursor
 
     fake_driver = SimpleNamespace()
-    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("mysql_connector", fake_driver)):
-        result = mysql_mcp._open_streaming_cursor(conn)
+    with patch("mcp_servers.mysql.adapter.load_mysql_driver", return_value=("mysql_connector", fake_driver)):
+        result = mysql_adapter.MYSQL_ADAPTER.open_streaming_cursor(conn)
 
     conn.cursor.assert_called_once_with(buffered=False)
     assert result is cursor
@@ -343,9 +350,9 @@ def test_open_streaming_cursor_pymysql_missing_sscursor_raises(monkeypatch):
         connect=MagicMock(return_value=conn),
     )
 
-    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("pymysql", fake_pymysql)):
+    with patch("mcp_servers.mysql.adapter.load_mysql_driver", return_value=("pymysql", fake_pymysql)):
         with pytest.raises(RuntimeError, match="缺少 SSCursor"):
-            mysql_mcp._open_streaming_cursor(conn)
+            mysql_adapter.MYSQL_ADAPTER.open_streaming_cursor(conn)
 
     # 確保未呼叫 conn.cursor() 降級
     conn.cursor.assert_not_called()
@@ -356,9 +363,9 @@ def test_open_streaming_cursor_unsupported_driver_raises(monkeypatch):
     conn = MagicMock()
     fake_driver = SimpleNamespace()
 
-    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("unknown_driver", fake_driver)):
+    with patch("mcp_servers.mysql.adapter.load_mysql_driver", return_value=("unknown_driver", fake_driver)):
         with pytest.raises(RuntimeError, match="不支援的 MySQL 驅動類型"):
-            mysql_mcp._open_streaming_cursor(conn)
+            mysql_adapter.MYSQL_ADAPTER.open_streaming_cursor(conn)
 
 
 def test_mysql_run_select_query_fail_closed_on_missing_sscursor(monkeypatch):
@@ -371,7 +378,7 @@ def test_mysql_run_select_query_fail_closed_on_missing_sscursor(monkeypatch):
         connect=MagicMock(),
     )
 
-    with patch("mcp_servers.mysql_mcp._load_mysql_driver", return_value=("pymysql", fake_pymysql)):
+    with patch("mcp_servers.mysql.adapter.load_mysql_driver", return_value=("pymysql", fake_pymysql)):
         out = mysql_mcp.mysql_run_select_query("SELECT 1")
 
     assert out.startswith("[ERROR]")
@@ -428,7 +435,7 @@ def test_mysql_inspect_health_detects_missing_pk_fragmentation_autoinc_and_redun
     ]
     cursor.fetchall.side_effect = [table_rows, col_rows, idx_rows]
 
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn):
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
         out = mysql_mcp.mysql_inspect_health()
 
     assert "[MySQL Health Summary]" in out
@@ -449,7 +456,7 @@ def test_mysql_check_table_quick_and_size_or_mode_guards(monkeypatch):
     _set_full_mysql_env(monkeypatch)
 
     # 1. 攔截危險或非白名單 check_mode（連線前即阻擋）
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection") as mock_conn:
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect") as mock_conn:
         for bad_mode in ("EXTENDED", "MEDIUM", "FOR UPGRADE", "QUICK; DROP TABLE users"):
             bad_out = mysql_mcp.mysql_check_table("orders", check_mode=bad_mode)
             assert bad_out.startswith("[ERROR]")
@@ -458,7 +465,7 @@ def test_mysql_check_table_quick_and_size_or_mode_guards(monkeypatch):
     # 2. 攔截 VIEW（不執行 CHECK TABLE）
     conn_view, cursor_view = _make_fake_conn()
     cursor_view.fetchone.return_value = ("VIEW", 0)
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn_view):
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn_view):
         out_view = mysql_mcp.mysql_check_table("v_orders")
     assert out_view.startswith("[SKIPPED]")
     assert cursor_view.execute.call_count == 1
@@ -466,7 +473,7 @@ def test_mysql_check_table_quick_and_size_or_mode_guards(monkeypatch):
     # 3. 攔截超過 2GB 的巨型資料表
     conn_huge, cursor_huge = _make_fake_conn()
     cursor_huge.fetchone.return_value = ("BASE TABLE", 3 * 1024 * 1024 * 1024)
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn_huge):
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn_huge):
         out_huge = mysql_mcp.mysql_check_table("huge_events")
     assert out_huge.startswith("[BLOCKED]")
     assert "3.00 GB" in out_huge
@@ -476,7 +483,7 @@ def test_mysql_check_table_quick_and_size_or_mode_guards(monkeypatch):
     conn_ok, cursor_ok = _make_fake_conn()
     cursor_ok.fetchone.return_value = ("BASE TABLE", 5 * 1024 * 1024)
     cursor_ok.fetchall.return_value = [("app_db.orders", "check", "status", "OK")]
-    with patch("mcp_servers.mysql_mcp._get_readonly_connection", return_value=conn_ok):
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn_ok):
         out_ok = mysql_mcp.mysql_check_table("orders", check_mode="fast")
     assert "[MySQL CHECK TABLE Result (FAST)]" in out_ok
     assert "- [status] app_db.orders (check): OK" in out_ok

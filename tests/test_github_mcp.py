@@ -10,13 +10,16 @@ import pytest
 from rich.console import Console
 
 from mcp_servers import github_mcp
+from mcp_servers._shared import ConnAuthError
+from mcp_servers.github import client as gh_client
+from mcp_servers.github import security as gh_security
 from pocket_agent.extensions.mcp import MCPManager
 from pocket_agent.frontend.cli.render import CliRenderer
 
 
 @pytest.fixture(autouse=True)
 def _clean_github_env_and_cache(monkeypatch, tmp_path):
-    github_mcp._clear_creds_cache()
+    gh_client.clear_creds_cache()
     monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_ALLOWED_REPOS", raising=False)
@@ -52,7 +55,7 @@ def test_github_list_prs_handles_null_user_and_redacts_secrets(monkeypatch, tmp_
             {"number": 11, "title": "Leak api_key=SuperSecretKey123", "user": {"login": "octocat"}},
         ],
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm):
         out = asyncio.run(github_mcp.github_list_prs("octocat", "hello", state="open", per_page=20, page=2))
 
     assert "#10 Fix bug for deleted account (ghost)" in out
@@ -73,18 +76,18 @@ def test_github_read_issue_handles_null_body_and_truncates_long_output(monkeypat
     cm_null, _ = _mock_http_client(
         json_data={"title": "Empty body issue", "state": "open", "user": None, "body": None},
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_null):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_null):
         out_null = asyncio.run(github_mcp.github_read_issue("octocat", "hello", 5))
 
     assert "標題：Empty body issue" in out_null
     assert "作者：ghost" in out_null
     assert "None" not in out_null
 
-    long_body = "X" * (github_mcp.MAX_OUTPUT_CHARS + 300)
+    long_body = "X" * (gh_security.MAX_OUTPUT_CHARS + 300)
     cm_long, _ = _mock_http_client(
         json_data={"title": "Huge issue", "state": "closed", "user": {"login": "dev"}, "body": long_body},
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_long):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_long):
         out_long = asyncio.run(github_mcp.github_read_issue("octocat", "hello", 6))
 
     assert "輸出已截斷" in out_long
@@ -116,7 +119,7 @@ def test_github_blocks_path_traversal_and_invalid_params(
     page,
 ):
     monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
-    with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
         if issue_no < 1:
             out = asyncio.run(github_mcp.github_read_issue(owner, repo, issue_no))
         else:
@@ -131,13 +134,13 @@ def test_github_allowed_repos_whitelist_and_audit_blocked(monkeypatch, tmp_path)
     monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
     monkeypatch.setenv("GITHUB_ALLOWED_REPOS", " MyOrg/Allowed-Repo , second/repo ")
 
-    with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
         blocked = asyncio.run(github_mcp.github_list_prs("evil-org", "secret-repo"))
     assert blocked.startswith("[ERROR] 拒絕存取")
     mock_factory.assert_not_called()
 
     cm, _ = _mock_http_client(json_data=[])
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm):
         allowed_out = asyncio.run(github_mcp.github_list_prs("myorg", "allowed-repo"))
     assert "目前沒有狀態為 open 的 Pull Requests" in allowed_out
 
@@ -156,7 +159,7 @@ def test_github_allowed_repos_whitelist_and_audit_blocked(monkeypatch, tmp_path)
 )
 def test_github_create_comment_blocks_outbound_secrets(monkeypatch, secret_body):
     monkeypatch.setenv("GITHUB_TOKEN", "current_active_pat_secret_123")
-    with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
         out = asyncio.run(github_mcp.github_create_comment("octocat", "hello", 12, secret_body))
     assert out.startswith("[ERROR] 安全攔截")
     mock_factory.assert_not_called()
@@ -166,7 +169,7 @@ def test_github_create_comment_allows_normal_prose_with_token_word(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "current_active_pat_secret_123")
     cm, recorded = _mock_http_client(json_data={"id": 99}, status_code=201)
     body_text = "LGTM! Fixed OAuth token refresh timeout in edge cases."
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm):
         out = asyncio.run(github_mcp.github_create_comment("octocat", "hello", 12, body_text))
 
     assert out == "成功在 octocat/hello#12 新增留言。"
@@ -176,19 +179,19 @@ def test_github_create_comment_allows_normal_prose_with_token_word(monkeypatch):
 
 def test_github_http_401_clears_cache_and_403_rate_limit():
     cm_401, _ = _mock_http_client(json_data={"message": "Bad credentials"}, status_code=401)
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_401):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_401):
         out_401 = asyncio.run(
             github_mcp.github_list_prs("octocat", "hello", github_token="expired_pat_token"),
         )
     assert "[CONN_AUTH]" in out_401
-    assert github_mcp._RUNTIME_CREDS == {}
+    assert gh_client.CREDS_CACHE.get("GITHUB_TOKEN") == ""
 
     cm_403, _ = _mock_http_client(
         json_data={"message": "API rate limit exceeded"},
         status_code=403,
         headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1799999999"},
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_403):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_403):
         out_403 = asyncio.run(
             github_mcp.github_list_prs("octocat", "hello", github_token="valid_pat_token"),
         )
@@ -256,64 +259,49 @@ def test_cli_renderer_summarises_github_tool_args():
 
 def test_tty_secret_prompt_fails_fast_when_not_tty(monkeypatch):
     fake_stream = SimpleNamespace(isatty=lambda: False)
-    monkeypatch.setattr(github_mcp.sys, "stdin", fake_stream)
-    monkeypatch.setattr(github_mcp.sys, "stderr", fake_stream)
-    with pytest.raises(github_mcp._ConnAuthError, match="CONN_AUTH"):
-        github_mcp._tty_secret_prompt("Prompt: ")
+    monkeypatch.setattr("sys.stdin", fake_stream)
+    monkeypatch.setattr("sys.stderr", fake_stream)
+    with pytest.raises(ConnAuthError, match="CONN_AUTH"):
+        gh_client.resolve_token()
 
 
 def test_redirect_validation_blocks_external_host_and_unallowed_repos(monkeypatch):
     monkeypatch.setenv("GITHUB_ALLOWED_REPOS", "myorg/allowed-repo")
 
-    req = httpx.Request("GET", "https://api.github.com/repos/myorg/allowed-repo/pulls")
-    resp_ext = httpx.Response(302, headers={"location": "https://evil.example.com/steal"}, request=req)
     with pytest.raises(PermissionError, match="外部網域"):
-        asyncio.run(github_mcp._validate_redirect_response(resp_ext))
+        gh_security.validate_redirect_url(httpx.URL("https://evil.example.com/steal"))
 
-    resp_http = httpx.Response(301, headers={"location": "http://api.github.com/repos/myorg/allowed-repo"}, request=req)
     with pytest.raises(PermissionError, match="非 HTTPS"):
-        asyncio.run(github_mcp._validate_redirect_response(resp_http))
+        gh_security.validate_redirect_url(httpx.URL("http://api.github.com/repos/myorg/allowed-repo"))
 
-    resp_unallowed = httpx.Response(
-        301,
-        headers={"location": "https://api.github.com/repos/other-org/secret-repo/pulls"},
-        request=req,
-    )
     with pytest.raises(PermissionError, match="GITHUB_ALLOWED_REPOS"):
-        asyncio.run(github_mcp._validate_redirect_response(resp_unallowed))
+        gh_security.validate_redirect_url(httpx.URL("https://api.github.com/repos/other-org/secret-repo/pulls"))
 
-    resp_repo_id = httpx.Response(
-        307,
-        headers={"location": "https://api.github.com/repositories/123456/pulls"},
-        request=req,
-    )
     with pytest.raises(PermissionError, match="/repositories/:id"):
-        asyncio.run(github_mcp._validate_redirect_response(resp_repo_id))
+        gh_security.validate_redirect_url(httpx.URL("https://api.github.com/repositories/123456/pulls"))
 
-    resp_allowed = httpx.Response(
-        302,
-        headers={"location": "https://api.github.com/repos/MyOrg/Allowed-Repo/pulls?page=2"},
-        request=req,
-    )
-    asyncio.run(github_mcp._validate_redirect_response(resp_allowed))
+    gh_security.validate_redirect_url(httpx.URL("https://api.github.com/repos/MyOrg/Allowed-Repo/pulls?page=2"))
 
 
 def test_response_size_limit_and_boundary_secret_redaction(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
-    req = httpx.Request("GET", "https://api.github.com/repos/octocat/hello/issues/1")
-    oversized_resp = httpx.Response(
-        200,
-        json={"title": "big"},
-        headers={"content-length": str(github_mcp.MAX_RESPONSE_BYTES + 100)},
-        request=req,
-    )
-    with pytest.raises(ValueError, match="回應內容過大"):
-        github_mcp._parse_json_response(oversized_resp)
 
-    prefix = ("A" * (github_mcp.MAX_OUTPUT_CHARS - 6)) + " "
+    def oversized_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"title": "big"},
+            headers={"content-length": str(gh_security.MAX_RESPONSE_BYTES + 100)},
+        )
+
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(oversized_handler)):
+        out_oversized = asyncio.run(github_mcp.github_read_issue("octocat", "hello", 1))
+    assert out_oversized.startswith("[ERROR]")
+    assert "回應內容過大" in out_oversized
+
+    prefix = ("A" * (gh_security.MAX_OUTPUT_CHARS - 6)) + " "
     boundary_secret = "ghp_1234567890abcdefghijklmnop"
     raw = prefix + boundary_secret + " " + ("B" * 5000)
-    out, truncated = github_mcp._sanitize_and_truncate(raw, "test_pat_value_999", "hint")
+    out, truncated = gh_security.GITHUB_REDACTION.sanitize_and_truncate(raw, "test_pat_value_999", "hint")
     assert truncated is True
     assert "ghp_12345" not in out
     assert "[REDACTED_TOKEN]" in out
@@ -330,11 +318,10 @@ def test_audit_log_sanitizes_target_against_log_injection(tmp_path):
 
 def test_shared_http_client_reuses_instance_in_same_event_loop():
     async def _run():
-        async with github_mcp._create_http_client() as c1:
-            async with github_mcp._create_http_client() as c2:
+        async with gh_client.create_http_client() as c1:
+            async with gh_client.create_http_client() as c2:
                 assert c1 is c2
-        if github_mcp._SHARED_CLIENT is not None:
-            await github_mcp._SHARED_CLIENT.aclose()
+        await gh_client.close_shared_client()
 
     asyncio.run(_run())
 
@@ -347,7 +334,7 @@ def test_github_read_comments_and_get_pr_files(monkeypatch):
             {"user": None, "created_at": "2026-11-16T10:05:00Z", "body": "token=my_secret_val_12345"},
         ],
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_comments):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_comments):
         out_comments = asyncio.run(github_mcp.github_read_comments("octocat", "hello", 10))
     assert "作者：alice" in out_comments
     assert "First comment" in out_comments
@@ -364,7 +351,7 @@ def test_github_read_comments_and_get_pr_files(monkeypatch):
             },
         ],
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_files):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_files):
         out_files = asyncio.run(github_mcp.github_get_pr_files("octocat", "hello", 10))
     assert "檔案：src/app.py [modified] (+5 / -2)" in out_files
     assert "+print('hello')" in out_files
@@ -378,12 +365,12 @@ def test_github_list_and_search_issues(monkeypatch):
             {"number": 2, "state": "open", "title": "A PR item", "user": {"login": "dev"}, "pull_request": {}},
         ],
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_issues):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_issues):
         out_issues = asyncio.run(github_mcp.github_list_issues("octocat", "hello", labels="bug"))
     assert "#1 [open] Real bug (dev) [bug]" in out_issues
     assert "#2" not in out_issues
 
-    with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
         blocked_search = asyncio.run(github_mcp.github_search_issues("octocat", "hello", "bug repo:evil/other"))
     assert blocked_search.startswith("[ERROR] 拒絕存取")
     mock_factory.assert_not_called()
@@ -394,7 +381,7 @@ def test_github_list_and_search_issues(monkeypatch):
             "items": [{"number": 7, "state": "open", "title": "Crash on startup", "user": {"login": "bob"}}],
         },
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_search):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_search):
         out_search = asyncio.run(github_mcp.github_search_issues("octocat", "hello", "Crash", state="open"))
     assert "#7 [Issue:open] Crash on startup (bob)" in out_search
     assert recorded_search[0].url.params["q"] == "repo:octocat/hello Crash state:open"
@@ -407,11 +394,11 @@ def test_github_get_pr_reviews_and_checks_and_create_issue(monkeypatch):
             {"user": {"login": "reviewer1"}, "state": "APPROVED", "submitted_at": "2026-11-16T12:00:00Z", "body": "OK"},
         ],
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_rev):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_rev):
         out_rev = asyncio.run(github_mcp.github_get_pr_reviews("octocat", "hello", 3))
     assert "審查者：reviewer1 | 狀態：APPROVED" in out_rev
 
-    with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
         bad_ref = asyncio.run(github_mcp.github_get_pr_checks("octocat", "hello", "../evil"))
     assert bad_ref.startswith("[ERROR]")
     mock_factory.assert_not_called()
@@ -424,11 +411,11 @@ def test_github_get_pr_reviews_and_checks_and_create_issue(monkeypatch):
             ],
         },
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_checks):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_checks):
         out_checks = asyncio.run(github_mcp.github_get_pr_checks("octocat", "hello", "feature/branch-1"))
     assert "- pytest: [completed/success] — All passed" in out_checks
 
-    with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
         blocked_issue = asyncio.run(
             github_mcp.github_create_issue("octocat", "hello", "Leak", body="api_key=SuperSecretValue12345"),
         )
@@ -436,7 +423,7 @@ def test_github_get_pr_reviews_and_checks_and_create_issue(monkeypatch):
     mock_factory.assert_not_called()
 
     cm_create, recorded_create = _mock_http_client(json_data={"number": 55}, status_code=201)
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_create):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_create):
         out_create = asyncio.run(
             github_mcp.github_create_issue("octocat", "hello", "Bug report", body="Steps to repro", labels=["bug"]),
         )
@@ -471,7 +458,7 @@ def test_github_prepare_pr_context_with_local_and_fallback_template(monkeypatch,
 
     cm, _ = _mock_http_client(responses=[resp_repo, resp_404, resp_compare])
 
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm):
         out_fallback = asyncio.run(
             github_mcp.github_prepare_pr_context("octocat", "hello", head="enhance_cli_input"),
         )
@@ -489,7 +476,7 @@ def test_github_prepare_pr_context_with_local_and_fallback_template(monkeypatch,
 
     cm2, _ = _mock_http_client(responses=[resp_compare])
 
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm2):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm2):
         out_local = asyncio.run(
             github_mcp.github_prepare_pr_context("octocat", "hello", head="octocat:enhance_cli_input", base="dev"),
         )
@@ -503,7 +490,7 @@ def test_github_create_pr_and_422_error_and_no_merge_tool(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
     assert not hasattr(github_mcp, "github_merge_pr")
 
-    with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
         blocked_pr = asyncio.run(
             github_mcp.github_create_pr(
                 "octocat",
@@ -518,7 +505,7 @@ def test_github_create_pr_and_422_error_and_no_merge_tool(monkeypatch):
     mock_factory.assert_not_called()
 
     cm_same, _ = _mock_http_client(json_data={})
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_same):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_same):
         same_branch = asyncio.run(
             github_mcp.github_create_pr("octocat", "hello", title="feat: x", head="main", base="main"),
         )
@@ -528,7 +515,7 @@ def test_github_create_pr_and_422_error_and_no_merge_tool(monkeypatch):
         json_data={"message": "Validation Failed", "errors": [{"message": "A pull request already exists"}]},
         status_code=422,
     )
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_422):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_422):
         out_422 = asyncio.run(
             github_mcp.github_create_pr(
                 "octocat",
@@ -550,7 +537,7 @@ def test_github_create_pr_and_422_error_and_no_merge_tool(monkeypatch):
     )
     cm_ok, recorded_ok = _mock_http_client(responses=[resp_repo, resp_created])
 
-    with patch("mcp_servers.github_mcp._create_http_client", return_value=cm_ok):
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_ok):
         out_ok = asyncio.run(
             github_mcp.github_create_pr(
                 "octocat",
@@ -604,7 +591,7 @@ def test_confirmation_bridge_formats_pr_preview_and_requires_explicit_approval()
 
 @asynccontextmanager
 async def _transport_client_cm(handler):
-    client = github_mcp._build_async_client()
+    client = gh_client.build_async_client()
     client._transport = httpx.MockTransport(handler)
     client._mounts = {}
     try:
@@ -662,7 +649,7 @@ def test_cr001_redirect_blocks_relative_traversal_and_unknown_path(monkeypatch, 
             return httpx.Response(302, headers={"location": redirect_loc})
         return httpx.Response(200, json=[])
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(get_handler)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(get_handler)):
         out = asyncio.run(github_mcp.github_list_prs("myorg", "allowed-repo"))
 
     assert out.startswith("[ERROR] 拒絕存取")
@@ -686,7 +673,7 @@ def test_cr001_post_redirect_is_blocked(monkeypatch, tmp_path):
             )
         return httpx.Response(201, json={"id": 99})
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(post_handler)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(post_handler)):
         post_out = asyncio.run(github_mcp.github_create_comment("myorg", "allowed-repo", 12, "hi"))
 
     assert post_out.startswith("[ERROR] 拒絕存取")
@@ -713,7 +700,7 @@ def test_cr001_get_follows_valid_allowed_redirect_and_respects_max_redirects(mon
             json=[{"number": 42, "title": "Redirected PR", "user": {"login": "octocat"}}],
         )
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(ok_handler)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(ok_handler)):
         out_ok = asyncio.run(github_mcp.github_list_prs("myorg", "allowed-repo"))
 
     assert "#42 Redirected PR (octocat)" in out_ok
@@ -728,11 +715,11 @@ def test_cr001_get_follows_valid_allowed_redirect_and_respects_max_redirects(mon
             headers={"location": "https://api.github.com/repos/myorg/allowed-repo/pulls"},
         )
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(loop_handler)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(loop_handler)):
         out_loop = asyncio.run(github_mcp.github_list_prs("myorg", "allowed-repo"))
 
     assert out_loop.startswith("[ERROR]")
-    assert len(loop_urls) <= github_mcp.MAX_REDIRECTS + 1
+    assert len(loop_urls) <= gh_client.MAX_REDIRECTS + 1
 
 
 def test_cr002_diff_redacts_secrets_before_truncation_in_pr_files_and_context(monkeypatch, tmp_path):
@@ -755,7 +742,7 @@ def test_cr002_diff_redacts_secrets_before_truncation_in_pr_files_and_context(mo
             ],
         )
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(files_handler)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(files_handler)):
         out_files = asyncio.run(github_mcp.github_get_pr_files("octocat", "hello", 10))
 
     assert "SENSITIVE_PEM_FILE_CHUNK_12345" not in out_files
@@ -785,7 +772,7 @@ def test_cr002_diff_redacts_secrets_before_truncation_in_pr_files_and_context(mo
             )
         return httpx.Response(200, json={"default_branch": "main"})
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(ctx_handler)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(ctx_handler)):
         out_ctx = asyncio.run(github_mcp.github_prepare_pr_context("octocat", "hello", head="feat/key"))
 
     assert "SENSITIVE_PEM_CTX_CHUNK_67890" not in out_ctx
@@ -794,24 +781,24 @@ def test_cr002_diff_redacts_secrets_before_truncation_in_pr_files_and_context(mo
 
 def test_cr002_sanitize_and_truncate_handles_long_pem_and_preslice_shrinkage(monkeypatch):
     long_pem = _make_dummy_pem(3400, "SENSITIVE_4096_PEM_99999")
-    raw_boundary = ("A" * (github_mcp.MAX_OUTPUT_CHARS - 100)) + "\n" + long_pem + "\n" + ("B" * 500)
-    out_b, trunc_b = github_mcp._sanitize_and_truncate(raw_boundary, "test_pat_value_999", "hint")
+    raw_boundary = ("A" * (gh_security.MAX_OUTPUT_CHARS - 100)) + "\n" + long_pem + "\n" + ("B" * 500)
+    out_b, trunc_b = gh_security.GITHUB_REDACTION.sanitize_and_truncate(raw_boundary, "test_pat_value_999", "hint")
     assert trunc_b is True
     assert "SENSITIVE_4096_PEM_99999" not in out_b
     assert "[REDACTED_PRIVATE_KEY]" in out_b
 
     head_pems = _make_dummy_pem(3400, "PEM_ONE") + "\n" + _make_dummy_pem(3400, "PEM_TWO") + "\n"
-    pad_len = (github_mcp.MAX_OUTPUT_CHARS + 2048 - 14) - len(head_pems) - 1
+    pad_len = (gh_security.MAX_OUTPUT_CHARS + 2048 - 14) - len(head_pems) - 1
     raw_shrink = head_pems + ("C" * pad_len) + " ghp_1234567890abcdefghij " + ("Z" * 6000)
-    out_s, trunc_s = github_mcp._sanitize_and_truncate(raw_shrink, "test_pat_value_999", "hint")
+    out_s, trunc_s = gh_security.GITHUB_REDACTION.sanitize_and_truncate(raw_shrink, "test_pat_value_999", "hint")
     assert trunc_s is True
     assert "ghp_1234567890" not in out_s
     assert "[REDACTED_TOKEN]" in out_s
 
-    monkeypatch.setattr(github_mcp, "MAX_RESPONSE_BYTES", 35000)
+    monkeypatch.setattr(gh_security, "MAX_RESPONSE_BYTES", 35000)
     pad_bytes = (35000 - 14) - len(head_pems) - 1
     raw_over = head_pems + ("D" * pad_bytes) + " ghp_9876543210abcdefghij " + ("W" * 3000)
-    out_o, trunc_o = github_mcp._sanitize_and_truncate(raw_over, "test_pat_value_999", "hint")
+    out_o, trunc_o = gh_security.GITHUB_REDACTION.sanitize_and_truncate(raw_over, "test_pat_value_999", "hint")
     assert trunc_o is True
     assert "[REDACTED_PRIVATE_KEY]" in out_o
     assert "ghp_9876543210" not in out_o
@@ -819,13 +806,13 @@ def test_cr002_sanitize_and_truncate_handles_long_pem_and_preslice_shrinkage(mon
 
 def test_cr003_streaming_stops_and_closes_when_200_exceeds_max_bytes(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
-    monkeypatch.setattr(github_mcp, "MAX_RESPONSE_BYTES", 1024)
+    monkeypatch.setattr(gh_security, "MAX_RESPONSE_BYTES", 1024)
     stream = _CountingChunkStream(b"a" * 256, total_chunks=20)
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, stream=stream)
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(handler)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(handler)):
         out = asyncio.run(github_mcp.github_list_prs("octocat", "hello"))
 
     assert out.startswith("[ERROR]")
@@ -835,18 +822,18 @@ def test_cr003_streaming_stops_and_closes_when_200_exceeds_max_bytes(monkeypatch
 
 
 def test_cr003_streaming_caps_oversized_error_body_and_preserves_http_status(monkeypatch):
-    monkeypatch.setattr(github_mcp, "MAX_RESPONSE_BYTES", 1024)
+    monkeypatch.setattr(gh_security, "MAX_RESPONSE_BYTES", 1024)
 
     s401 = _CountingChunkStream(b"e" * 256, total_chunks=20)
 
     def handler_401(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, stream=s401)
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(handler_401)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(handler_401)):
         out_401 = asyncio.run(github_mcp.github_list_prs("octocat", "hello", github_token="expired_pat"))
 
     assert "[CONN_AUTH]" in out_401
-    assert github_mcp._RUNTIME_CREDS == {}
+    assert gh_client.CREDS_CACHE.get("GITHUB_TOKEN") == ""
     assert s401.closed is True
     assert s401.chunks_yielded < 20
 
@@ -859,7 +846,7 @@ def test_cr003_streaming_caps_oversized_error_body_and_preserves_http_status(mon
             stream=s403,
         )
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(handler_403)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(handler_403)):
         out_403 = asyncio.run(github_mcp.github_list_prs("octocat", "hello", github_token="valid_pat"))
 
     assert "Rate Limit Exceeded" in out_403
@@ -875,7 +862,7 @@ def test_cr003_streaming_caps_oversized_error_body_and_preserves_http_status(mon
     def handler_422_gz(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(422, headers={"content-encoding": "gzip"}, stream=s422_gz)
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(handler_422_gz)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(handler_422_gz)):
         out_gz = asyncio.run(github_mcp.github_list_prs("octocat", "hello", github_token="valid_pat"))
 
     assert "HTTP 422" in out_gz
@@ -897,7 +884,7 @@ def test_cr003_streaming_caps_oversized_error_body_and_preserves_http_status(mon
 )
 def test_cr004_outbound_blocks_quoted_keys_and_structured_token(monkeypatch, secret_body):
     monkeypatch.setenv("GITHUB_TOKEN", "current_active_pat_secret_123")
-    with patch("mcp_servers.github_mcp._create_http_client") as mock_factory:
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
         out = asyncio.run(github_mcp.github_create_comment("octocat", "hello", 12, secret_body))
     assert out.startswith("[ERROR] 安全攔截")
     mock_factory.assert_not_called()
@@ -905,29 +892,29 @@ def test_cr004_outbound_blocks_quoted_keys_and_structured_token(monkeypatch, sec
 
 def test_cr004_outbound_allows_prose_and_placeholders_and_inbound_redacts_quoted_keys():
     safe_prose = "Note about OAuth token: authentication fails on timeout."
-    assert github_mcp._check_outbound_content(safe_prose) is None
+    assert gh_security.GITHUB_REDACTION.check_outbound_content(safe_prose) is None
 
     safe_json = '{"token": "changeme", "password": "example"}'
-    assert github_mcp._check_outbound_content(safe_json) is None
+    assert gh_security.GITHUB_REDACTION.check_outbound_content(safe_json) is None
 
     safe_tpl = "token=${GITHUB_TOKEN}\ntoken=<placeholder>\ntoken=........"
-    assert github_mcp._check_outbound_content(safe_tpl) is None
+    assert gh_security.GITHUB_REDACTION.check_outbound_content(safe_tpl) is None
 
     inbound_json = (
         '{"password": "MySecretPassword123", "api_key": "MySecretKey12345", "access_token": "MyAccessTok12345"}'
     )
-    redacted = github_mcp._redact_output(inbound_json)
+    redacted = gh_security.GITHUB_REDACTION.redact(inbound_json)
     assert "MySecretPassword123" not in redacted
     assert "MySecretKey12345" not in redacted
     assert "MyAccessTok12345" not in redacted
     assert "[REDACTED]" in redacted
     assert "]]" not in redacted
-    assert github_mcp._redact_output(redacted) == redacted
+    assert gh_security.GITHUB_REDACTION.redact(redacted) == redacted
 
-    assert github_mcp._redact_output("token=ghp_1234567890abcdefghijklmnop") == "token=[REDACTED_TOKEN]"
-    assert github_mcp._redact_output("token=[REDACTED_TOKEN]") == "token=[REDACTED_TOKEN]"
+    assert gh_security.GITHUB_REDACTION.redact("token=ghp_1234567890abcdefghijklmnop") == "token=[REDACTED_TOKEN]"
+    assert gh_security.GITHUB_REDACTION.redact("token=[REDACTED_TOKEN]") == "token=[REDACTED_TOKEN]"
     non_url_repeat = ".a" * 5000
-    assert github_mcp._redact_output(non_url_repeat) == non_url_repeat
+    assert gh_security.GITHUB_REDACTION.redact(non_url_repeat) == non_url_repeat
 
 
 def test_cr005_zero_hit_search_does_not_echo_query(monkeypatch):
@@ -936,7 +923,7 @@ def test_cr005_zero_hit_search_does_not_echo_query(monkeypatch):
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"total_count": 0, "items": []})
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(handler)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(handler)):
         out = asyncio.run(
             github_mcp.github_search_issues("octocat", "hello", "SENSITIVE_QUERY_MARKER_" + ("Q" * 500)),
         )
@@ -956,7 +943,7 @@ def test_cr005_errors_and_audit_redact_active_token_sanitize_fields_and_bound_le
             json={"message": f"Validation failed for {active_tok}", "errors": errors},
         )
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(handler_422)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(handler_422)):
         out_422 = asyncio.run(github_mcp.github_list_prs("octocat", "hello", github_token=active_tok))
 
     assert out_422.startswith("[ERROR]")
@@ -971,7 +958,7 @@ def test_cr005_errors_and_audit_redact_active_token_sanitize_fields_and_bound_le
             headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": f"leak_{active_tok}"},
         )
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(handler_403)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(handler_403)):
         out_403 = asyncio.run(github_mcp.github_list_prs("octocat", "hello", github_token=active_tok))
 
     assert "Rate Limit Exceeded" in out_403
@@ -981,7 +968,7 @@ def test_cr005_errors_and_audit_redact_active_token_sanitize_fields_and_bound_le
     def handler_err(_request: httpx.Request) -> httpx.Response:
         raise RuntimeError(f"boom {active_tok} " + ("X" * 5000))
 
-    with patch("mcp_servers.github_mcp._create_http_client", lambda: _transport_client_cm(handler_err)):
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(handler_err)):
         out_err = asyncio.run(github_mcp.github_list_prs("octocat", "hello", github_token=active_tok))
 
     assert out_err.startswith("[ERROR]")
@@ -995,39 +982,39 @@ def test_cr006_clear_creds_cache_preserves_shared_client_and_clears_cookies():
         c1 = None
         c3 = None
         try:
-            async with github_mcp._create_http_client() as client1:
+            async with gh_client.create_http_client() as client1:
                 c1 = client1
                 c1.cookies.set("gh_sess", "secret", domain="api.github.com")
-                github_mcp._clear_creds_cache()
-                assert github_mcp._SHARED_CLIENT is c1
+                gh_client.clear_creds_cache()
+                assert gh_client._SHARED_CLIENT is c1
                 assert not c1.is_closed
                 assert len(c1.cookies) == 0
 
-            async with github_mcp._create_http_client() as c2:
+            async with gh_client.create_http_client() as c2:
                 assert c2 is c1
 
-            assert hasattr(github_mcp, "_close_shared_client")
-            await github_mcp._close_shared_client()
+            assert hasattr(gh_client, "close_shared_client")
+            await gh_client.close_shared_client()
             assert c1.is_closed is True
-            assert github_mcp._SHARED_CLIENT is None
+            assert gh_client._SHARED_CLIENT is None
 
-            async with github_mcp._server_lifespan(github_mcp.mcp):
-                async with github_mcp._create_http_client() as client3:
+            async with gh_client.server_lifespan(github_mcp.mcp):
+                async with gh_client.create_http_client() as client3:
                     c3 = client3
                     assert not c3.is_closed
             assert c3 is not None and c3.is_closed is True
-            assert github_mcp._SHARED_CLIENT is None
+            assert gh_client._SHARED_CLIENT is None
         finally:
             for client in (c1, c3):
                 if client is not None and not client.is_closed:
                     await client.aclose()
-            github_mcp._SHARED_CLIENT = None
-            github_mcp._SHARED_CLIENT_LOOP = None
+            gh_client._SHARED_CLIENT = None
+            gh_client._SHARED_CLIENT_LOOP = None
 
     asyncio.run(_run())
 
     async def _run_cross_loop():
-        async with github_mcp._create_http_client() as client_loop:
+        async with gh_client.create_http_client() as client_loop:
             return client_loop
 
     loop1_client = asyncio.run(_run_cross_loop())
@@ -1038,6 +1025,6 @@ def test_cr006_clear_creds_cache_preserves_shared_client_and_clears_cookies():
         assert loop1_client.is_closed is True
         assert not loop2_client.is_closed
     finally:
-        asyncio.run(github_mcp._close_shared_client())
-        github_mcp._SHARED_CLIENT = None
-        github_mcp._SHARED_CLIENT_LOOP = None
+        asyncio.run(gh_client.close_shared_client())
+        gh_client._SHARED_CLIENT = None
+        gh_client._SHARED_CLIENT_LOOP = None

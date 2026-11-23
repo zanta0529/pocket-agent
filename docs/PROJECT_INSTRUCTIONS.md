@@ -25,7 +25,7 @@
 | `src/pocket_agent/system/`     | 系統基礎設施：全域常數（`constants`）、多語系（`i18n` 與 `locales/`）、認證（`auth`）、供應商策略（`providers/`）、路徑解析（`paths`）、設定（`config`）、指令白名單（`permissions`）、Markdown 註冊表（`registry`）、巨集與系統指令（`commands`、`sys_commands`）、設定精靈（`wizard`）、自動清理（`housekeeping`）、相容處理（`compat`）與線上更新（`updater`）。 |
 | `src/pocket_agent/extensions/` | 擴充功能：MCP 伺服器生命週期、白名單授權與動態連線參數注入管理（`mcp`）、漸進式技能載入與遮蔽（`skills`）、生命週期事件鉤子（`hooks`）與外掛封裝管理（`plugins`）。                                                                                      |
 | `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行（`shell`）、原生檔案操作（`fs`）、網路請求（`web`）、圖片生成（`image`）、文件產出（`doc`）、文件讀取（`document`）、FTS5 檢索（`rag`）與 AST 結構圖（`repo_map`）。 |
-| `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器腳本（`browser_mcp.py`、`github_mcp.py`、`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`memory_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`）與資料庫共用基礎設施（`_db_common.py`，以 `--internal-mcp-server` 獨立啟動時須確保目錄在 `sys.path`）。 |
+| `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器薄入口（`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`github_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`）、對應領域子套件（`sqlite/`、`mysql/`、`mssql/`、`github/`、`rhel/`、`win_rdp/`）、輕量單檔伺服器（`browser_mcp.py`、`memory_mcp.py`）與共用基礎設施（`_shared/`，以 `--internal-mcp-server` 獨立啟動時須確保目錄在 `sys.path`）。 |
 | `subagents/`                   | 隨附之內建子代理人設定義檔（`.md`）。                                                                                                                                                                                         |
 | `build_scripts/`、`scripts/`   | 可攜版打包腳本（`build_scripts/build_portable.py`）與依賴完整性檢查工具（`scripts/check_imports.py`）。                                                                                                                       |
 
@@ -46,6 +46,9 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 - **Factory（工廠）**：`EngineFactory` 集中選擇及建立引擎；呼叫端應顯式傳入 `provider`，避免依賴 `resolve_provider` 的 URL 推論後備。
 - **Command（指令）**：前端斜線指令應透過 `CliCommandRegistry` 註冊各自獨立的 `CliCommand` 實作，禁止以單一巨型 `if/elif` 狀態路由器集中處理多個互動指令。
 - **狀態同步**：當指令變更了 Agent 存取權限或全域狀態時，應透過 `Agent._instructions()` 動態注入狀態摘要；業務規則必須統一實作於共用層，前端僅負責接收狀態並渲染。
+- **MCP 伺服器模組化規範（`mcp_servers/`）**：
+  - 複雜領域 MCP 伺服器採「共用基礎設施（`mcp_servers/_shared/`）＋ 領域子套件（`<domain>/`）＋ 頂層薄入口（`<name>_mcp.py`）」分層，由 `create_mcp_server(name, registrars)`（Factory）組裝各 `tools/*.py` 的 `register(mcp)`（Command／Registrar），並將連線與協定差異封裝於獨立轉接層（Adapter）、安全與 SQL 驗證集中於 `security.py`／`sql_guard.py`（Strategy）。
+  - 新增或擴充 MCP 伺服器時，應優先複用 `mcp_servers._shared` 既有之 `CONSTANTS`、`CredentialCache`、`tty_prompt`、遮罩與稽核元件，禁止在各伺服器重複實作共用設施或重新堆積巨型單檔。
 - **MCP 工具命名空間與顯示規範**：
   - **強制前綴隔離**：所有透過 `MCPManager` 註冊的 MCP 工具，一律冠上 `mcp__{normalized_server}__{tool}` 命名空間，以隔離內建工具並避免跨伺服器撞名；命名正規化與解析統一由 `extensions/mcp.py` 的 `normalize_mcp_server_name`、`format_mcp_tool_name` 與 `parse_mcp_tool_name` 集中維護，禁止在各模組重複實作字串切割邏輯。`server_name` 須正規化為 `[a-zA-Z0-9_-]`，並留意模型 API 常見的 64 字元工具名稱上限。
   - **嚴格權限比對**：`Agent._build_tools` 中的 `allowed_tools` 對 MCP 工具採嚴格比對（須使用完整 `mcp__{server}__{tool}` 名稱），不提供未加前綴的向下相容。
@@ -71,7 +74,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 - **語系檔維護**：所有使用者可見之顯示文字（CLI 提示、選單、設定精靈、錯誤訊息、狀態與額度顯示）必須維護於 `src/pocket_agent/locales/*.json`（目前包含 `zh_TW.json` 與 `en_US.json`），透過 `pocket_agent.system.i18n.t(key, **kwargs)` 讀取，**嚴禁在程式碼中寫死顯示文字**或傳入冗餘的 `default` 硬編碼文案；新增或調整任何顯示文字時，**務必搜尋 `src/pocket_agent/locales/*.json` 下所有支援語系檔並同步新增／更新對應鍵值**。當語系檔與預設基準 `zh_TW` 皆查無鍵值時，直接回傳該 `key` 名稱以利開發與測試人員辨識遺漏。
 - **語系解析順序**：執行期由 `get_locale()` 依序解析：`set_locale()` 顯式設定 ＞ 環境變數 `POCKET_AGENT_LANG` ＞ `config.json` 之 `locale` ＞ 預設 `zh_TW`（`setup` 精靈啟動時若 `config.json` 未明確設定 `locale` 則預設使用 `en_US`）。
 - **不可翻譯之邊界不變量**：內部工具名稱（`read_file`、`mcp__<server>__<tool>`）、送往 LLM 的 System Prompt／Instructions、內部前綴比對邏輯（如 `ConfirmationBridge._is_fs_edit`、安全標記 `[CONN_AUTH]` / `[ERROR]`）及後台 `logging` 訊息不得納入 UI 多語系替換。
-- **獨立模組與 MCP 伺服器相容性**：`mcp_servers/` 腳本須保留獨立執行的能力，匯入 `pocket_agent.system.i18n.t` 時應搭配 `try / except ImportError` 提供純鍵值降級函式；既有獨立 MCP 伺服器若尚未全面多語系化，新增或修改工具時應優先遵循本規範。
+- **獨立模組與 MCP 伺服器相容性**：`mcp_servers/` 腳本須保留獨立執行的能力，應優先直接匯入 `mcp_servers._shared.t`（已統一封裝 `pocket_agent.system.i18n.t` 與 `ImportError` 純鍵值降級），禁止在各 MCP 模組重複撰寫降級樣板；既有獨立 MCP 伺服器若尚未全面多語系化，新增或修改工具時應優先遵循本規範。
 - **測試語系隔離**：`tests/conftest.py` 透過 `autouse=True` fixture 固定測試執行期語系為 `zh_TW` 並清除 `POCKET_AGENT_LANG`，防止本機 `~/.pocket-agent/config.json` 設定干擾自動化測試。
 
 ## 4. 資料、擴充與安全邊界

@@ -2,23 +2,14 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
-from mcp.server.mcpserver import MCPServer
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-_SRC_DIR = Path(__file__).resolve().parent.parent / "src"
-if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
+from mcp_servers._shared import create_mcp_server, t  # noqa: E402
 
-try:
-    from pocket_agent.system.i18n import t
-except ImportError:
-
-    def t(key: str, default: str | None = None, **kwargs: Any) -> str:
-        return default if default is not None else key
-
-
-mcp = MCPServer("memory")
+mcp = create_mcp_server("memory")
 
 
 def get_memory_file() -> Path:
