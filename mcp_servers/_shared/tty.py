@@ -22,10 +22,10 @@ class SystemTtyPrompter:
 
     def prompt(self, prompt_text: str, *, is_password: bool = False, hint: str = "") -> str:
         if is_password:
-            return self._prompt_password(prompt_text)
-        return self._prompt_plain(prompt_text, hint=hint)
+            return self.prompt_secret(prompt_text)
+        return self.prompt_text(prompt_text, hint=hint)
 
-    def _prompt_password(self, prompt_text: str) -> str:
+    def prompt_secret(self, prompt_text: str) -> str:
         if os.name == "nt" and sys.stdin is not sys.__stdin__:
             raise ValueError(t("mcp_shared.tty_password_unavailable"))
         is_patched_getpass = getattr(getpass.getpass, "__module__", "") != "getpass"
@@ -41,7 +41,7 @@ class SystemTtyPrompter:
             except (getpass.GetPassWarning, EOFError, OSError) as exc:
                 raise ValueError(t("mcp_shared.tty_password_read_failed")) from exc
 
-    def _prompt_plain(self, prompt_text: str, *, hint: str = "") -> str:
+    def prompt_text(self, prompt_text: str, *, hint: str = "") -> str:
         tty_in_name = "CONIN$" if os.name == "nt" else "/dev/tty"
         tty_out_name = "CONOUT$" if os.name == "nt" else "/dev/tty"
         try:
@@ -57,6 +57,16 @@ class SystemTtyPrompter:
 
 
 DEFAULT_TTY_PROMPTER = SystemTtyPrompter()
+
+
+def tty_prompt_text(prompt_text: str, *, hint: str = "") -> str:
+    """透過預設系統終端機安全詢問非機密文字輸入（不含密碼）。"""
+    return DEFAULT_TTY_PROMPTER.prompt_text(prompt_text, hint=hint)
+
+
+def tty_prompt_secret(prompt_text: str) -> str:
+    """透過預設系統終端機安全詢問隱藏密碼或 Token。"""
+    return DEFAULT_TTY_PROMPTER.prompt_secret(prompt_text)
 
 
 def tty_prompt(prompt_text: str, *, is_password: bool = False, hint: str = "") -> str:

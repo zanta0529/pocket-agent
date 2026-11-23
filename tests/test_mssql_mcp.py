@@ -213,20 +213,25 @@ def test_mssql_streaming_truncation_anti_oom(monkeypatch):
 
 @pytest.mark.parametrize("empty_val", ["", "   ", "null", "NULL", "None", "none", "~"])
 def test_mssql_empty_or_null_env_prompts_and_caches(monkeypatch, empty_val):
-    """驗證未設定或為空值/null 時透過 _tty_prompt 互動詢問（Database 為選填不詢問）並快取於記憶體。"""
+    """驗證未設定或為空值/null 時透過終端機互動詢問（Database 為選填不詢問）並快取於記憶體。"""
     monkeypatch.setenv("MSSQL_HOST", empty_val)
     monkeypatch.setenv("MSSQL_DATABASE", empty_val)
-    prompts = iter(["sql.corp.local", "", r"CORP\dbuser", "PromptedSqlPass!1"])
+    text_prompts = iter(["sql.corp.local", "", r"CORP\dbuser"])
 
-    with patch("mcp_servers.mssql.adapter.tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
+    with (
+        patch("mcp_servers.mssql.adapter.tty_prompt_text", side_effect=lambda *a, **kw: next(text_prompts)) as mock_t,
+        patch("mcp_servers.mssql.adapter.tty_prompt_secret", return_value="PromptedSqlPass!1") as mock_s,
+    ):
         resolved = mssql_adapter.MSSQL_ADAPTER.resolve_connection_params()
         assert resolved == ("sql.corp.local", "1433", r"CORP\dbuser", "PromptedSqlPass!1", "")
-        assert mock_prompt.call_count == 4
+        assert mock_t.call_count == 3
+        assert mock_s.call_count == 1
 
         # 第二次呼叫直接命中快取，不再詢問
         resolved2 = mssql_adapter.MSSQL_ADAPTER.resolve_connection_params()
         assert resolved2 == resolved
-        assert mock_prompt.call_count == 4
+        assert mock_t.call_count == 3
+        assert mock_s.call_count == 1
 
 
 def test_mssql_missing_driver_preserves_cached_creds(monkeypatch):
@@ -372,7 +377,10 @@ def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port_tolerance(
     monkeypatch.setenv("MSSQL_USER", "sa_reader")
     monkeypatch.setenv("MSSQL_PASSWORD", "Ipv6Secret!99")
 
-    with patch("mcp_servers.mssql.adapter.tty_prompt") as mock_prompt:
+    with (
+        patch("mcp_servers.mssql.adapter.tty_prompt_text") as mock_text,
+        patch("mcp_servers.mssql.adapter.tty_prompt_secret") as mock_secret,
+    ):
         host, port, user, pw, _ = mssql_adapter.MSSQL_ADAPTER.resolve_connection_params(
             mssql_host="fe80::1",
             mssql_port="1433",
@@ -381,7 +389,8 @@ def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port_tolerance(
         assert port == "1433"
         assert user == "sa_reader"
         assert pw == "Ipv6Secret!99"
-        mock_prompt.assert_not_called()
+        mock_text.assert_not_called()
+        mock_secret.assert_not_called()
 
 
 def test_redact_url_pem_and_format_cell_null_multiline():

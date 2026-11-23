@@ -10,7 +10,7 @@ from mcp_servers._shared import (
     CredentialCache,
     ReadOnlyDatabaseAdapter,
     is_empty_or_null,
-    tty_prompt,
+    tty_prompt_text,
 )
 
 _UNC_PREFIXES = ("\\\\", "//")
@@ -78,7 +78,7 @@ class SqliteReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     raw_path = (env_val or "").strip().strip("'\"")
                 else:
                     prompt_text = "請輸入要連線的 SQLite 資料庫完整路徑與檔名 (DB_PATH): "
-                    raw_path = tty_prompt(prompt_text, hint="DB_PATH").strip().strip("'\"")
+                    raw_path = tty_prompt_text(prompt_text, hint="DB_PATH").strip().strip("'\"")
 
             if is_empty_or_null(raw_path):
                 self.cache.clear()

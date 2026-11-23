@@ -17,7 +17,7 @@ from mcp_servers._shared import (
     ConnAuthError,
     CredentialCache,
     is_empty_or_null,
-    tty_prompt,
+    tty_prompt_secret,
 )
 from mcp_servers.github import security
 
@@ -122,15 +122,7 @@ def resolve_token(github_token: str = "") -> str:
                 raw = cached
             else:
                 try:
-                    raw = (
-                        tty_prompt(
-                            "請輸入 GitHub Personal Access Token (GITHUB_TOKEN): ",
-                            is_password=True,
-                            hint="GITHUB_TOKEN",
-                        )
-                        .strip()
-                        .strip("'\"")
-                    )
+                    raw = tty_prompt_secret("請輸入 GitHub Personal Access Token (GITHUB_TOKEN): ").strip().strip("'\"")
                 except ValueError as exc:
                     msg = "[CONN_AUTH] 缺少 GITHUB_TOKEN 憑證。請於 mcp_config.yaml 的 env 區段設定 GITHUB_TOKEN。"
                     raise ConnAuthError(msg) from exc

@@ -12,7 +12,8 @@ from mcp_servers._shared import (
     ReadOnlyDatabaseAdapter,
     clean_param,
     is_empty_or_null,
-    tty_prompt,
+    tty_prompt_secret,
+    tty_prompt_text,
     validate_host,
     validate_identifier,
     validate_port,
@@ -122,14 +123,16 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
             database = clean_param(mssql_database) or cached_db or env_db
 
             if not host:
-                host = clean_param(tty_prompt("請輸入 SQL Server 主機 IP 或位址 (MSSQL_HOST): ", hint="MSSQL_*"))
+                host = clean_param(tty_prompt_text("請輸入 SQL Server 主機 IP 或位址 (MSSQL_HOST): ", hint="MSSQL_*"))
             if not port:
                 port = (
-                    clean_param(tty_prompt("請輸入 SQL Server 連接埠 (MSSQL_PORT) [預設 1433]: ", hint="MSSQL_*"))
+                    clean_param(tty_prompt_text("請輸入 SQL Server 連接埠 (MSSQL_PORT) [預設 1433]: ", hint="MSSQL_*"))
                     or "1433"
                 )
             if not user:
-                user = clean_param(tty_prompt(f"請輸入 {host} 的 SQL Server 登入帳號 (MSSQL_USER): ", hint="MSSQL_*"))
+                user = clean_param(
+                    tty_prompt_text(f"請輸入 {host} 的 SQL Server 登入帳號 (MSSQL_USER): ", hint="MSSQL_*")
+                )
 
             if not host:
                 raise ValueError("未提供 SQL Server 主機位址 (MSSQL_HOST)。")
@@ -172,11 +175,7 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     password = str(env_pw)
 
             if not password:
-                password = tty_prompt(
-                    f"請輸入 {user}@{host} 的 SQL Server 登入密碼: ",
-                    is_password=True,
-                    hint="MSSQL_*",
-                )
+                password = tty_prompt_secret(f"請輸入 {user}@{host} 的 SQL Server 登入密碼: ")
             if not password:
                 raise ValueError("未提供 SQL Server 登入密碼 (MSSQL_PASSWORD)。")
 

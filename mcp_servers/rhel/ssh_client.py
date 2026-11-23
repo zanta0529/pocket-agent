@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from mcp_servers._shared import CONSTANTS, AuditLogger, CredentialCache, tty_prompt
+from mcp_servers._shared import CONSTANTS, AuditLogger, CredentialCache, tty_prompt_secret, tty_prompt_text
 from mcp_servers.rhel import security
 
 MAX_CAPTURE_BYTES = CONSTANTS.max_capture_bytes
@@ -47,11 +47,11 @@ def resolve_connection_params(
         key_path = ssh_key_path.strip() or cached_key or (os.getenv("RHEL_SSH_KEY_PATH") or "").strip()
 
         if not host:
-            host = tty_prompt("請輸入 RHEL 主機 IP 或位址 (RHEL_HOST): ").strip()
+            host = tty_prompt_text("請輸入 RHEL 主機 IP 或位址 (RHEL_HOST): ").strip()
         if not port:
-            port = tty_prompt("請輸入 SSH 連接埠 (RHEL_SSH_PORT) [預設 22]: ").strip() or "22"
+            port = tty_prompt_text("請輸入 SSH 連接埠 (RHEL_SSH_PORT) [預設 22]: ").strip() or "22"
         if not user:
-            user = tty_prompt(f"請輸入 {host} 的 SSH 登入帳號 (RHEL_SSH_USER): ").strip()
+            user = tty_prompt_text(f"請輸入 {host} 的 SSH 登入帳號 (RHEL_SSH_USER): ").strip()
 
         if not host:
             raise ValueError("未提供 RHEL 主機位址 (RHEL_HOST)。")
@@ -96,7 +96,7 @@ def resolve_connection_params(
 
         if not key_path:
             if not password:
-                password = tty_prompt(f"請輸入 {user}@{host} 的 SSH 登入密碼: ", is_password=True)
+                password = tty_prompt_secret(f"請輸入 {user}@{host} 的 SSH 登入密碼: ")
             if not password:
                 raise ValueError("未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；未指定私鑰時必須提供密碼驗證。")
 

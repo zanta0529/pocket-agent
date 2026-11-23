@@ -11,7 +11,8 @@ from mcp_servers._shared import (
     ReadOnlyDatabaseAdapter,
     clean_param,
     is_empty_or_null,
-    tty_prompt,
+    tty_prompt_secret,
+    tty_prompt_text,
     validate_host,
     validate_identifier,
     validate_port,
@@ -85,13 +86,16 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
             database = clean_param(mysql_database) or cached_db or env_db
 
             if not host:
-                host = clean_param(tty_prompt("請輸入 MySQL/MariaDB 主機 IP 或位址 (MYSQL_HOST): ", hint="MYSQL_*"))
+                host = clean_param(
+                    tty_prompt_text("請輸入 MySQL/MariaDB 主機 IP 或位址 (MYSQL_HOST): ", hint="MYSQL_*")
+                )
             if not port:
                 port = (
-                    clean_param(tty_prompt("請輸入 MySQL 連接埠 (MYSQL_PORT) [預設 3306]: ", hint="MYSQL_*")) or "3306"
+                    clean_param(tty_prompt_text("請輸入 MySQL 連接埠 (MYSQL_PORT) [預設 3306]: ", hint="MYSQL_*"))
+                    or "3306"
                 )
             if not user:
-                user = clean_param(tty_prompt(f"請輸入 {host} 的 MySQL 登入帳號 (MYSQL_USER): ", hint="MYSQL_*"))
+                user = clean_param(tty_prompt_text(f"請輸入 {host} 的 MySQL 登入帳號 (MYSQL_USER): ", hint="MYSQL_*"))
 
             if not host:
                 raise ValueError("未提供 MySQL 主機位址 (MYSQL_HOST)。")
@@ -134,7 +138,7 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     password = str(env_pw)
 
             if not password:
-                password = tty_prompt(f"請輸入 {user}@{host} 的 MySQL 登入密碼: ", is_password=True, hint="MYSQL_*")
+                password = tty_prompt_secret(f"請輸入 {user}@{host} 的 MySQL 登入密碼: ")
             if not password:
                 raise ValueError("未提供 MySQL 登入密碼 (MYSQL_PASSWORD)。")
 

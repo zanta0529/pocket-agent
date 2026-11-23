@@ -41,6 +41,8 @@ from mcp_servers._shared.tty import (
     SystemTtyPrompter,
     TtyPrompter,
     tty_prompt,
+    tty_prompt_secret,
+    tty_prompt_text,
 )
 from mcp_servers._shared.validation import (
     clean_param,
@@ -85,6 +87,8 @@ __all__ = [
     "t",
     "truncate_health_report",
     "tty_prompt",
+    "tty_prompt_secret",
+    "tty_prompt_text",
     "validate_host",
     "validate_identifier",
     "validate_port",

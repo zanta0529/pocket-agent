@@ -39,7 +39,7 @@ def test_missing_params_prompts_tty_and_rejects_empty_password(monkeypatch):
     monkeypatch.setenv("RHEL_HOST", "192.168.1.10")
     monkeypatch.setenv("RHEL_SSH_PORT", "22")
     monkeypatch.setenv("RHEL_SSH_USER", "admin")
-    with patch("mcp_servers.rhel.ssh_client.tty_prompt", return_value="") as mock_prompt:
+    with patch("mcp_servers.rhel.ssh_client.tty_prompt_secret", return_value="") as mock_prompt:
         out = rhel_mcp.rhel_system_overview()
         assert out.startswith("[ERROR]")
         assert "連線參數" in out
@@ -50,10 +50,14 @@ def test_partial_config_prompts_only_missing_fields_and_caches(monkeypatch):
     monkeypatch.setenv("RHEL_HOST", "172.17.3.57")
     monkeypatch.setenv("RHEL_SSH_PORT", "")
 
-    prompts = iter(["2222", "opsuser", "MyPassword99"])
-    with patch("mcp_servers.rhel.ssh_client.tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
+    text_prompts = iter(["2222", "opsuser"])
+    with (
+        patch("mcp_servers.rhel.ssh_client.tty_prompt_text", side_effect=lambda *a, **kw: next(text_prompts)) as mock_t,
+        patch("mcp_servers.rhel.ssh_client.tty_prompt_secret", return_value="MyPassword99") as mock_s,
+    ):
         args, pw, timeout = rhel_ssh.build_ssh_args("uptime")
-        assert mock_prompt.call_count == 3
+        assert mock_t.call_count == 2
+        assert mock_s.call_count == 1
         assert pw == "MyPassword99"
         assert timeout == 10
         assert "BatchMode=no" in args
@@ -65,9 +69,10 @@ def test_partial_config_prompts_only_missing_fields_and_caches(monkeypatch):
         assert "-p" in args and "2222" in args
         assert args[-3:] == ["--", "opsuser@172.17.3.57", "uptime"]
 
-        # 第二次呼叫應直接使用記憶體快取，不再觸發 _tty_prompt
+        # 第二次呼叫應直接使用記憶體快取，不再觸發終端機詢問
         args2, pw2, _ = rhel_ssh.build_ssh_args("df -h")
-        assert mock_prompt.call_count == 3
+        assert mock_t.call_count == 2
+        assert mock_s.call_count == 1
         assert pw2 == "MyPassword99"
         assert args2[-2] == "opsuser@172.17.3.57"
 
@@ -452,19 +457,19 @@ def test_cross_host_credentials_not_leaked(monkeypatch):
             "RHEL_HOST": "192.168.1.10",
             "RHEL_SSH_PORT": "22",
             "RHEL_SSH_USER": "admin",
-            "RHEL_SSH_PASSWORD": "OldHostPassword!123",
         }
     )
+    rhel_ssh.CREDS_CACHE.set_secret("RHEL_SSH_PASSWORD", "OldHostPassword!123")
 
     # 目標主機變更為不同主機時，禁止沿用舊主機密碼快取
     prompts = iter(["NewHostPass!456"])
-    with patch("mcp_servers.rhel.ssh_client.tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
+    with patch("mcp_servers.rhel.ssh_client.tty_prompt_secret", side_effect=lambda *a, **kw: next(prompts)) as mock_s:
         host, port, user, pw, key = rhel_ssh.resolve_connection_params(ssh_host="192.168.1.20")
         assert host == "192.168.1.20"
         assert pw == "NewHostPass!456"
         assert key == ""
-        assert mock_prompt.call_count == 1
-        assert "密碼" in mock_prompt.call_args_list[0].args[0]
+        assert mock_s.call_count == 1
+        assert "密碼" in mock_s.call_args_list[0].args[0]
 
 
 def test_key_mode_generates_pubkey_ssh_args(tmp_path, monkeypatch):
@@ -731,11 +736,15 @@ def test_ipv6_env_host_matches_password_and_known_hosts_prefix_safety(monkeypatc
     monkeypatch.setenv("RHEL_SSH_USER", "opsuser")
     monkeypatch.setenv("RHEL_SSH_PASSWORD", "Ipv6Secret!99")
 
-    with patch("mcp_servers.rhel.ssh_client.tty_prompt") as mock_prompt:
+    with (
+        patch("mcp_servers.rhel.ssh_client.tty_prompt_text") as mock_text,
+        patch("mcp_servers.rhel.ssh_client.tty_prompt_secret") as mock_secret,
+    ):
         host, port, user, pw, _ = rhel_ssh.resolve_connection_params()
         assert host == "[fe80::1]"
         assert pw == "Ipv6Secret!99"
-        mock_prompt.assert_not_called()
+        mock_text.assert_not_called()
+        mock_secret.assert_not_called()
 
     rhel_ssh.CREDS_CACHE.clear()
     _set_full_creds(monkeypatch)
@@ -811,7 +820,10 @@ def test_rhel_parallel_resolve_connection_params_prompts_once(monkeypatch):
             return "admin"
         return "pw!"
 
-    with patch("mcp_servers.rhel.ssh_client.tty_prompt", side_effect=fake_tty_prompt):
+    with (
+        patch("mcp_servers.rhel.ssh_client.tty_prompt_text", side_effect=fake_tty_prompt),
+        patch("mcp_servers.rhel.ssh_client.tty_prompt_secret", side_effect=fake_tty_prompt),
+    ):
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             futures = [pool.submit(rhel_ssh.resolve_connection_params) for _ in range(4)]
             results = [f.result() for f in futures]

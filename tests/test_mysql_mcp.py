@@ -87,7 +87,10 @@ def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port(monkeypatc
     monkeypatch.setenv("MYSQL_USER", "db_reader")
     monkeypatch.setenv("MYSQL_PASSWORD", "Ipv6MySqlPw!")
 
-    with patch("mcp_servers.mysql.adapter.tty_prompt") as mock_prompt:
+    with (
+        patch("mcp_servers.mysql.adapter.tty_prompt_text") as mock_text,
+        patch("mcp_servers.mysql.adapter.tty_prompt_secret") as mock_secret,
+    ):
         host, port, user, pw, _ = mysql_adapter.MYSQL_ADAPTER.resolve_connection_params(
             mysql_host="2001:0db8::1",
             mysql_port="3306",
@@ -96,7 +99,8 @@ def test_resolve_connection_params_ipv6_env_host_and_invalid_env_port(monkeypatc
         assert port == "3306"
         assert user == "db_reader"
         assert pw == "Ipv6MySqlPw!"
-        mock_prompt.assert_not_called()
+        mock_text.assert_not_called()
+        mock_secret.assert_not_called()
 
 
 def test_readonly_connection_enforces_read_only_transaction_and_rollback(monkeypatch):

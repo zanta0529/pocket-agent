@@ -38,23 +38,30 @@ def test_missing_password_rejected_and_partial_config_cached(monkeypatch):
     monkeypatch.setenv("WIN_RDP_PORT", "")
     monkeypatch.setenv("WIN_RDP_USER", r"CORP\winadmin")
 
-    with patch("mcp_servers.win_rdp.session.tty_prompt", side_effect=["", ""]):
+    with (
+        patch("mcp_servers.win_rdp.session.tty_prompt_text", return_value=""),
+        patch("mcp_servers.win_rdp.session.tty_prompt_secret", return_value=""),
+    ):
         with pytest.raises(ValueError, match="WIN_RDP_PASSWORD"):
             rdp_session.resolve_connection_params()
 
-    prompts = iter(["", "MyRdpPass!99"])
-    with patch("mcp_servers.win_rdp.session.tty_prompt", side_effect=lambda *a, **kw: next(prompts)) as mock_prompt:
+    with (
+        patch("mcp_servers.win_rdp.session.tty_prompt_text", return_value="") as mock_text,
+        patch("mcp_servers.win_rdp.session.tty_prompt_secret", return_value="MyRdpPass!99") as mock_secret,
+    ):
         host, port, user, pw = rdp_session.resolve_connection_params()
         assert host == "10.20.30.40"
         assert port == "3389"
         assert user == r"CORP\winadmin"
         assert pw == "MyRdpPass!99"
-        assert mock_prompt.call_count == 2
+        assert mock_text.call_count == 1
+        assert mock_secret.call_count == 1
 
         # 第二次呼叫應直接命中記憶體快取，不再詢問
         host2, port2, user2, pw2 = rdp_session.resolve_connection_params()
         assert (host2, port2, user2, pw2) == ("10.20.30.40", "3389", r"CORP\winadmin", "MyRdpPass!99")
-        assert mock_prompt.call_count == 2
+        assert mock_text.call_count == 1
+        assert mock_secret.call_count == 1
 
 
 def test_rdp_file_disables_backdoors_and_enables_clipboard(monkeypatch):
@@ -238,7 +245,7 @@ def test_tty_prompt_non_interactive_raises_value_error():
     """驗證無 TTY 終端機時直接拋出 ValueError，絕不降級至 sys.stdin.readline() 污染 MCP 協定。"""
     with patch("builtins.open", side_effect=OSError("No CONIN$ device")):
         with pytest.raises(ValueError, match="沒有可用的互動終端機"):
-            rdp_session.tty_prompt("請輸入主機位址: ")
+            rdp_session.tty_prompt_text("請輸入主機位址: ")
 
 
 def test_run_rdp_clip_command_preserves_and_restores_user_clipboard():

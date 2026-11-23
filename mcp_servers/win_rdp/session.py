@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from mcp_servers._shared import CredentialCache, tty_prompt
+from mcp_servers._shared import CredentialCache, tty_prompt_secret, tty_prompt_text
 from mcp_servers.win_rdp import security, win32_api
 
 CREDS_CACHE = CredentialCache(ttl_seconds=600.0)
@@ -41,11 +41,11 @@ def resolve_connection_params(
         user = rdp_user.strip() or cached_user or (os.getenv("WIN_RDP_USER") or "").strip()
 
         if not host:
-            host = tty_prompt("請輸入 Windows 主機 IP 或位址 (WIN_HOST): ").strip()
+            host = tty_prompt_text("請輸入 Windows 主機 IP 或位址 (WIN_HOST): ").strip()
         if not port:
-            port = tty_prompt("請輸入 RDP 連接埠 (WIN_RDP_PORT) [預設 3389]: ").strip() or "3389"
+            port = tty_prompt_text("請輸入 RDP 連接埠 (WIN_RDP_PORT) [預設 3389]: ").strip() or "3389"
         if not user:
-            user = tty_prompt(f"請輸入 {host} 的 Windows 登入帳號 (WIN_RDP_USER): ").strip()
+            user = tty_prompt_text(f"請輸入 {host} 的 Windows 登入帳號 (WIN_RDP_USER): ").strip()
 
         if not host:
             raise ValueError("未提供 Windows 主機位址 (WIN_HOST)。")
@@ -73,7 +73,7 @@ def resolve_connection_params(
             password = os.getenv("WIN_RDP_PASSWORD") or ""
 
         if not password:
-            password = tty_prompt(f"請輸入 {user}@{host} 的 Windows 登入密碼: ", is_password=True)
+            password = tty_prompt_secret(f"請輸入 {user}@{host} 的 Windows 登入密碼: ")
         if not password:
             raise ValueError("未提供 Windows 登入密碼 (WIN_RDP_PASSWORD)；本工具僅允許帳號密碼驗證。")
 
