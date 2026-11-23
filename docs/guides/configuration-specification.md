@@ -23,7 +23,7 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 
 | 鍵值 (Key)        | 型別     | 預設值          | 環境變數                | 說明                                                                                                                     |
 | :---------------- | :------- | :-------------- | :---------------------- | :----------------------------------------------------------------------------------------------------------------------- |
-| `active_provider` | `string` | `"openai"`      | `POCKET_AGENT_PROVIDER` | 目前啟用的主要模型供應商（如 `openai`, `openrouter`, `ollama`, `ollamacloud`, `sambanova`, `groq`, `mistral`, `gemini`, `openai-compatible`） |
+| `active_provider` | `string` | `"openai"`      | `POCKET_AGENT_PROVIDER` | 目前啟用的主要模型供應商（如 `openai`, `openrouter`, `azure`, `ollama`, `ollamacloud`, `sambanova`, `groq`, `mistral`, `gemini`, `openai-compatible`） |
 | `active_model`    | `string` | `"gpt-6-astra"` | `OPENAI_MODEL`          | 目前啟用的模型名稱                                                                                                       |
 | `locale`          | `string` | `"zh_TW"`       | `POCKET_AGENT_LANG`     | 介面顯示語系（對應 `src/pocket_agent/locales/*.json`，如 `zh_TW`、`en_US`）；可透過 `setup` 或 `/config` 選單切換。     |
 
@@ -142,7 +142,17 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 
 - 可直接在 `providers` 下設定 `api_key` 與 `base_url`，或使用對應環境變數（如 `GROQ_API_KEY`, `MISTRAL_API_KEY`, `SAMBANOVA_API_KEY`, `GEMINI_API_KEY`）。
 
-#### 6. 通用 OpenAI-Compatible 端點 (`providers.openai_compatible`)
+#### 6. Azure OpenAI / Azure AI Foundry (`providers.azure`)
+
+同時支援微軟新一代 `/openai/v1` 統一介面與經典 `api-version` 部署模式（`active_model` 請填寫 Azure 上的 **Deployment Name 部署名稱**）：
+
+- `endpoint`: Azure OpenAI 資源或 AI Foundry 端點位址（環境變數: `AZURE_OPENAI_ENDPOINT`，例如 `"https://<resource>.openai.azure.com"` 或 `"https://<project>.services.ai.azure.com/openai/v1"`）。
+- `api_key`: Azure 存取金鑰（環境變數: `AZURE_OPENAI_API_KEY`，必填，儲存於 Keyring 或 JWE 加密庫）。
+- `api_version`: 選填 API 版本字串（環境變數: `AZURE_OPENAI_API_VERSION`）：
+  - **留空（預設推薦）**：自動採用新一代 `/openai/v1` 介面（`AsyncOpenAI`），若 `endpoint` 未帶 `/openai/v1` 會自動補齊，免維護日期版號。
+  - **指定日期版本（如 `"2024-10-21"`）**：若 `endpoint` 未固定指向 `/openai/v1`，將自動切換為經典 `AsyncAzureOpenAI` 部署路由模式。
+
+#### 7. 通用 OpenAI-Compatible 端點 (`providers.openai_compatible`)
 
 適用於 LM Studio、vLLM、llama.cpp 或企業內部 AI Gateway（如 LiteLLM）：
 

@@ -174,7 +174,13 @@
     "enter_openai_compatible_url": "請輸入 Base URL（例如 http://localhost:1234/v1 或企業 Gateway 位址）",
     "invalid_base_url": "✗ Base URL 格式無效，必須以 http:// 或 https:// 開頭且包含主機名稱。",
     "openai_compatible_missing_url": "尚未設定 OpenAI-Compatible Base URL。請執行 `pocket-agent setup` 或設定 `OPENAI_COMPATIBLE_BASE_URL`。",
-    "optional_api_key_hint": "提示：若為免認證的本機伺服器（如 LM Studio／vLLM），可直接按 Enter 略過 API Key。"
+    "optional_api_key_hint": "提示：若為免認證的本機伺服器（如 LM Studio／vLLM），可直接按 Enter 略過 API Key。",
+    "enter_azure_endpoint": "請輸入 Azure Endpoint（例如 https://<resource>.openai.azure.com 或 Foundry 端點）",
+    "current_azure_api_version": "目前 Azure API Version: {version}",
+    "azure_v1_default": "未設定（自動採用新一代 /openai/v1 介面）",
+    "enter_azure_api_version": "請輸入 Azure API Version（選填，留空採新一代 v1 API；經典模式如 2024-10-21）",
+    "azure_missing_endpoint": "尚未設定 Azure OpenAI Endpoint。請執行 `pocket-agent setup` 或設定 `AZURE_OPENAI_ENDPOINT`。",
+    "azure_missing_key": "尚未設定 Azure OpenAI API Key。請執行 `pocket-agent setup` 或設定 `AZURE_OPENAI_API_KEY`。"
   },
   "commands": {
     "activity": "列出本次會話新增／修改／刪除的檔案與上網查詢網址清單",
