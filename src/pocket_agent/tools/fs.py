@@ -17,12 +17,14 @@ from pocket_agent.core.cancellation import check_cancelled
 from pocket_agent.system import paths
 from pocket_agent.system.constants import (
     DEFAULT_READ_FILE_LINES,
+    DEFAULT_SEARCH_LINE_MAX_CHARS,
     DEFAULT_SEARCH_MAX_RESULTS,
     DEFAULT_TOOL_OUTPUT_CHARS,
     MAX_FILE_SEARCH_SIZE_BYTES,
     MAX_READ_FILE_BYTES,
     REPLACE_DIAGNOSTIC_MAX_MATCHES,
     REPLACE_SCOPE_DRIFT_LINES,
+    TIME_MACHINE_BACKUP_MAX_BYTES,
     TOOL_NOT_FOUND_PREFIX,
     TOOL_OVERWRITE_REQUIRED_PREFIX,
     TOOL_TARGET_NOT_FOUND_PREFIX,
@@ -39,12 +41,29 @@ MAX_READ_CHARS = DEFAULT_TOOL_OUTPUT_CHARS
 SEARCH_MAX_RESULTS = DEFAULT_SEARCH_MAX_RESULTS
 
 _ALLOWED_GLOBAL_SUBDIRS = frozenset({"workspaces", "scratch", "backups", "skills"})
+_READONLY_GLOBAL_SUBDIRS = frozenset({"backups"})
+_SEARCH_EXCLUDED_DIRS = frozenset({".git", "node_modules", "venv", "__pycache__"})
 _EXTERNAL_TAG_RE = re.compile(r"<\s*/?\s*external_content(?:\s+[^>]*)?\s*>", re.IGNORECASE)
+
+
+def is_sensitive_part(part: str) -> bool:
+    """不分大小寫檢查路徑區段是否為敏感版本控制或環境變數檔案（.git 或 .env*）。"""
+    low = part.lower()
+    return low == ".git" or low.startswith(".env")
+
+
+# 向後相容別名
+_is_sensitive_part = is_sensitive_part
+
+
+def escape_external_content_tags(text: str) -> str:
+    """跳脫文字中內嵌的偽造 <external_content> 標籤。"""
+    return _EXTERNAL_TAG_RE.sub("[escaped_tag]", text)
 
 
 def wrap_external_content(text: str, source: str | None = None) -> str:
     """將外部不可信內容包裹於 <external_content> 標籤中，並跳脫內嵌的偽造標籤。"""
-    safe_text = _EXTERNAL_TAG_RE.sub("[escaped_tag]", text)
+    safe_text = escape_external_content_tags(text)
     open_tag = f'<external_content source="{source}">' if source else "<external_content>"
     return f"{open_tag}\n{safe_text}\n</external_content>"
 
@@ -262,7 +281,7 @@ def _resolve_scratch_note_path(filename: str) -> Path:
     if rel.is_absolute() or ".." in rel.parts:
         raise ValueError("安全限制：僅允許相對於沙盒筆記目錄的檔案路徑")
     for part in rel.parts:
-        if part.lower().startswith(".env") or part.lower() == ".git":
+        if _is_sensitive_part(part):
             raise ValueError(f"安全限制：禁止使用敏感檔名 ({part})")
 
     notes_root = (paths.scratch_dir() / "notes").resolve(strict=False)
@@ -299,7 +318,12 @@ def call_scratch_tool(name: str, args: dict) -> str:
         return f"[ERROR] 沙盒筆記寫入發生未預期錯誤: {e}"
 
 
-def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = None) -> Path:
+def validate_safe_path(
+    requested_path: str,
+    workspace_dirs: list[str] | None = None,
+    *,
+    is_write: bool = False,
+) -> Path:
     """解析路徑並驗證是否在安全的工作區內，同時阻擋敏感檔案。"""
     try:
         # 使用 strict=False 允許解析尚不存在的檔案路徑
@@ -321,12 +345,14 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
         rel = target.relative_to(global_user_dir)
         if len(rel.parts) == 0 or rel.parts[0] not in _ALLOWED_GLOBAL_SUBDIRS:
             raise ValueError(t("fs_tool.sensitive_path_blocked", part=USER_DATA_DIR_NAME))
+        if is_write and rel.parts[0] in _READONLY_GLOBAL_SUBDIRS:
+            raise ValueError(t("fs_tool.sensitive_path_blocked", part=rel.parts[0]))
 
     user_dir_name_lower = USER_DATA_DIR_NAME.lower()
     parts_lower = [p.lower() for p in target.parts]
     for idx, part in enumerate(target.parts):
         lower_part = parts_lower[idx]
-        if lower_part == ".git" or lower_part.startswith(".env"):
+        if _is_sensitive_part(part):
             raise ValueError(t("fs_tool.sensitive_path_blocked", part=part))
         # 僅當目標不在合法全域使用者目錄內時，才阻擋與使用者資料目錄同名之敏感目錄
         if lower_part == user_dir_name_lower and not is_in_global:
@@ -348,7 +374,12 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
     try:
         bundled_skills = (paths.bundle_dir() / "skills").resolve()
         if bundled_skills.exists():
-            allowed_roots.append(bundled_skills)
+            if is_write and target.is_relative_to(bundled_skills):
+                raise ValueError(t("fs_tool.sensitive_path_blocked", part="bundle/skills"))
+            if not is_write:
+                allowed_roots.append(bundled_skills)
+    except ValueError:
+        raise
     except Exception:
         pass
 
@@ -360,16 +391,7 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
             except Exception:
                 continue
 
-    is_safe = False
-    for root in allowed_roots:
-        try:
-            target.relative_to(root)
-            is_safe = True
-            break
-        except ValueError:
-            pass
-
-    if not is_safe:
+    if not any(target.is_relative_to(root) for root in allowed_roots):
         allowed_display = ", ".join(str(r) for r in allowed_roots)
         raise ValueError(
             f"安全限制：路徑 {target} 超出允許的工作區範圍。"
@@ -380,30 +402,31 @@ def _validate_safe_path(requested_path: str, workspace_dirs: list[str] | None = 
     return target
 
 
+# 向後相容別名
+_validate_safe_path = validate_safe_path
+
+
 def _get_ignore_spec(target_dir: Path):
-    """嘗試讀取目標目錄的 .gitignore 並回傳 pathspec 的 PathSpec 物件。若無則回傳 None。"""
+    """嘗試讀取目標目錄或上層之 .gitignore，回傳 (PathSpec, gitignore_root_dir)。若無則回傳 (None, None)。"""
     try:
         import pathspec
     except ImportError:
-        return None
+        return None, None
 
-    gitignore_path = target_dir / ".gitignore"
-    if not gitignore_path.exists():
-        # 往上層找
-        curr = target_dir
-        while curr.parent != curr:
-            curr = curr.parent
-            if (curr / ".gitignore").exists():
-                gitignore_path = curr / ".gitignore"
-                break
+    curr = target_dir.resolve(strict=False)
+    gitignore_path = curr / ".gitignore"
+    while not gitignore_path.exists() and curr.parent != curr:
+        curr = curr.parent
+        gitignore_path = curr / ".gitignore"
 
     if gitignore_path.exists():
         try:
             with open(gitignore_path, "r", encoding="utf-8") as f:
-                return pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, f)
+                spec = pathspec.PathSpec.from_lines("gitignore", f)
+                return spec, gitignore_path.parent
         except Exception:
-            return None
-    return None
+            return None, None
+    return None, None
 
 
 _BACKUP_MAP_LOCK = threading.Lock()
@@ -431,8 +454,20 @@ def _backup_file(target: Path) -> None:
     check_cancelled()
     if not target.exists() or not target.is_file():
         return
+    if _is_current_workspace_scratch_target(target):
+        return
 
     try:
+        fsize = target.stat().st_size
+        if isinstance(fsize, int) and fsize > TIME_MACHINE_BACKUP_MAX_BYTES:
+            log.warning(
+                "Time Machine: 檔案過大 (%d Bytes > %d Bytes)，略過自動備份: %s",
+                fsize,
+                TIME_MACHINE_BACKUP_MAX_BYTES,
+                target,
+            )
+            return
+
         user_root = paths.user_dir()
         backup_dir = user_root / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -487,7 +522,16 @@ def _should_skip_fs_confirm(target: Path, auto_allow_scratch: bool) -> bool:
     return auto_allow_scratch and _is_current_workspace_scratch_target(target)
 
 
-def _evaluate_fs_confirmation(
+def extract_refusal_instruction(decision: object) -> str:
+    """從非 True 的確認回傳值（str 或 (False, str)）提取使用者自訂拒絕指示。"""
+    if isinstance(decision, str):
+        return decision.strip()
+    if isinstance(decision, tuple) and len(decision) == 2 and decision[0] is not True:
+        return str(decision[1]).strip()
+    return ""
+
+
+def evaluate_fs_confirmation(
     on_confirm: Callable[[str], bool | str | tuple[bool, str]] | None,
     action_desc: str,
     op_name: str,
@@ -503,11 +547,7 @@ def _evaluate_fs_confirmation(
 
     if decision is True:
         return None
-    custom_inst = ""
-    if isinstance(decision, str):
-        custom_inst = decision.strip()
-    elif isinstance(decision, tuple) and len(decision) == 2 and decision[0] is not True:
-        custom_inst = str(decision[1]).strip()
+    custom_inst = extract_refusal_instruction(decision)
     if custom_inst:
         return (
             f"[使用者拒絕執行此檔案{op_name}操作，並提供後續指示：\n"
@@ -515,6 +555,10 @@ def _evaluate_fs_confirmation(
             "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的操作。]"
         )
     return f"[使用者拒絕執行此檔案{op_name}操作]"
+
+
+# 向後相容別名
+_evaluate_fs_confirmation = evaluate_fs_confirmation
 
 
 def _resolve_skill_reference_path(path_str: str, workspace_dirs: list[str] | None = None) -> Path | None:
@@ -543,26 +587,25 @@ def _resolve_skill_reference_path(path_str: str, workspace_dirs: list[str] | Non
     if len(target_rel.parts) > 1 and target_rel.parts[0].lower() == "skills":
         target_rel = Path(*target_rel.parts[1:])
 
+    valid_roots = [r.resolve() for r in search_roots if r.exists() and r.is_dir()]
+
     # 1. 直接匹配：若路徑開頭即為某技能名稱（如 abc/reference/ref1.md）
-    for root in search_roots:
-        if not root.exists() or not root.is_dir():
-            continue
+    for root in valid_roots:
         try:
             candidate = (root / target_rel).resolve()
-            if candidate.exists() and candidate.is_relative_to(root.resolve()):
+            if candidate.exists() and candidate.is_relative_to(root):
                 return candidate
         except Exception:
             continue
 
     # 2. 次層比對：若路徑省略技能名稱，直接指向內部子路徑（如 reference/ref1.md）
-    for root in search_roots:
-        if not root.exists() or not root.is_dir():
-            continue
+    for root in valid_roots:
         try:
             for skill_dir in root.iterdir():
                 if skill_dir.is_dir():
-                    candidate = (skill_dir / target_rel).resolve()
-                    if candidate.exists() and candidate.is_relative_to(skill_dir.resolve()):
+                    resolved_skill = skill_dir.resolve()
+                    candidate = (resolved_skill / target_rel).resolve()
+                    if candidate.exists() and candidate.is_relative_to(resolved_skill):
                         return candidate
         except Exception:
             continue
@@ -789,6 +832,312 @@ def _resolve_replace_content(
     return _ReplacePlan(matched=False, diagnostic=f"{TOOL_TARGET_NOT_FOUND_PREFIX} {msg}")
 
 
+def _tool_list_dir(
+    target: Path,
+    rel_display_path: str,
+    args: dict,
+    workspace_dirs: list[str] | None,
+) -> str:
+    """執行 list_dir 工具。"""
+    if not target.exists():
+        return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.dir_not_found', path=rel_display_path)}"
+    if target.is_file():
+        return f"[ERROR] {target} 是一個檔案而非目錄。請改用 'read_file' 工具來讀取內容。"
+    if not target.is_dir():
+        return f"[ERROR] 路徑不是一個目錄: {target}"
+
+    max_depth = args.get("depth", 2)
+    if not isinstance(max_depth, int) or max_depth < 1:
+        max_depth = 2
+
+    def build_tree(dir_path: Path, current_depth: int, prefix: str = "") -> list[str]:
+        if current_depth > max_depth:
+            return [f"{prefix}└── ... (已達深度限制 {max_depth})"]
+
+        try:
+            raw_entries = list(dir_path.iterdir())
+        except Exception as e:
+            return [f"{prefix}└── [ERROR 讀取失敗: {e}]"]
+
+        entries: list[Path] = []
+        for entry in raw_entries:
+            if _is_sensitive_part(entry.name):
+                continue
+            if entry.is_symlink():
+                try:
+                    resolved_link = entry.resolve(strict=False)
+                    _validate_safe_path(str(resolved_link), workspace_dirs)
+                except Exception:
+                    continue
+            entries.append(entry)
+
+        # 目錄在前，檔案在後，並照名稱排序
+        entries.sort(key=lambda x: (not x.is_dir(), x.name.lower()))
+        tree_lines = []
+        count = len(entries)
+        for i, entry in enumerate(entries):
+            is_last = i == count - 1
+            connector = "└── " if is_last else "├── "
+            child_prefix = "    " if is_last else "│   "
+
+            if entry.is_dir():
+                tree_lines.append(f"{prefix}{connector}[DIR] {entry.name}/")
+                tree_lines.extend(build_tree(entry, current_depth + 1, prefix + child_prefix))
+            else:
+                tree_lines.append(f"{prefix}{connector}{entry.name}")
+        return tree_lines
+
+    lines = [f"[DIR] {target.name}/"] + build_tree(target, 1)
+    return "\n".join(lines)
+
+
+def _tool_get_file_info(target: Path, path_str: str, rel_display_path: str) -> str:
+    """執行 get_file_info 工具。"""
+    if not target.exists():
+        return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.path_not_found', path=path_str)}"
+
+    stat = target.stat()
+    size_bytes = stat.st_size
+    mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+    info = [f"路徑: {rel_display_path}"]
+    if target.is_dir():
+        info.append("類型: 目錄")
+    else:
+        info.append("類型: 一般檔案")
+        info.append(f"大小: {size_bytes} Bytes")
+        try:
+            with target.open("r", encoding="utf-8") as f:
+                line_count = sum(1 for _ in f)
+            info.append(f"總行數: {line_count}")
+        except UnicodeDecodeError:
+            info.append("總行數: (無法讀取，可能為二進位檔案)")
+        except Exception as e:
+            info.append(f"總行數: (讀取失敗: {e})")
+
+    info.append(f"最後修改時間: {mtime}")
+    return "\n".join(info)
+
+
+def _tool_read_file(target: Path, rel_display_path: str, args: dict) -> str:
+    """執行 read_file 工具。"""
+    if not target.exists():
+        return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.file_not_found', path=rel_display_path)}"
+    if target.is_dir():
+        return f"[ERROR] {rel_display_path} 是一個目錄。請改用 'list_dir' 工具來查看該目錄內容。"
+    if not target.is_file():
+        return f"[ERROR] 不是一般檔案: {rel_display_path}"
+
+    try:
+        fsize = target.stat().st_size
+        if isinstance(fsize, int) and fsize > MAX_READ_FILE_BYTES:
+            return (
+                f"[ERROR] 檔案過大 ({fsize:,} Bytes，超過 {MAX_READ_FILE_BYTES // (1024 * 1024)} MB 安全上限)。"
+                "請改用 `search_files` 進行關鍵字檢索。"
+            )
+    except OSError:
+        pass
+
+    start = args.get("start_line")
+    end = args.get("end_line")
+    char_offset = args.get("char_offset")
+    char_offset = max(0, int(char_offset)) if char_offset is not None else 0
+
+    start_idx = max(0, int(start) - 1) if start else 0
+    req_end_idx = int(end) if end else (MAX_READ_LINES if start is None else None)
+
+    sliced: list[str] = []
+    total_lines = 0
+    try:
+        with target.open("r", encoding="utf-8") as f:
+            for idx, line in enumerate(f):
+                total_lines += 1
+                if idx >= start_idx and (req_end_idx is None or idx < req_end_idx):
+                    sliced.append(line)
+    except UnicodeDecodeError:
+        return f"[ERROR] 無法以 UTF-8 解碼檔案（可能為二進位檔案或非 UTF-8 編碼）: {rel_display_path}"
+
+    # 逐行組合並檢查字元數上限
+    formatted_lines = []
+    chars_count = 0
+    char_truncated = False
+    is_single_line_cut = False
+    cut_end_char = 0
+    last_rendered_line = start_idx
+
+    for i, line in enumerate(sliced):
+        current_line_no = start_idx + i + 1
+        stripped = line.rstrip("\r\n")
+        if i == 0 and char_offset > 0:
+            stripped = stripped[char_offset:]
+            line_prefix = f"{current_line_no:4}| [+{char_offset}] "
+        else:
+            line_prefix = f"{current_line_no:4}| "
+
+        avail_chars = MAX_READ_CHARS - chars_count - len(line_prefix) - 1
+
+        if avail_chars <= 0:
+            char_truncated = True
+            break
+
+        if len(stripped) > avail_chars:
+            line_str = line_prefix + stripped[:avail_chars]
+            formatted_lines.append(line_str)
+            chars_count += len(line_str) + 1
+            last_rendered_line = current_line_no
+            char_truncated = True
+            is_single_line_cut = True
+            cut_end_char = (char_offset if i == 0 else 0) + avail_chars
+            break
+
+        line_str = line_prefix + stripped
+        formatted_lines.append(line_str)
+        chars_count += len(line_str) + 1
+        last_rendered_line = current_line_no
+
+    inner = "\n".join(formatted_lines)
+
+    # 截斷提示
+    notice_parts = []
+    if char_truncated:
+        notice_parts.append(
+            f"...（內容過長，已達單次讀取上限 {MAX_READ_CHARS} 字元，"
+            f"僅呈現至第 {last_rendered_line} 行 / 共 {total_lines} 行。）"
+        )
+        if is_single_line_cut:
+            notice_parts.append(
+                f"[系統提示] 第 {last_rendered_line} 行為超長單行，已被字元截斷。"
+                f"若要閱讀該行剩餘內容，請設定 `start_line={last_rendered_line}`, "
+                f"`char_offset={cut_end_char}`；"
+                f"若要閱讀後續行，可設定 `start_line={last_rendered_line + 1}`；"
+                "若要尋找特定字串，請優先改用 `search_files` 進行精準檢索。"
+            )
+        else:
+            notice_parts.append(
+                f"[系統建議] 若要繼續閱讀後續內容，請呼叫 `read_file` 並設定 "
+                f"`start_line={last_rendered_line + 1}`；"
+                "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
+            )
+    elif start is None and end is None and total_lines > MAX_READ_LINES:
+        notice_parts.append(f"...（內容過長，共 {total_lines} 行，已自動截斷前 {MAX_READ_LINES} 行。）")
+        notice_parts.append(
+            "[系統建議] 若要繼續閱讀後續內容，請呼叫 `read_file` 並設定 "
+            f"`start_line={MAX_READ_LINES + 1}`；"
+            "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
+        )
+
+    if notice_parts:
+        inner += "\n\n" + "\n".join(notice_parts)
+
+    return wrap_external_content(inner)
+
+
+def _tool_search_files(target: Path, args: dict, workspace_dirs: list[str] | None) -> str:
+    """執行 search_files 工具。"""
+    if not target.exists():
+        return f"[ERROR] 目錄或檔案不存在: {target}"
+
+    query = args.get("query", "")
+    file_pattern = args.get("file_pattern", "")
+
+    results: list[str] = []
+    spec, gitignore_root = _get_ignore_spec(target) if target.is_dir() else (None, None)
+
+    try:
+        global_user_dir: Path | None = paths.user_dir().resolve()
+    except Exception:
+        global_user_dir = None
+
+    user_dir_name_lower = USER_DATA_DIR_NAME.lower()
+
+    # 決定搜尋範圍
+    if target.is_file():
+        paths_to_search = [target]
+    else:
+        glob_pattern = file_pattern if file_pattern else "*"
+        paths_to_search = target.rglob(glob_pattern)
+
+    for p in paths_to_search:
+        check_cancelled()
+        if any(_is_sensitive_part(part) or part.lower() in _SEARCH_EXCLUDED_DIRS for part in p.parts):
+            continue
+        p_in_global = global_user_dir is not None and p.is_relative_to(global_user_dir)
+        if p_in_global and global_user_dir is not None:
+            rel_g = p.relative_to(global_user_dir)
+            if len(rel_g.parts) == 0 or rel_g.parts[0] not in _ALLOWED_GLOBAL_SUBDIRS:
+                continue
+        elif any(part.lower() == user_dir_name_lower for part in p.parts):
+            continue
+
+        if p.is_symlink():
+            try:
+                resolved = p.resolve(strict=False)
+                _validate_safe_path(str(resolved), workspace_dirs)
+            except Exception:
+                continue
+
+        if not p.is_file():
+            continue
+
+        if target.is_file():
+            rel_path = target.name
+        else:
+            rel_path = str(p.relative_to(target))
+            if spec is not None and gitignore_root is not None:
+                try:
+                    ignore_rel = p.resolve(strict=False).relative_to(gitignore_root).as_posix()
+                    if spec.match_file(ignore_rel):
+                        continue
+                except ValueError:
+                    pass
+
+        # 如果沒有給 query，就只是搜檔名
+        if not query:
+            results.append(rel_path)
+            if len(results) >= DEFAULT_SEARCH_MAX_RESULTS:
+                results.append(
+                    f"... (結果過多，已自動截斷前 {DEFAULT_SEARCH_MAX_RESULTS} 筆)\n"
+                    "[系統建議] 若要尋找特定內容，請利用 search_files 設定 `query`，\n"
+                    "或利用 `file_pattern` 限縮範圍。"
+                )
+                break
+            continue
+
+        # 如果有 query，進行全文檢索
+        # DoS 防護：略過超過 MAX_FILE_SEARCH_SIZE_BYTES 的大檔
+        try:
+            if p.stat().st_size > MAX_FILE_SEARCH_SIZE_BYTES:
+                continue
+        except Exception:
+            continue
+
+        try:
+            with p.open("r", encoding="utf-8", errors="ignore") as f:
+                for i, line in enumerate(f):
+                    if query in line:
+                        snippet = line.strip()
+                        if len(snippet) > DEFAULT_SEARCH_LINE_MAX_CHARS:
+                            snippet = snippet[:DEFAULT_SEARCH_LINE_MAX_CHARS] + "..."
+                        results.append(f"{rel_path}:{i + 1}: {snippet}")
+                        if len(results) >= DEFAULT_SEARCH_MAX_RESULTS:
+                            results.append(
+                                f"... (結果過多，已自動截斷前 {DEFAULT_SEARCH_MAX_RESULTS} 筆)\n"
+                                "[系統建議] 若要繼續閱讀特定檔案，"
+                                "請使用 `read_file` 並設定 `start_line`/`end_line`；\n"
+                                "若要精準搜尋，請在 `search_files` 設定更精確的 `query` 或 `file_pattern`。"
+                            )
+                            return wrap_external_content("搜尋結果：\n" + "\n".join(results))
+        except Exception:
+            continue
+
+    if not results:
+        if query:
+            return f"找不到包含 '{query}' 的內容。"
+        return f"找不到符合 {file_pattern} 的檔案。"
+    body = "搜尋結果：\n" + "\n".join(results)
+    return wrap_external_content(body) if query else body
+
+
 def call_fs_tool(
     name: str,
     args: dict,
@@ -800,10 +1149,15 @@ def call_fs_tool(
 ) -> str:
     """執行檔案操作工具。"""
     try:
-        path_str = args.get("path") or args.get("target_file") or args.get("file") or args.get("target") or ""
+        path_str = args.get("path") or args.get("target_file") or args.get("file") or ""
+        if not path_str and name != "replace_file_content":
+            path_str = args.get("target") or ""
+        if not path_str and name == "search_files":
+            path_str = "."
         if not path_str:
             return "[ERROR] 缺少必填參數 'path'"
 
+        is_readonly_op = name in SAFE_READ_FS_TOOLS
         target = None
         # 唯讀操作支援技能參考路徑回退解析
         if name in ("read_file", "get_file_info", "list_dir"):
@@ -823,196 +1177,19 @@ def call_fs_tool(
                         pass
 
         if target is None:
-            target = _validate_safe_path(path_str, workspace_dirs)
+            target = _validate_safe_path(path_str, workspace_dirs, is_write=not is_readonly_op)
 
         cwd = Path.cwd().resolve()
         rel_display_path = str(target.relative_to(cwd)) if target.is_relative_to(cwd) else path_str
 
         if name == "list_dir":
-            if not target.exists():
-                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.dir_not_found', path=rel_display_path)}"
-            if target.is_file():
-                return f"[ERROR] {target} 是一個檔案而非目錄。請改用 'read_file' 工具來讀取內容。"
-            if not target.is_dir():
-                return f"[ERROR] 路徑不是一個目錄: {target}"
-
-            max_depth = args.get("depth", 2)
-            if not isinstance(max_depth, int) or max_depth < 1:
-                max_depth = 2
-
-            def build_tree(dir_path: Path, current_depth: int, prefix: str = "") -> list[str]:
-                if current_depth > max_depth:
-                    return [f"{prefix}└── ... (已達深度限制 {max_depth})"]
-
-                try:
-                    raw_entries = list(dir_path.iterdir())
-                except Exception as e:
-                    return [f"{prefix}└── [ERROR 讀取失敗: {e}]"]
-
-                entries: list[Path] = []
-                for entry in raw_entries:
-                    if entry.name == ".git" or entry.name.startswith(".env"):
-                        continue
-                    if entry.is_symlink():
-                        try:
-                            resolved_link = entry.resolve(strict=False)
-                            _validate_safe_path(str(resolved_link), workspace_dirs)
-                        except Exception:
-                            continue
-                    entries.append(entry)
-
-                # 目錄在前，檔案在後，並照名稱排序
-                entries.sort(key=lambda x: (not x.is_dir(), x.name.lower()))
-                tree_lines = []
-                count = len(entries)
-                for i, entry in enumerate(entries):
-                    is_last = i == count - 1
-                    connector = "└── " if is_last else "├── "
-                    child_prefix = "    " if is_last else "│   "
-
-                    if entry.is_dir():
-                        tree_lines.append(f"{prefix}{connector}[DIR] {entry.name}/")
-                        tree_lines.extend(build_tree(entry, current_depth + 1, prefix + child_prefix))
-                    else:
-                        tree_lines.append(f"{prefix}{connector}{entry.name}")
-                return tree_lines
-
-            lines = [f"[DIR] {target.name}/"] + build_tree(target, 1)
-            return "\n".join(lines)
+            return _tool_list_dir(target, rel_display_path, args, workspace_dirs)
 
         elif name == "get_file_info":
-            if not target.exists():
-                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.path_not_found', path=path_str)}"
-
-            stat = target.stat()
-            size_bytes = stat.st_size
-            mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-
-            info = [f"路徑: {rel_display_path}"]
-            if target.is_dir():
-                info.append("類型: 目錄")
-            else:
-                info.append("類型: 一般檔案")
-                info.append(f"大小: {size_bytes} Bytes")
-                try:
-                    with target.open("r", encoding="utf-8") as f:
-                        line_count = sum(1 for _ in f)
-                    info.append(f"總行數: {line_count}")
-                except UnicodeDecodeError:
-                    info.append("總行數: (無法讀取，可能為二進位檔案)")
-                except Exception as e:
-                    info.append(f"總行數: (讀取失敗: {e})")
-
-            info.append(f"最後修改時間: {mtime}")
-            return "\n".join(info)
+            return _tool_get_file_info(target, path_str, rel_display_path)
 
         elif name == "read_file":
-            if not target.exists():
-                return f"{TOOL_NOT_FOUND_PREFIX} {t('fs_tool.file_not_found', path=rel_display_path)}"
-            if target.is_dir():
-                return f"[ERROR] {rel_display_path} 是一個目錄。請改用 'list_dir' 工具來查看該目錄內容。"
-            if not target.is_file():
-                return f"[ERROR] 不是一般檔案: {rel_display_path}"
-
-            try:
-                fsize = target.stat().st_size
-                if isinstance(fsize, int) and fsize > MAX_READ_FILE_BYTES:
-                    return (
-                        f"[ERROR] 檔案過大 ({fsize:,} Bytes，超過 {MAX_READ_FILE_BYTES // (1024 * 1024)} MB 安全上限)。"
-                        "請改用 `search_files` 進行關鍵字檢索。"
-                    )
-            except OSError:
-                pass
-
-            start = args.get("start_line")
-            end = args.get("end_line")
-            char_offset = args.get("char_offset")
-            char_offset = max(0, int(char_offset)) if char_offset is not None else 0
-
-            start_idx = max(0, int(start) - 1) if start else 0
-            req_end_idx = int(end) if end else (MAX_READ_LINES if start is None else None)
-
-            sliced: list[str] = []
-            total_lines = 0
-            with target.open("r", encoding="utf-8") as f:
-                for idx, line in enumerate(f):
-                    total_lines += 1
-                    if idx >= start_idx and (req_end_idx is None or idx < req_end_idx):
-                        sliced.append(line)
-
-            # 逐行組合並檢查字元數上限
-            formatted_lines = []
-            chars_count = 0
-            char_truncated = False
-            is_single_line_cut = False
-            cut_end_char = 0
-            last_rendered_line = start_idx
-
-            for i, line in enumerate(sliced):
-                current_line_no = start_idx + i + 1
-                stripped = line.rstrip()
-                if i == 0 and char_offset > 0:
-                    stripped = stripped[char_offset:]
-                    line_prefix = f"{current_line_no:4}| [+{char_offset}] "
-                else:
-                    line_prefix = f"{current_line_no:4}| "
-
-                avail_chars = MAX_READ_CHARS - chars_count - len(line_prefix) - 1
-
-                if avail_chars <= 0:
-                    char_truncated = True
-                    break
-
-                if len(stripped) > avail_chars:
-                    line_str = line_prefix + stripped[:avail_chars]
-                    formatted_lines.append(line_str)
-                    chars_count += len(line_str) + 1
-                    last_rendered_line = current_line_no
-                    char_truncated = True
-                    is_single_line_cut = True
-                    cut_end_char = (char_offset if i == 0 else 0) + avail_chars
-                    break
-
-                line_str = line_prefix + stripped
-                formatted_lines.append(line_str)
-                chars_count += len(line_str) + 1
-                last_rendered_line = current_line_no
-
-            inner = "\n".join(formatted_lines)
-
-            # 截斷提示
-            notice_parts = []
-            if char_truncated:
-                notice_parts.append(
-                    f"...（內容過長，已達單次讀取上限 {MAX_READ_CHARS} 字元，"
-                    f"僅呈現至第 {last_rendered_line} 行 / 共 {total_lines} 行。）"
-                )
-                if is_single_line_cut:
-                    notice_parts.append(
-                        f"[系統提示] 第 {last_rendered_line} 行為超長單行，已被字元截斷。"
-                        f"若要閱讀該行剩餘內容，請設定 `start_line={last_rendered_line}`, "
-                        f"`char_offset={cut_end_char}`；"
-                        f"若要閱讀後續行，可設定 `start_line={last_rendered_line + 1}`；"
-                        "若要尋找特定字串，請優先改用 `search_files` 進行精準檢索。"
-                    )
-                else:
-                    notice_parts.append(
-                        f"[系統建議] 若要繼續閱讀後續內容，請呼叫 `read_file` 並設定 "
-                        f"`start_line={last_rendered_line + 1}`；"
-                        "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
-                    )
-            elif start is None and end is None and total_lines > MAX_READ_LINES:
-                notice_parts.append(f"...（內容過長，共 {total_lines} 行，已自動截斷前 {MAX_READ_LINES} 行。）")
-                notice_parts.append(
-                    "[系統建議] 若要繼續閱讀後續內容，請呼叫 `read_file` 並設定 "
-                    f"`start_line={MAX_READ_LINES + 1}`；"
-                    "若要尋找特定字串，請改用 `search_files` 進行精準檢索。"
-                )
-
-            if notice_parts:
-                inner += "\n\n" + "\n".join(notice_parts)
-
-            return wrap_external_content(inner)
+            return _tool_read_file(target, rel_display_path, args)
 
         elif name == "write_to_file":
             content = args.get("content", "")
@@ -1072,7 +1249,11 @@ def call_fs_tool(
             if not target_str:
                 return "[ERROR] 缺少必填參數 'target'"
 
-            content = target.read_text(encoding="utf-8")
+            try:
+                content = target.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                return f"[ERROR] 無法以 UTF-8 解碼檔案（可能為二進位檔案或非 UTF-8 編碼）: {rel_display_path}"
+
             plan = _resolve_replace_content(
                 content,
                 target_str,
@@ -1097,98 +1278,7 @@ def call_fs_tool(
             return f"[SUCCESS] 成功替換檔案 {target} 的局部內容"
 
         elif name == "search_files":
-            if not target.exists():
-                return f"[ERROR] 目錄或檔案不存在: {target}"
-
-            query = args.get("query", "")
-            file_pattern = args.get("file_pattern", "")
-
-            results = []
-            excludes = {".git", "node_modules", "venv", "__pycache__"}
-            spec = _get_ignore_spec(target) if target.is_dir() else None
-
-            try:
-                global_user_dir: Path | None = paths.user_dir().resolve()
-            except Exception:
-                global_user_dir = None
-
-            # 決定搜尋範圍
-            if target.is_file():
-                paths_to_search = [target]
-            else:
-                glob_pattern = file_pattern if file_pattern else "*"
-                paths_to_search = target.rglob(glob_pattern)
-
-            for p in paths_to_search:
-                if any(part.startswith(".env") or part in excludes for part in p.parts):
-                    continue
-                p_in_global = global_user_dir is not None and p.is_relative_to(global_user_dir)
-                if p_in_global:
-                    rel_g = p.relative_to(global_user_dir)
-                    if len(rel_g.parts) == 0 or rel_g.parts[0] not in _ALLOWED_GLOBAL_SUBDIRS:
-                        continue
-                elif USER_DATA_DIR_NAME in p.parts:
-                    continue
-
-                if p.is_symlink():
-                    try:
-                        resolved = p.resolve(strict=False)
-                        _validate_safe_path(str(resolved), workspace_dirs)
-                    except Exception:
-                        continue
-
-                if not p.is_file():
-                    continue
-
-                if target.is_file():
-                    rel_path = target.name
-                else:
-                    rel_path = str(p.relative_to(target))
-                    if spec and spec.match_file(rel_path):
-                        continue
-
-                # 如果沒有給 query，就只是搜檔名
-                if not query:
-                    results.append(rel_path)
-                    if len(results) >= DEFAULT_SEARCH_MAX_RESULTS:
-                        results.append(
-                            f"... (結果過多，已自動截斷前 {DEFAULT_SEARCH_MAX_RESULTS} 筆)\n"
-                            "[系統建議] 若要尋找特定內容，請利用 search_files 設定 `query`，\n"
-                            "或利用 `file_pattern` 限縮範圍。"
-                        )
-                        break
-                    continue
-
-                # 如果有 query，進行全文檢索
-                # DoS 防護：略過超過 MAX_FILE_SEARCH_SIZE_BYTES 的大檔
-                try:
-                    if p.stat().st_size > MAX_FILE_SEARCH_SIZE_BYTES:
-                        continue
-                except Exception:
-                    continue
-
-                try:
-                    lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
-                    for i, line in enumerate(lines):
-                        if query in line:
-                            results.append(f"{rel_path}:{i + 1}: {line.strip()}")
-                            if len(results) >= DEFAULT_SEARCH_MAX_RESULTS:
-                                results.append(
-                                    f"... (結果過多，已自動截斷前 {DEFAULT_SEARCH_MAX_RESULTS} 筆)\n"
-                                    "[系統建議] 若要繼續閱讀特定檔案，"
-                                    "請使用 `read_file` 並設定 `start_line`/`end_line`；\n"
-                                    "若要精準搜尋，請在 `search_files` 設定更精確的 `query` 或 `file_pattern`。"
-                                )
-                                return "搜尋結果：\n" + "\n".join(results)
-                except Exception:
-                    continue
-
-            if not results:
-                if query:
-                    return f"找不到包含 '{query}' 的內容。"
-                else:
-                    return f"找不到符合 {file_pattern} 的檔案。"
-            return "搜尋結果：\n" + "\n".join(results)
+            return _tool_search_files(target, args, workspace_dirs)
 
         return f"[ERROR] 未知的工具名稱: {name}"
 

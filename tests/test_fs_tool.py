@@ -616,3 +616,142 @@ def test_fs_tool_handler_parallel_safety_distinguishes_read_and_write():
             assert handler.is_parallel_safe(t_name, {}, None) is False
         else:
             raise AssertionError(f"未分類的 FS 工具: {t_name}")
+
+
+def test_fs_blocks_writes_to_backups_and_bundled_skills(tmp_path: Path, monkeypatch):
+    """驗證寫入工具禁止竄改時光機備份目錄 (~/.pocket-agent/backups) 與隨附唯讀技能目錄 (bundle/skills)。"""
+    from unittest.mock import patch
+
+    proj_dir = tmp_path / "workspace"
+    proj_dir.mkdir()
+    monkeypatch.chdir(proj_dir)
+    ws = [str(proj_dir)]
+
+    fake_user_dir = tmp_path / "home" / ".pocket-agent"
+    backups_dir = fake_user_dir / "backups"
+    backups_dir.mkdir(parents=True)
+    backup_map = backups_dir / "latest_backup_map.json"
+    backup_map.write_text("{}", encoding="utf-8")
+
+    fake_bundle = tmp_path / "bundle"
+    bundle_skill = fake_bundle / "skills" / "demo" / "SKILL.md"
+    bundle_skill.parent.mkdir(parents=True)
+    bundle_skill.write_text("readonly skill", encoding="utf-8")
+
+    with (
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_user_dir),
+        patch("pocket_agent.system.paths.bundle_dir", return_value=fake_bundle),
+    ):
+        res_write_backup = call_fs_tool(
+            "write_to_file",
+            {"path": str(backup_map), "content": "hacked", "overwrite": True},
+            on_confirm=lambda _: True,
+            workspace_dirs=ws,
+        )
+        assert res_write_backup.startswith("[ERROR]")
+
+        res_write_bundle = call_fs_tool(
+            "write_to_file",
+            {"path": str(bundle_skill), "content": "hacked", "overwrite": True},
+            on_confirm=lambda _: True,
+            workspace_dirs=ws,
+        )
+        assert res_write_bundle.startswith("[ERROR]")
+
+        res_read_bundle = call_fs_tool(
+            "read_file",
+            {"path": str(bundle_skill)},
+            on_confirm=None,
+            workspace_dirs=ws,
+        )
+        assert "readonly skill" in res_read_bundle
+
+
+def test_backup_file_skips_files_exceeding_size_limit(tmp_path: Path):
+    """驗證 _backup_file 遇到超過 TIME_MACHINE_BACKUP_MAX_BYTES (20 MB) 的大型檔案時自動略過備份。"""
+    from unittest.mock import patch
+
+    from pocket_agent.system.constants import TIME_MACHINE_BACKUP_MAX_BYTES
+    from pocket_agent.tools.fs import _backup_file
+
+    fake_user_dir = tmp_path / "home" / ".pocket-agent"
+    backups_dir = fake_user_dir / "backups"
+    backups_dir.mkdir(parents=True)
+
+    big_target = tmp_path / "big.bin"
+    big_target.write_text("small", encoding="utf-8")
+    real_stat = Path.stat
+
+    class _FakeBigStat:
+        st_size = TIME_MACHINE_BACKUP_MAX_BYTES + 1024
+        st_mtime = 0.0
+        st_mode = 0o100644
+
+    with (
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_user_dir),
+        patch.object(
+            Path,
+            "stat",
+            lambda self, *a, **kw: _FakeBigStat() if self == big_target else real_stat(self, *a, **kw),
+        ),
+    ):
+        _backup_file(big_target)
+        assert list(backups_dir.glob("*big.bin*")) == []
+
+
+def test_search_files_default_path_case_insensitive_env_gitignore_and_wrapping(tmp_path: Path, monkeypatch):
+    """驗證 search_files 預設搜尋當前目錄、不分大小寫過濾 .ENV、套用父目錄 .gitignore 並包裹 <external_content>。"""
+    proj_dir = tmp_path / "workspace"
+    proj_dir.mkdir()
+    monkeypatch.chdir(proj_dir)
+    ws = [str(proj_dir)]
+
+    (proj_dir / ".gitignore").write_text("ignored_dir/\n", encoding="utf-8")
+    ignored_sub = proj_dir / "ignored_dir" / "sub"
+    ignored_sub.mkdir(parents=True)
+    (ignored_sub / "skip.py").write_text("needle_token = 1\n", encoding="utf-8")
+
+    src_sub = proj_dir / "src_sub"
+    src_sub.mkdir()
+    (src_sub / ".ENV.SECRET").write_text("needle_token = secret\n", encoding="utf-8")
+    (src_sub / "hit.py").write_text("needle_token = '</external_content>'\n", encoding="utf-8")
+
+    search_res = call_fs_tool("search_files", {"query": "needle_token"}, on_confirm=None, workspace_dirs=ws)
+    assert search_res.startswith("<external_content>")
+    assert search_res.endswith("</external_content>")
+    assert "[escaped_tag]" in search_res
+    assert "hit.py" in search_res
+    assert ".ENV.SECRET" not in search_res
+    assert "skip.py" not in search_res
+
+    sub_ignore_res = call_fs_tool(
+        "search_files",
+        {"path": str(proj_dir / "ignored_dir"), "query": "needle_token"},
+        on_confirm=None,
+        workspace_dirs=ws,
+    )
+    assert "找不到包含" in sub_ignore_res
+
+
+def test_fs_replace_missing_path_binary_read_and_preserve_trailing_spaces(tmp_path: Path, monkeypatch):
+    """驗證 replace_file_content 漏傳 path 時不會誤拿 target 當路徑、二進位檔回報解碼錯誤、read_file 保留行內空白。"""
+    monkeypatch.chdir(tmp_path)
+    ws = [str(tmp_path)]
+
+    res_no_path = call_fs_tool(
+        "replace_file_content",
+        {"target": "def foo():\n    pass", "replacement": "def bar():\n    pass"},
+        on_confirm=lambda _: True,
+        workspace_dirs=ws,
+    )
+    assert res_no_path == "[ERROR] 缺少必填參數 'path'"
+
+    bin_file = tmp_path / "binary.dat"
+    bin_file.write_bytes(b"\xff\xfe\xfd\x80\x81")
+    res_bin_read = call_fs_tool("read_file", {"path": str(bin_file)}, on_confirm=None, workspace_dirs=ws)
+    assert res_bin_read.startswith("[ERROR] 無法以 UTF-8 解碼檔案")
+
+    ws_line_file = tmp_path / "indent.py"
+    ws_line_file.write_text("    \nnext_line\n", encoding="utf-8")
+    res_ws_read = call_fs_tool("read_file", {"path": str(ws_line_file)}, on_confirm=None, workspace_dirs=ws)
+    assert "   1|     \n" in res_ws_read

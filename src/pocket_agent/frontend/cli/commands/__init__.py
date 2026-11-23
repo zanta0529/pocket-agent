@@ -84,7 +84,7 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("goal", GoalCommand())
 
     cs_cmd = CodeSearchCommand()
-    registry.register("codesearch", cs_cmd)
+    registry.register("code-search", cs_cmd)
     registry.register("cs", cs_cmd)
 
     registry.register("add-dir", AddDirCommand())

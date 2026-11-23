@@ -16,6 +16,8 @@ from pathlib import Path
 from pocket_agent.core.cancellation import check_cancelled, run_sync
 from pocket_agent.system.auth import get_model, get_provider_client
 from pocket_agent.system.constants import MAX_IMAGE_INPUT_BYTES, MAX_IMAGE_INPUT_COUNT, PROVIDER_OPENAI
+from pocket_agent.system.i18n import t
+from pocket_agent.tools.fs import is_sensitive_part, validate_safe_path
 
 # gpt-image-2 支援的參數
 VALID_SIZES = {"auto", "1024x1024", "1536x1024", "1024x1536"}
@@ -30,9 +32,6 @@ _SUPPORTED_IMAGE_MIMES: dict[str, str] = {
 }
 
 IMAGE_MODEL = "gpt-image-2"
-
-# 生圖是掛在文字模型上的 hosted tool，這裡的 model 只是「載具」
-_WRAPPER_MODEL_ENV = "OPENAI_IMAGE_WRAPPER_MODEL"
 
 _INSTRUCTIONS = (
     "You are an image generation assistant. Use the image_generation tool to create exactly what the user asks for."
@@ -64,22 +63,32 @@ def _prepare_output_path(output_path: str | Path) -> Path:
     """於遠端生圖或寫檔前預先驗證輸出目標路徑並確保父目錄存在。"""
     raw = str(output_path if output_path is not None else "").strip()
     if not raw or raw.startswith(("\\\\", "//")):
-        raise ValueError("無效或不安全的輸出路徑（禁止空白或 UNC／網路路徑）。")
+        raise ValueError(t("image_tool.invalid_output_path"))
 
     resolved = Path(raw).expanduser().resolve(strict=False)
+    for part in resolved.parts:
+        if is_sensitive_part(part):
+            raise ValueError(t("image_tool.sensitive_output_path", part=part))
+
     if resolved.exists() and resolved.is_dir():
-        raise ValueError(f"輸出路徑不能是資料夾（請指定完整檔名，例如 {resolved / 'image.png'}）：{resolved}")
+        raise ValueError(
+            t(
+                "image_tool.output_is_dir",
+                example=resolved / "image.png",
+                path=resolved,
+            )
+        )
 
     for parent in resolved.parents:
         if parent.exists():
             if not parent.is_dir():
-                raise ValueError(f"輸出路徑的父路徑不是資料夾：{parent}")
+                raise ValueError(t("image_tool.parent_not_dir", parent=parent))
             break
 
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise ValueError(f"無法建立輸出目錄 {resolved.parent}：{exc}") from exc
+        raise ValueError(t("image_tool.mkdir_failed", parent=resolved.parent, error=exc)) from exc
 
     return resolved
 
@@ -109,7 +118,7 @@ def save_image_b64(b64_png: str, output_path: str | Path = "generated_images/ima
         except BaseException:
             candidate.unlink(missing_ok=True)
             raise
-    raise RuntimeError("無法寫入圖片檔案")
+    raise RuntimeError(t("image_tool.write_failed"))
 
 
 def _has_valid_image_header(path: Path, ext: str) -> bool:
@@ -129,38 +138,40 @@ def _has_valid_image_header(path: Path, ext: str) -> bool:
 
 def _image_part(path: str | Path, workspace_dirs: list[str] | None = None) -> dict:
     """本地圖片 → Responses API 的 input_image part（base64 data URL）。"""
-    from pocket_agent.tools.fs import _validate_safe_path
-
-    p = _validate_safe_path(str(path), workspace_dirs)
+    p = validate_safe_path(str(path), workspace_dirs)
     if not p.exists():
-        raise FileNotFoundError(f"找不到圖片：{p}")
+        raise FileNotFoundError(t("image_tool.ref_not_found", path=p))
     if not p.is_file():
-        raise ValueError(f"參考圖路徑不是一般檔案（請先從待送附件移除）：{p.name}")
+        raise ValueError(t("image_tool.ref_not_regular", name=p.name))
 
     ext = p.suffix.lower()
     mime = _SUPPORTED_IMAGE_MIMES.get(ext)
     if not mime:
-        raise ValueError(f"不支援的參考圖格式「{p.name}」（僅支援 PNG、JPEG、WEBP、GIF，請先從待送附件移除）。")
+        raise ValueError(t("image_tool.ref_unsupported_format", name=p.name))
 
     size_bytes = p.stat().st_size
     if size_bytes <= 0:
-        raise ValueError(f"參考圖檔案為空「{p.name}」，請先從待送附件移除。")
+        raise ValueError(t("image_tool.ref_empty", name=p.name))
     if size_bytes > MAX_IMAGE_INPUT_BYTES:
         limit_mb = MAX_IMAGE_INPUT_BYTES // (1024 * 1024)
-        raise ValueError(f"參考圖「{p.name}」超過大小上限（{limit_mb} MB），請先移除或壓縮後再試。")
+        raise ValueError(t("image_tool.ref_too_large", name=p.name, limit_mb=limit_mb))
     if not _has_valid_image_header(p, ext):
-        raise ValueError(f"檔案「{p.name}」內容與副檔名 {ext} 格式不符，請確認為有效圖片後再試。")
+        raise ValueError(t("image_tool.ref_header_mismatch", name=p.name, ext=ext))
 
     b64 = base64.b64encode(p.read_bytes()).decode()
     return {"type": "input_image", "image_url": f"data:{mime};base64,{b64}"}
 
 
-def _next_available(path: Path) -> Path:
+def next_available_path(path: Path) -> Path:
     """加上本地時間戳記（yyyyMMdd_hhmmss），同秒碰撞時附加 -2、-3 後綴避免覆蓋。"""
     for candidate in _iter_candidates(path):
         if not candidate.exists():
             return candidate
-    raise RuntimeError("無法取得可用輸出路徑")
+    raise RuntimeError(t("image_tool.no_available_path"))
+
+
+# 向後相容別名
+_next_available = next_available_path
 
 
 async def generate_image(
@@ -173,13 +184,13 @@ async def generate_image(
 ) -> Path:
     """生成（或用 input_images 編輯）圖片，存成 PNG，回傳實際存檔路徑。"""
     if size not in VALID_SIZES:
-        raise ValueError(f"size 必須是 {sorted(VALID_SIZES)}，收到：{size}")
+        raise ValueError(t("image_tool.invalid_size", valid=sorted(VALID_SIZES), size=size))
     if quality not in VALID_QUALITIES:
-        raise ValueError(f"quality 必須是 {sorted(VALID_QUALITIES)}，收到：{quality}")
+        raise ValueError(t("image_tool.invalid_quality", valid=sorted(VALID_QUALITIES), quality=quality))
 
     imgs = list(input_images or [])
     if len(imgs) > MAX_IMAGE_INPUT_COUNT:
-        raise ValueError(f"參考圖數量超過上限（最多 {MAX_IMAGE_INPUT_COUNT} 張），請先移除多餘附件。")
+        raise ValueError(t("image_tool.too_many_refs", max_count=MAX_IMAGE_INPUT_COUNT))
 
     # 送出網路請求前先預檢輸出目的地並整批驗證參考圖
     target_output = _prepare_output_path(output_path)
@@ -216,7 +227,12 @@ async def generate_image(
         except Exception:
             raise exc
         raise RuntimeError(
-            f"無法寫入目標路徑 {target_output}（{exc}）；已將生成的圖片緊急保存至沙盒暫存區：{rescued}"
+            t(
+                "image_tool.rescued_to_scratch",
+                target=target_output,
+                error=exc,
+                rescued=rescued,
+            )
         ) from exc
 
 
@@ -283,9 +299,9 @@ async def _request(client, model: str, content: list[dict], tool: dict) -> str:
                 pass
 
     if error_msg:
-        raise RuntimeError(f"生圖失敗：{error_msg}")
+        raise RuntimeError(t("image_tool.gen_failed", error=error_msg))
     if incomplete_reason:
-        raise RuntimeError(f"生圖未完成 (incomplete)：{incomplete_reason}")
+        raise RuntimeError(t("image_tool.gen_incomplete", reason=incomplete_reason))
     if not result:
-        raise RuntimeError("生圖失敗：後端沒有回傳圖片資料")
+        raise RuntimeError(t("image_tool.gen_empty_result"))
     return result

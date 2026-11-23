@@ -6,6 +6,7 @@
 - 輸出截斷，避免灌爆 context
 """
 
+import functools
 import locale
 import logging
 import os
@@ -16,16 +17,20 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any, Callable
 
 from pocket_agent.system.constants import (
     DEFAULT_CLI_TIMEOUT_SEC,
     DEFAULT_PROCESS_BUFFER_BYTES,
+    DEFAULT_PROCESS_READ_CHUNK_BYTES,
     DEFAULT_TOOL_OUTPUT_CHARS,
     MAX_CLI_TIMEOUT_SEC,
     SENSITIVE_ENV_EXACT_KEYS,
     SENSITIVE_ENV_PREFIXES,
 )
+from pocket_agent.system.i18n import t
 from pocket_agent.system.permissions import CommandVerdict, classify_command_safety
+from pocket_agent.tools.fs import escape_external_content_tags, extract_refusal_instruction
 
 log = logging.getLogger("pocket-agent")
 
@@ -34,8 +39,9 @@ MAX_OUTPUT = DEFAULT_TOOL_OUTPUT_CHARS  # 回傳給模型的最大字元數 (適
 MAX_OUTPUT_BYTES = DEFAULT_PROCESS_BUFFER_BYTES  # 讀取子行程輸出的位元組上限 (1 MB 安全緩衝區)
 
 
-def _decode_candidates() -> list[str]:
-    """子行程輸出的候選編碼，依序嘗試。
+@functools.lru_cache(maxsize=1)
+def _decode_candidates() -> tuple[str, ...]:
+    """子行程輸出的候選編碼，依序嘗試（行程生命週期內快取）。
 
     Windows 上沒有單一正確答案：`type` 一個 UTF-8 檔案吐的是 UTF-8，
     但 dir、ping 這些內建指令吐的是主控台的 OEM 碼頁（正體中文為
@@ -56,13 +62,14 @@ def _decode_candidates() -> list[str]:
 
     candidates.append(locale.getpreferredencoding(False))
 
-    seen, ordered = set(), []
+    seen: set[str] = set()
+    ordered: list[str] = []
     for enc in candidates:
         key = (enc or "").lower()
         if key and key not in seen:
             seen.add(key)
             ordered.append(enc)
-    return ordered
+    return tuple(ordered)
 
 
 def _decode(raw: bytes) -> str:
@@ -135,22 +142,23 @@ def scrub_subprocess_env(
     *,
     extra_allowlist: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, str]:
-    """複製環境變數並剝除主程序之敏感 API Key／憑證，避免子行程無意繼承洩漏。"""
+    """複製環境變數並剝除主程序之敏感 API Key／憑證（不分大小寫），避免子行程無意繼承洩漏。"""
     env = dict(base_env if base_env is not None else os.environ)
-    allow_set: set[str] = {str(k).strip() for k in (extra_allowlist or ()) if str(k).strip()}
+    allow_upper: set[str] = {str(k).strip().upper() for k in (extra_allowlist or ()) if str(k).strip()}
     try:
         from pocket_agent.system.config import config
 
         cfg_allow = config.get("system.subprocess_env_allowlist", [])
         if isinstance(cfg_allow, (list, tuple)):
-            allow_set.update(str(k).strip() for k in cfg_allow if str(k).strip())
+            allow_upper.update(str(k).strip().upper() for k in cfg_allow if str(k).strip())
     except Exception:
         pass
 
     for key in list(env.keys()):
-        if key in allow_set:
+        key_upper = key.upper()
+        if key_upper in allow_upper:
             continue
-        if key in SENSITIVE_ENV_EXACT_KEYS or key.startswith(SENSITIVE_ENV_PREFIXES):
+        if key_upper in SENSITIVE_ENV_EXACT_KEYS or key_upper.startswith(SENSITIVE_ENV_PREFIXES):
             env.pop(key, None)
     return env
 
@@ -281,7 +289,8 @@ class _WindowsJobContainment(_ProcessContainmentStrategy):
     """Windows Job Object 行程生命週期管理（僅負責行程樹清理，非檔案或網路沙盒）。"""
 
     def __init__(self) -> None:
-        self._job_handle = None
+        self._lock = threading.Lock()
+        self._job_handle: Any = None
         self._attached = False
         self._fallback = _FallbackTreeContainment()
 
@@ -297,8 +306,9 @@ class _WindowsJobContainment(_ProcessContainmentStrategy):
             info["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             win32job.SetInformationJobObject(job, win32job.JobObjectExtendedLimitInformation, info)
             win32job.AssignProcessToJobObject(job, raw_handle)
-            self._job_handle = job
-            self._attached = True
+            with self._lock:
+                self._job_handle = job
+                self._attached = True
         except Exception as e:
             log.debug("Windows Job Object 綁定失敗，將降級至 taskkill：%s", e)
             self.cleanup()
@@ -310,12 +320,15 @@ class _WindowsJobContainment(_ProcessContainmentStrategy):
         *,
         output_complete: bool = False,
     ) -> ShellTerminationStatus:
-        if not self._attached or self._job_handle is None:
+        with self._lock:
+            job_handle = self._job_handle
+            attached = self._attached
+        if not attached or job_handle is None:
             return self._fallback.terminate(proc, timeout=timeout, output_complete=output_complete)
         try:
             import win32job
 
-            win32job.TerminateJobObject(self._job_handle, 1)
+            win32job.TerminateJobObject(job_handle, 1)
             t0 = time.monotonic()
             while time.monotonic() - t0 < timeout:
                 if proc.poll() is not None:
@@ -341,15 +354,17 @@ class _WindowsJobContainment(_ProcessContainmentStrategy):
             self.cleanup()
 
     def cleanup(self) -> None:
-        if self._job_handle is not None:
+        with self._lock:
+            handle = self._job_handle
+            self._job_handle = None
+            self._attached = False
+        if handle is not None:
             try:
                 import win32api
 
-                win32api.CloseHandle(self._job_handle)
+                win32api.CloseHandle(handle)
             except Exception:
                 pass
-            self._job_handle = None
-            self._attached = False
 
 
 def _create_containment_strategy() -> _ProcessContainmentStrategy:
@@ -426,32 +441,12 @@ def interrupt_active_shell_processes() -> int:
     return count
 
 
-def call_shell_tool(name: str, args: dict, confirm=None) -> str:
-    """執行指令並回傳結果字串。confirm(command) 回傳 False 時拒絕執行。
-
-    這是阻塞呼叫，core 端請用 asyncio.to_thread 包起來跑。
-    """
-    command = str(args.get("command", "")).strip()
-    if not command:
-        return "[ERROR] 沒有提供指令。"
-
-    safety = classify_command_safety(command)
-    if safety.verdict == CommandVerdict.BLOCKED:
-        log.warning("SECURITY BLOCK: 嘗試執行毀滅性指令被系統底線攔截 (%s) -> %s", safety.reason, command)
-        return f"[ERROR] 觸發安全底線限制（{safety.reason}），拒絕執行該高風險指令：{command}"
-
-    cwd = args.get("cwd") or None
-    if cwd and not os.path.isdir(cwd):
-        return f"[ERROR] 工作目錄不存在或不是目錄：{cwd}"
-
-    confirm_prompt = command
-    if safety.verdict == CommandVerdict.CAUTION:
-        from pocket_agent.system.i18n import t
-
-        localized_reason = t(safety.reason_key) if safety.reason_key else safety.reason
-        confirm_prompt = t("confirmation.git_caution_banner", reason=localized_reason, command=command)
-
-    start_generation = _shell_cancel_generation
+def _evaluate_shell_confirmation(
+    confirm: Callable[[str], Any] | None,
+    confirm_prompt: str,
+    start_generation: int,
+) -> str | None:
+    """執行指令確認回呼，僅當回傳 True 且期間未取消時放行（回傳 None），否則回傳拒絕或取消訊息。"""
     if confirm is not None:
         try:
             allowed = confirm(confirm_prompt)
@@ -462,63 +457,82 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         allowed = False
 
     if _shell_cancel_generation != start_generation:
-        return "[操作已由使用者取消中斷，指令未建立與執行]"
-
+        return t("shell_tool.cancelled_before_exec")
     if allowed is True:
-        pass
-    elif isinstance(allowed, str) and allowed.strip():
-        return (
-            f"[使用者拒絕執行此指令，並提供後續指示：\n"
-            f"「{allowed.strip()}」\n"
-            "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的指令。]"
-        )
-    elif isinstance(allowed, tuple) and len(allowed) == 2 and not allowed[0]:
-        custom_inst = str(allowed[1]).strip()
-        if custom_inst:
-            return (
-                f"[使用者拒絕執行此指令，並提供後續指示：\n"
-                f"「{custom_inst}」\n"
-                "請立即並嚴格遵循使用者的上述指示繼續處理任務，切勿再次嘗試執行違背該指示的指令。]"
-            )
-        return "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]"
-    else:
-        return "[使用者拒絕執行此指令，請改用其他方式或詢問使用者。]"
+        return None
 
+    custom_inst = extract_refusal_instruction(allowed)
+    if custom_inst:
+        return t("shell_tool.refused_with_instruction", instruction=custom_inst)
+    return t("shell_tool.refused_generic")
+
+
+def _resolve_timeout_sec(raw_timeout: Any) -> int:
+    """將 timeout_sec 安全轉換並夾限於 [1, MAX_CLI_TIMEOUT_SEC] 區間。"""
+    if raw_timeout is None or raw_timeout == "":
+        return DEFAULT_CLI_TIMEOUT_SEC
     try:
-        timeout = min(
-            int(args.get("timeout_sec") or DEFAULT_CLI_TIMEOUT_SEC),
-            MAX_CLI_TIMEOUT_SEC,
-        )
-    except (
-        TypeError,
-        ValueError,
-    ):
-        timeout = DEFAULT_CLI_TIMEOUT_SEC
+        val = int(raw_timeout)
+    except TypeError, ValueError:
+        return DEFAULT_CLI_TIMEOUT_SEC
+    if val <= 0:
+        return DEFAULT_CLI_TIMEOUT_SEC
+    return max(1, min(val, MAX_CLI_TIMEOUT_SEC))
+
+
+def _build_sandbox_command(command: str) -> tuple[str | list[str], bool]:
+    """依系統設定組裝沙盒執行命令與 shell 旗標（Strategy / Factory 輔助）。"""
+    from pocket_agent.system.config import config
+
+    sandbox_mode = str(config.get("system.use_sandbox", "none") or "none").strip().lower()
+    if sandbox_mode == "wsl":
+        log.debug("Using WSL Sandbox")
+        return ["wsl", "--", "sh", "-c", command], False
+    if sandbox_mode == "docker":
+        container_name = str(config.get("system.sandbox_container", "pocket_sandbox") or "pocket_sandbox").strip()
+        log.debug("Using Docker Sandbox")
+        return ["docker", "exec", container_name, "sh", "-c", command], False
+    return command, True
+
+
+def call_shell_tool(name: str, args: dict, confirm=None) -> str:
+    """執行指令並回傳結果字串。confirm(command) 回傳 False 時拒絕執行。
+
+    這是阻塞呼叫，core 端請用 asyncio.to_thread 包起來跑。
+    """
+    command = str(args.get("command", "")).strip()
+    if not command:
+        return f"[ERROR] {t('shell_tool.empty_command')}"
+
+    safety = classify_command_safety(command)
+    if safety.verdict == CommandVerdict.BLOCKED:
+        log.warning("SECURITY BLOCK: 嘗試執行毀滅性指令被系統底線攔截 (%s) -> %s", safety.reason, command)
+        return f"[ERROR] {t('shell_tool.security_floor_blocked', reason=safety.reason, command=command)}"
+
+    cwd = args.get("cwd") or None
+    if cwd and not os.path.isdir(cwd):
+        return f"[ERROR] {t('shell_tool.invalid_cwd', cwd=cwd)}"
+
+    confirm_prompt = command
+    if safety.verdict == CommandVerdict.CAUTION:
+        localized_reason = t(safety.reason_key) if safety.reason_key else safety.reason
+        confirm_prompt = t("confirmation.git_caution_banner", reason=localized_reason, command=command)
+
+    start_generation = _shell_cancel_generation
+    refusal = _evaluate_shell_confirmation(confirm, confirm_prompt, start_generation)
+    if refusal is not None:
+        return refusal
+
+    timeout = _resolve_timeout_sec(args.get("timeout_sec"))
 
     # GUI 程式底下跑 console 指令不要閃出黑視窗
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
     log.debug("CLI run: %s", command)
-
-    from pocket_agent.system.config import config  # 依照系統設定決定 sandbox 模式
-
-    sandbox_mode = config.get("system.use_sandbox", "none").lower()
-
-    cmd_args = command
-    is_shell = True
-
-    if sandbox_mode == "wsl":
-        cmd_args = ["wsl", "--", "sh", "-c", command]
-        is_shell = False
-        log.debug("Using WSL Sandbox")
-    elif sandbox_mode == "docker":
-        container_name = config.get("system.sandbox_container", "pocket_sandbox")
-        cmd_args = ["docker", "exec", container_name, "sh", "-c", command]
-        is_shell = False
-        log.debug("Using Docker Sandbox")
+    cmd_args, is_shell = _build_sandbox_command(command)
 
     try:
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "shell": is_shell,
             "cwd": cwd,
             "env": scrub_subprocess_env(),
@@ -532,7 +546,7 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
 
         with _shell_proc_lock:
             if _shell_cancel_generation != start_generation:
-                return "[操作已由使用者取消中斷，指令未建立與執行]"
+                return t("shell_tool.cancelled_before_exec")
             proc = subprocess.Popen(cmd_args, **kwargs)
             strategy = _create_containment_strategy()
             strategy.attach(proc)
@@ -543,10 +557,10 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
         output_buf = bytearray()
         truncated = [False]
 
-        def reader_thread():
+        def reader_thread() -> None:
             while True:
                 try:
-                    buf = proc.stdout.read(1024)
+                    buf = proc.stdout.read(DEFAULT_PROCESS_READ_CHUNK_BYTES)
                 except ValueError, OSError:
                     break  # stdout 已被關閉
                 if not buf:
@@ -557,49 +571,41 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
                     _kill_proc_tree(proc)
                     break
 
-        t = threading.Thread(target=reader_thread, daemon=True)
-        t.start()
+        t_reader = threading.Thread(target=reader_thread, daemon=True)
+        t_reader.start()
 
         def collect_output() -> str:
             raw = bytes(output_buf[:MAX_OUTPUT_BYTES]) if truncated[0] else bytes(output_buf)
             if truncated[0]:
                 raw = _trim_partial_utf8(raw)
-            text = _decode(raw)
+            text = escape_external_content_tags(_decode(raw))
             if len(text) > MAX_OUTPUT:
                 text = text[:MAX_OUTPUT]
                 truncated[0] = True
             if truncated[0]:
-                text += (
-                    f"\n…（輸出過長，已提早截斷至前 {MAX_OUTPUT} 字元）\n"
-                    "[系統提示：若需檢視後續內容或特定錯誤，請透過 grep、head/tail 或加上更精確的過濾指令再次執行]"
-                )
+                text += t("shell_tool.output_truncated_notice", max_chars=MAX_OUTPUT)
             return text.strip()
 
         try:
             proc.wait(timeout=timeout)
-            t.join(timeout=1.0)
+            t_reader.join(timeout=1.0)
         except subprocess.TimeoutExpired:
             term_status = _kill_proc_tree(proc, output_complete=False)
             try:
                 proc.stdout.close()
             except Exception:
                 pass
-            t.join(timeout=0.5)
+            t_reader.join(timeout=0.5)
             partial = collect_output()
             if term_status.exited and term_status.tree_cleanup_confirmed:
-                message = f"[ERROR] 指令逾時（{timeout} 秒），已強制終止（輸出可能不完整）。"
+                err_body = t("shell_tool.timeout_confirmed", timeout=timeout)
             elif term_status.exited:
-                message = (
-                    f"[ERROR] 指令逾時（{timeout} 秒），主程序已退出但程序樹清理未確認"
-                    f"（後端：{term_status.backend}，輸出可能不完整）。"
-                )
+                err_body = t("shell_tool.timeout_tree_unconfirmed", timeout=timeout, backend=term_status.backend)
             else:
-                message = (
-                    f"[ERROR] 指令逾時（{timeout} 秒），已請求終止但尚未確認程序退出"
-                    f"（後端：{term_status.backend}，輸出可能不完整）。"
-                )
+                err_body = t("shell_tool.timeout_exit_unconfirmed", timeout=timeout, backend=term_status.backend)
+            message = f"[ERROR] {err_body}"
             if partial:
-                message += f"\n已收集的輸出：\n{partial}"
+                message += f"\n{t('shell_tool.partial_output_header')}\n{partial}"
             return message
         finally:
             with _shell_proc_lock:
@@ -611,10 +617,11 @@ def call_shell_tool(name: str, args: dict, confirm=None) -> str:
                 proc.stdout.close()
             except Exception:
                 pass
-            t.join(timeout=0.2)
+            if t_reader.is_alive():
+                t_reader.join(timeout=0.2)
     except Exception as e:
         return f"[ERROR] {e}"
 
-    output = collect_output() or "(沒有輸出)"
+    output = collect_output() or t("shell_tool.no_output")
 
     return f"exit code: {proc.returncode}\n{output}"

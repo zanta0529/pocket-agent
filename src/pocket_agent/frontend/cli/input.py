@@ -28,7 +28,7 @@ BUILTIN_COMMAND_NAMES = (
     "attachments",
     "clean",
     "clear",
-    "codesearch",
+    "code-search",
     "compact",
     "config",
     "exit",
@@ -163,7 +163,7 @@ class SlashCommandCompleter(Completer):
 
         aliases = {
             "activity": "changes",
-            "codesearch": "cs",
+            "code-search": "cs",
             "exit": "quit",
             "mcp": "tools",
             "reasoning": "effort",

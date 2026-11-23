@@ -1,19 +1,43 @@
+import html as html_lib
 import ipaddress
 import logging
 import re
 import socket
-from urllib.parse import urlparse
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 
 from pocket_agent.system.constants import (
+    DEFAULT_ALLOWED_SSRF_DOMAINS,
     DEFAULT_MAX_REDIRECTS,
     DEFAULT_NETWORK_TIMEOUT_SEC,
     DEFAULT_WEB_CONTENT_MAX_CHARS,
+    DEFAULT_WEB_FALLBACK_MAX_RESULTS,
+    DEFAULT_WEB_SEARCH_MAX_RESULTS,
+    DEFAULT_WEB_STREAM_CHUNK_BYTES,
     MAX_RESPONSE_BYTES,
 )
+from pocket_agent.tools.fs import wrap_external_content
 
 log = logging.getLogger("pocket-agent")
+
+_DEFAULT_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"),
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
+
+_BLOCK_TAGS = frozenset({"br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"})
 
 WEB_TOOLS = [
     {
@@ -76,7 +100,21 @@ def _build_404_fallback_query(url: str) -> str:
     return f"site:{host}"
 
 
-def _search_ddg_snippets(query: str, headers: dict, max_results: int = 5) -> tuple[list[str], str | None]:
+def _extract_ddg_link(raw_href: str) -> str:
+    """反跳脫 DuckDuckGo 結果連結並解開 uddg 轉址參數。"""
+    link = html_lib.unescape(raw_href.strip())
+    if link.startswith("//duckduckgo.com/l/?"):
+        parsed = parse_qs(urlparse(link).query)
+        if "uddg" in parsed:
+            link = parsed["uddg"][0]
+    return link
+
+
+def _search_ddg_snippets(
+    query: str,
+    headers: dict,
+    max_results: int = DEFAULT_WEB_SEARCH_MAX_RESULTS,
+) -> tuple[list[str], str | None]:
     """向 DuckDuckGo HTML 介面查詢並解析前 max_results 筆結果。回傳 (結果列表, 錯誤訊息或 None)。"""
     url = "https://html.duckduckgo.com/html/"
     try:
@@ -97,7 +135,7 @@ def _search_ddg_snippets(query: str, headers: dict, max_results: int = 5) -> tup
                 url,
                 data={"q": query},
                 headers=headers,
-                follow_redirects=True,
+                follow_redirects=False,
                 timeout=DEFAULT_NETWORK_TIMEOUT_SEC,
             )
             resp.raise_for_status()
@@ -110,19 +148,23 @@ def _search_ddg_snippets(query: str, headers: dict, max_results: int = 5) -> tup
 
     html = resp.text
     results: list[str] = []
-    snippets = re.findall(r'<a class="result__snippet[^>]*>(.*?)</a>', html, re.DOTALL)
-    urls = re.findall(r'<a class="result__url" href="([^"]+)">', html)
-
-    for i in range(min(len(snippets), max_results, len(urls))):
-        text = _strip_html(snippets[i]).strip()
-        link = urls[i].strip()
-        if link.startswith("//duckduckgo.com/l/?"):
-            import urllib.parse
-
-            parsed = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
-            if "uddg" in parsed:
-                link = parsed["uddg"][0]
-        results.append(f"{i + 1}. {text}\n   URL: {link}")
+    pair_matches = re.findall(
+        r'<a class="result__url" href="([^"]+)">.*?<a class="result__snippet[^>]*>(.*?)</a>',
+        html,
+        re.DOTALL,
+    )
+    if pair_matches:
+        for i, (raw_url, raw_snippet) in enumerate(pair_matches[:max_results]):
+            text = _strip_html(raw_snippet).strip()
+            link = _extract_ddg_link(raw_url)
+            results.append(f"{i + 1}. {text}\n   URL: {link}")
+    else:
+        snippets = re.findall(r'<a class="result__snippet[^>]*>(.*?)</a>', html, re.DOTALL)
+        urls = re.findall(r'<a class="result__url" href="([^"]+)">', html)
+        for i in range(min(len(snippets), max_results, len(urls))):
+            text = _strip_html(snippets[i]).strip()
+            link = _extract_ddg_link(urls[i])
+            results.append(f"{i + 1}. {text}\n   URL: {link}")
 
     return results, None
 
@@ -137,7 +179,7 @@ def _format_404_fallback(url: str, headers: dict) -> str:
     if not fallback_query:
         return hint
     try:
-        results, err = _search_ddg_snippets(fallback_query, headers, max_results=3)
+        results, err = _search_ddg_snippets(fallback_query, headers, max_results=DEFAULT_WEB_FALLBACK_MAX_RESULTS)
         if not err and results:
             joined = "\n\n".join(results)
             return f"\n\n[404 自動退避檢索] 系統已自動以「{fallback_query}」搜尋該站點相近頁面：\n\n{joined}{hint}"
@@ -146,49 +188,45 @@ def _format_404_fallback(url: str, headers: dict) -> str:
     return hint
 
 
+class _MLStripper(HTMLParser):
+    """簡易 HTML 純文字抽取器，略過 script/style 並在區塊標籤補換行。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.text: list[str] = []
+        self.ignored_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in ("script", "style"):
+            self.ignored_depth += 1
+        elif self.ignored_depth == 0 and tag in _BLOCK_TAGS:
+            self.text.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style") and self.ignored_depth > 0:
+            self.ignored_depth -= 1
+        elif self.ignored_depth == 0 and tag in _BLOCK_TAGS:
+            self.text.append("\n")
+
+    def handle_data(self, d: str) -> None:
+        if self.ignored_depth == 0:
+            self.text.append(d)
+
+    def get_data(self) -> str:
+        return "".join(self.text)
+
+
 def _strip_html(html_str: str) -> str:
     """簡易移除 HTML 標籤並抽取純文字 (避免 bs4 依賴)"""
-    from html.parser import HTMLParser
-
-    class MLStripper(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.reset()
-            self.strict = False
-            self.convert_charrefs = True
-            self.text = []
-            self.in_style_script = False
-
-        def handle_starttag(self, tag, attrs):
-            if tag in ("script", "style"):
-                self.in_style_script = True
-
-        def handle_endtag(self, tag):
-            if tag in ("script", "style"):
-                self.in_style_script = False
-
-        def handle_data(self, d):
-            if not self.in_style_script:
-                self.text.append(d)
-
-        def get_data(self):
-            return "".join(self.text)
-
-    try:
-        s = MLStripper()
-        s.feed(html_str)
-        text = s.get_data()
-        # 整理連續空白
-        return re.sub(r"\n\s*\n", "\n\n", text).strip()
-    except Exception:
-        # Fallback regex fallback
-        return re.sub(r"<[^>]+>", " ", html_str)
+    s = _MLStripper()
+    s.feed(html_str)
+    text = s.get_data()
+    return re.sub(r"\n\s*\n", "\n\n", text).strip()
 
 
 # 向後相容別名 (對齊 constants.py)
 MAX_REDIRECTS = DEFAULT_MAX_REDIRECTS
 _REDIRECT_CODES = (301, 302, 303, 307, 308)
-_EXTERNAL_TAG_RE = re.compile(r"<\s*/?\s*external_content\s*>", re.IGNORECASE)
 
 
 class _BlockedAddressError(Exception):
@@ -200,9 +238,6 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return (not ip.is_global) or ip.is_multicast
-
-
-DEFAULT_ALLOWED_SSRF_DOMAINS = ("github.com", "raw.githubusercontent.com")
 
 
 def _is_allowed_domain(hostname: str) -> bool:
@@ -305,7 +340,7 @@ def _fetch_pinned(url: str, ip: str, headers: dict) -> tuple[int, dict, bytes, b
                 resolve=[f"{host}:{port}:{ip}"],
             )
             try:
-                body, truncated = _read_limited(resp.iter_content(chunk_size=8192))
+                body, truncated = _read_limited(resp.iter_content(chunk_size=DEFAULT_WEB_STREAM_CHUNK_BYTES))
             finally:
                 resp.close()
             return resp.status_code, {k.lower(): v for k, v in resp.headers.items()}, body, truncated, False
@@ -315,7 +350,11 @@ def _fetch_pinned(url: str, ip: str, headers: dict) -> tuple[int, dict, bytes, b
     ip_host = f"[{ip}]" if ":" in ip else ip
     pinned_url = parsed._replace(netloc=f"{ip_host}:{port}").geturl()
     pinned_headers = dict(headers)
-    pinned_headers["Host"] = parsed.netloc.rsplit("@", 1)[-1]
+    default_port = 443 if parsed.scheme == "https" else 80
+    host_header = f"[{host}]" if ":" in host else host
+    if parsed.port and parsed.port != default_port:
+        host_header = f"{host_header}:{parsed.port}"
+    pinned_headers["Host"] = host_header
     extensions = {"sni_hostname": host} if parsed.scheme == "https" else {}
     # trust_env=False：避免環境 proxy 重新解析主機名稱而繞過固定 IP
     with httpx.Client(timeout=DEFAULT_NETWORK_TIMEOUT_SEC, follow_redirects=False, trust_env=False) as client:
@@ -333,7 +372,7 @@ def _read_url(url: str, headers: dict) -> str:
     body = b""
     truncated = False
 
-    for _ in range(MAX_REDIRECTS):
+    for _ in range(MAX_REDIRECTS + 1):
         parsed = urlparse(current_url)
         if parsed.scheme not in ("http", "https"):
             return "[ERROR] 僅支援 http / https 網址"
@@ -350,7 +389,7 @@ def _read_url(url: str, headers: dict) -> str:
 
         try:
             status, resp_headers, body, truncated, curl_missing = _fetch_pinned(current_url, ip, headers)
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, OSError) as e:
             return f"[ERROR] 網路操作失敗: {e}{warning_msg}"
         if curl_missing and not warning_msg:
             warning_msg = (
@@ -361,9 +400,9 @@ def _read_url(url: str, headers: dict) -> str:
         if status in _REDIRECT_CODES:
             location = resp_headers.get("location")
             if not location:
+                if not body:
+                    return f"[ERROR] 網路操作失敗: HTTP {status} (缺少 Location 標頭){warning_msg}"
                 break
-            from urllib.parse import urljoin
-
             current_url = urljoin(current_url, location)
             continue
 
@@ -390,45 +429,26 @@ def _read_url(url: str, headers: dict) -> str:
     elif truncated:
         inner = text + f"\n\n... (回應超過 {MAX_RESPONSE_BYTES} 位元組，已截斷)"
 
-    # 跳脫內容中的隔離標籤，避免外部內容提早結束 <external_content> 區塊
-    inner = _EXTERNAL_TAG_RE.sub("[external_content tag removed]", inner)
-    inner += warning_msg
-
-    return f"<external_content>\n{inner}\n</external_content>"
+    return wrap_external_content(inner + warning_msg)
 
 
 def call_web_tool(name: str, args: dict) -> str:
     """執行輕量級網路工具。"""
     try:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Accept": (
-                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-            ),
-            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-        }
+        headers = dict(_DEFAULT_HEADERS)
 
         if name == "search_web":
             query = args.get("query", "")
             if not query:
                 return "[ERROR] 缺少必填參數 'query'"
 
-            results, err = _search_ddg_snippets(query, headers, max_results=5)
+            results, err = _search_ddg_snippets(query, headers, max_results=DEFAULT_WEB_SEARCH_MAX_RESULTS)
             if err:
                 return err
 
             if not results:
                 return "搜尋無結果，或遭到搜尋引擎阻擋（亦可能是搜尋頁面結構已改版，導致解析失敗）。"
-            return "搜尋結果 (DuckDuckGo)：\n\n" + "\n\n".join(results)
+            return wrap_external_content("搜尋結果 (DuckDuckGo)：\n\n" + "\n\n".join(results))
 
         elif name == "read_url_content":
             url = args.get("url", "")

@@ -30,6 +30,7 @@ MIN_TOOL_OUTPUT_CHARS = 500
 # 消耗主機 RAM 造成 DoS 攻擊。1 MB 緩衝區可充分容納常規編譯輸出與長日誌。
 # ==============================================================================
 DEFAULT_PROCESS_BUFFER_BYTES = 1024 * 1024  # 1 MB 安全串流排空上限
+DEFAULT_PROCESS_READ_CHUNK_BYTES = 4096  # 4 KB: 子行程 stdout 單次讀取區塊大小
 MAX_READ_FILE_BYTES = 10 * 1024 * 1024  # 10 MB: 本機讀檔保護底線，超過此大小拒絕直接讀入
 MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024  # 20 MB: /image 單張參考圖最大檔案大小
 MAX_IMAGE_INPUT_COUNT = 10  # /image 單次請求最多允許的參考圖數量
@@ -53,6 +54,7 @@ DB_AUTOINC_WARN_RATIO = 0.75  # 自動遞增 (AUTO_INCREMENT / IDENTITY) 欄位�
 # ==============================================================================
 DEFAULT_READ_FILE_LINES = 500  # read_file 單次讀取的預設最大行數
 DEFAULT_SEARCH_MAX_RESULTS = 100  # search_files 檔名或關鍵字檢索最多回傳筆數
+DEFAULT_SEARCH_LINE_MAX_CHARS = 500  # search_files 全文檢索單行命中顯示的最大字元上限
 TIME_MACHINE_BACKUP_MAX_BYTES = 20 * 1024 * 1024  # 20 MB: 檔案修改前時光機備份上限
 USER_DATA_DIR_NAME = ".pocket-agent"  # 使用者資料根目錄名稱 (~/.pocket-agent)
 DEFAULT_SKILL_RESOURCE_LIST_LIMIT = 20  # use_skill 提示中最多列出的頂層附屬資源項目數
@@ -72,6 +74,13 @@ REPLACE_DIAGNOSTIC_MAX_MATCHES = 5  # replace_file_content 回報實際行號診
 DEFAULT_NETWORK_TIMEOUT_SEC = 15.0  # HTTP 請求逾時秒數
 DEFAULT_MAX_REDIRECTS = 5  # 防範重新導向循環 (Redirect Loop) 的跳轉次數上限
 DEFAULT_WEB_CONTENT_MAX_CHARS = 15000  # read_url_content 抽取純文字後回傳模型的字元上限
+DEFAULT_WEB_SEARCH_MAX_RESULTS = 5  # search_web 預設擷取的搜尋結果筆數上限
+DEFAULT_WEB_FALLBACK_MAX_RESULTS = 3  # HTTP 404 自動退避搜尋時擷取的建議結果筆數上限
+DEFAULT_WEB_STREAM_CHUNK_BYTES = 8192  # Web 工具串流讀取單次區塊大小 (8 KB)
+DEFAULT_ALLOWED_SSRF_DOMAINS: tuple[str, ...] = (
+    "github.com",
+    "raw.githubusercontent.com",
+)  # 預設允許企業代理解析之受信任網域
 DEFAULT_STREAM_READ_TIMEOUT_SEC = 120.0  # LLM SSE 串流單區塊最大閒置讀取逾時秒數
 
 
@@ -95,6 +104,7 @@ DEFAULT_COMPACTION_KEEP_MESSAGES = 6  # /compact 摘要時保留的最近對話�
 DEFAULT_REPO_MAP_BUDGET_TOKENS = 1024  # AST 鳥瞰地圖佔用的 Token 預算
 DEFAULT_RAG_TOP_K = 5  # 本機 FTS5 檢索預設回傳代碼片段數
 MAX_RAG_TOP_K = 10  # 本機 FTS5 檢索最大片段數
+DEFAULT_RAG_MAX_FILE_LINES = 2000  # 本機 FTS5 索引單一原始碼檔案最多擷取行數上限
 
 
 # ==============================================================================

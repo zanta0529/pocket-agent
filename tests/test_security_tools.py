@@ -215,3 +215,102 @@ def test_fs_confirm_contract_blocks_custom_text_refusal_when_accept_edits_off(tm
     assert out.startswith("[使用者拒絕執行此檔案寫入操作")
     assert "先不要寫入，請說明原因" in out
     assert f.read_text(encoding="utf-8") == "x = 1\n"
+
+
+# ==========================================
+# 4. 文件讀取與產出韌性測試 (document.py & doc.py)
+# ==========================================
+def test_read_document_pdf_runtime_fallback_and_output_truncation(tmp_path, monkeypatch):
+    """驗證 pymupdf4llm 發生執行期例外時自動降級至 pypdf，且超長輸出會截斷並包裹 <external_content>。"""
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    pdf_file = tmp_path / "sample.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 dummy")
+
+    fake_pymupdf = SimpleNamespace(to_markdown=MagicMock(side_effect=RuntimeError("corrupt layout")))
+    fake_page = SimpleNamespace(extract_text=lambda: "A" * 13000)
+    fake_pypdf = SimpleNamespace(PdfReader=lambda _p: SimpleNamespace(pages=[fake_page]))
+
+    with patch.dict(sys.modules, {"pymupdf4llm": fake_pymupdf, "pypdf": fake_pypdf}):
+        res = call_document_tool("read_document", {"path": str(pdf_file)}, workspace_dirs=[str(tmp_path)])
+
+    assert res.startswith("<external_content>")
+    assert res.endswith("</external_content>")
+    assert "12000" in res
+    assert "AAAAA" in res
+
+
+def test_read_document_missing_file_returns_not_found_and_blocks_oversized(tmp_path, monkeypatch):
+    """驗證 read_document 對不存在檔案回傳 [NOT_FOUND]，且拒絕超過 MAX_READ_FILE_BYTES 的大檔。"""
+    from pathlib import Path
+
+    from pocket_agent.system.constants import MAX_READ_FILE_BYTES
+
+    monkeypatch.chdir(tmp_path)
+    res_missing = call_document_tool("read_document", {"path": str(tmp_path / "nope.pdf")}, [str(tmp_path)])
+    assert res_missing.startswith("[NOT_FOUND] ")
+
+    big_pdf = tmp_path / "huge.pdf"
+    big_pdf.write_bytes(b"%PDF-1.4")
+    real_stat = Path.stat
+
+    class _FakeBigStat:
+        st_size = MAX_READ_FILE_BYTES + 1024
+        st_mtime = 0.0
+        st_mode = 0o100644
+
+    with patch.object(
+        Path,
+        "stat",
+        lambda self, *a, **kw: _FakeBigStat() if self == big_pdf else real_stat(self, *a, **kw),
+    ):
+        res_big = call_document_tool("read_document", {"path": str(big_pdf)}, [str(tmp_path)])
+    assert res_big.startswith("[ERROR]")
+    assert "MB" in res_big
+
+
+def test_doc_generation_defensive_heading_level_empty_table_and_pptx_roundtrip(tmp_path, monkeypatch):
+    """驗證 doc.py 容忍 level=None、空表格列 [[]]，且 create_pptx 的備忘稿與內容可由 read_document 讀回。"""
+    from pocket_agent.tools.doc import call_doc_tool
+
+    monkeypatch.chdir(tmp_path)
+    ws = [str(tmp_path)]
+
+    msg_docx, docx_path = call_doc_tool(
+        "create_docx",
+        {
+            "filename": "report",
+            "title": "年度報告",
+            "blocks": [
+                {"type": "heading", "text": "第一章", "level": None},
+                {"type": "table", "rows": [[], ["欄位A", "欄位B"], ["值1", "值2"]]},
+            ],
+        },
+        on_confirm=lambda _: True,
+        workspace_dirs=ws,
+    )
+    assert docx_path is not None and docx_path.is_file()
+    assert "✓" in msg_docx
+    read_docx_res = call_document_tool("read_document", {"path": str(docx_path)}, ws)
+    assert "第一章" in read_docx_res
+    assert "欄位A | 欄位B" in read_docx_res
+
+    msg_pptx, pptx_path = call_doc_tool(
+        "create_pptx",
+        {
+            "filename": "deck",
+            "title": "簡報封面",
+            "slides": [
+                {"title": "第一頁", "bullets": ["重點一"], "notes": "這是演講者備忘稿秘密提醒"},
+            ],
+        },
+        on_confirm=lambda _: True,
+        workspace_dirs=ws,
+    )
+    assert pptx_path is not None and pptx_path.is_file()
+    assert "✓" in msg_pptx
+    read_pptx_res = call_document_tool("read_document", {"path": str(pptx_path)}, ws)
+    assert "第一頁" in read_pptx_res
+    assert "這是演講者備忘稿秘密提醒" in read_pptx_res
