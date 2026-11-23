@@ -537,5 +537,28 @@
     "timeout_exit_unconfirmed": "指令逾時（{timeout} 秒），已請求終止但尚未確認程序退出（後端：{backend}，輸出可能不完整）。",
     "partial_output_header": "已收集的輸出：",
     "no_output": "(沒有輸出)"
+  },
+  "doc_tool": {
+    "unknown_tool": "未知的文件產生工具: {name}",
+    "missing_filename": "缺少必填參數 'filename'",
+    "confirm_create": "產生文件：{path}",
+    "cancelled": "[操作已由使用者取消，文件未寫入]",
+    "created": "✓ 檔案已產生：{path}"
+  },
+  "document_tool": {
+    "unknown_tool": "未知的工具名稱: {name}",
+    "missing_path": "缺少必填參數 'path'",
+    "not_regular_file": "不是一般檔案: {path}",
+    "file_too_large": "檔案過大 ({size:,} Bytes，超過 {limit_mb} MB 安全上限)。",
+    "unsupported_format": "檔案格式不支援。read_document 僅支援 .pdf, .docx, .pptx，目前副檔名為 {ext}。如果是純文字檔，請改用 read_file。",
+    "read_failed": "讀取文件失敗: {error}",
+    "missing_pdf_deps": "尚未安裝 pymupdf4llm 或 pypdf 套件。為了獲得最佳解析效果（包含表格），強烈建議使用 run_command 執行： pip install pymupdf4llm",
+    "missing_docx_dep": "尚未安裝 python-docx 套件，請使用 run_command 執行 pip install python-docx",
+    "missing_pptx_dep": "尚未安裝 python-pptx 套件，請使用 run_command 執行 pip install python-pptx",
+    "page_header": "--- 第 {page} 頁 ---",
+    "table_header": "\n--- 表格 {index} ---",
+    "slide_header": "\n--- 投影片 {index} ---",
+    "notes_header": "[演講者備忘稿]",
+    "truncated_notice": "\n\n...（文件內容過長，已達單次讀取上限 {max_chars} 字元，已自動截斷。）"
   }
 }

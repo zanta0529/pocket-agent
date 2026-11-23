@@ -537,5 +537,28 @@
     "timeout_exit_unconfirmed": "Command timed out ({timeout}s); termination requested but process exit is unconfirmed (backend: {backend}, output may be incomplete).",
     "partial_output_header": "Collected output:",
     "no_output": "(no output)"
+  },
+  "doc_tool": {
+    "unknown_tool": "Unknown document generation tool: {name}",
+    "missing_filename": "Missing required parameter 'filename'",
+    "confirm_create": "Generate document: {path}",
+    "cancelled": "[操作已由使用者取消，文件未寫入]",
+    "created": "✓ Document generated: {path}"
+  },
+  "document_tool": {
+    "unknown_tool": "Unknown tool name: {name}",
+    "missing_path": "Missing required parameter 'path'",
+    "not_regular_file": "Not a regular file: {path}",
+    "file_too_large": "File is too large ({size:,} Bytes, exceeds {limit_mb} MB safety limit).",
+    "unsupported_format": "Unsupported file format. read_document only supports .pdf, .docx, .pptx (got {ext}). For plain text files, use read_file.",
+    "read_failed": "Failed to read document: {error}",
+    "missing_pdf_deps": "Neither pymupdf4llm nor pypdf is installed. For best parsing (including tables), run: pip install pymupdf4llm",
+    "missing_docx_dep": "python-docx is not installed. Run: pip install python-docx",
+    "missing_pptx_dep": "python-pptx is not installed. Run: pip install python-pptx",
+    "page_header": "--- Page {page} ---",
+    "table_header": "\n--- Table {index} ---",
+    "slide_header": "\n--- Slide {index} ---",
+    "notes_header": "[Speaker Notes]",
+    "truncated_notice": "\n\n... (Document content too long, truncated to the first {max_chars} characters.)"
   }
 }
