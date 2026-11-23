@@ -590,5 +590,23 @@
     "gen_failed": "生圖失敗：{error}",
     "gen_incomplete": "生圖未完成 (incomplete)：{reason}",
     "gen_empty_result": "生圖失敗：後端沒有回傳圖片資料"
+  },
+  "mcp_shared": {
+    "invalid_port": "非法的 {env_name} 連接埠數值（必須為 1~65535 之間的整數）。",
+    "invalid_identifier": "非法的 {field_name} 參數格式（僅允許安全識別字字元，且不得以連字號開頭）。",
+    "invalid_host": "非法的 {field_name} 參數格式（僅允許合法的 IPv4、IPv6 或主機名稱）。",
+    "invalid_positive_int": "無效的 {field_name} 參數：{value}（必須為正整數）。",
+    "invalid_positive_int_range": "無效的 {field_name} 參數：{value}（範圍須為 1 ~ {max_val}）。",
+    "tty_password_unavailable": "沒有安全的互動終端機，請由上層注入連線參數。",
+    "tty_password_read_failed": "無法安全讀取密碼，請由上層注入連線參數。",
+    "tty_unavailable": "沒有可用的互動終端機，請於環境變數或 mcp_config.yaml 設定 {hint}；不讀取 MCP stdin。",
+    "output_truncated": "\n\n... [輸出已截斷：超過單次 {max_chars} 字元上限。{hint}]",
+    "db_no_columns": "查詢未產生欄位結果。",
+    "db_empty_result": "查詢結果為空。",
+    "db_query_truncated": "\n\n... (查詢結果已截斷，達單次上限 {max_chars} 字元，已呈現前 {shown_rows} 筆紀錄)\n[提示：若需檢視特定區段資料，請在 SQL 中加入 WHERE 條件或 LIMIT/OFFSET 分頁]",
+    "db_health_truncated": "\n\n... (健康檢查報告已截斷，達單次上限 {max_chars} 字元；建議指定 table_name 或 database 縮小巡檢範圍)",
+    "db_redundant_exact": "{name_a} ({cols_a}) 與 {name_b} ({cols_b}) 欄位完全重複",
+    "db_redundant_prefix": "{name_a} ({cols_a}) 為 {name_b} ({cols_b}) 的冗餘前導索引",
+    "missing_required_param": "缺少必要連線參數：{env_key}。"
   }
 }
