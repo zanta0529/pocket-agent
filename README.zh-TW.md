@@ -223,6 +223,69 @@ run.bat setup       # Windows
 
 ## ✨ 核心架構與特色 (Architecture & Features)
 
+```mermaid
+flowchart TB
+    User(["👤 <b>使用者</b>"]) --> CLI["<b>CLI 前端介面</b><br/>Rich · prompt_toolkit · 斜線指令"]
+
+    CLI --> Agent
+    CLI -.->|"Zero-Token 路由"| Extensions
+
+    subgraph Core["🧠 核心代理層"]
+        Agent["<b>Agent 主迴圈</b><br/>流程協調 · 串流回應 · 非同步取消"]
+        Context["<b>上下文管線</b><br/>動態預算 · 歷史壓縮 · 巨量輸出落盤"]
+        Extensions["<b>子代理、技能與鉤子</b><br/>/parallel · SKILL.md · 生命週期 Hooks"]
+        Agent <--> Context
+        Agent <--> Extensions
+    end
+
+    subgraph Engines["🔌 LLM 引擎層（轉接器模式）"]
+        EngineAdapters["<b>EngineFactory 與轉接器</b><br/>OpenAI · OpenRouter · Ollama · Standard"]
+        LLMProviders["<b>模型供應商</b><br/>ChatGPT OAuth · Gemini · Groq<br/>Mistral · SambaNova · 本機 Ollama"]
+        EngineAdapters --> LLMProviders
+    end
+
+    subgraph Tools["🧰 工具與 MCP 擴充層"]
+        ToolRegistry["<b>ToolRegistry 與 MCPManager</b><br/>統一派發 · 命名空間隔離 · 機密注入"]
+        BuiltinTools["<b>內建工具</b><br/>檔案 · Shell · 網路 · 繪圖<br/>Doc/PDF/PPTX · RAG FTS5"]
+        MCPServers["<b>MCP 伺服器</b>（Stdio / SSE / HTTP）<br/>Browser · GitHub · SQLite/MySQL/MSSQL<br/>Memory · RHEL · Windows RDP"]
+        ToolRegistry --> BuiltinTools
+        ToolRegistry --> MCPServers
+    end
+
+    subgraph Infra["🛡️ 安全治理、認證與沙盒"]
+        Security["<b>安全與認證</b><br/>OAuth PKCE · OS Keyring / JWE<br/>Default-Deny 確認閘道"]
+        LocalState[("<b>隔離沙盒與狀態保存</b><br/>~/.pocket-agent/<br/>簽章會話 · 日誌 · 落盤暫存")]
+    end
+
+    Agent --> EngineAdapters
+    Agent --> ToolRegistry
+    Security -.->|"憑證供給"| EngineAdapters
+    Security -.->|"確認閘道"| ToolRegistry
+    Agent -.->|"設定與會話"| LocalState
+    Context -.->|"溢出落盤"| LocalState
+
+    classDef entry fill:#1e293b,stroke:#64748b,stroke-width:1.5px,color:#f8fafc
+    classDef hero fill:#1d4ed8,stroke:#60a5fa,stroke-width:2px,color:#ffffff
+    classDef coreSub fill:#eff6ff,stroke:#3b82f6,stroke-width:1.5px,color:#1e3a8a
+    classDef engine fill:#f5f3ff,stroke:#8b5cf6,stroke-width:1.5px,color:#4c1d95
+    classDef tool fill:#ecfdf5,stroke:#10b981,stroke-width:1.5px,color:#065f46
+    classDef infra fill:#fffbeb,stroke:#f59e0b,stroke-width:1.5px,color:#78350f
+
+    class User,CLI entry
+    class Agent hero
+    class Context,Extensions coreSub
+    class EngineAdapters,LLMProviders engine
+    class ToolRegistry,BuiltinTools,MCPServers tool
+    class Security,LocalState infra
+
+    style Core fill:transparent,stroke:#3b82f6,stroke-width:1.5px,stroke-dasharray:5 3
+    style Engines fill:transparent,stroke:#8b5cf6,stroke-width:1.5px,stroke-dasharray:5 3
+    style Tools fill:transparent,stroke:#10b981,stroke-width:1.5px,stroke-dasharray:5 3
+    style Infra fill:transparent,stroke:#f59e0b,stroke-width:1.5px,stroke-dasharray:5 3
+```
+
+> 使用者輸入經由 CLI 前端進入核心代理層，由上下文管線動態控管視窗預算，並協調 LLM 引擎轉接器、內建工具與 MCP 伺服器執行任務（輸入 `/<name>` 則可透過 Zero-Token 路由直接派發至子代理）。所有敏感操作均須通過 Default-Deny 確認閘道，憑證由作業系統 Keyring 或 JWE 加密庫保護，執行期日誌、簽章會話與溢出暫存皆隔離於 `~/.pocket-agent/` 以維持工作區零污染。
+
 ### 1. 雙軌大模型轉接架構 (LLM Engine Adapter Architecture)
 
 - **OpenAI 核心 / OpenRouter 相容**：原生支援 ChatGPT Plus/Pro 最新協定，並相容於 OpenRouter，完美整合 Function Calling 與深度反思推理 (Reasoning)。

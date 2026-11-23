@@ -223,6 +223,69 @@ Type any of the following `/` commands at the prompt:
 
 ## ✨ Architecture & Features
 
+```mermaid
+flowchart TB
+    User(["👤 <b>User</b>"]) --> CLI["<b>CLI Frontend</b><br/>Rich · prompt_toolkit · Slash Commands"]
+
+    CLI --> Agent
+    CLI -.->|"Zero-Token Routing"| Extensions
+
+    subgraph Core["🧠 Agent Core"]
+        Agent["<b>Agent Loop</b><br/>Orchestration · Streaming · Cancellation"]
+        Context["<b>Context Pipeline</b><br/>Budget · Compaction · Spillover"]
+        Extensions["<b>Subagents, Skills & Hooks</b><br/>/parallel · SKILL.md · Lifecycle Hooks"]
+        Agent <--> Context
+        Agent <--> Extensions
+    end
+
+    subgraph Engines["🔌 LLM Engine Layer (Adapter)"]
+        EngineAdapters["<b>EngineFactory & Adapters</b><br/>OpenAI · OpenRouter · Ollama · Standard"]
+        LLMProviders["<b>Model Providers</b><br/>ChatGPT OAuth · Gemini · Groq<br/>Mistral · SambaNova · Local Ollama"]
+        EngineAdapters --> LLMProviders
+    end
+
+    subgraph Tools["🧰 Tools & MCP Layer"]
+        ToolRegistry["<b>ToolRegistry & MCPManager</b><br/>Unified Dispatch · Namespace · Secret Inject"]
+        BuiltinTools["<b>Built-in Tools</b><br/>FS · Shell · Web · Image<br/>Doc/PDF/PPTX · RAG FTS5"]
+        MCPServers["<b>MCP Servers</b> (Stdio / SSE / HTTP)<br/>Browser · GitHub · SQLite/MySQL/MSSQL<br/>Memory · RHEL · Windows RDP"]
+        ToolRegistry --> BuiltinTools
+        ToolRegistry --> MCPServers
+    end
+
+    subgraph Infra["🛡️ Governance, Auth & Sandbox"]
+        Security["<b>Security & Auth</b><br/>OAuth PKCE · OS Keyring / JWE<br/>Default-Deny Confirm Gate"]
+        LocalState[("<b>Isolated Sandbox & State</b><br/>~/.pocket-agent/<br/>Signed Sessions · Logs · Spillover")]
+    end
+
+    Agent --> EngineAdapters
+    Agent --> ToolRegistry
+    Security -.->|"Credentials"| EngineAdapters
+    Security -.->|"Confirm Gate"| ToolRegistry
+    Agent -.->|"Config & Sessions"| LocalState
+    Context -.->|"Spillover"| LocalState
+
+    classDef entry fill:#1e293b,stroke:#64748b,stroke-width:1.5px,color:#f8fafc
+    classDef hero fill:#1d4ed8,stroke:#60a5fa,stroke-width:2px,color:#ffffff
+    classDef coreSub fill:#eff6ff,stroke:#3b82f6,stroke-width:1.5px,color:#1e3a8a
+    classDef engine fill:#f5f3ff,stroke:#8b5cf6,stroke-width:1.5px,color:#4c1d95
+    classDef tool fill:#ecfdf5,stroke:#10b981,stroke-width:1.5px,color:#065f46
+    classDef infra fill:#fffbeb,stroke:#f59e0b,stroke-width:1.5px,color:#78350f
+
+    class User,CLI entry
+    class Agent hero
+    class Context,Extensions coreSub
+    class EngineAdapters,LLMProviders engine
+    class ToolRegistry,BuiltinTools,MCPServers tool
+    class Security,LocalState infra
+
+    style Core fill:transparent,stroke:#3b82f6,stroke-width:1.5px,stroke-dasharray:5 3
+    style Engines fill:transparent,stroke:#8b5cf6,stroke-width:1.5px,stroke-dasharray:5 3
+    style Tools fill:transparent,stroke:#10b981,stroke-width:1.5px,stroke-dasharray:5 3
+    style Infra fill:transparent,stroke:#f59e0b,stroke-width:1.5px,stroke-dasharray:5 3
+```
+
+> User prompts enter through the CLI frontend into the Agent Core, where the Context Pipeline manages token budgets while dispatching requests across LLM Engine Adapters, Built-in Tools, and MCP Servers (with `/<name>` shortcuts routing directly to subagents at zero main-agent token cost). Sensitive tool calls pass through the default-deny confirmation gate, credentials stay protected in the OS Keyring or JWE vault, and all runtime logs, sessions, and spillover files remain isolated under `~/.pocket-agent/`.
+
 ### 1. LLM Engine Adapter Architecture
 
 - **OpenAI Core / OpenRouter Compatible**: Native support for ChatGPT Plus/Pro protocols and OpenRouter, with full Function Calling and reasoning integration.
