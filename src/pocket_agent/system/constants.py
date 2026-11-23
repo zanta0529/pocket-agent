@@ -147,6 +147,7 @@ DEFAULT_SESSION_PRUNE_KEEP = 20  # /prune 手動清理歷史對話預設保留�
 # 設計意圖：
 # 集中管理各 LLM 供應商的唯一標識字串，供 EngineFactory、組態設定與路由分派使用。
 # ==============================================================================
+PROVIDER_AZURE = "azure"
 PROVIDER_GEMINI = "gemini"
 PROVIDER_GEMINI_OAUTH = "gemini_oauth"
 PROVIDER_GROQ = "groq"

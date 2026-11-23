@@ -1,4 +1,5 @@
 from pocket_agent.system.constants import (
+    PROVIDER_AZURE,
     PROVIDER_GEMINI,
     PROVIDER_GEMINI_OAUTH,
     PROVIDER_GROQ,
@@ -11,6 +12,7 @@ from pocket_agent.system.constants import (
     PROVIDER_OPENROUTER,
     PROVIDER_SAMBANOVA,
 )
+from pocket_agent.system.providers.azure_provider import AzureOpenAIProvider
 from pocket_agent.system.providers.base import BaseProvider
 from pocket_agent.system.providers.gemini_provider import GeminiOAuthProvider, GeminiProvider
 from pocket_agent.system.providers.groq_provider import GroqProvider
@@ -33,6 +35,7 @@ PROVIDER_STRATEGIES = {
     PROVIDER_GROQ: GroqProvider,
     PROVIDER_SAMBANOVA: SambaNovaProvider,
     PROVIDER_MISTRAL: MistralProvider,
+    PROVIDER_AZURE: AzureOpenAIProvider,
     PROVIDER_OPENAI_COMPATIBLE: OpenAICompatibleCustomProvider,
 }
 
