@@ -1,0 +1,39 @@
+"""遠端 RHEL 主機唯讀探查與維運診斷 MCP 子套件。"""
+
+from mcp_servers.rhel.server import mcp
+from mcp_servers.rhel.tools import (
+    rhel_container_status,
+    rhel_cron_and_timers,
+    rhel_hardware_info,
+    rhel_list_directory,
+    rhel_network_connections,
+    rhel_network_status,
+    rhel_package_info,
+    rhel_process_inspect,
+    rhel_query_journal,
+    rhel_read_config,
+    rhel_security_status,
+    rhel_selinux_context,
+    rhel_service_status,
+    rhel_storage_and_fs,
+    rhel_system_overview,
+)
+
+__all__ = [
+    "mcp",
+    "rhel_container_status",
+    "rhel_cron_and_timers",
+    "rhel_hardware_info",
+    "rhel_list_directory",
+    "rhel_network_connections",
+    "rhel_network_status",
+    "rhel_package_info",
+    "rhel_process_inspect",
+    "rhel_query_journal",
+    "rhel_read_config",
+    "rhel_security_status",
+    "rhel_selinux_context",
+    "rhel_service_status",
+    "rhel_storage_and_fs",
+    "rhel_system_overview",
+]

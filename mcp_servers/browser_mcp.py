@@ -21,42 +21,25 @@
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
-_SRC_DIR = Path(__file__).resolve().parent.parent / "src"
-if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-try:
-    from pocket_agent.system.i18n import t
-except ImportError:
-
-    def t(key: str, default: str | None = None, **kwargs: Any) -> str:
-        return default if default is not None else key
-
-
-try:
-    from mcp.server.mcpserver import MCPServer
-except ImportError:
-    from mcp.server.fastmcp import FastMCP as MCPServer
+from mcp_servers._shared import CONSTANTS, create_mcp_server, t  # noqa: E402
 
 try:
     from playwright.async_api import async_playwright  # pyright: ignore[reportMissingImports]
 except ImportError:
     async_playwright = None  # type: ignore
 
-mcp = MCPServer("browser")
+mcp = create_mcp_server("browser")
 
 _pw = None
 _browser = None
 _page = None
 
-try:
-    from pocket_agent.system.constants import DEFAULT_TOOL_OUTPUT_CHARS
-
-    MAX_TEXT = DEFAULT_TOOL_OUTPUT_CHARS
-except ImportError:
-    MAX_TEXT = 12000
+MAX_TEXT = CONSTANTS.max_output_chars
 
 # 可互動元素的標記 JS：加上 data-mcp-ref 屬性並回傳清單
 _SNAPSHOT_JS = """

@@ -168,7 +168,7 @@ def test_subagent_sensitive_propagates_to_parent():
 def test_win_rdp_rejects_command_injection_characters():
     import pytest
 
-    from mcp_servers.win_rdp_mcp import _validate_win_config_path
+    from mcp_servers.win_rdp.security import validate_win_config_path as _validate_win_config_path
 
     # 合法路徑
     assert _validate_win_config_path(r"C:\Windows\win.ini") == r"C:\Windows\win.ini"
