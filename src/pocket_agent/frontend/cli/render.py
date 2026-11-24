@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 
 from prompt_toolkit.formatted_text import FormattedText
 from rich.cells import cell_len
@@ -134,10 +134,84 @@ def clip(value: str, width: int) -> str:
     return text.plain
 
 
+_BG_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+
+def _bg_status_badge(state: CliState | None) -> str:
+    """組裝背景作業精簡狀態徽章字串；無活動工作時回傳空字串。"""
+    if state is None:
+        return ""
+    from pocket_agent.system.i18n import t
+
+    bg_running = getattr(state, "bg_jobs_running", 0)
+    bg_done = getattr(state, "bg_jobs_done", 0)
+    valid_run = isinstance(bg_running, int) and not isinstance(bg_running, bool) and bg_running > 0
+    valid_done = isinstance(bg_done, int) and not isinstance(bg_done, bool) and bg_done > 0
+    if valid_run and valid_done:
+        return t("cli.toolbar_bg_both", running=bg_running, done=bg_done)
+    if valid_run:
+        return t("cli.toolbar_bg_running", running=bg_running)
+    if valid_done:
+        return t("cli.toolbar_bg_done", done=bg_done)
+    return ""
+
+
+def _format_bg_status_line(state: CliState, width: int) -> tuple[str, str] | None:
+    """若存在執行中或待取回背景子代理，產生專屬高對比狀態列（方案 A）。"""
+    from pocket_agent.system.i18n import t
+
+    bg_running = getattr(state, "bg_jobs_running", 0)
+    bg_done = getattr(state, "bg_jobs_done", 0)
+    valid_run = isinstance(bg_running, int) and not isinstance(bg_running, bool) and bg_running > 0
+    valid_done = isinstance(bg_done, int) and not isinstance(bg_done, bool) and bg_done > 0
+    if not valid_run and not valid_done:
+        return None
+
+    summaries = getattr(state, "bg_job_summaries", None)
+    parts: list[str] = []
+    now_ts = time()
+    if isinstance(summaries, list):
+        for item in summaries:
+            if not isinstance(item, dict):
+                continue
+            jid = str(item.get("job_id") or "")
+            name = str(item.get("name") or "")
+            status = str(item.get("status") or "")
+            if not jid:
+                continue
+            if status == "running":
+                created = item.get("created_at")
+                elapsed = max(0.0, now_ts - float(created)) if isinstance(created, (int, float)) else 0.0
+                prog = plain(item.get("progress") or "").strip()
+                if len(prog) > 28:
+                    prog = prog[:27] + "…"
+                prog_str = f" {prog}" if prog else ""
+                parts.append(f"{jid} [{name}]{prog_str} ({elapsed:.0f}s)")
+            else:
+                icon = "✓" if status == "completed" else "✗"
+                parts.append(f"{jid} [{name}] {icon}")
+
+    body = " │ ".join(parts)
+    if valid_run:
+        frame = _BG_SPINNER_FRAMES[int(monotonic() * 2) % len(_BG_SPINNER_FRAMES)]
+        if valid_done:
+            prefix = t("cli.toolbar_bg_bar_both", spinner=frame, running=bg_running, done=bg_done)
+        else:
+            prefix = t("cli.toolbar_bg_bar_running", spinner=frame, running=bg_running)
+        return ("bold ansicyan", clip(f"{prefix}{body}", width))
+
+    prefix = t("cli.toolbar_bg_bar_done", done=bg_done)
+    hint = t("cli.toolbar_bg_bar_hint")
+    suffix = f"{body}{hint}" if body else hint.lstrip(" ·")
+    return ("bold ansigreen", clip(f"{prefix}{suffix}", width))
+
+
 def toolbar(state: CliState, width: int) -> FormattedText:
     from pocket_agent.system.i18n import t
 
     width = max(0, width)
+    if width <= 0:
+        return FormattedText([("", "")])
 
     count = t("cli.toolbar_pending", count=len(state.pending_files) if state.pending_files else 0)
 
@@ -165,17 +239,6 @@ def toolbar(state: CliState, width: int) -> FormattedText:
     if getattr(state, "staged_update_version", None):
         tokens_str += t("cli.toolbar_update_ready", version=state.staged_update_version)
 
-    bg_running = getattr(state, "bg_jobs_running", 0)
-    bg_done = getattr(state, "bg_jobs_done", 0)
-    valid_run = isinstance(bg_running, int) and not isinstance(bg_running, bool) and bg_running > 0
-    valid_done = isinstance(bg_done, int) and not isinstance(bg_done, bool) and bg_done > 0
-    if valid_run and valid_done:
-        tokens_str += t("cli.toolbar_bg_both", running=bg_running, done=bg_done)
-    elif valid_run:
-        tokens_str += t("cli.toolbar_bg_running", running=bg_running)
-    elif valid_done:
-        tokens_str += t("cli.toolbar_bg_done", done=bg_done)
-
     model = f"[ {state.provider} ] {state.model}"
     budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
     line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
@@ -188,6 +251,10 @@ def toolbar(state: CliState, width: int) -> FormattedText:
     ]:
         if cell_len(plain(line + extra)) <= width:
             line += extra
+
+    bg_line = _format_bg_status_line(state, width)
+    if bg_line is not None:
+        return FormattedText([bg_line, ("", "\n"), ("", clip(line, width))])
     return FormattedText([("", clip(line, width))])
 
 
@@ -453,7 +520,11 @@ class CliRenderer:
         self._thinking_buffer = ""
         from pocket_agent.system.i18n import t
 
-        self.message(t("cli.reply_footer", seconds=seconds, tokens=tokens))
+        footer = t("cli.reply_footer", seconds=seconds, tokens=tokens)
+        bg_badge = _bg_status_badge(self._state)
+        if bg_badge:
+            footer += bg_badge
+        self.message(footer)
 
     def event(self, kind: str, data: object) -> None:
         if kind == "system":

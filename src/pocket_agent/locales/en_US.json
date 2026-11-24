@@ -41,6 +41,10 @@
     "toolbar_bg_running": " · BG {running} running",
     "toolbar_bg_done": " · BG {done} ready",
     "toolbar_bg_both": " · BG {running} running/{done} ready",
+    "toolbar_bg_bar_running": "{spinner} Background ({running} running): ",
+    "toolbar_bg_bar_both": "{spinner} Background ({running} running/{done} ready): ",
+    "toolbar_bg_bar_done": "✓ Background ({done} ready): ",
+    "toolbar_bg_bar_hint": " · /jobs collect to retrieve",
     "toolbar_hint_cmd": " · / Cmd  @ File",
     "toolbar_hint_accept": " · Shift+Tab Accept-edits",
     "toolbar_hint_keys": " · Enter Send  Esc+Enter Newline",
@@ -363,7 +367,9 @@
     "jobs_not_found": "Background job not found: {job_id}",
     "jobs_still_running": "Background job {job_id} is still running; wait for completion before collecting.",
     "jobs_none_ready": "No completed uncollected background jobs available.",
-    "jobs_no_output": "(No text output from this background job)"
+    "jobs_no_output": "(No text output from this background job)",
+    "bg_toast_completed": "✓ [BG Done] {job_id} ({name}, {seconds:.1f}s) — run /jobs collect {job_id} or ask agent",
+    "bg_toast_failed": "✗ [BG Failed] {job_id} ({name}, {seconds:.1f}s) — run /jobs show {job_id} for details"
   },
   "system_cmd": {
     "model_usage": "Usage: /model <{providers}> <model_name>",

@@ -384,3 +384,107 @@ def test_cli_bg_jobs_commands_and_toolbar(monkeypatch) -> None:
         assert "openai" in fragment_list_to_text(toolbar(mock_state, 100))  # type: ignore[arg-type]
 
     asyncio.run(_scenario())
+
+
+def test_background_visibility_two_line_toolbar_footer_and_toast(monkeypatch) -> None:
+    """方案 A + B + C: 兩行動態背景狀態列、回覆尾註徽章與非侵入式完成通知。"""
+    import time as _time
+
+    from rich.cells import cell_len
+
+    from pocket_agent.frontend.cli.main import conversation
+
+    # 1. 方案 A: 閒置單行 vs 執行中兩行 vs 完成後提示
+    state = CliState("openai", "nvidia/nemotron-3.5-super-vl:free")
+    idle_text = fragment_list_to_text(toolbar(state, 100))
+    assert "\n" not in idle_text
+
+    state.bg_jobs_running = 1
+    state.bg_job_summaries = [
+        {
+            "job_id": "bg-111111",
+            "name": "researcher",
+            "status": "running",
+            "progress": "tool: search_web",
+            "created_at": _time.time() - 5,
+            "finished_at": None,
+        }
+    ]
+    running_text = fragment_list_to_text(toolbar(state, 100))
+    lines = running_text.split("\n")
+    assert len(lines) == 2
+    assert "bg-111111 [researcher] tool: search_web" in lines[0]
+    assert all(cell_len(line) <= 100 for line in lines)
+
+    state.bg_jobs_running = 0
+    state.bg_jobs_done = 1
+    state.bg_job_summaries = [
+        {
+            "job_id": "bg-111111",
+            "name": "researcher",
+            "status": "completed",
+            "progress": "completed",
+            "created_at": _time.time() - 5,
+            "finished_at": _time.time(),
+        }
+    ]
+    done_text = fragment_list_to_text(toolbar(state, 120))
+    assert "待取回" in done_text and "/jobs collect" in done_text
+
+    # 2. 方案 C: 回覆尾註附帶背景作業徽章
+    stream = StringIO()
+    renderer = CliRenderer(Console(file=stream, force_terminal=False, no_color=True, width=120))
+    renderer._state = state
+    renderer.reply("ok", 1.2, 100, streamed=False)
+    assert "背景 1 待取回" in stream.getvalue()
+
+    # 3. 方案 B: conversation 中背景完成通知（提示列作用中即時通知 + 忙碌時佇列補印）
+    async def _toast_scenario() -> None:
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        async def _quick_chat(self_sub, task: str) -> tuple[str, str, str]:
+            await asyncio.sleep(0.03)
+            return "", "bg report", "0s"
+
+        sub_def = {"name": "researcher", "description": "r", "allowed_tools": ["read_file"], "system_prompt": "SP"}
+        monkeypatch.setattr(
+            "pocket_agent.core.subagents.get_subagent", lambda n: sub_def if n == "researcher" else None
+        )
+        monkeypatch.setattr(Agent, "chat", _quick_chat)
+
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="m", provider="openai")
+        cli_state = CliState("openai", "m")
+        out = StringIO()
+        cli_renderer = CliRenderer(Console(file=out, force_terminal=False, no_color=True, width=120))
+
+        # 啟動背景工作時 reader.notify_in_terminal 回傳 False -> 應排入佇列並於下次 read 前印出
+        job = agent.start_background_subagent("researcher", "news")
+        await agent.wait_background_job(job.job_id, timeout=1.0)
+        # 重新註冊 on_job_finished 於 conversation() 並觸發一次新工作測試即時通知
+        notified_live: list[bool] = []
+        read_calls = 0
+
+        async def _fake_read(default: str = "") -> str:
+            nonlocal read_calls
+            read_calls += 1
+            if read_calls == 1:
+                j2 = agent.start_background_subagent("researcher", "ai")
+                await agent.wait_background_job(j2.job_id, timeout=1.0)
+                return "/quit"
+            return "/quit"
+
+        def _fake_notify(fn) -> bool:
+            notified_live.append(True)
+            fn()
+            return True
+
+        reader = SimpleNamespace(read=_fake_read, invalidate=MagicMock(), notify_in_terminal=_fake_notify)
+        with patch("pocket_agent.core.sessions.save_session"):
+            await conversation(agent, cli_state, reader, cli_renderer, [])
+
+        assert notified_live == [True]
+        assert "[背景完成]" in out.getvalue()
+
+    asyncio.run(_toast_scenario())

@@ -32,6 +32,7 @@ class CliState:
     pending_update_restart: bool = False
     bg_jobs_running: int = 0
     bg_jobs_done: int = 0
+    bg_job_summaries: list[dict[str, object]] = field(default_factory=list)
 
     def add_files(self, paths: list[str]) -> list[str]:
         # Validate the whole batch before committing, including readability.

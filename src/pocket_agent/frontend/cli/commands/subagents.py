@@ -207,6 +207,11 @@ def _sync_bg_counts(ctx: CommandContext) -> None:
         counts = ctx.agent.background_job_counts()
         if isinstance(counts, tuple) and len(counts) == 2:
             ctx.state.bg_jobs_running, ctx.state.bg_jobs_done = counts
+    from pocket_agent.core.subagents import BackgroundSubagentManager
+
+    bg_mgr = getattr(ctx.agent, "background_jobs", None)
+    if isinstance(bg_mgr, BackgroundSubagentManager):
+        ctx.state.bg_job_summaries = bg_mgr.summarize_active_jobs()
 
 
 class BgCommand(CliCommand):

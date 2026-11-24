@@ -405,6 +405,7 @@ class CliInput:
             completer=self.completer,
             complete_while_typing=True,
             bottom_toolbar=lambda: toolbar(state, shutil.get_terminal_size().columns),
+            refresh_interval=0.5,
             key_bindings=key_bindings(
                 lambda: self.selecting,
                 state=state,
@@ -415,6 +416,23 @@ class CliInput:
             erase_when_done=True,
             color_depth=ColorDepth.DEPTH_1_BIT if "NO_COLOR" in os.environ or not sys.stdout.isatty() else None,
         )
+
+    def invalidate(self) -> None:
+        """觸發輸入區與底部狀態列重繪（僅在互動提示執行中有效）。"""
+        app = getattr(self.session, "app", None)
+        if app is not None and getattr(app, "is_running", False):
+            app.invalidate()
+
+    def notify_in_terminal(self, fn: Callable[[], None]) -> bool:
+        """若正處於提示列輸入狀態，於提示列上方安全印出非侵入式通知。"""
+        app = getattr(self.session, "app", None)
+        if app is not None and getattr(app, "is_running", False):
+            from prompt_toolkit.application.run_in_terminal import run_in_terminal
+
+            run_in_terminal(fn)
+            app.invalidate()
+            return True
+        return False
 
     async def read(self, message: str = "› ", default: str = "", is_password: bool = False) -> str:
         return await self.session.prompt_async(

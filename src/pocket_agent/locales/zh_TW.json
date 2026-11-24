@@ -41,6 +41,10 @@
     "toolbar_bg_running": " · 背景 {running} 執行中",
     "toolbar_bg_done": " · 背景 {done} 待取回",
     "toolbar_bg_both": " · 背景 {running} 執行中/{done} 待取回",
+    "toolbar_bg_bar_running": "{spinner} 背景作業 ({running} 執行中)：",
+    "toolbar_bg_bar_both": "{spinner} 背景作業 ({running} 執行中/{done} 待取回)：",
+    "toolbar_bg_bar_done": "✓ 背景作業 ({done} 待取回)：",
+    "toolbar_bg_bar_hint": " · 輸入 /jobs collect 取回",
     "toolbar_hint_cmd": " · / 指令  @ 檔案",
     "toolbar_hint_accept": " · Shift+Tab 自動編輯",
     "toolbar_hint_keys": " · Enter 送出  Esc+Enter 換行",
@@ -363,7 +367,9 @@
     "jobs_not_found": "找不到背景工作：{job_id}",
     "jobs_still_running": "背景工作 {job_id} 仍在執行中，請稍候完成後再取回。",
     "jobs_none_ready": "目前沒有已完成且尚未取回的背景工作。",
-    "jobs_no_output": "（此背景工作未產出文字結果）"
+    "jobs_no_output": "（此背景工作未產出文字結果）",
+    "bg_toast_completed": "✓ [背景完成] {job_id} ({name}, {seconds:.1f}s) — 輸入 /jobs collect {job_id} 或請主代理取回",
+    "bg_toast_failed": "✗ [背景失敗] {job_id} ({name}, {seconds:.1f}s) — 輸入 /jobs show {job_id} 查看詳情"
   },
   "system_cmd": {
     "model_usage": "用法：/model <{providers}> <模型名稱>",

@@ -275,6 +275,7 @@ class BackgroundSubagentManager:
         self._max_history = max(1, int(max_history))
         self._jobs: dict[str, BackgroundJob] = {}
         self.on_state_change: Callable[[], None] | None = None
+        self.on_job_finished: Callable[[BackgroundJob], None] | None = None
 
     def _notify_state_change(self) -> None:
         cb = self.on_state_change
@@ -342,7 +343,10 @@ class BackgroundSubagentManager:
             scope=job_scope,
         )
 
+        last_notify_ts = 0.0
+
         def _on_bg_stream(kind: str, data: dict | str) -> None:
+            nonlocal last_notify_ts
             snippet = ""
             if kind == "tool_start":
                 tool_name = data.get("name", "") if isinstance(data, dict) else str(data)
@@ -351,6 +355,10 @@ class BackgroundSubagentManager:
                 snippet = " ".join(str(data).split())
             if snippet:
                 job.last_progress = snippet[:80]
+                now_ts = time.monotonic()
+                if kind == "tool_start" or (now_ts - last_notify_ts) >= 0.3:
+                    last_notify_ts = now_ts
+                    self._notify_state_change()
 
         sub.on_stream = _on_bg_stream
 
@@ -400,6 +408,11 @@ class BackgroundSubagentManager:
                 current_scope.reset(token)
                 self._prune_history()
                 self._notify_state_change()
+                if job.status in ("completed", "failed") and callable(self.on_job_finished):
+                    try:
+                        self.on_job_finished(job)
+                    except Exception:
+                        log.debug("background_jobs on_job_finished 回呼失敗", exc_info=True)
 
         self._jobs[job_id] = job
         job.asyncio_task = loop.create_task(_runner())
@@ -419,6 +432,22 @@ class BackgroundSubagentManager:
             1 for j in self._jobs.values() if j.status in ("completed", "failed", "cancelled") and not j.collected
         )
         return running, uncollected
+
+    def summarize_active_jobs(self) -> list[dict[str, Any]]:
+        """回傳執行中與尚未取回之背景工作精簡快照（供 CLI 狀態列即時顯示）。"""
+        running = [j for j in self._jobs.values() if j.status == "running"]
+        ready = [j for j in self._jobs.values() if j.status in ("completed", "failed", "cancelled") and not j.collected]
+        return [
+            {
+                "job_id": j.job_id,
+                "name": j.subagent_name,
+                "status": j.status,
+                "progress": j.last_progress,
+                "created_at": j.created_at,
+                "finished_at": j.finished_at,
+            }
+            for j in (running + ready)
+        ]
 
     async def wait(
         self,
