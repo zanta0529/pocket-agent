@@ -305,7 +305,7 @@ flowchart TB
 
 [![支援 MCP](https://img.shields.io/badge/MCP-supported-blue)](docs/architecture/mcp-architecture.md)
 
-- **子代理與背景多工 (Subagents & Background Multitasking)**：支援在設定中定義多元人設（如研究員、架構師、稽核員），並提供**四種執行模式**——前景單一（`/<name>`、`run_subagent`）、前景平行（`/parallel`、`run_subagents_parallel`）、背景 LLM 自主派發（`start_background_subagent`／`check_background_subagent`）與背景 CLI 手動控制（`/bg`／`/jobs`）。背景模式採嚴格唯讀隔離且不阻塞前景對話，搭配終端機雙行即時狀態列、非侵入式完成通知與回覆頁尾徽章；完整模式比較請參閱 [三層式路由、分層配置與子代理機制](docs/architecture/routing-and-subagents.md)。
+- **子代理與背景多工 (Subagents & Background Multitasking)**：支援在設定中定義多元人設（如研究員、架構師、稽核員），並提供**四種執行模式**——前景單一（`/<name>`、`run_subagent`）、前景平行（`/parallel`、`run_subagents_parallel`）、背景 LLM 自主派發（`start_background_subagent`／`check_background_subagent`）與背景 CLI 手動控制（`/bg`／`/jobs`）。背景模式採嚴格唯讀隔離且不阻塞前景對話，並具備「**先預覽再決定是否注入**」機制（`/jobs show` 僅供人眼預覽、不佔後續主對話每輪上下文 Token；需要主代理接手時再以 `/jobs collect` 匯入歷史），搭配終端機雙行即時狀態列、非侵入式完成通知與回覆頁尾徽章；完整模式比較請參閱 [三層式路由、分層配置與子代理機制](docs/architecture/routing-and-subagents.md)。
 - **事件鉤子 (Hooks)**：支援在 `before_send`, `after_response`, `before_tool`, `after_tool` 綁定本機 Python 腳本，實現自訂攔截邏輯。
 - **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，可於 `mcp_config.yaml` 透過 `enabled: true/false` 彈性切換啟動時載入的伺服器（省略預設為啟用），輕鬆掛載本機檔案系統、資料庫或遠端工具。隨附提供：
   - `browser_mcp.py`：純 Python 網頁自動化操作，直接沿用系統 Edge/Chrome，支援 CDP 連接與 Cookie 狀態繼承。
