@@ -18,6 +18,7 @@ SKILL.md 格式：
 import logging
 import shutil
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 
@@ -188,6 +189,7 @@ def save_skill(name: str, description: str, body: str, scope: str = "global") ->
 
 # ── BM25 技能檢索 (SQLite FTS5) ──────────────────────
 
+_SKILLS_SYNC_LOCK = threading.RLock()
 _last_sync_state = None
 
 
@@ -208,8 +210,8 @@ def _get_db_path() -> Path:
     return db_dir / "skills_index.db"
 
 
-def sync_index(workspace_dirs: list[str] | None = None):
-    """將目前的 skill 同步到 SQLite FTS5 虛擬資料表中。"""
+def _sync_index_unlocked(workspace_dirs: list[str] | None = None) -> None:
+    """將目前的 skill 同步到 SQLite FTS5 虛擬資料表中（呼叫端需持有 _SKILLS_SYNC_LOCK）。"""
     global _last_sync_state
     import sqlite3
 
@@ -239,13 +241,19 @@ def sync_index(workspace_dirs: list[str] | None = None):
     _last_sync_state = _get_skills_state(workspace_dirs)
 
 
+def sync_index(workspace_dirs: list[str] | None = None):
+    """將目前的 skill 同步到 SQLite FTS5 虛擬資料表中。"""
+    with _SKILLS_SYNC_LOCK:
+        _sync_index_unlocked(workspace_dirs)
+
+
 def sync_index_if_needed(workspace_dirs: list[str] | None = None):
     """如果技能檔案有異動 (mtime 改變或檔案增減)，或 DB 不存在時，才執行同步。"""
-    global _last_sync_state
-    current_state = _get_skills_state(workspace_dirs)
-    if _last_sync_state == current_state and _get_db_path().exists():
-        return
-    sync_index(workspace_dirs)
+    with _SKILLS_SYNC_LOCK:
+        current_state = _get_skills_state(workspace_dirs)
+        if _last_sync_state == current_state and _get_db_path().exists():
+            return
+        _sync_index_unlocked(workspace_dirs)
 
 
 def search_skills(query: str, workspace_dirs: list[str] | None = None, top_k: int = 5) -> list[dict]:
@@ -253,30 +261,30 @@ def search_skills(query: str, workspace_dirs: list[str] | None = None, top_k: in
     import re
     import sqlite3
 
-    sync_index_if_needed(workspace_dirs)
-
     if not query.strip():
         return list_skills(workspace_dirs)[:top_k]
 
-    db_path = _get_db_path()
-    with sqlite3.connect(db_path) as conn:
-        words = re.findall(r"\w+", query)
-        if not words:
-            return list_skills(workspace_dirs)[:top_k]
+    words = re.findall(r"\w+", query)
+    if not words:
+        return list_skills(workspace_dirs)[:top_k]
 
-        fts_query = " OR ".join(f'"{w}"' for w in words)
-        try:
-            cursor = conn.execute(
-                "SELECT name, description FROM skills_fts WHERE skills_fts MATCH ? ORDER BY rank LIMIT ?",
-                (fts_query, top_k),
-            )
-            results = [{"name": row[0], "description": row[1]} for row in cursor.fetchall()]
-            if not results:
+    fts_query = " OR ".join(f'"{w}"' for w in words)
+    with _SKILLS_SYNC_LOCK:
+        sync_index_if_needed(workspace_dirs)
+        db_path = _get_db_path()
+        with sqlite3.connect(db_path) as conn:
+            try:
+                cursor = conn.execute(
+                    "SELECT name, description FROM skills_fts WHERE skills_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (fts_query, top_k),
+                )
+                results = [{"name": row[0], "description": row[1]} for row in cursor.fetchall()]
+                if not results:
+                    return list_skills(workspace_dirs)[:top_k]
+                return results
+            except sqlite3.OperationalError as e:
+                log.warning("FTS5 查詢失敗: %s", e)
                 return list_skills(workspace_dirs)[:top_k]
-            return results
-        except sqlite3.OperationalError as e:
-            log.warning("FTS5 查詢失敗: %s", e)
-            return list_skills(workspace_dirs)[:top_k]
 
 
 # ── 系統提示注入 ──────────────────────────────────

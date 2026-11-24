@@ -161,7 +161,7 @@ run.bat setup       # Windows
 
 ## 💻 快速上手與日常操作 (Quick Start & Usage)
 
-啟動後，終端機將呈現互動式對話面板。底端狀態列會即時顯示當前模型、推理強度、待送附件數與累計 Token 用量。
+啟動後，終端機將呈現互動式對話面板。底端狀態列會即時顯示當前模型、推理強度、待送附件數與累計 Token 用量；當有背景子代理執行或待取回報告時，狀態列會自動展開第二行即時顯示進度與取回提示。
 
 ### 終端互動快捷鍵
 
@@ -172,7 +172,7 @@ run.bat setup       # Windows
 | **Alt+V**                     | 從剪貼簿智慧貼上：支援檔案總管選取的實體檔案、文字路徑，以及**記憶體截圖（免存檔自動轉入待送附件）**。 |
 | **Tab / 方向鍵**              | 候選詞自動補齊、在互動選單中移動光棒。                                                                 |
 | **Ctrl+L**                    | 清除終端機畫面顯示，保留歷史對話脈絡。                                                                 |
-| **Ctrl+C**                    | 輸入文字時：清空當前輸入框（不清除待送附件）；長任務執行時：中斷執行中的子代理或主代理。               |
+| **Ctrl+C**                    | 輸入文字時：清空當前輸入框（不清除待送附件）；長任務執行時：中斷前景執行中的子代理或主代理（不影響背景 `/bg` 工作，取消背景工作請用 `/jobs cancel`）。 |
 | **Ctrl+D** 或 `/exit`         | 關閉並安全退出應用程式。                                                                               |
 
 ---
@@ -207,8 +207,10 @@ run.bat setup       # Windows
 
 #### 👥 子代理與客製技能 (Subagents & Skills)
 
-- `/subagent <name> <任務>` 或 `/<name> <任務>`：**Zero-Token 路由**——系統於底層直接攔截並啟動專屬子代理處理任務，不經主代理推論，零 Token 浪費（例如 `/researcher 搜集競品資料`）。
-- `/parallel <name:task> | <name:task>`：平行啟動多個子代理進行分工（Map 階段），並由背景自動總結彙整成單一最終報告（Reduce 階段）。_注意：代理間請使用直線符號 `|` 分隔_。
+- `/subagent <name> <任務>` 或 `/<name> <任務>`：**Zero-Token 路由**——系統於底層直接攔截並於**前景**啟動專屬子代理處理任務，不經主代理推論，零 Token 浪費（例如 `/researcher 搜集競品資料`）。
+- `/parallel <name:task> | <name:task>`：於前景平行啟動多個子代理進行分工（Map 階段），並由背景自動總結彙整成單一最終報告（Reduce 階段）。_注意：代理間請使用直線符號 `|` 分隔_。
+- `/bg <name> <任務>`：**非阻塞背景子代理**——於背景啟動唯讀子代理執行研究任務（最多同時 3 個），終端機立即交還輸入框，可持續進行其他前景對話。
+- `/jobs [list | all | show <id> | collect [id] | cancel <id|all> | clear]`：管理背景子代理工作；預設僅顯示執行中與待取回項目，`all` 查看完整歷史，`show` 僅預覽不耗用主對話 Token，`collect` 將完成報告注入主對話歷史，`clear` 清除已結束紀錄。
 - `/skills [name]`：列出當前所有可用的全域與專案專屬技能 (Skills)，或檢視特定技能 SOP。
 - `/learn`：由 AI 分析當前對話脈絡，互動式萃取並存為可重複呼叫的新技能。
 
@@ -235,7 +237,7 @@ flowchart TB
     subgraph Core["🧠 核心代理層"]
         Agent["<b>Agent 主迴圈</b><br/>流程協調 · 串流回應 · 非同步取消"]
         Context["<b>上下文管線</b><br/>動態預算 · 歷史壓縮 · 巨量輸出落盤"]
-        Extensions["<b>子代理、技能與鉤子</b><br/>/parallel · SKILL.md · 生命週期 Hooks"]
+        Extensions["<b>子代理、技能與鉤子</b><br/>/parallel · /bg · SKILL.md · 生命週期 Hooks"]
         Agent <--> Context
         Agent <--> Extensions
     end
@@ -303,7 +305,7 @@ flowchart TB
 
 [![支援 MCP](https://img.shields.io/badge/MCP-supported-blue)](docs/architecture/mcp-architecture.md)
 
-- **子代理 (Subagents)**：支援在設定中定義多元人設（如架構師、稽核員），複雜任務由主代理自動或透過 `/parallel` 委派處理。
+- **子代理與背景多工 (Subagents & Background Multitasking)**：支援在設定中定義多元人設（如研究員、架構師、稽核員），並提供**四種執行模式**——前景單一（`/<name>`、`run_subagent`）、前景平行（`/parallel`、`run_subagents_parallel`）、背景 LLM 自主派發（`start_background_subagent`／`check_background_subagent`）與背景 CLI 手動控制（`/bg`／`/jobs`）。背景模式採嚴格唯讀隔離且不阻塞前景對話，搭配終端機雙行即時狀態列、非侵入式完成通知與回覆頁尾徽章；完整模式比較請參閱 [三層式路由、分層配置與子代理機制](docs/architecture/routing-and-subagents.md)。
 - **事件鉤子 (Hooks)**：支援在 `before_send`, `after_response`, `before_tool`, `after_tool` 綁定本機 Python 腳本，實現自訂攔截邏輯。
 - **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，可於 `mcp_config.yaml` 透過 `enabled: true/false` 彈性切換啟動時載入的伺服器（省略預設為啟用），輕鬆掛載本機檔案系統、資料庫或遠端工具。隨附提供：
   - `browser_mcp.py`：純 Python 網頁自動化操作，直接沿用系統 Edge/Chrome，支援 CDP 連接與 Cookie 狀態繼承。

@@ -393,12 +393,18 @@ class NewCommand(CliCommand):
                 ctx.agent.user_instructions.clear()
             if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
                 ctx.agent.activity.clear()
+            if callable(getattr(type(ctx.agent), "clear_finished_background_jobs", None)):
+                ctx.agent.clear_finished_background_jobs()
         ctx.state.session_id = new_session_id()
         ctx.state.pending_files.clear()
         ctx.state.last_failed_input = ""
         ctx.state.session_tokens = 0
         ctx.state.session_approved_commands.clear()
         ctx.state.accept_edits = False
+
+        from pocket_agent.frontend.cli.commands.subagents import _sync_bg_counts
+
+        _sync_bg_counts(ctx)
 
         info = t("session_cmd.new_started", id=ctx.state.session_id)
         if saved_msg:

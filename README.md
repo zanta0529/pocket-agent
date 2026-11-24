@@ -161,7 +161,7 @@ The interactive wizard guides you through five steps (defaults to English if `lo
 
 ## 💻 Quick Start & Usage
 
-Once started, the CLI displays an interactive conversation prompt with a live bottom toolbar showing the active model, reasoning effort, pending attachments, and cumulative token usage.
+Once started, the CLI displays an interactive conversation prompt with a live bottom toolbar showing the active model, reasoning effort, pending attachments, and cumulative token usage; when background subagents are running or ready to collect, a second highlighted status line automatically appears with live progress and collection hints.
 
 ### Terminal Shortcuts
 
@@ -172,7 +172,7 @@ Once started, the CLI displays an interactive conversation prompt with a live bo
 | **Alt+V**                       | Smart clipboard paste: supports files selected in Explorer, text paths, and **in-memory screenshots**.   |
 | **Tab / Arrow Keys**            | Auto-complete commands/paths and navigate interactive selection menus.                                   |
 | **Ctrl+L**                      | Clear terminal screen while preserving conversation history.                                             |
-| **Ctrl+C**                      | While typing: clear input buffer (keeps attachments); during execution: interrupt active agent/subagent. |
+| **Ctrl+C**                      | While typing: clear input buffer (keeps attachments); during execution: interrupt active foreground agent/subagent (does not cancel `/bg` jobs; use `/jobs cancel`). |
 | **Ctrl+D** or `/exit`           | Safely close and exit the application.                                                                   |
 
 ---
@@ -207,8 +207,10 @@ Type any of the following `/` commands at the prompt:
 
 #### 👥 Subagents & Custom Skills
 
-- `/subagent <name> <task>` or `/<name> <task>`: **Zero-Token Routing** — intercepts at the CLI layer and dispatches directly to the named subagent without main-agent LLM overhead (e.g., `/researcher gather competitor info`).
-- `/parallel <name:task> | <name:task>`: Run multiple subagents in parallel (Map) and automatically synthesize their reports into one final summary (Reduce). _Separate tasks with `|`_.
+- `/subagent <name> <task>` or `/<name> <task>`: **Zero-Token Routing** — intercepts at the CLI layer and dispatches directly in the **foreground** to the named subagent without main-agent LLM overhead (e.g., `/researcher gather competitor info`).
+- `/parallel <name:task> | <name:task>`: Run multiple subagents in parallel in the foreground (Map) and automatically synthesize their reports into one final summary (Reduce). _Separate tasks with `|`_.
+- `/bg <name> <task>`: **Non-blocking Background Subagent** — launches a strictly read-only subagent in the background (up to 3 concurrent jobs) and immediately returns the prompt so you can keep chatting.
+- `/jobs [list | all | show <id> | collect [id] | cancel <id|all> | clear]`: Manage background subagent jobs; defaults to active/uncollected jobs (`all` shows full history, `show` previews results without spending main-context tokens, `collect` injects completed reports into main conversation history, and `clear` removes finished records).
 - `/skills [name]`: List all available global and workspace skills, or view a specific skill's SOP.
 - `/learn`: Analyze recent conversation context and interactively extract a reusable skill.
 
@@ -235,7 +237,7 @@ flowchart TB
     subgraph Core["🧠 Agent Core"]
         Agent["<b>Agent Loop</b><br/>Orchestration · Streaming · Cancellation"]
         Context["<b>Context Pipeline</b><br/>Budget · Compaction · Spillover"]
-        Extensions["<b>Subagents, Skills & Hooks</b><br/>/parallel · SKILL.md · Lifecycle Hooks"]
+        Extensions["<b>Subagents, Skills & Hooks</b><br/>/parallel · /bg · SKILL.md · Lifecycle Hooks"]
         Agent <--> Context
         Agent <--> Extensions
     end
@@ -303,7 +305,7 @@ flowchart TB
 
 [![MCP Support](https://img.shields.io/badge/MCP-supported-blue)](docs/architecture/mcp-architecture.md)
 
-- **Subagents**: Define specialized personas (e.g., architect, auditor) and delegate tasks automatically or via `/parallel`.
+- **Subagents & Background Multitasking**: Define specialized personas (e.g., researcher, architect, auditor) and run them across **four execution modes** — foreground single (`/<name>`, `run_subagent`), foreground parallel (`/parallel`, `run_subagents_parallel`), LLM-controlled background (`start_background_subagent` / `check_background_subagent`), and CLI-controlled background (`/bg` / `/jobs`). Background jobs run with strict read-only isolation without blocking foreground chat, surfaced via a live two-line status bar, non-intrusive completion notices, and a reply footer badge; see [Routing, Layered Config & Subagents](docs/architecture/routing-and-subagents.md) for the full mode comparison.
 - **Hooks**: Attach local Python scripts to `before_send`, `after_response`, `before_tool`, and `after_tool` lifecycle events.
 - **MCP (Model Context Protocol)**: Full support for Stdio, SSE, and Streamable HTTP. You can flexibly toggle which servers load at startup via `enabled: true/false` in `mcp_config.yaml` (defaults to `true` when omitted) without commenting out configurations. Bundled MCP servers include:
   - `browser_mcp.py`: Pure-Python browser automation driving system Edge/Chrome with CDP and session reuse.

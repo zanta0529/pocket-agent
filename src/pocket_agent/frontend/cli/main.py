@@ -210,6 +210,19 @@ def _render_mcp_secret_persist(renderer: "CliRenderer", result: SecretPersistRes
             status.start()
 
 
+def _sync_bg_state(agent: "Agent", state: "CliState", reader: "CliInput | None" = None) -> None:
+    """同步背景子代理計數與摘要至 CliState，並觸發輸入區重繪。"""
+    from pocket_agent.core.subagents import BackgroundSubagentManager
+
+    bg_mgr = getattr(agent, "background_jobs", None)
+    if not isinstance(bg_mgr, BackgroundSubagentManager):
+        return
+    state.bg_jobs_running, state.bg_jobs_done = bg_mgr.counts()
+    state.bg_job_summaries = bg_mgr.summarize_active_jobs()
+    if reader is not None and callable(getattr(reader, "invalidate", None)):
+        reader.invalidate()
+
+
 def _autosave_session(agent: "Agent", state: "CliState", renderer: "CliRenderer", silent: bool = False) -> None:
     """對話結束或每輪完成時自動存檔（失敗不中斷流程）。"""
     from pocket_agent.core.sessions import save_session
@@ -335,6 +348,7 @@ async def send_turn(
         if budget_obj is not None and getattr(budget_obj, "window", 0) > 0:
             state.context_window = budget_obj.window
 
+        _sync_bg_state(agent, state)
         renderer.reply(reply, monotonic() - started, turn_tokens, streamed=True)
 
         # 背景非同步更新額度資訊，避免網路請求阻塞本輪結算與耗時計算
@@ -377,58 +391,105 @@ async def conversation(
         renderer._stop_status()
         renderer.message(t("cli.stopping"), "yellow")
 
+    from pocket_agent.core.subagents import BackgroundSubagentManager
+
+    pending_bg_notices: list[tuple[str, str]] = []
+    bg_mgr = getattr(agent, "background_jobs", None)
+    if isinstance(bg_mgr, BackgroundSubagentManager):
+
+        def _on_bg_state_change() -> None:
+            _sync_bg_state(agent, state, reader)
+
+        def _on_bg_finished(job) -> None:
+            from pocket_agent.system.i18n import t
+
+            if job.status == "completed":
+                msg = t(
+                    "subagent_cmd.bg_toast_completed",
+                    job_id=job.job_id,
+                    name=job.subagent_name,
+                    seconds=job.elapsed_seconds(),
+                )
+                style = "bold green"
+            else:
+                msg = t(
+                    "subagent_cmd.bg_toast_failed",
+                    job_id=job.job_id,
+                    name=job.subagent_name,
+                    seconds=job.elapsed_seconds(),
+                )
+                style = "bold red"
+
+            _sync_bg_state(agent, state, reader)
+            notifier = getattr(reader, "notify_in_terminal", None)
+            if callable(notifier) and notifier(lambda: renderer.message(msg, style)):
+                return
+            pending_bg_notices.append((msg, style))
+
+        bg_mgr.on_state_change = _on_bg_state_change
+        bg_mgr.on_job_finished = _on_bg_finished
+
     handler = CommandHandler(agent, state, reader, renderer, tools)
     agent.on_stream = renderer.event
     last_sigint_time = 0.0
-    while True:
-        try:
-            raw = await reader.read(default=state.last_failed_input)
-        except EOFError:
-            break
-        except KeyboardInterrupt:
-            now = monotonic()
-            if now - last_sigint_time < 1.5:
-                from pocket_agent.system.i18n import t
-
-                renderer.message(t("cli.exiting_on_sigint"), "yellow")
-                break
-            last_sigint_time = now
-            state.last_failed_input = ""
-            from pocket_agent.system.i18n import t
-
-            renderer.message(t("cli.ctrl_c_exit_hint"), "yellow")
-            continue
-        state.last_failed_input = ""
-        last_sigint_time = 0.0
-        if not raw.strip():
-            continue
-        try:
-            result = await run_operation(handler.dispatch(raw), stopping)
-        except OperationInterrupted:
-            renderer._stop_status()
-            from pocket_agent.system.i18n import t
-
-            renderer.message(t("cli.operation_interrupted"), "yellow")
-            continue
-        except Exception as exc:
-            from pocket_agent.system.i18n import t
-
-            renderer.message(t("cli.command_not_executed", error=exc), "red")
-            continue
-        if result.action == "quit":
-            break
-        elif result.action in ("chat", "image"):
+    try:
+        while True:
+            if pending_bg_notices:
+                for msg, style in pending_bg_notices:
+                    renderer.message(msg, style)
+                pending_bg_notices.clear()
+            _sync_bg_state(agent, state, reader)
             try:
-                await run_operation(send_turn(agent, state, renderer, raw, result), stopping)
-            except OperationInterrupted:
-                # Ctrl+C 在 send_turn 等待期間：中止當前輪次，不退出
-                agent.request_stop()
-                agent.on_stream = None
-                renderer._stop_status()
-                state.last_failed_input = raw
+                raw = await reader.read(default=state.last_failed_input)
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                now = monotonic()
+                if now - last_sigint_time < 1.5:
+                    from pocket_agent.system.i18n import t
+
+                    renderer.message(t("cli.exiting_on_sigint"), "yellow")
+                    break
+                last_sigint_time = now
+                state.last_failed_input = ""
                 from pocket_agent.system.i18n import t
 
-                renderer.message(t("cli.stopped"), "yellow")
+                renderer.message(t("cli.ctrl_c_exit_hint"), "yellow")
+                continue
+            state.last_failed_input = ""
+            last_sigint_time = 0.0
+            if not raw.strip():
+                continue
+            try:
+                result = await run_operation(handler.dispatch(raw), stopping)
+            except OperationInterrupted:
+                renderer._stop_status()
+                from pocket_agent.system.i18n import t
+
+                renderer.message(t("cli.operation_interrupted"), "yellow")
+                continue
+            except Exception as exc:
+                from pocket_agent.system.i18n import t
+
+                renderer.message(t("cli.command_not_executed", error=exc), "red")
+                continue
+            if result.action == "quit":
+                break
+            elif result.action in ("chat", "image"):
+                try:
+                    await run_operation(send_turn(agent, state, renderer, raw, result), stopping)
+                except OperationInterrupted:
+                    # Ctrl+C 在 send_turn 等待期間：中止當前輪次，不退出
+                    agent.request_stop()
+                    agent.on_stream = None
+                    renderer._stop_status()
+                    state.last_failed_input = raw
+                    from pocket_agent.system.i18n import t
+
+                    renderer.message(t("cli.stopped"), "yellow")
+    finally:
+        if isinstance(bg_mgr, BackgroundSubagentManager):
+            bg_mgr.on_job_finished = None
 
     # 對話結束，自動存檔
     _autosave_session(agent, state, renderer)
@@ -576,6 +637,17 @@ class CliFrontend(FrontendStrategy):
                 client=client, mcp=mcp, model=state.model, system_prompt=system_prompt, provider=state.provider
             )
             state.reasoning_effort = getattr(agent, "reasoning_effort", "auto")
+
+            from pocket_agent.core.subagents import BackgroundSubagentManager
+
+            bg_mgr = getattr(agent, "background_jobs", None)
+            if isinstance(bg_mgr, BackgroundSubagentManager):
+
+                def _on_bg_state_change() -> None:
+                    state.bg_jobs_running, state.bg_jobs_done = bg_mgr.counts()
+
+                bg_mgr.on_state_change = _on_bg_state_change
+                _on_bg_state_change()
 
             # F3：讓 renderer 能取得 model 名稱顯示在標頭
             renderer._state = state

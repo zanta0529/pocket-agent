@@ -8,6 +8,7 @@
 import ast
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,7 @@ class RepoMapGenerator:
         self._explicit_db_path: Path | None = db_path
         self._initialized_db_path: Path | None = None
         self._map_cache: dict[tuple[int, int], str] = {}
+        self._lock = threading.RLock()
         if db_path is not None:
             self._ensure_db(db_path)
 
@@ -130,26 +132,27 @@ class RepoMapGenerator:
         self._initialized_db_path = None
 
     def _ensure_db(self, target_db: Path | None = None) -> Path:
-        path = target_db if target_db is not None else self.db_path
-        if self._initialized_db_path == path and path.is_file():
-            return path
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(path) as conn:
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS file_ast_cache (
-                        path TEXT PRIMARY KEY,
-                        mtime REAL,
-                        skeleton TEXT
+        with self._lock:
+            path = target_db if target_db is not None else self.db_path
+            if self._initialized_db_path == path and path.is_file():
+                return path
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(path) as conn:
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS file_ast_cache (
+                            path TEXT PRIMARY KEY,
+                            mtime REAL,
+                            skeleton TEXT
+                        )
+                        """
                     )
-                    """
-                )
-                conn.commit()
-            self._initialized_db_path = path
-        except sqlite3.OperationalError as e:
-            log.warning("Repo Map 快取資料庫初始化異常: %s", e)
-        return path
+                    conn.commit()
+                self._initialized_db_path = path
+            except sqlite3.OperationalError as e:
+                log.warning("Repo Map 快取資料庫初始化異常: %s", e)
+            return path
 
     def _init_db(self) -> None:
         self._ensure_db()
@@ -206,23 +209,24 @@ class RepoMapGenerator:
 
     def prune_stale_entries(self, *, vacuum: bool = False) -> int:
         """清除快取資料庫中已不存在於磁碟之孤兒路徑紀錄，回傳已刪除筆數。"""
-        target_db = self.db_path
-        if not target_db.is_file():
-            return 0
-        try:
-            with sqlite3.connect(target_db) as conn:
-                deleted, _ = self._prune_stale_in_conn(conn)
-                if deleted == 0:
-                    return 0
-                conn.commit()
-                if vacuum or deleted >= 100:
-                    conn.execute("VACUUM")
-            self._map_cache.clear()
-            log.info("Repo Map 已清除 %d 筆孤兒快取紀錄", deleted)
-            return deleted
-        except sqlite3.OperationalError as e:
-            log.warning("Repo Map 孤兒快取清理失敗: %s", e)
-            return 0
+        with self._lock:
+            target_db = self.db_path
+            if not target_db.is_file():
+                return 0
+            try:
+                with sqlite3.connect(target_db) as conn:
+                    deleted, _ = self._prune_stale_in_conn(conn)
+                    if deleted == 0:
+                        return 0
+                    conn.commit()
+                    if vacuum or deleted >= 100:
+                        conn.execute("VACUUM")
+                self._map_cache.clear()
+                log.info("Repo Map 已清除 %d 筆孤兒快取紀錄", deleted)
+                return deleted
+            except sqlite3.OperationalError as e:
+                log.warning("Repo Map 孤兒快取清理失敗: %s", e)
+                return 0
 
     def build_repo_map(self, root_dirs: list[Path | str], budget_tokens: int | None = None) -> str:
         """掃描目標目錄產生動態預算之 Repo Map Markdown 字串。"""
@@ -292,57 +296,58 @@ class RepoMapGenerator:
 
         state_fingerprint = hash(tuple((str(f), mt) for f, mt in file_mtimes))
         cache_key = (state_fingerprint, budget_tokens)
-        if cache_key in self._map_cache:
-            return self._map_cache[cache_key]
+        with self._lock:
+            if cache_key in self._map_cache:
+                return self._map_cache[cache_key]
 
-        entries: list[tuple[str, str]] = []  # (rel_path_str, skeleton)
-        cwd = Path.cwd().resolve()
+            entries: list[tuple[str, str]] = []  # (rel_path_str, skeleton)
+            cwd = Path.cwd().resolve()
 
-        try:
-            target_db = self._ensure_db()
-            with sqlite3.connect(target_db) as conn:
-                _, valid_rows = self._prune_stale_in_conn(conn)
-                db_cache = {r[0]: (r[1], r[2]) for r in valid_rows}
-                for f, mt in file_mtimes:
-                    skeleton = self._get_cached_or_parse(f, conn, db_cache=db_cache, current_mtime=mt)
+            try:
+                target_db = self._ensure_db()
+                with sqlite3.connect(target_db) as conn:
+                    _, valid_rows = self._prune_stale_in_conn(conn)
+                    db_cache = {r[0]: (r[1], r[2]) for r in valid_rows}
+                    for f, mt in file_mtimes:
+                        skeleton = self._get_cached_or_parse(f, conn, db_cache=db_cache, current_mtime=mt)
+                        if skeleton.strip():
+                            entries.append((_format_rel_path(f, cwd, root_paths), skeleton))
+                    conn.commit()
+            except sqlite3.OperationalError as e:
+                log.warning("Repo Map 快取存取失敗，使用即時解析: %s", e)
+                for f, _mt in file_mtimes:
+                    skeleton = extract_file_skeleton(f)
                     if skeleton.strip():
                         entries.append((_format_rel_path(f, cwd, root_paths), skeleton))
-                conn.commit()
-        except sqlite3.OperationalError as e:
-            log.warning("Repo Map 快取存取失敗，使用即時解析: %s", e)
-            for f, _mt in file_mtimes:
-                skeleton = extract_file_skeleton(f)
-                if skeleton.strip():
-                    entries.append((_format_rel_path(f, cwd, root_paths), skeleton))
 
-        if not entries:
-            return ""
+            if not entries:
+                return ""
 
-        # 二元搜尋 / 貪婪截斷填裝至預算上限
-        selected_blocks: list[str] = []
-        current_tokens = 0
+            # 二元搜尋 / 貪婪截斷填裝至預算上限
+            selected_blocks: list[str] = []
+            current_tokens = 0
 
-        header = "## 專案核心結構鳥瞰圖 (Pocket Repo Map)\n以下為工作區核心模組與公開介面骨架（簽名摘要）：\n"
-        current_tokens += estimate_tokens(header)
+            header = "## 專案核心結構鳥瞰圖 (Pocket Repo Map)\n以下為工作區核心模組與公開介面骨架（簽名摘要）：\n"
+            current_tokens += estimate_tokens(header)
 
-        for rel_path, skeleton in entries:
-            block = f"{rel_path}:\n"
-            for line in skeleton.splitlines():
-                block += f"  {line}\n"
+            for rel_path, skeleton in entries:
+                block = f"{rel_path}:\n"
+                for line in skeleton.splitlines():
+                    block += f"  {line}\n"
 
-            block_tokens = estimate_tokens(block)
-            if current_tokens + block_tokens > budget_tokens:
-                # 超過預算則停止塞入更多模組，保留頭部最具代表性之架構
-                break
-            selected_blocks.append(block)
-            current_tokens += block_tokens
+                block_tokens = estimate_tokens(block)
+                if current_tokens + block_tokens > budget_tokens:
+                    # 超過預算則停止塞入更多模組，保留頭部最具代表性之架構
+                    break
+                selected_blocks.append(block)
+                current_tokens += block_tokens
 
-        if not selected_blocks:
-            return ""
+            if not selected_blocks:
+                return ""
 
-        result_map = header + "\n".join(selected_blocks)
-        self._map_cache[cache_key] = result_map
-        return result_map
+            result_map = header + "\n".join(selected_blocks)
+            self._map_cache[cache_key] = result_map
+            return result_map
 
 
 # 全域單例

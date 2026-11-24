@@ -21,7 +21,18 @@ from pocket_agent.core.context_budget import (
     resolve_context_window,
 )
 from pocket_agent.core.files import FileUploader
-from pocket_agent.core.subagents import get_subagent, subagent_tools
+from pocket_agent.core.subagents import (
+    BUILTIN_READONLY_SUBAGENT_TOOLS,
+    STATEFUL_MCP_SERVER_NAMES,
+    STATEFUL_MCP_TOOL_PREFIXES,
+    BackgroundJob,
+    BackgroundSubagentManager,
+    background_subagent_tools,
+    build_subagent_labels,
+    get_subagent,
+    is_subagent_tool,
+    subagent_tools,
+)
 from pocket_agent.core.tool_registry import classify_tool_result, default_tool_registry
 from pocket_agent.engines.base import BaseEngine
 from pocket_agent.extensions.hooks import run_hooks
@@ -34,6 +45,7 @@ from pocket_agent.extensions.skills import (
 from pocket_agent.system.config import config
 from pocket_agent.system.constants import (
     DEFAULT_COMPACT_TARGET_RATIO,
+    DEFAULT_MAX_PARALLEL_SUBAGENTS,
     DEFAULT_MAX_STREAM_RETRIES,
     DEFAULT_MAX_TOOL_ROUNDS,
     DEFAULT_REASONING_EFFORT,
@@ -258,6 +270,10 @@ class Agent:
         self._subagent_tasks: dict["Agent", asyncio.Task] = {}  # 追蹤子代理非同步 Task 以便立即中斷
         self._current_task: asyncio.Task | None = None  # 當前主代理執行 Task
         self._bg_tasks: set[asyncio.Task] = set()  # 追蹤背景任務以防垃圾回收
+        self._non_interactive: bool = False
+        self.background_jobs: BackgroundSubagentManager | None = (
+            None if is_subagent else BackgroundSubagentManager(self)
+        )
 
         # 串流回呼：callable(kind, data)，從背景 asyncio thread 呼叫，
         # GUI 端需自行轉回主執行緒。kind 與 data 的對應：
@@ -463,6 +479,9 @@ class Agent:
         if self._current_task is not None and not self._current_task.done():
             self._current_task.cancel()
 
+        if self.background_jobs is not None:
+            await self.background_jobs.shutdown(timeout=timeout)
+
         if self._bg_tasks:
             tasks = list(self._bg_tasks)
             for t in tasks:
@@ -528,13 +547,14 @@ class Agent:
         self.activity.rebuild_from_history(self.history)
 
     def reset_session(self) -> None:
-        """徹底清空當前會話歷史與相關狀態旗標。"""
+        """徹底清空當前會話歷史與相關狀態旗標，並清除已結束的背景工作紀錄。"""
         self.clear_history()
         self.is_sensitive_session = False
         self.accept_edits = False
         self.context_usage = None
         self.last_images.clear()
         self.last_files.clear()
+        self.clear_finished_background_jobs()
 
     async def compact_history(self, keep_recent: int = 4) -> tuple[bool, int, int]:
         """對目前會話歷史進行主動式高密度摘要壓縮（供 /compact 指令或主動調度使用）。
@@ -630,6 +650,94 @@ class Agent:
         sub.accept_edits = self.accept_edits
         sub.user_instructions = list(self.user_instructions)
         return sub
+
+    def _readonly_safe_tool_set(self) -> set[str]:
+        """回傳背景／平行唯讀子代理允許使用的免確認唯讀工具集合。"""
+        allowed = set(BUILTIN_READONLY_SUBAGENT_TOOLS)
+        mcp_tools = self.mcp.openai_tools() if hasattr(self.mcp, "openai_tools") else []
+        for tool in mcp_tools or []:
+            if not isinstance(tool, dict) or not tool.get("_is_safe_read"):
+                continue
+            t_name = str(tool.get("name") or "")
+            if not t_name:
+                continue
+            server_name, raw_name = parse_mcp_tool_name(t_name)
+            if t_name in _PATH_GATED_SAFE_TOOLS or raw_name in _PATH_GATED_SAFE_TOOLS:
+                continue
+            if (server_name and server_name.lower() in STATEFUL_MCP_SERVER_NAMES) or raw_name.startswith(
+                STATEFUL_MCP_TOOL_PREFIXES
+            ):
+                continue
+            allowed.add(t_name)
+        return allowed
+
+    def resolve_readonly_subagent_tools(self, configured_tools: list[str] | None) -> list[str]:
+        """過濾子代理設定之工具清單，僅保留唯讀免確認工具。"""
+        readonly_set = self._readonly_safe_tool_set()
+        if configured_tools is None:
+            return sorted(readonly_set)
+        return [t for t in configured_tools if t in readonly_set]
+
+    def is_readonly_subagent(self, name: str) -> bool:
+        """判斷指定子代理是否明確宣告為純唯讀免確認工具集。"""
+        sub_cfg = get_subagent(name)
+        if not sub_cfg:
+            return False
+        configured = sub_cfg.get("allowed_tools")
+        if not isinstance(configured, list) or not configured:
+            return False
+        readonly_set = self._readonly_safe_tool_set()
+        return all(t in readonly_set for t in configured)
+
+    def start_background_subagent(self, name: str, task: str) -> BackgroundJob:
+        """公開介面：在背景非同步啟動唯讀子代理工作。"""
+        if self.background_jobs is None:
+            raise RuntimeError("子代理不可再啟動背景子代理。")
+        return self.background_jobs.start(name, task)
+
+    def list_background_jobs(self) -> list[BackgroundJob]:
+        if self.background_jobs is None:
+            return []
+        return self.background_jobs.list_jobs()
+
+    def get_background_job(self, job_id: str) -> BackgroundJob | None:
+        if self.background_jobs is None:
+            return None
+        return self.background_jobs.get(job_id)
+
+    def background_job_counts(self) -> tuple[int, int]:
+        if self.background_jobs is None:
+            return 0, 0
+        return self.background_jobs.counts()
+
+    async def wait_background_job(self, job_id: str, timeout: float = 0.0) -> BackgroundJob:
+        if self.background_jobs is None:
+            raise RuntimeError("子代理不可查詢背景子代理。")
+        return await self.background_jobs.wait(
+            job_id,
+            timeout=timeout,
+            cancel_check=lambda: self.cancel_requested,
+        )
+
+    def collect_background_job(self, job_id: str, *, inject_history: bool = False) -> BackgroundJob:
+        if self.background_jobs is None:
+            raise RuntimeError("子代理不可取回背景子代理。")
+        return self.background_jobs.collect(job_id, inject_history=inject_history)
+
+    async def cancel_background_job(self, job_id: str) -> bool:
+        if self.background_jobs is None:
+            return False
+        return await self.background_jobs.cancel(job_id)
+
+    async def cancel_all_background_jobs(self) -> int:
+        if self.background_jobs is None:
+            return 0
+        return await self.background_jobs.cancel_all()
+
+    def clear_finished_background_jobs(self) -> int:
+        if self.background_jobs is None:
+            return 0
+        return self.background_jobs.clear_finished()
 
     async def extract_skill(self) -> str:
         """非同步呼叫 LLM 總結對話為 Skill Markdown。"""
@@ -750,6 +858,7 @@ class Agent:
         if not self._is_subagent:
             tools.append(run_subagents_parallel)
             tools += subagent_tools()
+            tools += background_subagent_tools()
 
         if self.allowed_tools is not None:
             tools = [t for t in tools if t.get("name") in self.allowed_tools]
@@ -870,9 +979,19 @@ class Agent:
 
         return "\n\n".join(part for part in (static_parts + dynamic_parts) if part)
 
-    async def _run_subagent(self, args: dict) -> str:
+    async def _run_subagent(
+        self,
+        args: dict,
+        *,
+        display_label: str | None = None,
+        semaphore: asyncio.Semaphore | None = None,
+        non_interactive: bool = False,
+    ) -> str:
+        from pocket_agent.system.i18n import t
+
         name = args.get("name")
         task = str(args.get("task", "")).strip()
+        label = display_label or str(name or "")
 
         if not name:
             raise ValueError("Subagent name is required")
@@ -888,6 +1007,7 @@ class Agent:
             reasoning_effort=sub_config.get("reasoning_effort") or self.reasoning_effort,
             max_tool_rounds=sub_config.get("max_tool_rounds"),
         )
+        sub._non_interactive = bool(non_interactive)
 
         text_buffer = []
 
@@ -900,27 +1020,27 @@ class Agent:
                     lines = current.split("\n")
                     for line in lines[:-1]:
                         if line.strip():
-                            self._emit("thinking", f"[{name}] {line.strip()}")
+                            self._emit("thinking", f"[{label}] {line.strip()}")
                     text_buffer.clear()
                     if lines[-1]:
                         text_buffer.append(lines[-1])
                 elif len(current) > 60:
-                    self._emit("thinking", f"[{name}] {current.strip()}")
+                    self._emit("thinking", f"[{label}] {current.strip()}")
                     text_buffer.clear()
             elif kind == "tool_start":
                 if isinstance(data, dict):
                     new_data = dict(data)
-                    new_data["name"] = f"{name}::{new_data.get('name', '')}"
+                    new_data["name"] = f"{label}::{new_data.get('name', '')}"
                     self._emit("tool_start", new_data)
                 else:
-                    self._emit("tool_start", f"{name}::{data}")
+                    self._emit("tool_start", f"{label}::{data}")
             elif kind == "tool_done":
                 if isinstance(data, dict):
                     new_data = dict(data)
-                    new_data["name"] = f"{name}::{new_data.get('name', '')}"
+                    new_data["name"] = f"{label}::{new_data.get('name', '')}"
                     self._emit("tool_done", new_data)
                 else:
-                    self._emit("tool_done", f"{name}::{data}")
+                    self._emit("tool_done", f"{label}::{data}")
             elif kind == "image_saved":
                 self._emit("image_saved", data)
 
@@ -931,7 +1051,13 @@ class Agent:
 
         log.info("SUBAGENT run %s run_id=%s task=%r", name, run_id, task[:80])
 
-        sub_task = asyncio.create_task(sub.chat(task))
+        async def _exec_sub() -> tuple[str, str, str]:
+            if semaphore is not None:
+                async with semaphore:
+                    return await sub.chat(task)
+            return await sub.chat(task)
+
+        sub_task = asyncio.create_task(_exec_sub())
         self._subagent_tasks[sub] = sub_task
         self.active_subagents.append(sub)
         try:
@@ -944,6 +1070,7 @@ class Agent:
                 )
                 if handoff:
                     reply = f"{reply}\n\n{handoff}"
+            self._emit("thinking", f"[{label}] ✓ {t('cli.status_completed')}")
         except asyncio.CancelledError:
             log.info("SUBAGENT %s task 已由取消要求中斷", name)
             handoff = self._build_subagent_handoff_notice(
@@ -954,6 +1081,7 @@ class Agent:
             reply = f"（子代理 {name} 執行已被使用者停止）"
             if handoff:
                 reply = f"{reply}\n\n{handoff}"
+            self._emit("thinking", f"[{label}] ✗ {t('cli.status_failed')}")
         except Exception as e:
             log.debug("子代理「%s」執行失敗：%s", name, e, exc_info=True)
             handoff = self._build_subagent_handoff_notice(
@@ -961,6 +1089,7 @@ class Agent:
                 run_id=run_id,
                 reason=f"{type(e).__name__}: {e}",
             )
+            self._emit("thinking", f"[{label}] ✗ {t('cli.status_error')}")
             if handoff:
                 raise RuntimeError(f"{e}\n\n{handoff}") from e
             raise  # Let the caller handle the exception for proper CLI rendering
@@ -1181,7 +1310,12 @@ class Agent:
         """公開介面：平行執行多個子代理並彙整報告，寫入主對話歷史。"""
         if user_prompt is not None:
             self.history.append({"role": "user", "content": user_prompt})
-        coros = [self._run_subagent(t) for t in tasks]
+        labels = build_subagent_labels(tasks)
+        sem = asyncio.Semaphore(DEFAULT_MAX_PARALLEL_SUBAGENTS)
+        coros = [
+            self._run_subagent(t, display_label=label, semaphore=sem, non_interactive=True)
+            for t, label in zip(tasks, labels)
+        ]
         results = await asyncio.gather(*coros, return_exceptions=True)
 
         combined = []
@@ -1224,9 +1358,11 @@ class Agent:
 
     def _is_parallel_safe_tool(self, name: str, args: dict) -> bool:
         """判斷工具呼叫是否為無副作用且免互動確認的唯讀操作，可安全並行執行。"""
-        if name not in getattr(self, "_safe_read_tools", set()):
-            return False
         handler = default_tool_registry.resolve(name)
+        if name not in getattr(self, "_safe_read_tools", set()) and not getattr(
+            handler, "allows_dynamic_parallel_safe", False
+        ):
+            return False
         return handler.is_parallel_safe(name, args, self)
 
     async def _execute_safe_read_io(self, name: str, args: dict) -> str:
@@ -1555,6 +1691,20 @@ class Agent:
 
                 if len(parallel_batch) >= 2:
                     sem = asyncio.Semaphore(5)
+                    sub_items = [p_args for p_fc, p_args, _ in parallel_batch if is_subagent_tool(p_fc["name"])]
+                    sub_labels = build_subagent_labels(sub_items) if len(sub_items) >= 2 else []
+                    sub_sem = asyncio.Semaphore(DEFAULT_MAX_PARALLEL_SUBAGENTS) if sub_labels else None
+                    sub_label_by_cid: dict[str, str] = {}
+                    if sub_labels:
+                        idx_sub = 0
+                        for p_fc, _p_args, _p_raw in parallel_batch:
+                            if is_subagent_tool(p_fc["name"]):
+                                sub_label_by_cid[p_fc["call_id"]] = sub_labels[idx_sub]
+                                idx_sub += 1
+                        self._emit(
+                            "parallel_subagents_start",
+                            {"count": len(sub_labels), "labels": sub_labels},
+                        )
 
                     async def _run_one_parallel(
                         p_fc: dict, p_args: dict, p_raw: str
@@ -1569,14 +1719,29 @@ class Agent:
                                     )
                                 if self.cancel_requested:
                                     raise asyncio.CancelledError()
-                                res = await self._execute_safe_read_io(p_fc["name"], p_args)
-                                return p_fc["call_id"], res, None
+                                cid = p_fc["call_id"]
+                                if cid in sub_label_by_cid and sub_sem is not None:
+                                    handler = default_tool_registry.resolve(p_fc["name"])
+                                    exec_res = await handler.execute_parallel(
+                                        p_args,
+                                        self,
+                                        display_label=sub_label_by_cid[cid],
+                                        semaphore=sub_sem,
+                                    )
+                                    res = exec_res.output
+                                else:
+                                    res = await self._execute_safe_read_io(p_fc["name"], p_args)
+                                return cid, res, None
                             except BaseException as exc:
                                 return p_fc["call_id"], None, exc
 
-                    gathered = await asyncio.gather(
-                        *(_run_one_parallel(p_fc, p_args, p_raw) for p_fc, p_args, p_raw in parallel_batch)
-                    )
+                    try:
+                        gathered = await asyncio.gather(
+                            *(_run_one_parallel(p_fc, p_args, p_raw) for p_fc, p_args, p_raw in parallel_batch)
+                        )
+                    finally:
+                        if sub_labels:
+                            self._emit("parallel_subagents_done", {})
                     for cid, res, exc in gathered:
                         parallel_results[cid] = (res, exc)
 
