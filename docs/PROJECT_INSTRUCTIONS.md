@@ -9,10 +9,10 @@
 - 入口為 `src/pocket_agent/main.py`，使用 Click；CLI 使用 Rich／prompt_toolkit。
 - 引擎透過四大轉接器支援多元模型供應商：`OpenAIResponsesEngine`（ChatGPT OAuth `openai` 與官方 `openai-api`）、`OpenRouterEngine`（`openrouter`）、`OllamaChatEngine`（本機 `ollama` 與雲端 `ollamacloud`）、`StandardChatCompletionsEngine`（`gemini`、`gemini_oauth`、`groq`、`mistral`、`sambanova`）；非同步流程使用 asyncio。
 - 認證包含 OpenAI OAuth PKCE 與 Google Gemini OAuth 雙軌，敏感憑證優先透過作業系統原生 `keyring` 儲存，不支援原生憑證庫時以主密碼保護之 JWE 加密庫（`encrypted_provider`）儲存（拒絕明碼降級）；核心依賴包含 OpenAI SDK、httpx、keyring、mcp、curl_cffi、cryptography、truststore、pathspec、Pillow、pywin32（Windows），另 `requirements.in` 尚留有歷史保留依賴 FastAPI／uvicorn。
-- MCP 提供外部工具整合：`browser_mcp.py` 為瀏覽器自動化入口（依賴 Playwright，沿用系統 Edge／Chrome），`github_mcp.py` 為 GitHub PR／Issue／Diff／Review／CI 檢索、範本感知 PR 建立與留言入口，`sqlite_mcp.py` 為本機 SQLite 資料庫結構探查與唯讀檢索入口，`mysql_mcp.py` 為遠端 MySQL／MariaDB 資料庫唯讀檢索入口，`mssql_mcp.py` 為遠端 Microsoft SQL Server 資料庫唯讀檢索入口，`memory_mcp.py` 為本機 JSON 跨對話長期記憶檢索入口，`rhel_mcp.py` 為遠端 RHEL 主機結構化唯讀巡檢入口（透過系統 OpenSSH 支援指定私鑰與加固帳密雙軌驗證），`win_rdp_mcp.py` 為遠端 Windows 主機 RDP（Port 3389）視覺控制與結構化唯讀巡檢入口。
+- MCP 提供外部工具整合：`browser_mcp.py` 為瀏覽器自動化入口（依賴 Playwright，沿用系統 Edge／Chrome），`github_mcp.py` 為 GitHub PR／Issue／Diff／Review／CI 檢索、範本感知 PR 建立與留言入口，`sqlite_mcp.py` 為本機 SQLite 資料庫結構探查與唯讀檢索入口，`mysql_mcp.py` 為遠端 MySQL／MariaDB 資料庫唯讀檢索入口，`mssql_mcp.py` 為遠端 Microsoft SQL Server 資料庫唯讀檢索入口，`memory_mcp.py` 為本機 JSON 跨對話長期記憶檢索入口，`rhel_mcp.py` 為遠端 RHEL 主機結構化唯讀巡檢入口（透過系統 OpenSSH 支援指定私鑰與加固帳密雙軌驗證），`win_rdp_mcp.py` 為遠端 Windows 主機 RDP（Port 3389）視覺控制與結構化唯讀巡檢入口，`netdiag_mcp.py` 為網站與網路跨單位舉證診斷入口（預設停用、強制逐次人工確認，支援階段式 DNS／TCP／TLS／HTTP 探測與多解析器 DNS 比對）。
 - 文件產出（`doc.py`）支援 python-docx、python-pptx、ReportLab；二進位文件讀取（`document.py` 的 `read_document`）支援 `.pdf`、`.docx`、`.pptx`，其中 PDF 讀取優先使用 `pymupdf4llm`（純 `pymupdf`），失敗時降級至 `pypdf`。
 - 會話持久化使用 JSON（`~/.pocket-agent/sessions/*.json`，附帶 HMAC-SHA256 數位簽章防竄改），全域系統設定使用 `~/.pocket-agent/config.json`（JSON）與環境變數（`.env`），外部 MCP 伺服器掛載設定使用 YAML（`mcp_config.yaml`）。
-- 核心代理之本機索引與快取（RAG FTS5、Skill 檢索、Repo Map AST 快取）一律使用標準庫 `sqlite3`，禁止在核心引入第三方資料庫或 ORM；`pymysql` 與 `pymssql` 僅供 `mcp_servers/` 下之遠端唯讀資料庫 MCP 伺服器使用。
+- 核心代理之本機索引與快取（RAG FTS5、Skill 檢索、Repo Map AST 快取）一律使用標準庫 `sqlite3`，禁止在核心引入第三方資料庫或 ORM；`pymysql` 與 `pymssql` 僅供 `mcp_servers/` 下之遠端唯讀資料庫 MCP 伺服器使用，`dnspython`（`dns`）僅供 `mcp_servers/netdiag/` 使用。
 
 ## 2. 目錄與責任邊界
 
@@ -25,7 +25,7 @@
 | `src/pocket_agent/system/`     | 系統基礎設施：全域常數（`constants`）、多語系（`i18n` 與 `locales/`）、認證（`auth`）、供應商策略（`providers/`）、路徑解析（`paths`）、設定（`config`）、指令白名單（`permissions`）、Markdown 註冊表（`registry`）、巨集與系統指令（`commands`、`sys_commands`）、設定精靈（`wizard`）、自動清理（`housekeeping`）、相容處理（`compat`）與線上更新（`updater`）。 |
 | `src/pocket_agent/extensions/` | 擴充功能：MCP 伺服器生命週期、白名單授權與動態連線參數注入管理（`mcp`）、漸進式技能載入與遮蔽（`skills`）、生命週期事件鉤子（`hooks`）與外掛封裝管理（`plugins`）。                                                                                      |
 | `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行（`shell`）、原生檔案操作（`fs`）、網路請求（`web`）、圖片生成（`image`）、文件產出（`doc`）、文件讀取（`document`）、FTS5 檢索（`rag`）與 AST 結構圖（`repo_map`）。 |
-| `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器薄入口（`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`github_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`）、對應領域子套件（`sqlite/`、`mysql/`、`mssql/`、`github/`、`rhel/`、`win_rdp/`）、輕量單檔伺服器（`browser_mcp.py`、`memory_mcp.py`）與共用基礎設施（`_shared/`，以 `--internal-mcp-server` 獨立啟動時須確保目錄在 `sys.path`）。 |
+| `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器薄入口（`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`github_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`、`netdiag_mcp.py`）、對應領域子套件（`sqlite/`、`mysql/`、`mssql/`、`github/`、`rhel/`、`win_rdp/`、`netdiag/`）、輕量單檔伺服器（`browser_mcp.py`、`memory_mcp.py`）與共用基礎設施（`_shared/`，以 `--internal-mcp-server` 獨立啟動時須確保目錄在 `sys.path`）。 |
 | `subagents/`                   | 隨附之內建子代理人設定義檔（`.md`）。                                                                                                                                                                                         |
 | `build_scripts/`、`scripts/`   | 可攜版打包腳本（`build_scripts/build_portable.py`）與依賴完整性檢查工具（`scripts/check_imports.py`）。                                                                                                                       |
 

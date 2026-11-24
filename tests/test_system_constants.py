@@ -107,7 +107,7 @@ def test_module_aliases_backward_compatibility():
 
 def test_mcp_servers_output_chars_aligned():
     """驗證獨立 MCP 伺服器模組亦同步採用 12,000 字元上限與資料庫健康檢查安全閾值。"""
-    from mcp_servers import browser_mcp, mssql_mcp, mysql_mcp, rhel_mcp, sqlite_mcp, win_rdp_mcp
+    from mcp_servers import browser_mcp, mssql_mcp, mysql_mcp, netdiag_mcp, rhel_mcp, sqlite_mcp, win_rdp_mcp
     from mcp_servers._shared import CONSTANTS
 
     assert CONSTANTS.max_output_chars == constants.DEFAULT_TOOL_OUTPUT_CHARS
@@ -117,6 +117,10 @@ def test_mcp_servers_output_chars_aligned():
     assert sqlite_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert mysql_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert mssql_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
+    assert netdiag_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
+    assert CONSTANTS.netdiag_default_timeout_sec == constants.NETDIAG_DEFAULT_TIMEOUT_SEC == 10.0
+    assert CONSTANTS.netdiag_max_samples == constants.NETDIAG_MAX_SAMPLES == 3
+    assert CONSTANTS.netdiag_default_allowed_ports == constants.NETDIAG_DEFAULT_ALLOWED_PORTS == (80, 443, 8080, 8443)
     assert CONSTANTS.db_health_max_tables == constants.DB_HEALTH_MAX_TABLES == 500
     assert mysql_mcp.MYSQL_CHECK_TABLE_MAX_BYTES == constants.MYSQL_CHECK_TABLE_MAX_BYTES == 2 * 1024**3
     assert sqlite_mcp.SQLITE_QUICK_CHECK_MAX_BYTES == constants.SQLITE_QUICK_CHECK_MAX_BYTES == 500 * 1024**2

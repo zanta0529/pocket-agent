@@ -204,3 +204,20 @@ servers:
   #     WIN_RDP_PASSWORD: ""                 # 選填：Windows 登入密碼（建議留空或省略，於執行時安全輸入）
   #     WIN_RDP_TIMEOUT: "15"
   #     WIN_RDP_RESOLUTION: "1280x800"
+
+  # 網站與網路跨單位舉證診斷（DNS → TCP → TLS 憑證鏈 → HTTP 重導向／標頭／TTFB ＋ 多解析器 DNS 比對）
+  # 安全設計：預設停用（enabled: false）且不列入 safe_read_tools（每次探測皆須人工確認）
+  # netdiag:
+  #   enabled: false
+  #   transport: stdio
+  #   command: python
+  #   args: ["mcp_servers/netdiag_mcp.py"]
+  #   # is_sensitive: true                         # 強烈建議：啟用內網私有 IP 診斷時設為 true，強制對話紀錄零落盤
+  #   env:
+  #     NETDIAG_ALLOW_PRIVATE_NETWORKS: "false"    # 設為 true 允許診斷內網 RFC1918 / ULA 私有 IP
+  #     NETDIAG_ALLOWED_CIDRS: ""                  # 選填：留空且開啟內網時允許所有 RFC1918 / ULA；設定時嚴格限縮於指定 CIDR
+  #     NETDIAG_ALLOWED_DOMAINS: ""                # 選填：限制僅允許診斷指定網域（逗號分隔，支援 "*.example.org"）
+  #     NETDIAG_ALLOWED_PORTS: "80,443,8080,8443"  # 允許探測之連接埠白名單
+  #     NETDIAG_ALLOW_LOOPBACK: "false"            # 預設封鎖 localhost / 127.0.0.1 / ::1
+  #     NETDIAG_ALLOW_PROXY: "false"               # 預設 fail-closed 拒用環境 Proxy（企業代理環境請顯式設為 "true"）
+  #     NETDIAG_TIMEOUT: "10"                      # 單階段逾時秒數（3~15）

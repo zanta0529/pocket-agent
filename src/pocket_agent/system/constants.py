@@ -83,6 +83,16 @@ DEFAULT_ALLOWED_SSRF_DOMAINS: tuple[str, ...] = (
 )  # 預設允許企業代理解析之受信任網域
 DEFAULT_STREAM_READ_TIMEOUT_SEC = 120.0  # LLM SSE 串流單區塊最大閒置讀取逾時秒數
 
+# 網站與網路診斷 MCP (netdiag) 限流與安全常數
+NETDIAG_DEFAULT_TIMEOUT_SEC = 10.0  # netdiag 單階段預設逾時秒數
+NETDIAG_MIN_TIMEOUT_SEC = 3.0  # netdiag 允許設定的最小逾時秒數
+NETDIAG_MAX_TIMEOUT_SEC = 15.0  # netdiag 允許設定的最大逾時秒數
+NETDIAG_MAX_SAMPLES = 3  # netdiag 單次呼叫最多採樣次數
+NETDIAG_MAX_HEADER_VALUE_CHARS = 512  # netdiag 單一回應標頭值顯示上限
+NETDIAG_DNS_MAX_NAMESERVERS = 4  # netdiag_dns_compare 單次最多比對之額外解析器數量
+NETDIAG_DNS_MAX_CNAME_HOPS = 10  # netdiag DNS CNAME 鏈追蹤最大跳數
+NETDIAG_DEFAULT_ALLOWED_PORTS: tuple[int, ...] = (80, 443, 8080, 8443)  # netdiag 預設允許探測之連接埠
+
 
 # ==============================================================================
 # 5. 上下文預算與溢出管理常數 (Context Budget & Spillover Defaults)

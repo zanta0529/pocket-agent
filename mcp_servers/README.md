@@ -33,12 +33,14 @@ mcp_servers/
 ├── github/               # GitHub 領域子套件（security、client、templates、server、tools/）
 ├── rhel/                 # RHEL SSH 領域子套件（security、ssh_client、server、tools/）
 ├── win_rdp/              # Windows RDP 領域子套件（security、win32_api、session、server、tools/）
+├── netdiag/              # 網站與網路舉證診斷領域子套件（policy、redaction、dns_adapter、tls_probe、http_probe、pipeline、report、tools/）
 ├── sqlite_mcp.py         # 薄入口（對應 sqlite/）
 ├── mysql_mcp.py          # 薄入口（對應 mysql/）
 ├── mssql_mcp.py          # 薄入口（對應 mssql/）
 ├── github_mcp.py         # 薄入口（對應 github/）
 ├── rhel_mcp.py           # 薄入口（對應 rhel/）
 ├── win_rdp_mcp.py        # 薄入口（對應 win_rdp/）
+├── netdiag_mcp.py        # 薄入口（對應 netdiag/）
 ├── browser_mcp.py        # 輕量單檔伺服器（Playwright 瀏覽器自動化）
 └── memory_mcp.py         # 輕量單檔伺服器（本機 JSON 長期記憶）
 ```
@@ -53,7 +55,7 @@ mcp_servers/
 
 ---
 
-## 目前提供的 MCP 伺服器清單（共 8 座）
+## 目前提供的 MCP 伺服器清單（共 9 座）
 
 ### 1. 瀏覽器自動化（Browser MCP）
 
@@ -94,6 +96,11 @@ mcp_servers/
 
 - **入口**：`win_rdp_mcp.py` → `mcp_servers/win_rdp/`
 - **用途**：透過 Port 3389 與系統可信 `mstsc.exe` 提供 Layer A 視覺截圖與前景保護鍵鼠操作，以及 Layer B 剪貼簿 Enveloped Sentinel 唯讀巡檢（自動備份與還原剪貼簿）。
+
+### 9. 網站與網路跨單位舉證診斷（NetDiag MCP）
+
+- **入口**：`netdiag_mcp.py` → `mcp_servers/netdiag/`
+- **用途**：預設停用（`enabled: false`）且強制逐次人工確認，提供階段式 `DNS → TCP → TLS 憑證鏈 → HTTP` 唯讀診斷與多解析器 DNS 比對，支援公開 HTTP／HTTPS 與受控內網私有 IP 站點（含 `host_header` SNI／Host 指定、雙軌 CA 對照與過期憑證公開欄位擷取）。
 
 ---
 

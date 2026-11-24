@@ -2,9 +2,12 @@
 
 import asyncio
 import concurrent.futures
+import ipaddress
 import json
 import shutil
+from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -12,9 +15,104 @@ from rich.panel import Panel
 from rich.text import Text
 
 from pocket_agent.core.cancellation import check_cancelled, current_scope
+from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.frontend.cli.render import toolbar
 from pocket_agent.system.i18n import t
 from pocket_agent.system.permissions import add_command_to_allowlist, is_command_allowed
+
+
+def _classify_netdiag_target_scope(target: str) -> str:
+    """僅依 URL 字面值分類目標網段屬性（絕不觸發任何 DNS 解析）。"""
+    host = (urlsplit((target or "").strip()).hostname or "").strip().strip("[]").lower()
+    if not host:
+        return t("confirmation.netdiag_scope_domain")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if host == "localhost" or host.endswith(".localhost"):
+            return t("confirmation.netdiag_scope_loopback")
+        return t("confirmation.netdiag_scope_domain")
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_loopback:
+        return t("confirmation.netdiag_scope_loopback")
+    if not ip.is_global:
+        return t("confirmation.netdiag_scope_private")
+    return t("confirmation.netdiag_scope_public")
+
+
+def _format_github_create_pr(tool_name: str, payload: dict[str, Any]) -> str:
+    owner = payload.get("owner", "")
+    repo = payload.get("repo", "")
+    head = payload.get("head", "")
+    base = payload.get("base") or t("confirmation.pr_auto_base")
+    title = payload.get("title", "")
+    body = payload.get("body", "")
+    draft_label = t("confirmation.pr_mode_draft") if payload.get("draft") else t("confirmation.pr_mode_ready")
+    return "\n".join(
+        [
+            t("confirmation.pr_action"),
+            t("confirmation.pr_tool", tool_name=tool_name),
+            t("confirmation.pr_repo", owner=owner, repo=repo),
+            t("confirmation.pr_branch", head=head, base=base),
+            t("confirmation.pr_mode", mode=draft_label),
+            t("confirmation.pr_title", title=title),
+            t("confirmation.pr_body_preview"),
+            "─" * 40,
+            str(body),
+            "─" * 40,
+        ]
+    )
+
+
+def _format_netdiag_timeout(payload: dict[str, Any]) -> str:
+    timeout_val = payload.get("timeout_sec")
+    if timeout_val is None:
+        return t("confirmation.netdiag_timeout_default")
+    return t("confirmation.netdiag_timeout", timeout=timeout_val)
+
+
+def _format_netdiag_diagnose(tool_name: str, payload: dict[str, Any]) -> str:
+    target = str(payload.get("target") or "")
+    lines = [
+        t("confirmation.netdiag_action"),
+        t("confirmation.netdiag_tool", tool_name=tool_name),
+        t("confirmation.netdiag_target", target=target),
+        t("confirmation.netdiag_target_scope", scope=_classify_netdiag_target_scope(target)),
+    ]
+    host_header = str(payload.get("host_header") or "").strip()
+    if host_header:
+        lines.append(t("confirmation.netdiag_host_header", host_header=host_header))
+    lines.extend(
+        [
+            t("confirmation.netdiag_stage", max_stage=payload.get("max_stage") or "http"),
+            t("confirmation.netdiag_method", method=payload.get("method") or "HEAD"),
+            t("confirmation.netdiag_samples", samples=payload.get("samples", 1)),
+            _format_netdiag_timeout(payload),
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _format_netdiag_dns_compare(tool_name: str, payload: dict[str, Any]) -> str:
+    nameservers = str(payload.get("nameservers") or "").strip() or t("confirmation.netdiag_nameservers_system")
+    return "\n".join(
+        [
+            t("confirmation.netdiag_dns_action"),
+            t("confirmation.netdiag_tool", tool_name=tool_name),
+            t("confirmation.netdiag_domain", domain=payload.get("domain") or ""),
+            t("confirmation.netdiag_record_types", record_types=payload.get("record_types") or "A,AAAA,CNAME"),
+            t("confirmation.netdiag_nameservers", nameservers=nameservers),
+            _format_netdiag_timeout(payload),
+        ]
+    )
+
+
+_MCP_CONFIRM_FORMATTERS: dict[str, Callable[[str, dict[str, Any]], str]] = {
+    "github_create_pr": _format_github_create_pr,
+    "netdiag_diagnose": _format_netdiag_diagnose,
+    "netdiag_dns_compare": _format_netdiag_dns_compare,
+}
 
 
 class ConfirmationBridge:
@@ -60,31 +158,10 @@ class ConfirmationBridge:
             return args_tuple[0]
         if len(args_tuple) == 2 and isinstance(args_tuple[0], str) and isinstance(args_tuple[1], dict):
             tool_name, payload = args_tuple[0], args_tuple[1]
-            raw_tool = tool_name.split("__")[-1]
-            if raw_tool == "github_create_pr":
-                owner = payload.get("owner", "")
-                repo = payload.get("repo", "")
-                head = payload.get("head", "")
-                base = payload.get("base") or t("confirmation.pr_auto_base")
-                title = payload.get("title", "")
-                body = payload.get("body", "")
-                draft_label = (
-                    t("confirmation.pr_mode_draft") if payload.get("draft") else t("confirmation.pr_mode_ready")
-                )
-                return "\n".join(
-                    [
-                        t("confirmation.pr_action"),
-                        t("confirmation.pr_tool", tool_name=tool_name),
-                        t("confirmation.pr_repo", owner=owner, repo=repo),
-                        t("confirmation.pr_branch", head=head, base=base),
-                        t("confirmation.pr_mode", mode=draft_label),
-                        t("confirmation.pr_title", title=title),
-                        t("confirmation.pr_body_preview"),
-                        "─" * 40,
-                        str(body),
-                        "─" * 40,
-                    ]
-                )
+            _, raw_tool = parse_mcp_tool_name(tool_name)
+            formatter = _MCP_CONFIRM_FORMATTERS.get(raw_tool)
+            if formatter is not None:
+                return formatter(tool_name, payload)
         return " ".join(
             json.dumps(a, ensure_ascii=False) if isinstance(a, (dict, list)) else str(a) for a in args_tuple
         )
@@ -93,8 +170,21 @@ class ConfirmationBridge:
     def _is_fs_edit(command: str) -> bool:
         return command.startswith(("建立新檔：", "修改檔案：", "覆寫既有檔案：", "附加內容至檔案：", "局部修改檔案："))
 
+    @staticmethod
+    def _is_netdiag_command(command: str) -> bool:
+        return command.startswith(
+            (
+                "動作：執行網站與網路跨單位舉證診斷",
+                "動作：執行多解析器 DNS 比對與紀錄檢核",
+                t("confirmation.netdiag_action"),
+                t("confirmation.netdiag_dns_action"),
+            )
+        )
+
     def _is_auto_allowed(self, command: str, is_fs_edit: bool) -> bool:
         if command.startswith(("動作：建立 GitHub Pull Request", t("confirmation.pr_action"))):
+            return False
+        if self._is_netdiag_command(command):
             return False
         if is_fs_edit and getattr(self.state, "accept_edits", False):
             return True
@@ -143,10 +233,16 @@ class ConfirmationBridge:
         if answer in ("y", "Y"):
             return True
         if answer == "a":
+            if self._is_netdiag_command(command):
+                self.renderer.message(t("confirmation.netdiag_allowlist_blocked"), "yellow")
+                return True
             self.state.session_approved_commands.add(command.strip())
             self.renderer.message(t("confirmation.session_approved", command=command), "green")
             return True
         if answer == "A":
+            if self._is_netdiag_command(command):
+                self.renderer.message(t("confirmation.netdiag_allowlist_blocked"), "yellow")
+                return True
             prefix = add_command_to_allowlist(command)
             self.renderer._ensure_newline()
             self.renderer.message(t("confirmation.allowlisted", prefix=prefix), "green")
