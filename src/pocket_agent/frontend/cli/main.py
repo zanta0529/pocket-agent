@@ -2,8 +2,9 @@ import asyncio
 import logging
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
+from pocket_agent.extensions.mcp_secrets import ConnPromptResult, SecretPersistResult
 from pocket_agent.frontend.base import FrontendStrategy
 
 log = logging.getLogger("pocket-agent")
@@ -16,9 +17,13 @@ if TYPE_CHECKING:
     from pocket_agent.frontend.cli.state import CliState
 
 
-def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_keys: list[str]) -> dict[str, str]:
+def _prompt_mcp_conn_params(
+    renderer: "CliRenderer",
+    server_name: str,
+    missing_keys: list[str],
+) -> ConnPromptResult:
     """依核心註冊之 ConnParamSpec 規格向使用者收集缺少的 MCP 連線參數。"""
-    from rich.prompt import Prompt
+    from rich.prompt import Confirm, Prompt
 
     from pocket_agent.extensions.mcp import get_conn_param_spec
     from pocket_agent.system.i18n import t
@@ -27,13 +32,17 @@ def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_k
     if status:
         status.stop()
 
+    has_keyring_param = any(get_conn_param_spec(k).supports_keyring for k in missing_keys)
+    header_key = "cli.mcp_conn_prompt_keyring" if has_keyring_param else "cli.mcp_conn_prompt"
+
     renderer._ensure_newline()
     renderer.console.print()
     renderer.message(
-        t("cli.mcp_conn_prompt", server_name=server_name),
+        t(header_key, server_name=server_name),
         "bold cyan",
     )
     collected: dict[str, str] = {}
+    save_keys: set[str] = set()
     try:
         for key in missing_keys:
             spec = get_conn_param_spec(key)
@@ -41,10 +50,161 @@ def _prompt_mcp_conn_params(renderer: "CliRenderer", server_name: str, missing_k
             if spec.default is not None:
                 ask_kwargs["default"] = spec.default
             val = Prompt.ask(f"[bold yellow]  {spec.label}[/bold yellow]", **ask_kwargs)
-            collected[key] = val if spec.is_secret else val.strip()
-        return collected
+            clean_val = val if spec.is_secret else val.strip()
+            collected[key] = clean_val
+            if spec.supports_keyring and clean_val.strip():
+                should_save = Confirm.ask(
+                    f"[bold yellow]  {t('cli.mcp_save_to_keyring_prompt', label=spec.label)}[/bold yellow]",
+                    default=False,
+                    console=renderer.console,
+                )
+                if should_save:
+                    save_keys.add(key)
+        return ConnPromptResult(values=collected, save_to_keyring=frozenset(save_keys))
     except EOFError, KeyboardInterrupt:
-        return collected
+        return ConnPromptResult(values=collected, save_to_keyring=frozenset(save_keys))
+    finally:
+        if status:
+            status.start()
+
+
+def _prompt_mcp_vault_unlock(
+    renderer: "CliRenderer",
+    _server_name: str,
+    unlock_fn: Callable[[str], bool],
+) -> bool:
+    """暫停 Spinner 並引導使用者輸入主密碼以解鎖既有 JWE 加密庫。"""
+    from rich.prompt import Prompt
+
+    from pocket_agent.system.constants import CLI_MAX_AUTH_RETRIES
+    from pocket_agent.system.i18n import t
+
+    status = getattr(renderer, "_active_status", None)
+    if status:
+        status.stop()
+    renderer._ensure_newline()
+    try:
+        renderer.message(t("provider_setup.vault_locked"), "yellow")
+        for _ in range(CLI_MAX_AUTH_RETRIES):
+            pwd = Prompt.ask(
+                t("provider_setup.master_password_prompt"),
+                password=True,
+                console=renderer.console,
+            )
+            if unlock_fn(pwd):
+                renderer.message(t("provider_setup.unlock_success"), "green")
+                return True
+            renderer.message(t("provider_setup.unlock_failed"), "red")
+        return False
+    except EOFError, KeyboardInterrupt:
+        return False
+    finally:
+        if status:
+            status.start()
+
+
+def _prompt_mcp_vault_create(renderer: "CliRenderer", _server_name: str) -> str | None:
+    """暫停 Spinner 並引導使用者建立 JWE 加密庫主密碼（原生 Keyring 不可用時）。"""
+    from rich.prompt import Prompt
+
+    from pocket_agent.system.i18n import t
+
+    status = getattr(renderer, "_active_status", None)
+    if status:
+        status.stop()
+    renderer._ensure_newline()
+    try:
+        renderer.message(t("provider_setup.vault_creating"), "yellow")
+        while True:
+            pwd1 = Prompt.ask(
+                t("provider_setup.set_master_password"),
+                password=True,
+                console=renderer.console,
+            )
+            pwd2 = Prompt.ask(
+                t("provider_setup.confirm_master_password"),
+                password=True,
+                console=renderer.console,
+            )
+            if pwd1 and pwd1 == pwd2:
+                renderer.message(t("provider_setup.vault_created"), "green")
+                return pwd1
+            renderer.message(t("provider_setup.password_mismatch"), "red")
+    except EOFError, KeyboardInterrupt:
+        return None
+    finally:
+        if status:
+            status.start()
+
+
+def _render_mcp_secret_persist(renderer: "CliRenderer", result: SecretPersistResult) -> None:
+    """顯示 MCP 憑證持久化與設定檔回寫結果。"""
+    from pocket_agent.system.constants import SECRET_PLACEHOLDER_KEYRING
+    from pocket_agent.system.i18n import t
+
+    status = getattr(renderer, "_active_status", None)
+    if status:
+        status.stop()
+    renderer._ensure_newline()
+    try:
+        if result.saved and result.placeholder:
+            if not result.yaml_updated:
+                renderer.message(
+                    t(
+                        "cli.mcp_secret_yaml_update_failed",
+                        server_name=result.server_name,
+                        env_key=result.env_key,
+                        placeholder=result.placeholder,
+                    ),
+                    "yellow",
+                )
+            elif result.placeholder == SECRET_PLACEHOLDER_KEYRING:
+                renderer.message(
+                    t(
+                        "cli.mcp_secret_saved_keyring",
+                        server_name=result.server_name,
+                        env_key=result.env_key,
+                        placeholder=result.placeholder,
+                    ),
+                    "green",
+                )
+            else:
+                renderer.message(
+                    t(
+                        "cli.mcp_secret_saved_encrypted",
+                        server_name=result.server_name,
+                        env_key=result.env_key,
+                        placeholder=result.placeholder,
+                    ),
+                    "green",
+                )
+        elif result.reason == "auth_error":
+            renderer.message(
+                t(
+                    "cli.mcp_secret_save_skipped_auth",
+                    server_name=result.server_name,
+                    env_key=result.env_key,
+                ),
+                "yellow",
+            )
+        elif result.reason == "cancelled":
+            renderer.message(
+                t(
+                    "cli.mcp_secret_save_cancelled",
+                    server_name=result.server_name,
+                    env_key=result.env_key,
+                ),
+                "dim",
+            )
+        else:
+            renderer.message(
+                t(
+                    "cli.mcp_secret_save_failed",
+                    server_name=result.server_name,
+                    env_key=result.env_key,
+                ),
+                "yellow",
+            )
     finally:
         if status:
             status.start()
@@ -427,6 +587,11 @@ class CliFrontend(FrontendStrategy):
             mcp.on_prompt_conn = lambda server_name, missing_keys: _prompt_mcp_conn_params(
                 renderer, server_name, missing_keys
             )
+            mcp.on_vault_unlock = lambda server_name, unlock_fn: _prompt_mcp_vault_unlock(
+                renderer, server_name, unlock_fn
+            )
+            mcp.on_vault_create = lambda server_name: _prompt_mcp_vault_create(renderer, server_name)
+            mcp.on_secret_persisted = lambda result: _render_mcp_secret_persist(renderer, result)
 
             tools = list(mcp.list_tools())
             renderer.welcome(state, tools)

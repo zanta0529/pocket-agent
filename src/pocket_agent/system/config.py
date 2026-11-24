@@ -22,6 +22,8 @@ from pocket_agent.system.constants import (
     DEFAULT_SPILLOVER_HEAD_CHARS,
     DEFAULT_SPILLOVER_TAIL_CHARS,
     DEFAULT_TOOL_OUTPUT_CHARS,
+    SECRET_PLACEHOLDER_ENCRYPTED,
+    SECRET_PLACEHOLDER_KEYRING,
 )
 
 log = logging.getLogger("pocket-agent")
@@ -246,8 +248,13 @@ class KeyringConfigProvider(ConfigProvider):
     def __init__(self):
         self.service_name = "pocket-agent"
 
+    @staticmethod
+    def _is_secret_key(key: str) -> bool:
+        lower = key.lower()
+        return "api_key" in lower or "token" in lower
+
     def get(self, key: str) -> Optional[Any]:
-        if "api_key" in key or "token" in key:
+        if self._is_secret_key(key):
             try:
                 import keyring
 
@@ -258,7 +265,7 @@ class KeyringConfigProvider(ConfigProvider):
         return None
 
     def set(self, key: str, value: str) -> bool:
-        if "api_key" in key or "token" in key:
+        if self._is_secret_key(key):
             try:
                 import keyring
 
@@ -266,6 +273,19 @@ class KeyringConfigProvider(ConfigProvider):
                 if isinstance(keyring.get_keyring(), keyring.backends.fail.Keyring):
                     return False
                 keyring.set_password(self.service_name, key, value)
+                return True
+            except Exception:
+                return False
+        return False
+
+    def delete(self, key: str) -> bool:
+        if self._is_secret_key(key):
+            try:
+                import keyring
+
+                if isinstance(keyring.get_keyring(), keyring.backends.fail.Keyring):
+                    return False
+                keyring.delete_password(self.service_name, key)
                 return True
             except Exception:
                 return False
@@ -293,6 +313,8 @@ class EncryptedConfigProvider(ConfigProvider):
         self._cache = {}
         self._is_unlocked = False
         self._cek = None
+        self._salt: Optional[bytes] = None
+        self._kdf_params: tuple[int, int, int] = (2, 65536, 4)
 
     def _derive_key(self, password: str, salt: bytes, t: int, m: int, p: int) -> bytes:
         from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
@@ -343,6 +365,8 @@ class EncryptedConfigProvider(ConfigProvider):
 
             self._cache = json.loads(plaintext.decode("utf-8"))
             self._cek = cek
+            self._salt = salt
+            self._kdf_params = (t, m, p)
             self._is_unlocked = True
             return True
         except Exception as e:
@@ -355,16 +379,19 @@ class EncryptedConfigProvider(ConfigProvider):
 
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-        salt = os.urandom(16)
         iv = os.urandom(12)
 
-        t, m, p = 2, 65536, 4
-
         if password:
+            t, m, p = 2, 65536, 4
+            salt = os.urandom(16)
             self._cek = self._derive_key(password, salt, t, m, p)
-
-        if not self._cek:
+            self._salt = salt
+            self._kdf_params = (t, m, p)
+        elif not self._cek or not self._salt:
             raise RequireMasterPasswordException("建立加密庫需要主密碼")
+        else:
+            salt = self._salt
+            t, m, p = self._kdf_params
 
         header = {
             "alg": "dir",
@@ -402,6 +429,14 @@ class EncryptedConfigProvider(ConfigProvider):
         """此方法僅在已解鎖狀態下能寫入記憶體，實際存檔需呼叫 save_vault"""
         self._cache[key] = value
 
+    def delete(self, key: str) -> bool:
+        """從已解鎖的加密庫移除指定鍵並存檔；未解鎖或鍵不存在時回傳 False。"""
+        if not self._is_unlocked or key not in self._cache:
+            return False
+        self._cache.pop(key, None)
+        self.save_vault()
+        return True
+
 
 class ConfigManager:
     """設定檔管理員 (Facade & Chain of Responsibility)"""
@@ -435,9 +470,9 @@ class ConfigManager:
 
         # 若需要 api_key 卻找不到，進行精準延遲載入判斷
         if "api_key" in key or "token" in key:
-            if val_found == "USE_ENCRYPTED" and not self.encrypted_provider._is_unlocked:
+            if val_found == SECRET_PLACEHOLDER_ENCRYPTED and not self.encrypted_provider._is_unlocked:
                 raise AuthException(f"需要存取 {key}，加密庫已鎖定，請解鎖。")
-            if val_found is None or val_found == "" or val_found == "USE_KEYRING" or val_found == "USE_ENCRYPTED":
+            if val_found in (None, "", SECRET_PLACEHOLDER_KEYRING, SECRET_PLACEHOLDER_ENCRYPTED):
                 raise MissingKeyException(f"找不到 {key}，請先執行設定。")
 
         return val_found
@@ -447,9 +482,9 @@ class ConfigManager:
         if "api_key" in key or "token" in key:
             success = self.keyring_provider.set(key, str(value))
             if success:
-                self.json_provider.set(key, "USE_KEYRING")
+                self.json_provider.set(key, SECRET_PLACEHOLDER_KEYRING)
             else:
-                self.json_provider.set(key, "USE_ENCRYPTED")
+                self.json_provider.set(key, SECRET_PLACEHOLDER_ENCRYPTED)
                 self.encrypted_provider.set(key, str(value))
                 if not self.encrypted_provider._is_unlocked and not self.encrypted_provider._cek:
                     # 尚未建立過密碼，拋出例外請呼叫端提示使用者，然後再由呼叫端自行呼叫 save_vault(password)
@@ -461,6 +496,36 @@ class ConfigManager:
             self.json_provider.set(key, value)
 
         self.json_provider.save()
+
+    def get_secret(self, key: str, *, placeholder: str) -> Optional[str]:
+        """依佔位符號類型讀取獨立機密（不寫入或讀取 config.json）。"""
+        if placeholder == SECRET_PLACEHOLDER_KEYRING:
+            val = self.keyring_provider.get(key)
+            return str(val) if val else None
+        if placeholder == SECRET_PLACEHOLDER_ENCRYPTED:
+            if not self.encrypted_provider._is_unlocked:
+                raise AuthException(f"需要存取 {key}，加密庫已鎖定，請解鎖。")
+            val = self.encrypted_provider.get(key)
+            return str(val) if val else None
+        return None
+
+    def set_secret(self, key: str, value: str) -> str:
+        """寫入獨立機密至 Keyring（失敗時降級 JWE 加密庫），絕不寫入 config.json。"""
+        if self.keyring_provider.set(key, str(value)):
+            return SECRET_PLACEHOLDER_KEYRING
+        if not self.encrypted_provider._is_unlocked:
+            if self.encrypted_provider.path.exists():
+                raise AuthException(f"需要寫入 {key}，加密庫已鎖定，請先解鎖。")
+            raise RequireMasterPasswordException("需要設定主密碼以建立加密庫")
+        self.encrypted_provider.set(key, str(value))
+        self.encrypted_provider.save_vault()
+        return SECRET_PLACEHOLDER_ENCRYPTED
+
+    def delete_secret(self, key: str) -> bool:
+        """從 Keyring 與已解鎖之加密庫移除獨立機密，絕不碰觸 config.json。"""
+        deleted_kr = self.keyring_provider.delete(key)
+        deleted_enc = self.encrypted_provider.delete(key)
+        return deleted_kr or deleted_enc
 
     def reload(self) -> None:
         """重新載入 JSON 檔案"""

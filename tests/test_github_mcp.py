@@ -1028,3 +1028,18 @@ def test_cr006_clear_creds_cache_preserves_shared_client_and_clears_cookies():
         asyncio.run(gh_client.close_shared_client())
         gh_client._SHARED_CLIENT = None
         gh_client._SHARED_CLIENT_LOOP = None
+
+
+def test_github_resolve_token_rejects_and_resolves_placeholders(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "USE_ENCRYPTED")
+    with pytest.raises(ConnAuthError, match="USE_ENCRYPTED"):
+        gh_client.resolve_token()
+
+    monkeypatch.setenv("GITHUB_TOKEN", "USE_KEYRING")
+    with patch("mcp_servers.github.client._try_load_standalone_keyring_token", return_value=""):
+        with pytest.raises(ConnAuthError, match="USE_KEYRING"):
+            gh_client.resolve_token()
+
+    with patch("mcp_servers.github.client._try_load_standalone_keyring_token", return_value="standalone_pat_123"):
+        assert gh_client.resolve_token() == "standalone_pat_123"
+        assert gh_client.CREDS_CACHE.get_secret("GITHUB_TOKEN") == "standalone_pat_123"

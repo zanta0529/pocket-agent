@@ -1,6 +1,14 @@
 {
   "cli": {
     "mcp_conn_prompt": "🔐 [{server_name}] 請補充未設定的遠端連線資訊（僅存於本機記憶體，不會傳送給 AI 模型）：",
+    "mcp_conn_prompt_keyring": "🔐 [{server_name}] 請補充未設定的認證憑證（不會傳送給 AI 模型）：",
+    "mcp_save_to_keyring_prompt": "是否將 {label} 保存至系統 Keyring（同意後將更新 mcp_config.yaml 為佔位符號）？",
+    "mcp_secret_saved_keyring": "✓ [{server_name}] 已將 {env_key} 安全保存至系統 Keyring，並將 mcp_config.yaml 更新為 {placeholder}。",
+    "mcp_secret_saved_encrypted": "✓ [{server_name}] 系統不支援原生 Keyring，已將 {env_key} 保存至 JWE 加密庫並將 mcp_config.yaml 更新為 {placeholder}。",
+    "mcp_secret_yaml_update_failed": "⚠ [{server_name}] 已將 {env_key} 保存至安全憑證庫，但無法自動更新 mcp_config.yaml（可能為複雜 YAML 格式或檔案唯讀）；請手動將其設為 \"{placeholder}\"。",
+    "mcp_secret_save_skipped_auth": "⚠ [{server_name}] {env_key} 驗證失敗（HTTP 401），已取消保存至憑證庫。",
+    "mcp_secret_save_cancelled": "ℹ [{server_name}] 已取消保存 {env_key}，本次僅暫存於記憶體。",
+    "mcp_secret_save_failed": "⚠ [{server_name}] 無法保存 {env_key} 至憑證庫，本次僅暫存於記憶體。",
     "stopping": "⏸ 停止要求已送出，等待進行中的工作收尾…",
     "generating_image": "生圖中（可能需要 1-2 分鐘）…",
     "sensitive_session_warning": "【安全提醒】本工作階段涉及敏感主機診斷，基於資安政策不予持久化落盤。",

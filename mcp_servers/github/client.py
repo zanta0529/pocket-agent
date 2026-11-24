@@ -26,6 +26,11 @@ NETWORK_TIMEOUT_SEC = CONSTANTS.network_timeout_sec
 MAX_REDIRECTS = CONSTANTS.max_redirects
 _MAX_ERROR_DETAIL_CHARS = 800
 _MAX_422_ERROR_ITEMS = 10
+_KEYRING_PLACEHOLDER = "USE_KEYRING"
+_ENCRYPTED_PLACEHOLDER = "USE_ENCRYPTED"
+_SECRET_PLACEHOLDERS = frozenset({_KEYRING_PLACEHOLDER, _ENCRYPTED_PLACEHOLDER})
+_KEYRING_SERVICE = "pocket-agent"
+_KEYRING_ACCOUNT = "mcp.github.github_token"
 
 CREDS_CACHE = CredentialCache(ttl_seconds=600.0)
 AUDIT = AuditLogger("github", redaction_policy=security.GITHUB_REDACTION)
@@ -109,6 +114,17 @@ async def create_http_client() -> AsyncIterator[httpx.AsyncClient]:
     yield client
 
 
+def _try_load_standalone_keyring_token() -> str:
+    """獨立執行模式下嘗試自作業系統原生 Keyring 讀取 GitHub Token。"""
+    try:
+        import keyring
+
+        val = keyring.get_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT)
+        return (val or "").strip()
+    except Exception:
+        return ""
+
+
 def resolve_token(github_token: str = "") -> str:
     """依「動態注入 → 環境變數 → 記憶體快取 → 終端機詢問」順序解析 GITHUB_TOKEN。"""
     raw = github_token.strip().strip("'\"") if github_token else ""
@@ -116,18 +132,30 @@ def resolve_token(github_token: str = "") -> str:
         env_val = os.getenv("GITHUB_TOKEN")
         if not is_empty_or_null(env_val):
             raw = (env_val or "").strip().strip("'\"")
-        else:
-            cached = CREDS_CACHE.get_secret("GITHUB_TOKEN")
-            if not is_empty_or_null(cached):
-                raw = cached
-            else:
-                try:
-                    raw = tty_prompt_secret("請輸入 GitHub Personal Access Token (GITHUB_TOKEN): ").strip().strip("'\"")
-                except ValueError as exc:
-                    msg = "[CONN_AUTH] 缺少 GITHUB_TOKEN 憑證。請於 mcp_config.yaml 的 env 區段設定 GITHUB_TOKEN。"
-                    raise ConnAuthError(msg) from exc
+
+    if raw == _KEYRING_PLACEHOLDER:
+        raw = _try_load_standalone_keyring_token()
+        if is_empty_or_null(raw):
+            clear_creds_cache()
+            raise ConnAuthError("[CONN_AUTH] GITHUB_TOKEN 設為 USE_KEYRING，但系統 Keyring 中找不到對應憑證。")
+    elif raw == _ENCRYPTED_PLACEHOLDER:
+        clear_creds_cache()
+        raise ConnAuthError(
+            "[CONN_AUTH] GITHUB_TOKEN 設為 USE_ENCRYPTED，請透過 PocketAgent 主程式解鎖加密庫並注入憑證。"
+        )
 
     if is_empty_or_null(raw):
+        cached = CREDS_CACHE.get_secret("GITHUB_TOKEN")
+        if not is_empty_or_null(cached):
+            raw = cached
+        else:
+            try:
+                raw = tty_prompt_secret("請輸入 GitHub Personal Access Token (GITHUB_TOKEN): ").strip().strip("'\"")
+            except ValueError as exc:
+                msg = "[CONN_AUTH] 缺少 GITHUB_TOKEN 憑證。請於 mcp_config.yaml 的 env 區段設定 GITHUB_TOKEN。"
+                raise ConnAuthError(msg) from exc
+
+    if is_empty_or_null(raw) or raw in _SECRET_PLACEHOLDERS:
         clear_creds_cache()
         raise ConnAuthError(
             "[CONN_AUTH] 未提供有效的 GITHUB_TOKEN。請於 mcp_config.yaml 的 env 區段設定 GITHUB_TOKEN。"
