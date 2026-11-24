@@ -106,7 +106,7 @@
     "pr_mode": "PR 模式：{mode}",
     "pr_title": "PR 標題：{title}",
     "pr_body_preview": "PR 內文預覽：",
-    "netdiag_action": "動作：執行網站與網路跨單位舉證診斷（唯讀探測，不發送寫入請求）",
+    "netdiag_action": "動作：執行網站與網路診斷（唯讀探測，不發送寫入請求）",
     "netdiag_dns_action": "動作：執行多解析器 DNS 比對與紀錄檢核（唯讀查詢）",
     "netdiag_tool": "工具：{tool_name}",
     "netdiag_target": "目標位址：{target}",
