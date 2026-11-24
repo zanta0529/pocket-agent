@@ -52,8 +52,22 @@ async def do_model_flow(ctx: CommandContext, args: str) -> None:
         if len(parts) == 1:
             from pocket_agent.system.config import config
 
-            provider = config.get("active_provider", "openai")
-            model = parts[0]
+            active_provider = config.get("active_provider", "openai")
+            candidate = parts[0]
+            if candidate in SUPPORTED_PROVIDERS and not (active_provider == "ollama" and candidate == "mistral"):
+                provider = candidate
+                try:
+                    models = fetch_available_models(provider)
+                except Exception:
+                    models = []
+                if not models:
+                    ctx.renderer.message(t("system_cmd.model_fetch_failed"), "yellow")
+                model = await ctx.reader.choose(t("system_cmd.model_choose_name"), models)
+                if not model:
+                    return
+            else:
+                provider = active_provider
+                model = candidate
         elif len(parts) == 2:
             provider, model = parts
         else:

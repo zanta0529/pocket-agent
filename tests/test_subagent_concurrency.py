@@ -544,7 +544,7 @@ def test_jobs_active_view_all_clear_formatting_and_new_session_cleanup(monkeypat
         assert "上網研究 2026 年資安熱門新聞" in llm_list
 
         # 2. 全部取回後：預設 /jobs 不再展開舊清單，且提示切換為 /jobs all 與 /jobs clear
-        await handler.dispatch("/jobs collect")
+        await handler.dispatch("/jobs collect all")
         output.truncate(0)
         output.seek(0)
         await handler.dispatch("/jobs")
@@ -594,5 +594,223 @@ def test_jobs_active_view_all_clear_formatting_and_new_session_cleanup(monkeypat
 
         release_running.set()
         await agent.shutdown(timeout=1.0)
+
+    asyncio.run(_scenario())
+
+
+def test_jobs_show_and_collect_interactive_popup_selection(monkeypatch) -> None:
+    """省略 ID 時，/jobs show 與 /jobs collect 開啟互動式光棒選單選擇工作。"""
+
+    async def _scenario() -> None:
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        async def _done_chat(self_sub, task: str) -> tuple[str, str, str]:
+            return "", f"report: {task}", "0s"
+
+        sub_def = {"name": "researcher", "description": "r", "allowed_tools": ["read_file"], "system_prompt": "SP"}
+        monkeypatch.setattr(
+            "pocket_agent.core.subagents.get_subagent", lambda n: sub_def if n == "researcher" else None
+        )
+        monkeypatch.setattr(Agent, "chat", _done_chat)
+
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="m", provider="openai")
+        state = CliState("openai", "m")
+        output = StringIO()
+        renderer = CliRenderer(Console(file=output, force_terminal=False, no_color=True, width=140))
+        reader = MagicMock()
+        handler = CommandHandler(agent, state, reader, renderer, [])
+
+        await handler.dispatch("/bg researcher 研究文字生圖模型")
+        await handler.dispatch("/bg researcher 研究零知識證明")
+        jobs = agent.list_background_jobs()
+        for j in jobs:
+            await agent.wait_background_job(j.job_id, timeout=1.0)
+
+        # 1. /jobs show 不帶 ID -> 彈出選單並選取第一筆，不寫入 history
+        reader.choose = AsyncMock(side_effect=lambda _label, choices: choices[0])
+        await handler.dispatch("/jobs show")
+        show_choices = reader.choose.call_args[0][1]
+        assert len(show_choices) == 2
+        assert jobs[0].job_id in show_choices[0]
+        assert "研究文字生圖模型" in show_choices[0]
+        assert "report: 研究文字生圖模型" in output.getvalue()
+        assert agent.history == []
+
+        # 2. /jobs show 按 Esc 取消 (choose 回傳 None) -> 安全返回
+        reader.choose = AsyncMock(return_value=None)
+        await handler.dispatch("/jobs show")
+
+        # 3. /jobs collect 不帶 ID -> 含兩筆待取回與「全部取回」選項；先選第一筆
+        reader.choose = AsyncMock(side_effect=lambda _label, choices: choices[0])
+        await handler.dispatch("/jobs collect")
+        collect_choices_1 = reader.choose.call_args[0][1]
+        assert len(collect_choices_1) == 3
+        assert "全部取回" in collect_choices_1[-1]
+        assert jobs[0].collected is True
+        assert jobs[1].collected is False
+        assert state.bg_jobs_done == 1
+
+        # 4. 僅剩 1 筆時再次 /jobs collect -> 不再出現「全部取回」，選中後清空待取回計數
+        reader.choose = AsyncMock(side_effect=lambda _label, choices: choices[0])
+        await handler.dispatch("/jobs collect")
+        collect_choices_2 = reader.choose.call_args[0][1]
+        assert len(collect_choices_2) == 1
+        assert jobs[1].collected is True
+        assert state.bg_jobs_done == 0
+
+    asyncio.run(_scenario())
+
+
+def test_slash_command_arg_completions_jobs_and_other_commands(monkeypatch) -> None:
+    """/jobs 兩階段空白補全、其他斜線指令參數補全，以及 Enter 未高亮直接送出行為。"""
+    from prompt_toolkit.completion import CompleteEvent
+    from prompt_toolkit.document import Document
+
+    from pocket_agent.frontend.cli.input import SlashCommandCompleter, key_bindings
+
+    async def _scenario() -> None:
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+        mock_mcp.get_grouped_tools.return_value = {"sqlite": [{"name": "query"}], "github": [{"name": "get_issue"}]}
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _chat_mock(self_sub, task: str) -> tuple[str, str, str]:
+            if task.startswith("slow"):
+                started.set()
+                await release.wait()
+            return "", f"done: {task}", "0s"
+
+        ro_def = {"name": "researcher", "description": "ro", "allowed_tools": ["read_file"], "system_prompt": "SP"}
+        rw_def = {"name": "coder", "description": "rw", "allowed_tools": ["write_to_file"], "system_prompt": "SP"}
+        monkeypatch.setattr(
+            "pocket_agent.core.subagents.get_subagent",
+            lambda n: {"researcher": ro_def, "coder": rw_def}.get(n),
+        )
+        monkeypatch.setattr("pocket_agent.core.subagents.list_subagents", lambda: [ro_def, rw_def])
+        monkeypatch.setattr(Agent, "chat", _chat_mock)
+
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="m", provider="openai")
+        state = CliState("openai", "m")
+        state.pending_files = ["/tmp/report.pdf", "/tmp/notes.md"]
+        completer = SlashCommandCompleter(state, agent=agent)
+        ev = CompleteEvent()
+
+        def _complete(text: str):
+            return list(completer.get_completions(Document(text, len(text)), ev))
+
+        # 1. /jobs 第一階段
+        stage1 = [c.text for c in _complete("/jobs ")]
+        assert stage1 == ["show", "collect", "all", "clear", "cancel", "list"]
+        assert [c.text for c in _complete("/jobs sh")] == ["show"]
+        assert _complete("/jobs xyz") == []
+
+        # 建立 2 筆已完成 + 1 筆執行中工作
+        j1 = agent.start_background_subagent("researcher", "研究文字生圖")
+        j2 = agent.start_background_subagent("researcher", "研究零知識證明")
+        await agent.wait_background_job(j1.job_id, timeout=1.0)
+        await agent.wait_background_job(j2.job_id, timeout=1.0)
+        j3 = agent.start_background_subagent("researcher", "slow monitor")
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        # 2. /jobs show / collect / cancel 第二階段
+        show_items = _complete("/jobs show ")
+        assert [c.text for c in show_items] == [j1.job_id, j2.job_id, j3.job_id]
+        assert "研究文字生圖" in str(show_items[0].display_meta)
+
+        collect_items = [c.text for c in _complete("/jobs collect ")]
+        assert collect_items == [j1.job_id, j2.job_id, "all"]
+
+        cancel_items = [c.text for c in _complete("/jobs cancel ")]
+        assert cancel_items == [j3.job_id]
+
+        # 3. 其他斜線指令補全
+        assert [c.text for c in _complete("/reasoning ")] == ["auto", "high", "medium", "low", "none"]
+        assert [c.text for c in _complete("/effort h")] == ["high"]
+        assert [c.text for c in _complete("/session ")] == ["list", "load", "save", "delete", "prune"]
+        assert [c.text for c in _complete("/bg ")] == ["researcher"]
+        assert [c.text for c in _complete("/subagent ")] == ["researcher", "coder"]
+        assert [c.text for c in _complete("/attachments ")] == ["clear", "remove"]
+        assert [c.text for c in _complete("/attachments remove ")] == ["1", "2"]
+        assert [c.text for c in _complete("/rm-file ")] == ["1", "2"]
+        assert [c.text for c in _complete("/mcp ")] == ["sqlite", "github"]
+        assert [c.text for c in _complete("/tools ")] == ["sqlite", "github"]
+        assert _complete("/model ") == []
+
+        from pocket_agent.frontend.cli.arg_completers import _DEFAULT_REGISTRY, ArgCompleterStrategy
+
+        assert isinstance(_DEFAULT_REGISTRY.get("jobs"), ArgCompleterStrategy)
+        assert _DEFAULT_REGISTRY.get("reasoning") is _DEFAULT_REGISTRY.get("effort")
+        assert _DEFAULT_REGISTRY.get("mcp") is _DEFAULT_REGISTRY.get("tools")
+
+        # 4. Enter 鍵在參數補全未高亮時直接送出；高亮時套用補全不送出
+        kb = key_bindings(lambda: False, state=state, agent=agent, completer=completer)
+        enter_handler = next(b.handler for b in kb.get_bindings_for_keys(("c-m",)))
+
+        first_comp = _complete("/jobs ")[0]
+        buf_unselected = SimpleNamespace(
+            document=Document("/jobs ", 6),
+            complete_state=SimpleNamespace(current_completion=None, completions=[first_comp]),
+            apply_completion=MagicMock(),
+            validate_and_handle=MagicMock(),
+        )
+        enter_handler(SimpleNamespace(current_buffer=buf_unselected))
+        buf_unselected.apply_completion.assert_not_called()
+        buf_unselected.validate_and_handle.assert_called_once()
+
+        buf_selected = SimpleNamespace(
+            document=Document("/jobs ", 6),
+            complete_state=SimpleNamespace(current_completion=first_comp, completions=[first_comp]),
+            apply_completion=MagicMock(),
+            validate_and_handle=MagicMock(),
+        )
+        enter_handler(SimpleNamespace(current_buffer=buf_selected))
+        buf_selected.apply_completion.assert_called_once_with(first_comp)
+        buf_selected.validate_and_handle.assert_not_called()
+
+        release.set()
+        await agent.shutdown(timeout=1.0)
+
+    asyncio.run(_scenario())
+
+
+def test_model_command_provider_only_opens_model_picker(monkeypatch) -> None:
+    """/model <provider> 應開啟第二段模型光棒選單而非誤將 provider 當成模型名稱。"""
+
+    async def _scenario() -> None:
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="m", provider="openai")
+        state = CliState("openai", "m")
+        output = StringIO()
+        renderer = CliRenderer(Console(file=output, force_terminal=False, no_color=True, width=120))
+        reader = MagicMock()
+        reader.choose = AsyncMock(return_value="openai/gpt-5")
+        handler = CommandHandler(agent, state, reader, renderer, [])
+
+        fetched: list[str] = []
+
+        def _fake_fetch(prov: str) -> list[str]:
+            fetched.append(prov)
+            return ["openai/gpt-5", "anthropic/claude-sonnet-4"]
+
+        switched: list[tuple[str, str]] = []
+
+        async def _fake_switch(_agent, _state, prov: str, model: str, _renderer) -> None:
+            switched.append((prov, model))
+
+        monkeypatch.setattr("pocket_agent.system.auth.fetch_available_models", _fake_fetch)
+        monkeypatch.setattr("pocket_agent.frontend.cli.commands.system.switch_model", _fake_switch)
+
+        await handler.dispatch("/model openrouter")
+        assert fetched == ["openrouter"]
+        assert reader.choose.call_args[0][1] == ["openai/gpt-5", "anthropic/claude-sonnet-4"]
+        assert switched == [("openrouter", "openai/gpt-5")]
 
     asyncio.run(_scenario())
