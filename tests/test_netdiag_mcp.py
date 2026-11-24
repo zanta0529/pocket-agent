@@ -221,7 +221,7 @@ def test_ac_sec_4_tls_never_downgrades_to_http():
     expired_der = _generate_test_cert_der(days_offset=-5, dns_name="expired.example.com")
     cert_info = nd_tls.parse_der_certificate(expired_der)
     assert cert_info.days_remaining < 0
-    assert "expired.example.com" in cert_info.san
+    assert cert_info.san == ("expired.example.com",)
 
     pol = nd_policy.DefaultNetdiagPolicy()
     fake_dns = _FakeDnsAdapter()
