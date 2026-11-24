@@ -131,3 +131,29 @@ jobs:
             --notes "$notes" `
             --latest
           if ($LASTEXITCODE -ne 0) { throw 'Could not publish the portable ZIP release.' }
+
+      - name: Prune old rolling portable releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $keep = 3
+          $currentTag = "rolling-$($env:GITHUB_SHA.Substring(0, 7))"
+          $jq = '.[] | select(.draft == false and (.tag_name | startswith("rolling-"))) | "\(.published_at // .created_at)\t\(.tag_name)"'
+          $lines = gh api --paginate "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" --jq $jq
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning 'Could not list releases for rolling retention cleanup.'
+            exit 0
+          }
+          $sorted = @($lines | Where-Object { $_ -and $_.Contains("`t") }) | Sort-Object -Descending
+          $toDelete = $sorted | Select-Object -Skip $keep
+          foreach ($entry in @($toDelete)) {
+            $oldTag = ($entry -split "`t", 2)[1].Trim()
+            if (-not $oldTag -or -not $oldTag.StartsWith('rolling-') -or $oldTag -eq $currentTag) {
+              continue
+            }
+            Write-Output "Pruning old rolling release: $oldTag"
+            gh release delete "$oldTag" --repo "$env:GITHUB_REPOSITORY" --cleanup-tag --yes
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Failed to delete old rolling release $oldTag."
+            }
+          }
