@@ -1,11 +1,12 @@
 # PocketAgent 🤖
 
-> **語系**：[English](README.md) | [繁體中文](README.zh-TW.md)
-
+[![GitHub 最新發布](https://img.shields.io/badge/release-latest-blue)](https://github.com/zanta0529/pocket-agent/releases/latest)
+[![main 分支 CI 狀態](https://github.com/zanta0529/pocket-agent/actions/workflows/standard-ci.yml/badge.svg?branch=main)](https://github.com/zanta0529/pocket-agent/actions/workflows/standard-ci.yml?query=branch%3Amain)
 [![Python Version](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#系統環境需求)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**語系**：[English](README.md) | [繁體中文](README.zh-TW.md)
 
 ## 📖 專案簡介 (Introduction)
 
@@ -299,6 +300,8 @@ flowchart TB
 - **無縫格式轉換**：透過自然語言指令，AI 即可自動整理專案脈絡，產出格式齊整的 Word 企劃書、PDF 說明文件或 PowerPoint 簡報。
 
 ### 3. 多重代理與擴充性 (Extensibility & Multi-Agent)
+
+[![支援 MCP](https://img.shields.io/badge/MCP-supported-blue)](docs/architecture/mcp-architecture.md)
 
 - **子代理 (Subagents)**：支援在設定中定義多元人設（如架構師、稽核員），複雜任務由主代理自動或透過 `/parallel` 委派處理。
 - **事件鉤子 (Hooks)**：支援在 `before_send`, `after_response`, `before_tool`, `after_tool` 綁定本機 Python 腳本，實現自訂攔截邏輯。

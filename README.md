@@ -1,11 +1,12 @@
 # PocketAgent 🤖
 
-> **Language**: [English](README.md) | [繁體中文](README.zh-TW.md)
-
+[![Latest GitHub Release](https://img.shields.io/badge/release-latest-blue)](https://github.com/zanta0529/pocket-agent/releases/latest)
+[![CI on main](https://github.com/zanta0529/pocket-agent/actions/workflows/standard-ci.yml/badge.svg?branch=main)](https://github.com/zanta0529/pocket-agent/actions/workflows/standard-ci.yml?query=branch%3Amain)
 [![Python Version](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#system-requirements)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**Language**: [English](README.md) | [繁體中文](README.zh-TW.md)
 
 ## 📖 Introduction
 
@@ -300,6 +301,8 @@ flowchart TB
 
 ### 3. Extensibility & Multi-Agent
 
+[![MCP Support](https://img.shields.io/badge/MCP-supported-blue)](docs/architecture/mcp-architecture.md)
+
 - **Subagents**: Define specialized personas (e.g., architect, auditor) and delegate tasks automatically or via `/parallel`.
 - **Hooks**: Attach local Python scripts to `before_send`, `after_response`, `before_tool`, and `after_tool` lifecycle events.
 - **MCP (Model Context Protocol)**: Full support for Stdio, SSE, and Streamable HTTP. You can flexibly toggle which servers load at startup via `enabled: true/false` in `mcp_config.yaml` (defaults to `true` when omitted) without commenting out configurations. Bundled MCP servers include:
@@ -444,6 +447,8 @@ pip install -r requirements-dev.txt
   ```
 
 ### 3. Linting & Formatting
+
+[![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 This project enforces **Ruff** with a **120-character line limit**, UTF-8 encoding, and LF line endings:
 
