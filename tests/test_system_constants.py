@@ -32,6 +32,7 @@ def test_constants_values_and_types():
     assert constants.MAX_CLI_TIMEOUT_SEC == 600
 
     # AI 模型供應商識別常數
+    assert constants.PROVIDER_CEREBRAS == "cerebras"
     assert constants.PROVIDER_GEMINI == "gemini"
     assert constants.PROVIDER_GEMINI_OAUTH == "gemini_oauth"
     assert constants.PROVIDER_GROQ == "groq"

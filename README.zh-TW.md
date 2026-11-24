@@ -11,7 +11,7 @@
 
 **PocketAgent** 是一款具備企業級擴充性與安全性的本機端 Python AI 代理工具，提供極簡、高效且專注於開發者體驗的命令列 (CLI) 介面。
 
-本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API**、**Gemini (Google AI Studio)**（支援 API Key 與 Google OAuth 雙軌登入），並廣泛支援各大具備免費開發者額度的雲端推理平台（包含 **Groq Cloud**、**SambaNova Cloud** 與 **Mistral AI**）。此外，內建強大的本地端大語言模型 (Ollama) 與 **Ollama Cloud** API Key 串接支援，滿足對資料隱私具高度要求的離線開發及雲端混合場景。
+本專案的核心優勢在於採用了 **OAuth PKCE 認證直接串接 ChatGPT 後端 (Codex API)**，這意味著只要您擁有 ChatGPT Plus/Pro 帳號，即可免費運用進階模型與深度的邏輯推理 (Reasoning) 能力，完全不需要申請或消耗 OpenAI API Key 的額外計費餘額。同時，專案也完美相容於 **OpenRouter API**、**Gemini (Google AI Studio)**（支援 API Key 與 Google OAuth 雙軌登入），並廣泛支援各大具備免費開發者額度的雲端推理平台（包含 **Cerebras Cloud**、**Groq Cloud**、**SambaNova Cloud** 與 **Mistral AI**）。此外，內建強大的本地端大語言模型 (Ollama) 與 **Ollama Cloud** API Key 串接支援，滿足對資料隱私具高度要求的離線開發及雲端混合場景。
 
 > ⚠️ **重要免責提醒（Important Disclaimer）**：本工具（含核心代理與所有內建／外掛 MCP 伺服器）具備執行本機指令、讀寫檔案及操作遠端主機與瀏覽器之能力，且 AI 模型輸出具非確定性。使用者須自行審查操作並承擔一切風險，任何非預期行為或衍生損害皆與原作者無關。使用前請務必詳閱文末完整的「免責聲明（Disclaimer）」章節。
 
@@ -146,7 +146,7 @@ run.bat setup       # Windows
 2. **選擇服務供應商 (Provider) 與登入設定**：
    - **ChatGPT Plus/Pro (OpenAI OAuth PKCE)**：【免 API Key】系統將引導開啟瀏覽器，於官方登入頁授權後自動將 Token 回傳至本機 `http://localhost:1455`，直接調用進階模型。
    - **Gemini (Google AI Studio)**：支援 Google OAuth 瀏覽器登入或直接輸入 `GEMINI_API_KEY`。
-   - **雲端推理平台 (Azure OpenAI / AI Foundry / OpenRouter / Groq / SambaNova / Mistral / Ollama Cloud)**：直接輸入對應的 API Key（敏感資訊將自動透過作業系統 Keyring 加密保護）。
+   - **雲端推理平台 (Azure OpenAI / AI Foundry / Cerebras / OpenRouter / Groq / SambaNova / Mistral / Ollama Cloud)**：直接輸入對應的 API Key（敏感資訊將自動透過作業系統 Keyring 加密保護；Cerebras 亦可自訂 Base URL）。
    - **本機端開源模型 (Ollama)**：預設連線 `http://localhost:11434`，離線亦可運行。
    - **通用 OpenAI-Compatible 端點 (Local / Gateway)**：支援 LM Studio、vLLM、llama.cpp 或企業內部 AI Gateway（自訂 Base URL，API Key 選填；URL 須自行包含 `/v1`。若為免驗證的純 Ollama，建議優先使用 **Ollama (Local)** 以自動偵測上下文視窗）。
 3. **設定預設模型 (Model)**：
@@ -182,7 +182,7 @@ run.bat setup       # Windows
 
 #### 🤖 模型與工作階段管理
 
-- `/model`：啟動互動式選單，即時切換服務供應商與模型（支援 `openai`, `gemini`, `openrouter`, `azure`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`, `openai-compatible`）。
+- `/model`：啟動互動式選單，即時切換服務供應商與模型（支援 `openai`, `gemini`, `openrouter`, `azure`, `cerebras`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`, `openai-compatible`）。
 - `/reasoning [auto|high|medium|low|none]` (或 `/effort`)：即時調整 LLM 推理強度（預設 `auto` 交由模型／供應商決定；不帶參數時開啟互動選單，目前狀態同步顯示於底部狀態列）。
 - `/session`：啟動歷史對話光棒管理選單，支援分頁檢視、載入與刪除。
 - `/prune [<天數> | --keep <筆數>]` (或 `/session prune`)：手動清理過期或過多的歷史對話（預設清理超過 30 天或僅保留最近 20 筆，永遠保護進行中的對話並須二次確認）。
@@ -240,8 +240,8 @@ flowchart TB
     end
 
     subgraph Engines["🔌 LLM 引擎層（轉接器模式）"]
-        EngineAdapters["<b>EngineFactory 與轉接器</b><br/>OpenAI · OpenRouter · Ollama · Standard"]
-        LLMProviders["<b>模型供應商</b><br/>ChatGPT OAuth · Azure · Gemini · Groq<br/>Mistral · SambaNova · Ollama · 自訂 v1"]
+        EngineAdapters["<b>EngineFactory 與轉接器</b><br/>OpenAI · OpenRouter · Cerebras · Ollama · Standard"]
+        LLMProviders["<b>模型供應商</b><br/>ChatGPT OAuth · Azure · Cerebras · Gemini · Groq<br/>Mistral · SambaNova · Ollama · 自訂 v1"]
         EngineAdapters --> LLMProviders
     end
 

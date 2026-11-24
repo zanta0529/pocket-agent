@@ -145,6 +145,15 @@ class StandardChatCompletionsEngine(BaseEngine):
 
         return messages
 
+    @staticmethod
+    def _extract_reasoning_delta(delta: Any) -> str | None:
+        """從串流 delta 提取推理文字，相容 reasoning_content 與 reasoning 欄位。"""
+        for attr in ("reasoning_content", "reasoning"):
+            val = getattr(delta, attr, None)
+            if isinstance(val, str) and val:
+                return val
+        return None
+
     def _build_extra_body(self, reasoning_param: Any) -> dict[str, Any] | None:
         """供子類別覆寫以注入供應商專屬之 extra_body 參數。"""
         return None
@@ -225,8 +234,9 @@ class StandardChatCompletionsEngine(BaseEngine):
                         )
                     tool_calls_buffer.clear()
 
-                if delta and getattr(delta, "reasoning_content", None):
-                    yield EventThinking(delta.reasoning_content)
+                reasoning_delta = self._extract_reasoning_delta(delta) if delta else None
+                if reasoning_delta:
+                    yield EventThinking(reasoning_delta)
 
                 if delta and delta.content:
                     for evt in think_parser.feed(delta.content):
