@@ -42,14 +42,42 @@ classDiagram
         +context_window() int?
         -支援 cerebras
         -處理 reasoning_effort 與 parsed 推理串流
-        -探測 public models 視窗與 429 重置提示
+        -探測 public models 視窗 (max_context_length)
+    }
+
+    class GroqEngine {
+        +stream_chat()
+        +context_window() int?
+        -支援 groq (含 stream_options 用量)
+        -處理 reasoning_effort 與 parsed 推理串流
+        -探測 /models 視窗 (context_window)
+    }
+
+    class AzureEngine {
+        +stream_chat()
+        -支援 azure (含 stream_options 用量)
+        -傳遞 low / medium / high 推理強度
+    }
+
+    class MistralEngine {
+        +stream_chat()
+        +context_window() int?
+        -支援 mistral
+        -探測 /models 視窗 (max_context_length)
+    }
+
+    class SambaNovaEngine {
+        +stream_chat()
+        -支援 sambanova (含 stream_options 用量)
+        -傳遞 low / medium / high 推理強度
     }
 
     class StandardChatCompletionsEngine {
         +stream_chat()
         +context_window() int?
-        -支援 gemini / gemini_oauth / groq / mistral / sambanova / azure / openai-compatible
-        -統一封裝標準 Chat Completions 協定與工具格式
+        +parse_api_error() str?
+        -支援 gemini / gemini_oauth / openai-compatible
+        -共用 delta.reasoning、ThinkTag 狀態機、429 標頭與視窗探測基底
     }
 
     class EngineFactory {
@@ -61,6 +89,10 @@ classDiagram
     BaseEngine <|-- OllamaChatEngine
     BaseEngine <|-- StandardChatCompletionsEngine
     StandardChatCompletionsEngine <|-- CerebrasEngine
+    StandardChatCompletionsEngine <|-- GroqEngine
+    StandardChatCompletionsEngine <|-- AzureEngine
+    StandardChatCompletionsEngine <|-- MistralEngine
+    StandardChatCompletionsEngine <|-- SambaNovaEngine
     EngineFactory --> BaseEngine: 根據 provider 建立實體
 ```
 
@@ -91,4 +123,4 @@ flowchart TD
 
 1. **無縫切換**：使用者可透過 `/model` 指令即時切換雲端（OpenAI / OpenRouter / Cerebras / Gemini / Groq / Mistral / SambaNova / Azure / Ollama Cloud）或本機（Ollama / OpenAI-Compatible）模型，上層渲染與工具呼叫邏輯完全不需修改。
 2. **平滑相容**：無論底層是否原生支援分離式 Reasoning 欄位，轉接器皆統一收斂為 `EventThinking` 事件，提供一致的使用者體驗。
-3. **職責分離與擴充性**：底層連線與憑證由 `Provider` 策略負責，協定與串流解析由 `Engine` 負責。新增相容 Chat Completions 的服務只需新增 `Provider` 並註冊於 `ENGINE_MAP`；若遇特殊協定，亦只需實作新的 `BaseEngine` 子類別即可。
+3. **職責分離與擴充性**：底層連線與憑證由 `Provider` 策略負責，協定與串流解析由 `Engine` 負責。常見的 HTTP 429 限流標頭解析（`BaseEngine.parse_rate_limit_headers`）、被動回應標頭額度快照（`supports_header_quota`／`rate_limits.py`）與 `/models` 視窗探測（`StandardChatCompletionsEngine._fetch_context_window_from_models`）已集中於基底類別，各雲端供應商僅透過薄子類別宣告差異參數，新增標準相容服務只需實作 `Provider`（必要時加上薄 `Engine` 子類別）並註冊於 `ENGINE_MAP` 即可。

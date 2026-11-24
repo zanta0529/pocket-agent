@@ -1,5 +1,8 @@
+import inspect
 import logging
+import time
 from typing import Any, AsyncGenerator, Callable, Optional
+from urllib.parse import urlparse
 
 from pocket_agent.engines.base import (
     BaseEngine,
@@ -9,8 +12,10 @@ from pocket_agent.engines.base import (
     EventToolCallDone,
     EventToolCallStart,
     EventUsage,
+    QuotaInfo,
     usage_field,
 )
+from pocket_agent.engines.rate_limits import format_rate_limit_quota
 
 log = logging.getLogger("pocket-agent")
 
@@ -154,8 +159,92 @@ class StandardChatCompletionsEngine(BaseEngine):
                 return val
         return None
 
+    @staticmethod
+    def _should_use_raw_response(completions: Any) -> bool:
+        """僅在真實 OpenAI SDK 或明確提供非同步 with_raw_response.create 時啟用標頭攔截。"""
+        raw_api = getattr(completions, "with_raw_response", None)
+        raw_create = getattr(raw_api, "create", None)
+        if raw_create is None:
+            return False
+        if inspect.iscoroutinefunction(raw_create):
+            return True
+        if inspect.iscoroutinefunction(getattr(raw_create, "__call__", None)):
+            return True
+        return type(completions).__module__.startswith("openai.")
+
+    async def get_quota(self) -> QuotaInfo:
+        """優先回傳最近一次對話回應標頭的即時限流快照。"""
+        from pocket_agent.system.i18n import t
+
+        snapshot = self.get_cached_rate_limit_snapshot()
+        if snapshot is not None:
+            return format_rate_limit_quota(snapshot)
+        if self.supports_header_quota:
+            return QuotaInfo(is_supported=False, message=t("quota.header_quota_pending"))
+        return await super().get_quota()
+
     def _build_extra_body(self, reasoning_param: Any) -> dict[str, Any] | None:
         """供子類別覆寫以注入供應商專屬之 extra_body 參數。"""
+        return None
+
+    def parse_api_error(self, exc: Exception) -> str | None:
+        """解析 HTTP 429 回應標頭中的 retry-after 與 x-ratelimit-reset* 重置提示。"""
+        return self.parse_rate_limit_headers(exc)
+
+    def _models_endpoint_url(self, default_base_url: str, *, suffix: str = "/models") -> str:
+        """依 client.base_url 推算模型清單端點 URL，無有效位址時回退至預設端點。"""
+        raw = str(getattr(self.client, "base_url", "") or "").strip().rstrip("/")
+        parsed = urlparse(raw)
+        base = raw if (parsed.scheme in ("http", "https") and parsed.netloc) else default_base_url.rstrip("/")
+        return f"{base}{suffix}"
+
+    async def _fetch_context_window_from_models(
+        self,
+        url: str,
+        *,
+        field_paths: tuple[tuple[str, ...], ...],
+        use_auth: bool = True,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float = 10.0,
+    ) -> int | None:
+        """查詢 OpenAI 相容 /models 端點並依欄位路徑萃取目前模型的 context 視窗大小。"""
+        headers: dict[str, str] = {}
+        if use_auth:
+            api_key = getattr(self.client, "api_key", None)
+            if isinstance(api_key, str) and api_key.strip():
+                headers["Authorization"] = f"Bearer {api_key.strip()}"
+        if extra_headers:
+            headers.update(extra_headers)
+
+        try:
+            if headers:
+                resp = await self._http_get(url, headers=headers, timeout=timeout)
+            else:
+                resp = await self._http_get(url, timeout=timeout)
+            if resp.status_code != 200:
+                return None
+            payload = resp.json()
+            items = payload.get("data", payload.get("models", [])) if isinstance(payload, dict) else []
+            if not isinstance(items, list):
+                return None
+
+            for item in items:
+                if not isinstance(item, dict) or item.get("id") != self.model:
+                    continue
+                for path in field_paths:
+                    cur: Any = item
+                    for part in path:
+                        if isinstance(cur, dict):
+                            cur = cur.get(part)
+                        else:
+                            cur = None
+                            break
+                    if isinstance(cur, int) and not isinstance(cur, bool) and cur > 0:
+                        key = self._cache_key()
+                        self._context_window_cache[key] = (cur, time.time() + 3600)
+                        return cur
+        except Exception as e:
+            log.debug("查詢 %s (%s) context_window 失敗: %s", self.provider_name or type(self).__name__, url, e)
         return None
 
     async def stream_chat(
@@ -188,8 +277,18 @@ class StandardChatCompletionsEngine(BaseEngine):
             create_kwargs["extra_body"] = extra_body
 
         try:
-            stream = await self.client.chat.completions.create(**create_kwargs)
+            completions = self.client.chat.completions
+            if self._should_use_raw_response(completions):
+                raw_resp = await completions.with_raw_response.create(**create_kwargs)
+                self.record_rate_limit_headers(getattr(raw_resp, "headers", None))
+                parsed_stream = raw_resp.parse()
+                stream = await parsed_stream if inspect.isawaitable(parsed_stream) else parsed_stream
+            else:
+                stream = await completions.create(**create_kwargs)
         except Exception as e:
+            resp_headers = getattr(getattr(e, "response", None), "headers", None)
+            if resp_headers is not None:
+                self.record_rate_limit_headers(resp_headers)
             log.info(f"Standard chat completion failed: {e}")
             raise
 
