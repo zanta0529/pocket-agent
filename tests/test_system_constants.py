@@ -30,6 +30,10 @@ def test_constants_values_and_types():
     assert constants.DEFAULT_REPO_MAP_BUDGET_TOKENS == 1024
     assert constants.DEFAULT_CLI_TIMEOUT_SEC == 60
     assert constants.MAX_CLI_TIMEOUT_SEC == 600
+    assert constants.DEFAULT_MAX_PARALLEL_SUBAGENTS == 3
+    assert constants.DEFAULT_MAX_BACKGROUND_SUBAGENTS == 3
+    assert constants.DEFAULT_MAX_BACKGROUND_JOB_HISTORY == 20
+    assert constants.DEFAULT_BG_CHECK_MAX_WAIT_SEC == 30
 
     # AI 模型供應商識別常數
     assert constants.PROVIDER_CEREBRAS == "cerebras"

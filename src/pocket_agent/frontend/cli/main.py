@@ -377,10 +377,18 @@ async def conversation(
         renderer._stop_status()
         renderer.message(t("cli.stopping"), "yellow")
 
+    from pocket_agent.core.subagents import BackgroundSubagentManager
+
+    def _sync_bg_state() -> None:
+        bg_mgr = getattr(agent, "background_jobs", None)
+        if isinstance(bg_mgr, BackgroundSubagentManager):
+            state.bg_jobs_running, state.bg_jobs_done = bg_mgr.counts()
+
     handler = CommandHandler(agent, state, reader, renderer, tools)
     agent.on_stream = renderer.event
     last_sigint_time = 0.0
     while True:
+        _sync_bg_state()
         try:
             raw = await reader.read(default=state.last_failed_input)
         except EOFError:
@@ -576,6 +584,17 @@ class CliFrontend(FrontendStrategy):
                 client=client, mcp=mcp, model=state.model, system_prompt=system_prompt, provider=state.provider
             )
             state.reasoning_effort = getattr(agent, "reasoning_effort", "auto")
+
+            from pocket_agent.core.subagents import BackgroundSubagentManager
+
+            bg_mgr = getattr(agent, "background_jobs", None)
+            if isinstance(bg_mgr, BackgroundSubagentManager):
+
+                def _on_bg_state_change() -> None:
+                    state.bg_jobs_running, state.bg_jobs_done = bg_mgr.counts()
+
+                bg_mgr.on_state_change = _on_bg_state_change
+                _on_bg_state_change()
 
             # F3：讓 renderer 能取得 model 名稱顯示在標頭
             renderer._state = state

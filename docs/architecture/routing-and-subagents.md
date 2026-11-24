@@ -51,3 +51,11 @@ flowchart TD
 - **進度串流轉發 (Stream Forwarding)**：子代理的思考過程與工具呼叫會加上專屬前綴（如 `[researcher]`）即時串流至終端機，兼顧隔離與可觀測性。
 - **安全防失控邊界**：子代理執行時不會觸發全域 Hooks，亦禁止無限遞迴再開子代理；任務結束後僅回傳摘要成果，維持主會話上下文乾淨。
 - **權限確認同步**：CLI 端透過 `ConfirmationBridge` 統一橋接確認流程，啟用 `Accept-edits` 時會同步套用至主代理與所有 `active_subagents`。
+
+---
+
+## 4. 平行節流與背景唯讀子代理多工
+
+- **平行子代理並發與標籤隔離**：當透過 `/parallel`、`run_subagents_parallel` 或同輪多筆唯讀 `run_subagent` 同時派發任務時，系統以 `DEFAULT_MAX_PARALLEL_SUBAGENTS`（預設 3）進行並發節流，並為同名子代理自動加上 `#1`、`#2` 標籤以正確更新 `MultiStatus` 狀態列；平行批次期間停用互動式 `ask_question` 以避免搶佔終端機輸入。
+- **非阻塞背景子代理（`/bg` 與 `/jobs`）**：使用者可透過 `/bg <name> <task>` 或主代理 LLM 呼叫 `start_background_subagent`／`check_background_subagent`／`cancel_background_subagent`，於背景事件迴圈非同步執行研究任務而不阻塞主對話。
+- **背景安全不變量**：背景子代理強制執行唯讀免確認工具白名單（排除檔案寫入、Shell、`ask_question` 與有狀態 MCP 工具）、關閉 `accept_edits` 與 `on_confirm`，並於獨立 `CancellationScope` 中執行；前景按下 `Ctrl+C` 不會誤殺背景工作，僅於 `/jobs cancel` 或 `Agent.shutdown()` 時取消並收斂。

@@ -13,10 +13,16 @@ from pathlib import Path
 from typing import Any
 
 from pocket_agent.core.cancellation import run_sync
-from pocket_agent.core.subagents import get_subagent, is_subagent_tool
+from pocket_agent.core.subagents import (
+    build_subagent_labels,
+    get_subagent,
+    is_background_subagent_tool,
+    is_subagent_tool,
+)
 from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.extensions.skills import call_skill_tool, is_skill_tool
 from pocket_agent.system.constants import (
+    DEFAULT_MAX_PARALLEL_SUBAGENTS,
     TOOL_NOT_FOUND_PREFIX,
     TOOL_OVERWRITE_REQUIRED_PREFIX,
     TOOL_TARGET_NOT_FOUND_PREFIX,
@@ -81,6 +87,8 @@ class ToolExecutionResult:
 class ToolHandler(ABC):
     """工具派發轉接器介面。"""
 
+    allows_dynamic_parallel_safe: bool = False
+
     @abstractmethod
     def matches(self, name: str) -> bool:
         """判斷此 Handler 是否負責處理指定名稱的工具。"""
@@ -111,7 +119,8 @@ class SkillToolHandler(ToolHandler):
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
         fn = _resolve_callable("call_skill_tool", call_skill_tool)
-        return ToolExecutionResult(output=fn(name, args, agent.workspace_dirs))
+        output = await run_sync(fn, name, args, agent.workspace_dirs)
+        return ToolExecutionResult(output=output)
 
 
 class ParallelSubagentsToolHandler(ToolHandler):
@@ -124,8 +133,17 @@ class ParallelSubagentsToolHandler(ToolHandler):
         tasks = args.get("tasks", [])
         if not tasks:
             return ToolExecutionResult(output="[ERROR] 未提供任何子代理任務。")
-        coros = [agent._run_subagent(t) for t in tasks]
-        results = await asyncio.gather(*coros, return_exceptions=True)
+        labels = build_subagent_labels(tasks)
+        sem = asyncio.Semaphore(DEFAULT_MAX_PARALLEL_SUBAGENTS)
+        agent._emit("parallel_subagents_start", {"count": len(tasks), "labels": labels})
+        coros = [
+            agent._run_subagent(t, display_label=label, semaphore=sem, non_interactive=True)
+            for t, label in zip(tasks, labels)
+        ]
+        try:
+            results = await asyncio.gather(*coros, return_exceptions=True)
+        finally:
+            agent._emit("parallel_subagents_done", {})
 
         combined = []
         require_save_prompt = False
@@ -155,6 +173,12 @@ class AskQuestionToolHandler(ToolHandler):
         return name == "ask_question"
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
+        if getattr(agent, "_non_interactive", False):
+            return ToolExecutionResult(
+                output=(
+                    "[ERROR] 背景或平行子代理不可呼叫 ask_question 互動提問，請直接依現有資訊完成分析或回報資料缺口。"
+                )
+            )
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
 
@@ -176,16 +200,111 @@ class AskQuestionToolHandler(ToolHandler):
 class SubagentToolHandler(ToolHandler):
     """委派單一子代理執行任務。"""
 
+    allows_dynamic_parallel_safe: bool = True
+
     def matches(self, name: str) -> bool:
         return is_subagent_tool(name)
 
-    async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
-        result = await agent._run_subagent(args)
-        result = wrap_external_content(result)
-        sa_def = get_subagent(args.get("name", ""))
+    def is_parallel_safe(self, name: str, args: dict, agent: Any) -> bool:
+        sub_name = str(args.get("name") or "").strip()
+        return bool(sub_name and hasattr(agent, "is_readonly_subagent") and agent.is_readonly_subagent(sub_name))
+
+    @staticmethod
+    def _finalize_subagent_output(raw_result: str, sub_name: str, agent: Any) -> ToolExecutionResult:
+        result = wrap_external_content(raw_result)
+        sa_def = get_subagent(sub_name)
         if sa_def and sa_def.get("post_actions", {}).get("require_save_prompt"):
             result += agent.build_save_report_prompt(is_parallel=False)
         return ToolExecutionResult(output=result)
+
+    async def execute_parallel(
+        self,
+        args: dict,
+        agent: Any,
+        *,
+        display_label: str,
+        semaphore: asyncio.Semaphore,
+    ) -> ToolExecutionResult:
+        raw_result = await agent._run_subagent(
+            args,
+            display_label=display_label,
+            semaphore=semaphore,
+            non_interactive=True,
+        )
+        return self._finalize_subagent_output(raw_result, str(args.get("name") or ""), agent)
+
+    async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
+        raw_result = await agent._run_subagent(args)
+        return self._finalize_subagent_output(raw_result, str(args.get("name") or ""), agent)
+
+
+class BackgroundSubagentToolHandler(ToolHandler):
+    """非同步派發、查詢／取回與取消唯讀背景子代理。"""
+
+    def matches(self, name: str) -> bool:
+        return is_background_subagent_tool(name)
+
+    async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
+        if name == "start_background_subagent":
+            sub_name = str(args.get("name") or "").strip()
+            task = str(args.get("task") or "").strip()
+            job = agent.start_background_subagent(sub_name, task)
+            return ToolExecutionResult(
+                output=(
+                    f"已於背景啟動唯讀子代理 `{job.subagent_name}`（job_id: `{job.job_id}`）。\n"
+                    f"可先處理其他工作或回覆使用者，稍後呼叫 `check_background_subagent` 查詢進度或取回結果。"
+                )
+            )
+
+        if name == "cancel_background_subagent":
+            job_id = str(args.get("job_id") or "").strip()
+            if not job_id:
+                return ToolExecutionResult(output="[ERROR] 請提供要取消的 job_id。")
+            ok = await agent.cancel_background_job(job_id)
+            if ok:
+                return ToolExecutionResult(output=f"已取消背景子代理工作 `{job_id}`。")
+            return ToolExecutionResult(output=f"[ERROR] 找不到執行中的背景工作 `{job_id}`（可能已完成或不存在）。")
+
+        # check_background_subagent
+        job_id = str(args.get("job_id") or "").strip()
+        if not job_id:
+            jobs = agent.list_background_jobs()
+            if not jobs:
+                return ToolExecutionResult(output="目前沒有任何背景子代理工作。")
+            lines = ["目前背景子代理工作清單："]
+            for j in jobs:
+                progress = f" | 進度: {j.last_progress}" if j.last_progress else ""
+                lines.append(
+                    f"- `{j.job_id}` [{j.subagent_name}] 狀態: {j.status} ({j.elapsed_seconds():.1f}s){progress}"
+                )
+            return ToolExecutionResult(output="\n".join(lines))
+
+        raw_wait = args.get("wait_seconds", 0)
+        try:
+            wait_sec = int(raw_wait) if raw_wait is not None else 0
+        except TypeError, ValueError:
+            wait_sec = 0
+
+        job = await agent.wait_background_job(job_id, timeout=float(wait_sec))
+        if job.status == "running":
+            progress = f"（目前進度：{job.last_progress}）" if job.last_progress else ""
+            return ToolExecutionResult(
+                output=(
+                    f"背景工作 `{job.job_id}`（{job.subagent_name}）仍在執行中，"
+                    f"已耗時 {job.elapsed_seconds():.1f}s{progress}。"
+                )
+            )
+
+        job = agent.collect_background_job(job_id, inject_history=False)
+        if job.status == "completed":
+            output = wrap_external_content(f"【子代理 {job.subagent_name} 背景結果 ({job.job_id})】\n{job.result}")
+            if job.require_save_prompt:
+                output += agent.build_save_report_prompt(is_parallel=False)
+            return ToolExecutionResult(output=output)
+        if job.status == "failed":
+            return ToolExecutionResult(output=f"[ERROR] 背景工作 `{job.job_id}` 執行失敗：\n{job.error}")
+        extra = f"\n{job.result}" if job.result else ""
+        return ToolExecutionResult(output=f"背景工作 `{job.job_id}`（{job.subagent_name}）已取消。{extra}")
 
 
 class ShellToolHandler(ToolHandler):
@@ -204,11 +323,11 @@ class ShellToolHandler(ToolHandler):
         return "[操作已由使用者取消中斷，Shell 指令未執行或已終止]"
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
-        before_snap = agent.activity.take_workspace_snapshot(agent.workspace_dirs)
+        before_snap = await run_sync(agent.activity.take_workspace_snapshot, agent.workspace_dirs)
         fn = _resolve_callable("call_shell_tool", call_shell_tool)
         result = await run_sync(fn, name, args, agent.on_confirm)
         if not isinstance(result, str) or not result.startswith(("[使用者拒絕", "[操作已由使用者取消", "[ERROR]")):
-            agent.activity.apply_workspace_diff(before_snap, agent.workspace_dirs)
+            await run_sync(agent.activity.apply_workspace_diff, before_snap, agent.workspace_dirs)
         return ToolExecutionResult(output=result)
 
 
@@ -390,6 +509,7 @@ default_tool_registry = ToolRegistry(
         ParallelSubagentsToolHandler(),
         AskQuestionToolHandler(),
         SubagentToolHandler(),
+        BackgroundSubagentToolHandler(),
         ShellToolHandler(),
         ScratchToolHandler(),
         FsToolHandler(),

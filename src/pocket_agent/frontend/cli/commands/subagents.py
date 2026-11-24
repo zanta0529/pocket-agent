@@ -150,9 +150,10 @@ class ParallelCommand(CliCommand):
         ctx.renderer.user(display_text)
 
         try:
+            from pocket_agent.core.subagents import build_subagent_labels
             from pocket_agent.frontend.cli.render import MultiStatus
 
-            task_names = [task_item["name"] for task_item in tasks]
+            task_names = build_subagent_labels(tasks)
             status = MultiStatus(
                 t("subagent_cmd.parallel_running", count=len(tasks)),
                 task_names,
@@ -198,4 +199,132 @@ class ParallelCommand(CliCommand):
             ctx.state.last_failed_input = display_text
             ctx.renderer.message(t("cli.stopped"), "yellow")
 
+        return CommandResult("handled")
+
+
+def _sync_bg_counts(ctx: CommandContext) -> None:
+    if callable(getattr(type(ctx.agent), "background_job_counts", None)):
+        counts = ctx.agent.background_job_counts()
+        if isinstance(counts, tuple) and len(counts) == 2:
+            ctx.state.bg_jobs_running, ctx.state.bg_jobs_done = counts
+
+
+class BgCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        from pocket_agent.core.subagents import list_subagents
+
+        if not args.strip():
+            sa_list = list_subagents()
+            if not sa_list:
+                raise ValueError(t("subagent_cmd.no_subagents"))
+            choices = [sa["name"] for sa in sa_list]
+            subagent_name = await ctx.reader.choose(t("subagent_cmd.choose_subagent"), choices)
+            if not subagent_name:
+                return CommandResult("handled")
+            ctx.renderer.console.print(f"[bold cyan]{t('subagent_cmd.selected_subagent')}[/bold cyan] {subagent_name}")
+            task = await ctx.reader.read(message=t("subagent_cmd.task_prompt"))
+            if not task or not task.strip():
+                return CommandResult("handled")
+        else:
+            parts = args.strip().split(maxsplit=1)
+            subagent_name = parts[0]
+            task = parts[1] if len(parts) > 1 else t("subagent_cmd.default_task")
+
+        job = ctx.agent.start_background_subagent(subagent_name, task)
+        _sync_bg_counts(ctx)
+        ctx.renderer.message(
+            t("subagent_cmd.bg_started", job_id=job.job_id, name=job.subagent_name),
+            "green",
+        )
+        return CommandResult("handled")
+
+
+class JobsCommand(CliCommand):
+    async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
+        raw = args.strip()
+        if not raw or raw == "list":
+            jobs = ctx.agent.list_background_jobs()
+            if not jobs:
+                ctx.renderer.message(t("subagent_cmd.jobs_empty"))
+                return CommandResult("handled")
+            ctx.renderer.message(t("subagent_cmd.jobs_header", count=len(jobs)), "bold cyan")
+            for job in jobs:
+                prog = f" · {job.last_progress}" if job.last_progress else ""
+                collected_tag = t("subagent_cmd.jobs_collected_tag") if job.collected else ""
+                ctx.renderer.message(
+                    f"  {job.job_id} [{job.subagent_name}] {job.status} ({job.elapsed_seconds():.1f}s)"
+                    f"{collected_tag}{prog}"
+                )
+            ctx.renderer.message(t("subagent_cmd.jobs_hint"), "dim")
+            return CommandResult("handled")
+
+        parts = raw.split(maxsplit=1)
+        sub_cmd = parts[0].lower()
+        target = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub_cmd == "cancel":
+            if not target:
+                raise ValueError(t("subagent_cmd.jobs_cancel_usage"))
+            if target.lower() == "all":
+                cancelled = await ctx.agent.cancel_all_background_jobs()
+                _sync_bg_counts(ctx)
+                ctx.renderer.message(t("subagent_cmd.jobs_cancelled_all", count=cancelled), "yellow")
+                return CommandResult("handled")
+            ok = await ctx.agent.cancel_background_job(target)
+            _sync_bg_counts(ctx)
+            if ok:
+                ctx.renderer.message(t("subagent_cmd.jobs_cancelled", job_id=target), "yellow")
+            else:
+                ctx.renderer.message(t("subagent_cmd.jobs_not_running", job_id=target), "yellow")
+            return CommandResult("handled")
+
+        if sub_cmd == "collect":
+            if target:
+                job = ctx.agent.get_background_job(target)
+                if job is None:
+                    raise ValueError(t("subagent_cmd.jobs_not_found", job_id=target))
+                if job.status == "running":
+                    ctx.renderer.message(t("subagent_cmd.jobs_still_running", job_id=target), "yellow")
+                    return CommandResult("handled")
+                collected = ctx.agent.collect_background_job(target, inject_history=True)
+                _sync_bg_counts(ctx)
+                body = collected.result if collected.status == "completed" else (collected.error or collected.result)
+                ctx.renderer.reply(
+                    body or t("subagent_cmd.jobs_no_output"), collected.elapsed_seconds(), 0, streamed=False
+                )
+                return CommandResult("handled")
+
+            ready_jobs = [j for j in ctx.agent.list_background_jobs() if j.status != "running" and not j.collected]
+            if not ready_jobs:
+                ctx.renderer.message(t("subagent_cmd.jobs_none_ready"))
+                return CommandResult("handled")
+            for r_job in ready_jobs:
+                collected = ctx.agent.collect_background_job(r_job.job_id, inject_history=True)
+                body = collected.result if collected.status == "completed" else (collected.error or collected.result)
+                ctx.renderer.reply(
+                    body or t("subagent_cmd.jobs_no_output"), collected.elapsed_seconds(), 0, streamed=False
+                )
+            _sync_bg_counts(ctx)
+            return CommandResult("handled")
+
+        job_id = target if sub_cmd == "show" else raw
+        if sub_cmd == "show" and not job_id:
+            raise ValueError(t("subagent_cmd.jobs_usage"))
+        job = ctx.agent.get_background_job(job_id)
+        if job is None:
+            raise ValueError(t("subagent_cmd.jobs_not_found", job_id=job_id))
+
+        ctx.renderer.message(
+            f"{job.job_id} [{job.subagent_name}] {job.status} ({job.elapsed_seconds():.1f}s)",
+            "bold cyan",
+        )
+        if job.status == "running":
+            if job.last_progress:
+                ctx.renderer.message(f"  {job.last_progress}")
+            return CommandResult("handled")
+        body = job.result if job.status == "completed" else (job.error or job.result)
+        if body:
+            ctx.renderer.reply(body, job.elapsed_seconds(), 0, streamed=False)
+        else:
+            ctx.renderer.message(t("subagent_cmd.jobs_no_output"))
         return CommandResult("handled")

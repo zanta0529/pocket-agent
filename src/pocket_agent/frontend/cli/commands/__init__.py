@@ -26,7 +26,13 @@ from pocket_agent.frontend.cli.commands.session import (
     RenameCommand,
     SessionCommand,
 )
-from pocket_agent.frontend.cli.commands.subagents import AgentsCommand, ParallelCommand, SubagentCommand
+from pocket_agent.frontend.cli.commands.subagents import (
+    AgentsCommand,
+    BgCommand,
+    JobsCommand,
+    ParallelCommand,
+    SubagentCommand,
+)
 from pocket_agent.frontend.cli.commands.system import (
     AddDirCommand,
     ConfigCommand,
@@ -73,6 +79,8 @@ def _build_registry() -> CliCommandRegistry:
     registry.register("rename", RenameCommand())
     registry.register("compact", CompactCommand())
     registry.register("agents", AgentsCommand())
+    registry.register("bg", BgCommand())
+    registry.register("jobs", JobsCommand())
     registry.register("subagent", SubagentCommand())
     registry.register("parallel", ParallelCommand())
     mcp_cmd = McpCommand()

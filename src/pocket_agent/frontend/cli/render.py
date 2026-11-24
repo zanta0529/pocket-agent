@@ -22,13 +22,14 @@ class MultiStatus:
     def __init__(self, title, task_names, console):
         from rich.live import Live
 
+        from pocket_agent.core.subagents import build_subagent_labels
         from pocket_agent.system.i18n import t
 
         self.title = title
         self.console = console
-        self.task_names = task_names
+        self.task_names = build_subagent_labels([{"name": n} for n in task_names])
 
-        self._states = {name: t("cli.status_starting") for name in task_names}
+        self._states = {name: t("cli.status_starting") for name in self.task_names}
         self._live = Live(self._build_table(), console=console, refresh_per_second=10)
         self.is_running = False
 
@@ -164,6 +165,17 @@ def toolbar(state: CliState, width: int) -> FormattedText:
     if getattr(state, "staged_update_version", None):
         tokens_str += t("cli.toolbar_update_ready", version=state.staged_update_version)
 
+    bg_running = getattr(state, "bg_jobs_running", 0)
+    bg_done = getattr(state, "bg_jobs_done", 0)
+    valid_run = isinstance(bg_running, int) and not isinstance(bg_running, bool) and bg_running > 0
+    valid_done = isinstance(bg_done, int) and not isinstance(bg_done, bool) and bg_done > 0
+    if valid_run and valid_done:
+        tokens_str += t("cli.toolbar_bg_both", running=bg_running, done=bg_done)
+    elif valid_run:
+        tokens_str += t("cli.toolbar_bg_running", running=bg_running)
+    elif valid_done:
+        tokens_str += t("cli.toolbar_bg_done", done=bg_done)
+
     model = f"[ {state.provider} ] {state.model}"
     budget = max(0, width - cell_len(count) - cell_len(tokens_str) - 3)
     line = f"{clip(model, budget)} · {count}{tokens_str}" if budget else f"{count}{tokens_str}"
@@ -203,6 +215,7 @@ class CliRenderer:
         self._text_buffer_len: int = 0
         self._last_text_flush: float = 0.0
         self._last_thinking_update: float = 0.0
+        self._auto_multi_status: bool = False
 
     def _stop_status(self) -> None:
         """停止思考中 spinner（若仍在執行），確保不與串流輸出衝突。"""
@@ -518,7 +531,34 @@ class CliRenderer:
             else:
                 self._stream_has_content = True
 
+        elif kind == "parallel_subagents_start":
+            labels = data.get("labels", []) if isinstance(data, dict) else []
+            is_multi = self._active_status is not None and type(self._active_status).__name__ == "MultiStatus"
+            if self.console.is_terminal and labels and not is_multi:
+                self._stop_status()
+                self._ensure_newline()
+                from pocket_agent.system.i18n import t
+
+                title = (data.get("title") if isinstance(data, dict) else None) or t(
+                    "subagent_cmd.parallel_running", count=len(labels)
+                )
+                status = MultiStatus(title, labels, console=self.console)
+                self._active_status = status
+                self._auto_multi_status = True
+                status.start()
+
+        elif kind == "parallel_subagents_done":
+            if self._auto_multi_status:
+                self._stop_status()
+                self._auto_multi_status = False
+
         elif kind == "thinking":
+            is_multi = self._active_status is not None and type(self._active_status).__name__ == "MultiStatus"
+            if is_multi:
+                line = " ".join(str(data).splitlines()).strip()
+                if line:
+                    self._active_status.update(line)
+                return
             self._thinking_buffer += str(data)
             if self._active_status:
                 now = monotonic()
@@ -552,7 +592,9 @@ class CliRenderer:
                 status.start()
 
         elif kind == "tool_start":
-            self._stop_status()
+            is_multi = self._active_status is not None and type(self._active_status).__name__ == "MultiStatus"
+            if not is_multi:
+                self._stop_status()
             self._ensure_newline()
             self._thinking_buffer = ""
 
@@ -597,24 +639,26 @@ class CliRenderer:
                 "server_tag": server_tag,
             }
 
-            if self.console.is_terminal:
-                is_multi = self._active_status and type(self._active_status).__name__ == "MultiStatus"
-                if not is_multi:
-                    self._stop_status()
-                    from rich.console import Group
-                    from rich.live import Live
-                    from rich.spinner import Spinner
+            if is_multi:
+                if sa_name:
+                    target_suffix = f" {plain(target)}" if target else ""
+                    self._active_status.update(f"[{sa_name}] {action} ({real_name}){target_suffix}")
+            elif self.console.is_terminal:
+                self._stop_status()
+                from rich.console import Group
+                from rich.live import Live
+                from rich.spinner import Spinner
 
-                    from pocket_agent.system.i18n import t
+                from pocket_agent.system.i18n import t
 
-                    group_items = list(self._format_tool_lines(("  ", ""), self._pending_tools[call_id]))
-                    spinner = Spinner("dots", text=Text(t("cli.tool_running"), style="default"))
-                    group_items.append(spinner)
+                group_items = list(self._format_tool_lines(("  ", ""), self._pending_tools[call_id]))
+                spinner = Spinner("dots", text=Text(t("cli.tool_running"), style="default"))
+                group_items.append(spinner)
 
-                    self._active_status = Live(
-                        Group(*group_items), console=self.console, refresh_per_second=12, transient=True
-                    )
-                    self._active_status.start()
+                self._active_status = Live(
+                    Group(*group_items), console=self.console, refresh_per_second=12, transient=True
+                )
+                self._active_status.start()
 
         elif kind == "ask_question":
             self._ensure_newline()
@@ -702,6 +746,8 @@ class CliRenderer:
                         self.console.print(line)
 
                 if status == "error" or not ok:
+                    if is_multi and info and info.get("sa_name"):
+                        self._active_status.update(f"[{info['sa_name']}] ✗ {info['real_name']}")
                     if "::" in name:
                         sa_name, inner_name = name.split("::", 1)
                         server_tag, real_name = parse_mcp_tool_name(inner_name)
