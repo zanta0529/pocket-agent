@@ -37,10 +37,18 @@ classDiagram
         -回傳 prompt_tokens 用量
     }
 
+    class CerebrasEngine {
+        +stream_chat()
+        +context_window() int?
+        -支援 cerebras
+        -處理 reasoning_effort 與 parsed 推理串流
+        -探測 public models 視窗與 429 重置提示
+    }
+
     class StandardChatCompletionsEngine {
         +stream_chat()
         +context_window() int?
-        -支援 gemini / gemini_oauth / groq / mistral / sambanova
+        -支援 gemini / gemini_oauth / groq / mistral / sambanova / azure / openai-compatible
         -統一封裝標準 Chat Completions 協定與工具格式
     }
 
@@ -52,6 +60,7 @@ classDiagram
     BaseEngine <|-- OpenRouterEngine
     BaseEngine <|-- OllamaChatEngine
     BaseEngine <|-- StandardChatCompletionsEngine
+    StandardChatCompletionsEngine <|-- CerebrasEngine
     EngineFactory --> BaseEngine: 根據 provider 建立實體
 ```
 
@@ -80,6 +89,6 @@ flowchart TD
 
 ## 關鍵優勢
 
-1. **無縫切換**：使用者可透過 `/model` 指令即時切換雲端（OpenAI / OpenRouter / Gemini / Groq / Mistral / SambaNova / Ollama Cloud）或本機（Ollama）模型，上層渲染與工具呼叫邏輯完全不需修改。
+1. **無縫切換**：使用者可透過 `/model` 指令即時切換雲端（OpenAI / OpenRouter / Cerebras / Gemini / Groq / Mistral / SambaNova / Azure / Ollama Cloud）或本機（Ollama / OpenAI-Compatible）模型，上層渲染與工具呼叫邏輯完全不需修改。
 2. **平滑相容**：無論底層是否原生支援分離式 Reasoning 欄位，轉接器皆統一收斂為 `EventThinking` 事件，提供一致的使用者體驗。
 3. **職責分離與擴充性**：底層連線與憑證由 `Provider` 策略負責，協定與串流解析由 `Engine` 負責。新增相容 Chat Completions 的服務只需新增 `Provider` 並註冊於 `ENGINE_MAP`；若遇特殊協定，亦只需實作新的 `BaseEngine` 子類別即可。

@@ -200,7 +200,10 @@
     "azure_v1_default": "Not set (defaults to modern /openai/v1 API)",
     "enter_azure_api_version": "Enter Azure API Version (optional; leave blank for modern v1 API, or e.g. 2024-10-21 for legacy)",
     "azure_missing_endpoint": "Azure OpenAI Endpoint is not configured. Run `pocket-agent setup` or set `AZURE_OPENAI_ENDPOINT`.",
-    "azure_missing_key": "Azure OpenAI API Key is not configured. Run `pocket-agent setup` or set `AZURE_OPENAI_API_KEY`."
+    "azure_missing_key": "Azure OpenAI API Key is not configured. Run `pocket-agent setup` or set `AZURE_OPENAI_API_KEY`.",
+    "missing_api_key": "{name} API Key is not configured. Set `{config_key}` or run `pocket-agent setup`.",
+    "enter_cerebras_base_url": "Enter Cerebras Base URL (default https://api.cerebras.ai/v1)",
+    "cerebras_missing_key": "Cerebras API Key is not configured. Run `pocket-agent setup` or set `CEREBRAS_API_KEY`."
   },
   "commands": {
     "activity": "List files created/modified/deleted and URLs fetched in this session",

@@ -3,12 +3,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 from pocket_agent.engines.base import BaseEngine
+from pocket_agent.engines.cerebras_engine import CerebrasEngine
 from pocket_agent.engines.chat_engine import StandardChatCompletionsEngine
 from pocket_agent.engines.ollama_engine import OllamaChatEngine
 from pocket_agent.engines.openai_engine import OpenAIResponsesEngine
 from pocket_agent.engines.openrouter_engine import OpenRouterEngine
 from pocket_agent.system.constants import (
     PROVIDER_AZURE,
+    PROVIDER_CEREBRAS,
     PROVIDER_GEMINI,
     PROVIDER_GEMINI_OAUTH,
     PROVIDER_GROQ,
@@ -36,6 +38,7 @@ ENGINE_MAP = {
     PROVIDER_MISTRAL: StandardChatCompletionsEngine,
     PROVIDER_SAMBANOVA: StandardChatCompletionsEngine,
     PROVIDER_AZURE: StandardChatCompletionsEngine,
+    PROVIDER_CEREBRAS: CerebrasEngine,
     PROVIDER_OPENAI_COMPATIBLE: StandardChatCompletionsEngine,
 }
 
@@ -63,6 +66,8 @@ class EngineFactory:
             return PROVIDER_MISTRAL
         if _matches_host(host, "api.sambanova.ai"):
             return PROVIDER_SAMBANOVA
+        if _matches_host(host, "api.cerebras.ai") or _matches_host(host, "cerebras.ai"):
+            return PROVIDER_CEREBRAS
         if _matches_host(host, "openai.azure.com") or _matches_host(host, "services.ai.azure.com"):
             return PROVIDER_AZURE
         log.warning("EngineFactory.resolve_provider 無法由 base_url (%s) 識別供應商，後備使用 ollama", url_str)

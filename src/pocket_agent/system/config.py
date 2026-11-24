@@ -101,6 +101,7 @@ DEFAULT_CONFIG = {
         "ollama": {"base_url": "http://localhost:11434"},
         "ollama_cloud": {"api_key": "", "base_url": "https://ollama.com/v1"},
         "azure": {"endpoint": "", "api_key": "", "api_version": ""},
+        "cerebras": {"api_key": "", "base_url": "https://api.cerebras.ai/v1"},
         "openai_compatible": {"base_url": "", "api_key": ""},
     },
 }
@@ -140,6 +141,8 @@ class EnvConfigProvider(ConfigProvider):
         "providers.azure.endpoint": "AZURE_OPENAI_ENDPOINT",
         "providers.azure.api_key": "AZURE_OPENAI_API_KEY",
         "providers.azure.api_version": "AZURE_OPENAI_API_VERSION",
+        "providers.cerebras.api_key": "CEREBRAS_API_KEY",
+        "providers.cerebras.base_url": "CEREBRAS_BASE_URL",
         "providers.openai_compatible.base_url": "OPENAI_COMPATIBLE_BASE_URL",
         "providers.openai_compatible.api_key": "OPENAI_COMPATIBLE_API_KEY",
         "system.max_tool_rounds": "MAX_TOOL_ROUNDS",

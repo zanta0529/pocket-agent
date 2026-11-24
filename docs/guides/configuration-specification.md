@@ -23,7 +23,7 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 
 | 鍵值 (Key)        | 型別     | 預設值          | 環境變數                | 說明                                                                                                                     |
 | :---------------- | :------- | :-------------- | :---------------------- | :----------------------------------------------------------------------------------------------------------------------- |
-| `active_provider` | `string` | `"openai"`      | `POCKET_AGENT_PROVIDER` | 目前啟用的主要模型供應商（如 `openai`, `openrouter`, `azure`, `ollama`, `ollamacloud`, `sambanova`, `groq`, `mistral`, `gemini`, `openai-compatible`） |
+| `active_provider` | `string` | `"openai"`      | `POCKET_AGENT_PROVIDER` | 目前啟用的主要模型供應商（如 `openai`, `openrouter`, `azure`, `cerebras`, `ollama`, `ollamacloud`, `sambanova`, `groq`, `mistral`, `gemini`, `openai-compatible`） |
 | `active_model`    | `string` | `"gpt-6-astra"` | `OPENAI_MODEL`          | 目前啟用的模型名稱                                                                                                       |
 | `locale`          | `string` | `"zh_TW"`       | `POCKET_AGENT_LANG`     | 介面顯示語系（對應 `src/pocket_agent/locales/*.json`，如 `zh_TW`、`en_US`）；可透過 `setup` 或 `/config` 選單切換。     |
 
@@ -167,6 +167,11 @@ Pocket Agent 採用階層式配置（Layered Configuration），載入優先順�
 > | **API Key** | 不支援（固定使用本機佔位值） | 選填（支援 Keyring／JWE 保護之 Bearer Token） |
 > | **Proxy 行為** | 固定略過系統 Proxy（`trust_env=False`） | 本機迴路（`localhost`／`127.0.0.1`／`::1`）略過 Proxy；其餘位址遵循系統 Proxy（若企業有全域 `HTTP_PROXY`，連內網伺服器請設定 `NO_PROXY`） |
 > | **視窗探測** | 自動呼叫 `/api/show` 讀取實際 `context_length` | 不呼叫 `/api/show`，使用保底值（`128,000`）；小視窗模型建議手動設定 `system.context_window` |
+
+#### 8. Cerebras Cloud (`providers.cerebras`)
+
+- `api_key`: Cerebras Cloud API 金鑰（環境變數: `CEREBRAS_API_KEY`，儲存於 Keyring 或 JWE 加密庫）。
+- `base_url`: 預設為 `"https://api.cerebras.ai/v1"`（環境變數: `CEREBRAS_BASE_URL`，可於 `setup` 精靈或設定檔自訂）。
 
 ---
 

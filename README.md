@@ -11,7 +11,7 @@
 
 **PocketAgent** is a local-first Python AI agent with enterprise-grade extensibility and security, offering a minimal, fast, developer-focused CLI experience.
 
-Its key advantage is **OAuth PKCE authentication directly integrated with the ChatGPT backend (Codex API)** — if you have a ChatGPT Plus or Pro subscription, you can leverage advanced models and deep reasoning without needing or consuming an OpenAI API Key billing balance. It also seamlessly supports **OpenRouter API**, **Gemini (Google AI Studio)** (both API Key and Google OAuth), cloud inference platforms with free developer tiers (**Groq Cloud**, **SambaNova Cloud**, **Mistral AI**), as well as local **Ollama** and **Ollama Cloud** for privacy-sensitive offline or hybrid workflows.
+Its key advantage is **OAuth PKCE authentication directly integrated with the ChatGPT backend (Codex API)** — if you have a ChatGPT Plus or Pro subscription, you can leverage advanced models and deep reasoning without needing or consuming an OpenAI API Key billing balance. It also seamlessly supports **OpenRouter API**, **Gemini (Google AI Studio)** (both API Key and Google OAuth), cloud inference platforms with free developer tiers (**Cerebras Cloud**, **Groq Cloud**, **SambaNova Cloud**, **Mistral AI**), as well as local **Ollama** and **Ollama Cloud** for privacy-sensitive offline or hybrid workflows.
 
 > ⚠️ **Important Disclaimer**: This tool (including the core agent and all built-in/external MCP servers) can execute local shell commands, read/write files, and interact with remote hosts and browsers, while LLM outputs are non-deterministic. Users must review every operation and assume all risks; any unintended behavior or resulting damage has no relation to the original author(s). Please read the full [Disclaimer](#️-disclaimer) section before use.
 
@@ -146,7 +146,7 @@ The interactive wizard guides you through five steps (defaults to English if `lo
 2. **Select Service Provider & Login**:
    - **ChatGPT Plus/Pro (OpenAI OAuth PKCE)**: _No API key needed_ — opens your browser to authorize and automatically returns the token to `http://localhost:1455`.
    - **Gemini (Google AI Studio)**: Supports Google OAuth browser login or `GEMINI_API_KEY`.
-   - **Cloud Inference (Azure OpenAI / AI Foundry / OpenRouter / Groq / SambaNova / Mistral / Ollama Cloud)**: Enter your API Key (protected via OS Keyring or JWE encrypted vault).
+   - **Cloud Inference (Azure OpenAI / AI Foundry / Cerebras / OpenRouter / Groq / SambaNova / Mistral / Ollama Cloud)**: Enter your API Key (protected via OS Keyring or JWE encrypted vault; Cerebras also allows customizing its Base URL).
    - **Local Models (Ollama)**: Connects to `http://localhost:11434` by default, supporting offline execution.
    - **OpenAI-Compatible (Local / Gateway)**: Connect to LM Studio, vLLM, llama.cpp, or an internal enterprise AI gateway (custom Base URL with optional API Key; include `/v1` in the URL when required. For unauthenticated Ollama, prefer **Ollama (Local)** for automatic context-window detection).
 3. **Select Default Model**:
@@ -182,7 +182,7 @@ Type any of the following `/` commands at the prompt:
 
 #### 🤖 Model & Session Management
 
-- `/model`: Open an interactive selector to switch providers and models (`openai`, `gemini`, `openrouter`, `azure`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`, `openai-compatible`).
+- `/model`: Open an interactive selector to switch providers and models (`openai`, `gemini`, `openrouter`, `azure`, `cerebras`, `groq`, `sambanova`, `mistral`, `ollama`, `ollamacloud`, `openai-compatible`).
 - `/reasoning [auto|high|medium|low|none]` (or `/effort`): Adjust LLM reasoning effort on the fly (defaults to `auto`; opens an interactive menu when called without arguments).
 - `/session`: Open a paginated interactive session manager to browse, load, or delete saved conversations.
 - `/prune [<days> | --keep <count>]` (or `/session prune`): Clean up expired or excess session history (defaults to older than 30 days or keeping latest 20; protects active session and requires confirmation).
@@ -240,8 +240,8 @@ flowchart TB
     end
 
     subgraph Engines["🔌 LLM Engine Layer (Adapter)"]
-        EngineAdapters["<b>EngineFactory & Adapters</b><br/>OpenAI · OpenRouter · Ollama · Standard"]
-        LLMProviders["<b>Model Providers</b><br/>ChatGPT OAuth · Azure · Gemini · Groq<br/>Mistral · SambaNova · Ollama · Custom v1"]
+        EngineAdapters["<b>EngineFactory & Adapters</b><br/>OpenAI · OpenRouter · Cerebras · Ollama · Standard"]
+        LLMProviders["<b>Model Providers</b><br/>ChatGPT OAuth · Azure · Cerebras · Gemini · Groq<br/>Mistral · SambaNova · Ollama · Custom v1"]
         EngineAdapters --> LLMProviders
     end
 

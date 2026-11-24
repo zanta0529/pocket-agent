@@ -144,3 +144,46 @@ def test_format_chat_messages_merges_intermediate_assistant_text_with_tool_calls
             ],
         }
     ]
+
+
+def test_chat_engine_streams_reasoning_and_reasoning_content_deltas():
+    """驗證 StandardChatCompletionsEngine 可提取 delta.reasoning 與 delta.reasoning_content 為 EventThinking。"""
+    from pocket_agent.engines.base import EventText, EventThinking
+
+    async def _run():
+        c1 = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(tool_calls=None, content=None, reasoning_content="step 1 "),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        )
+        c2 = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(tool_calls=None, content=None, reasoning="step 2"),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        )
+        c3 = _make_chunk(content="final answer", finish_reason="stop")
+
+        fake_stream = _AsyncChunkStream([c1, c2, c3])
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_stream)
+
+        engine = StandardChatCompletionsEngine(client=mock_client, model="test-model")
+        events = [
+            ev async for ev in engine.stream_chat(input_items=[], instructions="", tools=[], reasoning_param=None)
+        ]
+
+        thinking = [ev.delta for ev in events if isinstance(ev, EventThinking)]
+        texts = [ev.delta for ev in events if isinstance(ev, EventText)]
+        assert thinking == ["step 1 ", "step 2"]
+        assert texts == ["final answer"]
+        assert fake_stream.closed is True
+
+    asyncio.run(_run())

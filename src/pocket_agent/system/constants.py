@@ -158,6 +158,7 @@ DEFAULT_SESSION_PRUNE_KEEP = 20  # /prune 手動清理歷史對話預設保留�
 # 集中管理各 LLM 供應商的唯一標識字串，供 EngineFactory、組態設定與路由分派使用。
 # ==============================================================================
 PROVIDER_AZURE = "azure"
+PROVIDER_CEREBRAS = "cerebras"
 PROVIDER_GEMINI = "gemini"
 PROVIDER_GEMINI_OAUTH = "gemini_oauth"
 PROVIDER_GROQ = "groq"
@@ -214,6 +215,7 @@ SENSITIVE_ENV_EXACT_KEYS: tuple[str, ...] = (
     "GROQ_API_KEY",
     "MISTRAL_API_KEY",
     "SAMBANOVA_API_KEY",
+    "CEREBRAS_API_KEY",
     "OLLAMA_API_KEY",
     "OLLAMA_CLOUD_API_KEY",
     "OPENAI_COMPATIBLE_API_KEY",
