@@ -738,7 +738,14 @@ def test_slash_command_arg_completions_jobs_and_other_commands(monkeypatch) -> N
         assert [c.text for c in _complete("/attachments remove ")] == ["1", "2"]
         assert [c.text for c in _complete("/rm-file ")] == ["1", "2"]
         assert [c.text for c in _complete("/mcp ")] == ["sqlite", "github"]
-        assert "openai" in [c.text for c in _complete("/model ")]
+        assert [c.text for c in _complete("/tools ")] == ["sqlite", "github"]
+        assert _complete("/model ") == []
+
+        from pocket_agent.frontend.cli.arg_completers import _DEFAULT_REGISTRY, ArgCompleterStrategy
+
+        assert isinstance(_DEFAULT_REGISTRY.get("jobs"), ArgCompleterStrategy)
+        assert _DEFAULT_REGISTRY.get("reasoning") is _DEFAULT_REGISTRY.get("effort")
+        assert _DEFAULT_REGISTRY.get("mcp") is _DEFAULT_REGISTRY.get("tools")
 
         # 4. Enter 鍵在參數補全未高亮時直接送出；高亮時套用補全不送出
         kb = key_bindings(lambda: False, state=state, agent=agent, completer=completer)
@@ -767,5 +774,43 @@ def test_slash_command_arg_completions_jobs_and_other_commands(monkeypatch) -> N
 
         release.set()
         await agent.shutdown(timeout=1.0)
+
+    asyncio.run(_scenario())
+
+
+def test_model_command_provider_only_opens_model_picker(monkeypatch) -> None:
+    """/model <provider> 應開啟第二段模型光棒選單而非誤將 provider 當成模型名稱。"""
+
+    async def _scenario() -> None:
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="m", provider="openai")
+        state = CliState("openai", "m")
+        output = StringIO()
+        renderer = CliRenderer(Console(file=output, force_terminal=False, no_color=True, width=120))
+        reader = MagicMock()
+        reader.choose = AsyncMock(return_value="openai/gpt-5")
+        handler = CommandHandler(agent, state, reader, renderer, [])
+
+        fetched: list[str] = []
+
+        def _fake_fetch(prov: str) -> list[str]:
+            fetched.append(prov)
+            return ["openai/gpt-5", "anthropic/claude-sonnet-4"]
+
+        switched: list[tuple[str, str]] = []
+
+        async def _fake_switch(_agent, _state, prov: str, model: str, _renderer) -> None:
+            switched.append((prov, model))
+
+        monkeypatch.setattr("pocket_agent.system.auth.fetch_available_models", _fake_fetch)
+        monkeypatch.setattr("pocket_agent.frontend.cli.commands.system.switch_model", _fake_switch)
+
+        await handler.dispatch("/model openrouter")
+        assert fetched == ["openrouter"]
+        assert reader.choose.call_args[0][1] == ["openai/gpt-5", "anthropic/claude-sonnet-4"]
+        assert switched == [("openrouter", "openai/gpt-5")]
 
     asyncio.run(_scenario())
