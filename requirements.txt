@@ -43,6 +43,8 @@ cryptography==50.0.2
     #   pyjwt
 curl-cffi==0.17.0
     # via -r requirements.in
+dnspython==2.9.2
+    # via -r requirements.in
 fastapi==0.162.0
     # via -r requirements.in
 greenlet==3.5.6

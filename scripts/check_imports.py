@@ -23,6 +23,7 @@ PACKAGE_MAPPING = {
     "win32clipboard": "pywin32",
     "win32con": "pywin32",
     "win32job": "pywin32",
+    "dns": "dnspython",
 }
 
 

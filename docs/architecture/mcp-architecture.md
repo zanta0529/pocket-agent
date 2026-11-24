@@ -288,3 +288,34 @@ Pocket Agent 的解決方案：
 | :--- | :--- | :--- | :--- |
 | `GITHUB_TOKEN` | 彈性 | `""` | GitHub Personal Access Token；建議留空或省略，於首次呼叫工具時在 CLI 以隱藏輸入方式動態提供並快取於記憶體。 |
 | `GITHUB_ALLOWED_REPOS` | 選填 | `""` | 允許存取之儲存庫白名單（逗號分隔 `owner/repo`，不分大小寫）；留空時允許存取該 Token 授權範圍內之儲存庫。 |
+
+---
+
+## 內建網站與網路跨單位舉證診斷伺服器 (`mcp_servers/netdiag_mcp.py`)
+
+`netdiag_mcp.py` 專為權責分離環境下的網站負責人設計，提供唯讀、因果連貫的階段式網路舉證報告（`DNS → TCP → TLS 憑證鏈 → HTTP`）與多解析器 DNS 比對，預設停用（`enabled: false`）且**不建議列入 `safe_read_tools`**。
+
+### 1. 提供的結構化工具清單
+
+| 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
+| :--- | :--- | :--- | :--- |
+| `netdiag_diagnose` | **否（強制逐次確認）** | 單一分階段有界交易診斷，標註 `first_failure_stage`、雙軌 CA 對照（`truststore` vs `certifi`）、過期憑證公開欄位與白名單標頭 | `target`、`max_stage`（`dns`/`tcp`/`tls`/`http`）、`method`（`HEAD`/`GET`）、`host_header`、`samples`（`1`~`3`）、`timeout_sec`（`3.0`~`15.0`） |
+| `netdiag_dns_compare` | **否（強制逐次確認）** | 基於 `dnspython` 比對系統預設 DNS 與指定解析器之紀錄差異、TTL、CNAME 鏈與 SPF／DMARC／CAA 訊號（缺套件時降級 `socket`） | `domain`、`record_types`、`nameservers`（最多 4 個 IP）、`timeout_sec` |
+
+### 2. 安全防禦邊界
+
+- **授權先於 DNS 與永久硬封鎖**：在任何 DNS 解析前先行驗證協定、URL 內嵌帳密、連接埠（預設 `80,443,8080,8443`）與 `NETDIAG_ALLOWED_DOMAINS`；永久封鎖 Link-Local／雲端 Metadata（`169.254.0.0/16`、`fe80::/10`、`fd00:ec2::254`）、Multicast 與未指定位址。
+- **公私網分層治理與防 DNS Rebinding**：預設封鎖 RFC 1918／ULA 私有 IP 與 `localhost`；開啟 `NETDIAG_ALLOW_PRIVATE_NETWORKS=true` 後允許所有 RFC 1918／ULA（若設定 `NETDIAG_ALLOWED_CIDRS` 則進一步限縮）。採 Pinned IP 連線並於每跳 HTTP 轉址重審授權與網段。
+- **企業 Proxy Fail-Closed 與 TLS 不降級**：遵循環境 Proxy 設定並在代理失敗時立即中止（絕不靜默降級直連）；TLS 驗證失敗時中止 HTTP 階段，僅以零應用層資料之純 TLS 握手擷取公開憑證欄位供舉證。
+- **CLI 結構化確認與防永久白名單**：`ConfirmationBridge` 渲染目標網段、埠口、SNI／Host 與階段預覽，強制逐次確認且禁止 `a`／`A` 寫入會話或永久白名單。
+
+### 3. 環境變數與配置參數表 (`servers.netdiag.env`)
+
+| 參數名稱 | 必填 / 選填 | 預設值 | 說明 |
+| :--- | :--- | :--- | :--- |
+| `NETDIAG_ALLOW_PRIVATE_NETWORKS` | 選填 | `"false"` | 設為 `"true"` 允許診斷內網 RFC 1918／ULA 私有 IP。 |
+| `NETDIAG_ALLOWED_CIDRS` | 選填 | `""` | 啟用內網時選填之管轄 CIDR 白名單（留空則允許所有 RFC 1918／ULA）。 |
+| `NETDIAG_ALLOWED_DOMAINS` | 選填 | `""` | 允許診斷之網域白名單（逗號分隔，支援 `*.example.org`）。 |
+| `NETDIAG_ALLOWED_PORTS` | 選填 | `"80,443,8080,8443"` | 允許探測之連接埠白名單。 |
+| `NETDIAG_ALLOW_LOOPBACK` | 選填 | `"false"` | 設為 `"true"` 才允許診斷 `localhost`／`127.0.0.1`／`::1`。 |
+| `NETDIAG_TIMEOUT` | 選填 | `"10"` | 單階段逾時秒數（範圍 `3` ~ `15` 秒）。 |

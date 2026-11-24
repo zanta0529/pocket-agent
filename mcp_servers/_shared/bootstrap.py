@@ -40,6 +40,14 @@ class McpConstants:
     db_fragmentation_warn_ratio: float = 0.20
     db_fragmentation_min_free_bytes: int = 10 * 1024 * 1024
     db_autoinc_warn_ratio: float = 0.75
+    netdiag_default_timeout_sec: float = 10.0
+    netdiag_min_timeout_sec: float = 3.0
+    netdiag_max_timeout_sec: float = 15.0
+    netdiag_max_samples: int = 3
+    netdiag_max_header_value_chars: int = 512
+    netdiag_dns_max_nameservers: int = 4
+    netdiag_dns_max_cname_hops: int = 10
+    netdiag_default_allowed_ports: tuple[int, ...] = (80, 443, 8080, 8443)
 
 
 def load_constants() -> McpConstants:
@@ -59,6 +67,14 @@ def load_constants() -> McpConstants:
             db_fragmentation_warn_ratio=sys_const.DB_FRAGMENTATION_WARN_RATIO,
             db_fragmentation_min_free_bytes=sys_const.DB_FRAGMENTATION_MIN_FREE_BYTES,
             db_autoinc_warn_ratio=sys_const.DB_AUTOINC_WARN_RATIO,
+            netdiag_default_timeout_sec=sys_const.NETDIAG_DEFAULT_TIMEOUT_SEC,
+            netdiag_min_timeout_sec=sys_const.NETDIAG_MIN_TIMEOUT_SEC,
+            netdiag_max_timeout_sec=sys_const.NETDIAG_MAX_TIMEOUT_SEC,
+            netdiag_max_samples=sys_const.NETDIAG_MAX_SAMPLES,
+            netdiag_max_header_value_chars=sys_const.NETDIAG_MAX_HEADER_VALUE_CHARS,
+            netdiag_dns_max_nameservers=sys_const.NETDIAG_DNS_MAX_NAMESERVERS,
+            netdiag_dns_max_cname_hops=sys_const.NETDIAG_DNS_MAX_CNAME_HOPS,
+            netdiag_default_allowed_ports=sys_const.NETDIAG_DEFAULT_ALLOWED_PORTS,
         )
     except ImportError:
         return McpConstants()
