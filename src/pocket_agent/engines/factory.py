@@ -2,12 +2,16 @@ import logging
 from typing import Any
 from urllib.parse import urlparse
 
+from pocket_agent.engines.azure_engine import AzureEngine
 from pocket_agent.engines.base import BaseEngine
 from pocket_agent.engines.cerebras_engine import CerebrasEngine
 from pocket_agent.engines.chat_engine import StandardChatCompletionsEngine
+from pocket_agent.engines.groq_engine import GroqEngine
+from pocket_agent.engines.mistral_engine import MistralEngine
 from pocket_agent.engines.ollama_engine import OllamaChatEngine
 from pocket_agent.engines.openai_engine import OpenAIResponsesEngine
 from pocket_agent.engines.openrouter_engine import OpenRouterEngine
+from pocket_agent.engines.sambanova_engine import SambaNovaEngine
 from pocket_agent.system.constants import (
     PROVIDER_AZURE,
     PROVIDER_CEREBRAS,
@@ -34,10 +38,10 @@ ENGINE_MAP = {
     PROVIDER_OPENAI_API: OpenAIResponsesEngine,
     PROVIDER_GEMINI: StandardChatCompletionsEngine,
     PROVIDER_GEMINI_OAUTH: StandardChatCompletionsEngine,
-    PROVIDER_GROQ: StandardChatCompletionsEngine,
-    PROVIDER_MISTRAL: StandardChatCompletionsEngine,
-    PROVIDER_SAMBANOVA: StandardChatCompletionsEngine,
-    PROVIDER_AZURE: StandardChatCompletionsEngine,
+    PROVIDER_GROQ: GroqEngine,
+    PROVIDER_MISTRAL: MistralEngine,
+    PROVIDER_SAMBANOVA: SambaNovaEngine,
+    PROVIDER_AZURE: AzureEngine,
     PROVIDER_CEREBRAS: CerebrasEngine,
     PROVIDER_OPENAI_COMPATIBLE: StandardChatCompletionsEngine,
 }

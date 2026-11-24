@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pocket_agent.engines.azure_engine import AzureEngine
 from pocket_agent.engines.chat_engine import StandardChatCompletionsEngine
 from pocket_agent.engines.factory import EngineFactory
 from pocket_agent.system.config import AuthException, EnvConfigProvider, MissingKeyException
@@ -32,7 +33,9 @@ def test_engine_factory_creates_and_resolves_azure():
     dummy_client = MagicMock()
     dummy_client.base_url = "https://my-resource.openai.azure.com/openai/v1"
     engine = EngineFactory.create(PROVIDER_AZURE, dummy_client, "gpt-4o-deploy")
+    assert isinstance(engine, AzureEngine)
     assert isinstance(engine, StandardChatCompletionsEngine)
+    assert engine.supports_stream_usage is True
     assert engine.provider_name == PROVIDER_AZURE
     assert EngineFactory.resolve_provider(dummy_client) == PROVIDER_AZURE
 

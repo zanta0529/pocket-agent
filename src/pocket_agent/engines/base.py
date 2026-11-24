@@ -2,6 +2,20 @@ import time
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Callable, Optional
 
+DEFAULT_RATE_LIMIT_RESET_HEADERS: tuple[str, ...] = (
+    "retry-after-ms",
+    "retry-after",
+    "x-ratelimit-reset-requests",
+    "x-ratelimit-reset-tokens",
+    "x-ratelimit-reset-requests-minute",
+    "x-ratelimit-reset-tokens-minute",
+    "x-ratelimit-reset-requests-hour",
+    "x-ratelimit-reset-tokens-hour",
+    "x-ratelimit-reset-requests-day",
+    "x-ratelimit-reset-tokens-day",
+    "x-ratelimit-reset",
+)
+
 
 @dataclass
 class EventThinking:
@@ -409,6 +423,49 @@ class BaseEngine:
         """
         Parse API exception and return a human-readable hint string (e.g. reset time, remedy).
         """
+        return None
+
+    @classmethod
+    def parse_rate_limit_headers(
+        cls,
+        exc: Exception,
+        header_keys: tuple[str, ...] = DEFAULT_RATE_LIMIT_RESET_HEADERS,
+    ) -> str | None:
+        """從 HTTP 429 回應標頭解析 retry-after 與 x-ratelimit-reset*，回傳多語系重置提示。"""
+        if getattr(exc, "status_code", None) != 429:
+            return None
+
+        try:
+            response = getattr(exc, "response", None)
+            headers = getattr(response, "headers", None)
+            if not headers or not hasattr(headers, "items"):
+                return None
+            header_map = {str(k).lower(): str(v).strip() for k, v in headers.items()}
+
+            for header_key in header_keys:
+                raw = header_map.get(header_key)
+                if not raw:
+                    continue
+                if header_key.endswith("-ms"):
+                    try:
+                        ms_val = float(raw)
+                        if ms_val >= 0:
+                            return cls.format_reset_time_hint(resets_in_seconds=ms_val / 1000.0)
+                    except ValueError, TypeError:
+                        continue
+                dur = cls.parse_duration_seconds(raw)
+                if dur is not None:
+                    return cls.format_reset_time_hint(resets_in_seconds=dur)
+                try:
+                    val = float(raw)
+                    if val > 1_000_000_000_000:
+                        return cls.format_reset_time_hint(resets_at=val / 1000.0)
+                    if val > 1_000_000_000:
+                        return cls.format_reset_time_hint(resets_at=val)
+                except ValueError, TypeError:
+                    continue
+        except Exception:
+            return None
         return None
 
     def is_non_retryable_error(self, exc: Exception) -> bool:

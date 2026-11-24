@@ -1,26 +1,12 @@
 """Cerebras Cloud LLM Engine 轉接器實作。"""
 
-import logging
-import time
 from typing import Any
 from urllib.parse import urlparse
 
 from pocket_agent.engines.chat_engine import StandardChatCompletionsEngine
 from pocket_agent.system.constants import PROVIDER_CEREBRAS
 
-log = logging.getLogger("pocket-agent")
-
 _DEFAULT_PUBLIC_MODELS_URL = "https://api.cerebras.ai/public/v1/models"
-_RATE_LIMIT_RESET_HEADERS = (
-    "retry-after",
-    "x-ratelimit-reset-requests-minute",
-    "x-ratelimit-reset-tokens-minute",
-    "x-ratelimit-reset-requests-hour",
-    "x-ratelimit-reset-tokens-hour",
-    "x-ratelimit-reset-requests-day",
-    "x-ratelimit-reset-tokens-day",
-    "x-ratelimit-reset",
-)
 
 
 class CerebrasEngine(StandardChatCompletionsEngine):
@@ -60,53 +46,8 @@ class CerebrasEngine(StandardChatCompletionsEngine):
         return _DEFAULT_PUBLIC_MODELS_URL
 
     async def fetch_context_window(self) -> int | None:
-        try:
-            resp = await self._http_get(self._public_models_url(), timeout=10.0)
-            if resp.status_code != 200:
-                return None
-            data = resp.json().get("data", [])
-            for item in data:
-                if not isinstance(item, dict) or item.get("id") != self.model:
-                    continue
-                limits = item.get("limits")
-                ctx = limits.get("max_context_length") if isinstance(limits, dict) else None
-                if ctx is None:
-                    ctx = item.get("context_length") or item.get("max_context_length")
-                if isinstance(ctx, int) and not isinstance(ctx, bool) and ctx > 0:
-                    key = self._cache_key()
-                    self._context_window_cache[key] = (ctx, time.time() + 3600)
-                    return ctx
-        except Exception as e:
-            log.debug("查詢 Cerebras max_context_length 失敗: %s", e)
-        return None
-
-    def parse_api_error(self, exc: Exception) -> str | None:
-        """解析 HTTP 429 回應標頭中的 retry-after 與 x-ratelimit-reset-* 重置提示。"""
-        if getattr(exc, "status_code", None) != 429:
-            return None
-
-        try:
-            response = getattr(exc, "response", None)
-            headers = getattr(response, "headers", None)
-            if not headers or not hasattr(headers, "items"):
-                return None
-            header_map = {str(k).lower(): str(v).strip() for k, v in headers.items()}
-
-            for header_key in _RATE_LIMIT_RESET_HEADERS:
-                raw = header_map.get(header_key)
-                if not raw:
-                    continue
-                dur = self.parse_duration_seconds(raw)
-                if dur is not None:
-                    return self.format_reset_time_hint(resets_in_seconds=dur)
-                try:
-                    val = float(raw)
-                    if val > 1_000_000_000_000:
-                        return self.format_reset_time_hint(resets_at=val / 1000.0)
-                    if val > 1_000_000_000:
-                        return self.format_reset_time_hint(resets_at=val)
-                except ValueError, TypeError:
-                    continue
-        except Exception:
-            return None
-        return None
+        return await self._fetch_context_window_from_models(
+            self._public_models_url(),
+            field_paths=(("limits", "max_context_length"), ("context_length",), ("max_context_length",)),
+            use_auth=False,
+        )

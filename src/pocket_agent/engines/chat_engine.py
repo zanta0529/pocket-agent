@@ -1,5 +1,7 @@
 import logging
+import time
 from typing import Any, AsyncGenerator, Callable, Optional
+from urllib.parse import urlparse
 
 from pocket_agent.engines.base import (
     BaseEngine,
@@ -156,6 +158,66 @@ class StandardChatCompletionsEngine(BaseEngine):
 
     def _build_extra_body(self, reasoning_param: Any) -> dict[str, Any] | None:
         """供子類別覆寫以注入供應商專屬之 extra_body 參數。"""
+        return None
+
+    def parse_api_error(self, exc: Exception) -> str | None:
+        """解析 HTTP 429 回應標頭中的 retry-after 與 x-ratelimit-reset* 重置提示。"""
+        return self.parse_rate_limit_headers(exc)
+
+    def _models_endpoint_url(self, default_base_url: str, *, suffix: str = "/models") -> str:
+        """依 client.base_url 推算模型清單端點 URL，無有效位址時回退至預設端點。"""
+        raw = str(getattr(self.client, "base_url", "") or "").strip().rstrip("/")
+        parsed = urlparse(raw)
+        base = raw if (parsed.scheme in ("http", "https") and parsed.netloc) else default_base_url.rstrip("/")
+        return f"{base}{suffix}"
+
+    async def _fetch_context_window_from_models(
+        self,
+        url: str,
+        *,
+        field_paths: tuple[tuple[str, ...], ...],
+        use_auth: bool = True,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float = 10.0,
+    ) -> int | None:
+        """查詢 OpenAI 相容 /models 端點並依欄位路徑萃取目前模型的 context 視窗大小。"""
+        headers: dict[str, str] = {}
+        if use_auth:
+            api_key = getattr(self.client, "api_key", None)
+            if isinstance(api_key, str) and api_key.strip():
+                headers["Authorization"] = f"Bearer {api_key.strip()}"
+        if extra_headers:
+            headers.update(extra_headers)
+
+        try:
+            if headers:
+                resp = await self._http_get(url, headers=headers, timeout=timeout)
+            else:
+                resp = await self._http_get(url, timeout=timeout)
+            if resp.status_code != 200:
+                return None
+            payload = resp.json()
+            items = payload.get("data", payload.get("models", [])) if isinstance(payload, dict) else []
+            if not isinstance(items, list):
+                return None
+
+            for item in items:
+                if not isinstance(item, dict) or item.get("id") != self.model:
+                    continue
+                for path in field_paths:
+                    cur: Any = item
+                    for part in path:
+                        if isinstance(cur, dict):
+                            cur = cur.get(part)
+                        else:
+                            cur = None
+                            break
+                    if isinstance(cur, int) and not isinstance(cur, bool) and cur > 0:
+                        key = self._cache_key()
+                        self._context_window_cache[key] = (cur, time.time() + 3600)
+                        return cur
+        except Exception as e:
+            log.debug("查詢 %s (%s) context_window 失敗: %s", self.provider_name or type(self).__name__, url, e)
         return None
 
     async def stream_chat(
