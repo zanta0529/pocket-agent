@@ -544,7 +544,7 @@ def test_jobs_active_view_all_clear_formatting_and_new_session_cleanup(monkeypat
         assert "上網研究 2026 年資安熱門新聞" in llm_list
 
         # 2. 全部取回後：預設 /jobs 不再展開舊清單，且提示切換為 /jobs all 與 /jobs clear
-        await handler.dispatch("/jobs collect")
+        await handler.dispatch("/jobs collect all")
         output.truncate(0)
         output.seek(0)
         await handler.dispatch("/jobs")
@@ -594,5 +594,70 @@ def test_jobs_active_view_all_clear_formatting_and_new_session_cleanup(monkeypat
 
         release_running.set()
         await agent.shutdown(timeout=1.0)
+
+    asyncio.run(_scenario())
+
+
+def test_jobs_show_and_collect_interactive_popup_selection(monkeypatch) -> None:
+    """省略 ID 時，/jobs show 與 /jobs collect 開啟互動式光棒選單選擇工作。"""
+
+    async def _scenario() -> None:
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        async def _done_chat(self_sub, task: str) -> tuple[str, str, str]:
+            return "", f"report: {task}", "0s"
+
+        sub_def = {"name": "researcher", "description": "r", "allowed_tools": ["read_file"], "system_prompt": "SP"}
+        monkeypatch.setattr(
+            "pocket_agent.core.subagents.get_subagent", lambda n: sub_def if n == "researcher" else None
+        )
+        monkeypatch.setattr(Agent, "chat", _done_chat)
+
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="m", provider="openai")
+        state = CliState("openai", "m")
+        output = StringIO()
+        renderer = CliRenderer(Console(file=output, force_terminal=False, no_color=True, width=140))
+        reader = MagicMock()
+        handler = CommandHandler(agent, state, reader, renderer, [])
+
+        await handler.dispatch("/bg researcher 研究文字生圖模型")
+        await handler.dispatch("/bg researcher 研究零知識證明")
+        jobs = agent.list_background_jobs()
+        for j in jobs:
+            await agent.wait_background_job(j.job_id, timeout=1.0)
+
+        # 1. /jobs show 不帶 ID -> 彈出選單並選取第一筆，不寫入 history
+        reader.choose = AsyncMock(side_effect=lambda _label, choices: choices[0])
+        await handler.dispatch("/jobs show")
+        show_choices = reader.choose.call_args[0][1]
+        assert len(show_choices) == 2
+        assert jobs[0].job_id in show_choices[0]
+        assert "研究文字生圖模型" in show_choices[0]
+        assert "report: 研究文字生圖模型" in output.getvalue()
+        assert agent.history == []
+
+        # 2. /jobs show 按 Esc 取消 (choose 回傳 None) -> 安全返回
+        reader.choose = AsyncMock(return_value=None)
+        await handler.dispatch("/jobs show")
+
+        # 3. /jobs collect 不帶 ID -> 含兩筆待取回與「全部取回」選項；先選第一筆
+        reader.choose = AsyncMock(side_effect=lambda _label, choices: choices[0])
+        await handler.dispatch("/jobs collect")
+        collect_choices_1 = reader.choose.call_args[0][1]
+        assert len(collect_choices_1) == 3
+        assert "全部取回" in collect_choices_1[-1]
+        assert jobs[0].collected is True
+        assert jobs[1].collected is False
+        assert state.bg_jobs_done == 1
+
+        # 4. 僅剩 1 筆時再次 /jobs collect -> 不再出現「全部取回」，選中後清空待取回計數
+        reader.choose = AsyncMock(side_effect=lambda _label, choices: choices[0])
+        await handler.dispatch("/jobs collect")
+        collect_choices_2 = reader.choose.call_args[0][1]
+        assert len(collect_choices_2) == 1
+        assert jobs[1].collected is True
+        assert state.bg_jobs_done == 0
 
     asyncio.run(_scenario())

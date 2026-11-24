@@ -256,15 +256,41 @@ def _summarize_task(task: str, max_chars: int = DEFAULT_BG_JOB_TASK_PREVIEW_CHAR
     return f"{clean[: max(1, max_chars - 1)].rstrip()}…"
 
 
-def _format_job_line(job) -> tuple[str, str | None]:
-    """格式化 /jobs 單列輸出並回傳 (文字, Rich 樣式)。"""
+def _job_status_meta(status: str) -> tuple[str, str]:
+    """回傳背景工作狀態對應的圖示與本地化標籤。"""
     status_meta = {
         "running": ("⏳", t("subagent_cmd.job_status_running")),
         "completed": ("✓", t("subagent_cmd.job_status_completed")),
         "failed": ("✗", t("subagent_cmd.job_status_failed")),
         "cancelled": ("⏹", t("subagent_cmd.job_status_cancelled")),
     }
-    icon, status_label = status_meta.get(job.status, ("•", job.status))
+    return status_meta.get(status, ("•", status))
+
+
+def _format_job_choice(job) -> str:
+    """格式化互動選單用的單列背景工作選項。"""
+    icon, status_label = _job_status_meta(job.status)
+    collected_tag = t("subagent_cmd.jobs_collected_tag") if job.collected else ""
+    snippet = _summarize_task(getattr(job, "task", ""))
+    task_note = f' — "{snippet}"' if snippet else ""
+    return f"{icon} {job.job_id} [{job.subagent_name}] {status_label}{collected_tag}{task_note}"
+
+
+def _collect_and_render_job(ctx: CommandContext, job_id: str) -> None:
+    """取回單一背景工作並注入主對話歷史後輸出摘要。"""
+    collected = ctx.agent.collect_background_job(job_id, inject_history=True)
+    body = collected.result if collected.status == "completed" else (collected.error or collected.result)
+    ctx.renderer.reply(
+        body or t("subagent_cmd.jobs_no_output"),
+        collected.elapsed_seconds(),
+        0,
+        streamed=False,
+    )
+
+
+def _format_job_line(job) -> tuple[str, str | None]:
+    """格式化 /jobs 單列輸出並回傳 (文字, Rich 樣式)。"""
+    icon, status_label = _job_status_meta(job.status)
     prog = ""
     if job.status == "running" and job.last_progress:
         if job.last_progress.strip().lower() not in _TERMINAL_PROGRESS_LABELS:
@@ -401,6 +427,16 @@ class JobsCommand(CliCommand):
             return CommandResult("handled")
 
         if sub_cmd == "collect":
+            if target.lower() == "all":
+                ready_jobs = [j for j in ctx.agent.list_background_jobs() if j.status != "running" and not j.collected]
+                if not ready_jobs:
+                    ctx.renderer.message(t("subagent_cmd.jobs_none_ready"))
+                    return CommandResult("handled")
+                for r_job in ready_jobs:
+                    _collect_and_render_job(ctx, r_job.job_id)
+                _sync_bg_counts(ctx)
+                return CommandResult("handled")
+
             if target:
                 job = ctx.agent.get_background_job(target)
                 if job is None:
@@ -408,30 +444,51 @@ class JobsCommand(CliCommand):
                 if job.status == "running":
                     ctx.renderer.message(t("subagent_cmd.jobs_still_running", job_id=target), "yellow")
                     return CommandResult("handled")
-                collected = ctx.agent.collect_background_job(target, inject_history=True)
+                _collect_and_render_job(ctx, target)
                 _sync_bg_counts(ctx)
-                body = collected.result if collected.status == "completed" else (collected.error or collected.result)
-                ctx.renderer.reply(
-                    body or t("subagent_cmd.jobs_no_output"), collected.elapsed_seconds(), 0, streamed=False
-                )
                 return CommandResult("handled")
 
             ready_jobs = [j for j in ctx.agent.list_background_jobs() if j.status != "running" and not j.collected]
             if not ready_jobs:
                 ctx.renderer.message(t("subagent_cmd.jobs_none_ready"))
                 return CommandResult("handled")
-            for r_job in ready_jobs:
-                collected = ctx.agent.collect_background_job(r_job.job_id, inject_history=True)
-                body = collected.result if collected.status == "completed" else (collected.error or collected.result)
-                ctx.renderer.reply(
-                    body or t("subagent_cmd.jobs_no_output"), collected.elapsed_seconds(), 0, streamed=False
-                )
-            _sync_bg_counts(ctx)
+
+            choice_map = {_format_job_choice(j): j for j in ready_jobs}
+            choices = list(choice_map.keys())
+            collect_all_label = ""
+            if len(ready_jobs) > 1:
+                collect_all_label = t("subagent_cmd.jobs_collect_all_choice", count=len(ready_jobs))
+                choices.append(collect_all_label)
+
+            selected = await ctx.reader.choose(t("subagent_cmd.jobs_choose_collect"), choices)
+            if not selected:
+                return CommandResult("handled")
+            if collect_all_label and selected == collect_all_label:
+                for r_job in ready_jobs:
+                    _collect_and_render_job(ctx, r_job.job_id)
+                _sync_bg_counts(ctx)
+                return CommandResult("handled")
+            picked = choice_map.get(selected)
+            if picked is not None:
+                _collect_and_render_job(ctx, picked.job_id)
+                _sync_bg_counts(ctx)
             return CommandResult("handled")
 
-        job_id = target if sub_cmd == "show" else raw
-        if sub_cmd == "show" and not job_id:
-            raise ValueError(t("subagent_cmd.jobs_usage"))
+        if sub_cmd == "show" and not target:
+            all_jobs = ctx.agent.list_background_jobs()
+            if not all_jobs:
+                ctx.renderer.message(t("subagent_cmd.jobs_empty"))
+                return CommandResult("handled")
+            ordered_jobs = sorted(all_jobs, key=lambda j: j.status != "running" and j.collected)
+            choice_map = {_format_job_choice(j): j for j in ordered_jobs}
+            selected = await ctx.reader.choose(t("subagent_cmd.jobs_choose_show"), list(choice_map.keys()))
+            if not selected or selected not in choice_map:
+                return CommandResult("handled")
+            job_id = choice_map[selected].job_id
+        else:
+            job_id = target if sub_cmd == "show" else raw
+            if sub_cmd == "show" and not job_id:
+                raise ValueError(t("subagent_cmd.jobs_usage"))
         job = ctx.agent.get_background_job(job_id)
         if job is None:
             raise ValueError(t("subagent_cmd.jobs_not_found", job_id=job_id))

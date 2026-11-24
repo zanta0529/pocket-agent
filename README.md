@@ -210,7 +210,7 @@ Type any of the following `/` commands at the prompt:
 - `/subagent <name> <task>` or `/<name> <task>`: **Zero-Token Routing** — intercepts at the CLI layer and dispatches directly in the **foreground** to the named subagent without main-agent LLM overhead (e.g., `/researcher gather competitor info`).
 - `/parallel <name:task> | <name:task>`: Run multiple subagents in parallel in the foreground (Map) and automatically synthesize their reports into one final summary (Reduce). _Separate tasks with `|`_.
 - `/bg <name> <task>`: **Non-blocking Background Subagent** — launches a strictly read-only subagent in the background (up to 3 concurrent jobs) and immediately returns the prompt so you can keep chatting.
-- `/jobs [list | all | show <id> | collect [id] | cancel <id|all> | clear]`: Manage background subagent jobs; defaults to active/uncollected jobs (`all` shows full history, `show` previews results without spending main-context tokens, `collect` injects completed reports into main conversation history, and `clear` removes finished records).
+- `/jobs [list | all | show [id] | collect [id|all] | cancel <id|all> | clear]`: Manage background subagent jobs; defaults to active/uncollected jobs (`all` shows full history, `show`/`collect` open an interactive selector when `id` is omitted, `show` previews results without spending main-context tokens, `collect` injects completed reports into main conversation history or use `collect all`, and `clear` removes finished records).
 - `/skills [name]`: List all available global and workspace skills, or view a specific skill's SOP.
 - `/learn`: Analyze recent conversation context and interactively extract a reusable skill.
 
