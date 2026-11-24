@@ -11,6 +11,7 @@ class AzureEngine(StandardChatCompletionsEngine):
 
     provider_name = PROVIDER_AZURE
     supports_stream_usage = True
+    supports_header_quota = True
 
     def format_reasoning_param(self, reasoning_effort: str | None) -> str | None:
         """僅對明確指定的 low/medium/high 傳遞 reasoning_effort，避免舊系列或非推理部署報錯。"""

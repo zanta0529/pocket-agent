@@ -486,7 +486,21 @@
     "codex_7d_window": "7d weekly window",
     "unknown": "Unknown",
     "codex_window_line": "Codex {label}: {used}% used (Reset: {reset})",
-    "openai_api_usage_hint": "For OpenAI API Key mode, check billing and usage at platform.openai.com/usage."
+    "openai_api_usage_hint": "For OpenAI API Key mode, check billing and usage at platform.openai.com/usage.",
+    "header_quota_pending": "This provider reports live rate-limit quotas via chat response headers; send your first message to view them with /usage.",
+    "rl_metric_requests": "Requests",
+    "rl_metric_tokens": "Tokens",
+    "rl_metric_general": "API Rate Limit",
+    "rl_window_minute": "Per-minute",
+    "rl_window_hour": "Hourly",
+    "rl_window_day": "Daily",
+    "rl_window_month": "Monthly",
+    "rl_bucket_full": "{label}: {remaining:,} / {limit:,} remaining (used {used:,}{reset_suffix})",
+    "rl_bucket_remaining_only": "{label}: {remaining:,} remaining{reset_suffix}",
+    "rl_bucket_limit_only": "{label}: limit {limit:,}{reset_suffix}",
+    "rl_reset_in": ", resets {time} (in ~{countdown})",
+    "rl_reset_passed": ", should have reset at {time}",
+    "rl_captured_at": "(Snapshot from last API response headers: {time})"
   },
   "context_usage": {
     "kind_estimate": "estimated",

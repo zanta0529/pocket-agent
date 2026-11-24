@@ -133,9 +133,13 @@ class QuotaInfo:
 class BaseEngine:
     # 能力旗標：是否支援內建的圖片生成工具（由各 Adapter 覆寫）
     supports_image_generation: bool = False
+    # 能力旗標：是否透過 API 回應標頭回報即時限流額度（由各 Adapter 覆寫）
+    supports_header_quota: bool = False
 
     # (provider, base_url, model) -> (window_tokens, expire_ts)
     _context_window_cache: dict[tuple[str, str, str], tuple[int, float]] = {}
+    # (provider, base_url, model) -> RateLimitSnapshot
+    _rate_limit_cache: dict[tuple[str, str, str], Any] = {}
 
     def __init__(self, client: Any, model: str, provider: str | None = None):
         self.client = client
@@ -234,11 +238,26 @@ class BaseEngine:
             "工具呼叫（例如產生整份 PDF）過於龐大，導致 API 伺服器中斷連線或逾時。"
         )
 
+    def record_rate_limit_headers(self, headers: Any) -> Any:
+        """解析並快取最近一次回應標頭中的限流配額資訊。"""
+        from pocket_agent.engines.rate_limits import parse_rate_limit_snapshot
+
+        snapshot = parse_rate_limit_snapshot(headers)
+        if snapshot is not None:
+            self._rate_limit_cache[self._cache_key()] = snapshot
+        return snapshot
+
+    def get_cached_rate_limit_snapshot(self) -> Any:
+        """取得目前 (provider, base_url, model) 對應的限流標頭快照。"""
+        return self._rate_limit_cache.get(self._cache_key())
+
     async def get_quota(self) -> QuotaInfo:
         """
         查詢當前 Provider 的額度狀態。預設為不支援。
         """
-        return QuotaInfo(is_supported=False, message="此 Provider 不支援透過 API 直接查詢額度。")
+        from pocket_agent.system.i18n import t
+
+        return QuotaInfo(is_supported=False, message=t("quota.unsupported"))
 
     def format_reasoning_param(self, reasoning_effort: str | None) -> Any:
         """將統一的 reasoning_effort ('auto'|'high'|'medium'|'low'|'none') 轉為供應商專屬參數。"""

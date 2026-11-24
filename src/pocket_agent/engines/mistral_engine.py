@@ -10,6 +10,7 @@ class MistralEngine(StandardChatCompletionsEngine):
 
     provider_name = PROVIDER_MISTRAL
     supports_stream_usage = False
+    supports_header_quota = True
 
     async def fetch_context_window(self) -> int | None:
         return await self._fetch_context_window_from_models(

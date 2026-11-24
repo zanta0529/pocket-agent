@@ -123,4 +123,4 @@ flowchart TD
 
 1. **無縫切換**：使用者可透過 `/model` 指令即時切換雲端（OpenAI / OpenRouter / Cerebras / Gemini / Groq / Mistral / SambaNova / Azure / Ollama Cloud）或本機（Ollama / OpenAI-Compatible）模型，上層渲染與工具呼叫邏輯完全不需修改。
 2. **平滑相容**：無論底層是否原生支援分離式 Reasoning 欄位，轉接器皆統一收斂為 `EventThinking` 事件，提供一致的使用者體驗。
-3. **職責分離與擴充性**：底層連線與憑證由 `Provider` 策略負責，協定與串流解析由 `Engine` 負責。常見的 HTTP 429 限流標頭解析（`BaseEngine.parse_rate_limit_headers`）與 `/models` 視窗探測（`StandardChatCompletionsEngine._fetch_context_window_from_models`）已集中於基底類別，各雲端供應商僅透過薄子類別宣告差異參數，新增標準相容服務只需實作 `Provider`（必要時加上薄 `Engine` 子類別）並註冊於 `ENGINE_MAP` 即可。
+3. **職責分離與擴充性**：底層連線與憑證由 `Provider` 策略負責，協定與串流解析由 `Engine` 負責。常見的 HTTP 429 限流標頭解析（`BaseEngine.parse_rate_limit_headers`）、被動回應標頭額度快照（`supports_header_quota`／`rate_limits.py`）與 `/models` 視窗探測（`StandardChatCompletionsEngine._fetch_context_window_from_models`）已集中於基底類別，各雲端供應商僅透過薄子類別宣告差異參數，新增標準相容服務只需實作 `Provider`（必要時加上薄 `Engine` 子類別）並註冊於 `ENGINE_MAP` 即可。

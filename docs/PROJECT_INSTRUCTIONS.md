@@ -66,7 +66,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
    - 於 `system/providers/__init__.py` 註冊至 `PROVIDER_STRATEGIES`；禁止在 `wizard.py` 或 `/model` 指令硬編碼供應商清單。
 3. **Engine 轉接器分層與共用上提（Adapter／Factory）**：
    - **何時獨立建立 `<name>_engine.py`**：當供應商具備任一專屬協定行為（如 `supports_stream_usage` 差異、`reasoning_effort`／`reasoning_format` 轉換、`/models` 視窗探測、`get_quota` 或專屬錯誤解析）時，應建立繼承 `StandardChatCompletionsEngine` 的薄子類別（若協定完全非 Chat Completions 則繼承 `BaseEngine`）；僅當完全符合預設 Chat Completions 行為且無專屬參數時，方直接共用 `StandardChatCompletionsEngine`。
-   - **共用能力優先複用基底**：串流推理欄位（`delta.reasoning_content` 與 `delta.reasoning`）、`<think>` 狀態機、`finish_reason == "tool_calls"` 工具派發邊界、HTTP 429 標頭解析（`BaseEngine.parse_rate_limit_headers()`）與 `/models` 視窗探測（`StandardChatCompletionsEngine._fetch_context_window_from_models()`）一律集中於基底維護；禁止在基底寫 `if provider == ...` 分支，也禁止在各子類別複製貼上 HTTP 請求、快取或 429 標頭解析樣板。
+   - **共用能力優先複用基底**：串流推理欄位（`delta.reasoning_content` 與 `delta.reasoning`）、`<think>` 狀態機、`finish_reason == "tool_calls"` 工具派發邊界、HTTP 429 標頭解析（`BaseEngine.parse_rate_limit_headers()`）與 `/models` 視窗探測（`StandardChatCompletionsEngine._fetch_context_window_from_models()`）一律集中於基底維護；若供應商透過 `x-ratelimit-*` 回應標頭回報即時限流額度，僅需在薄引擎子類別宣告 `supports_header_quota = True`，即自動複用 `engines/rate_limits.py` 與 `StandardChatCompletionsEngine` 的標頭快照及 `/usage` 呈現。禁止在基底寫 `if provider == ...` 分支，也禁止在各子類別複製貼上 HTTP 請求、快取、429 或標頭額度解析樣板。
    - **推理強度安全預設**：`format_reasoning_param()` 遇到 `"auto"` 或未設定時不得送出供應商推理參數，以免非推理模型回傳 HTTP 400。
    - **工廠與能力旗標**：於 `engines/factory.py` 的 `ENGINE_MAP` 註冊引擎，並於 `resolve_provider()` 使用 `_matches_host()` 嚴格網域比對（禁止子字串比對）；前端功能判斷僅能查詢引擎／Agent 能力旗標（如 `supports_image_generation`）。
 4. **多語系（i18n）同步**：

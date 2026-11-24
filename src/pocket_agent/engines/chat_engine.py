@@ -1,3 +1,4 @@
+import inspect
 import logging
 import time
 from typing import Any, AsyncGenerator, Callable, Optional
@@ -11,8 +12,10 @@ from pocket_agent.engines.base import (
     EventToolCallDone,
     EventToolCallStart,
     EventUsage,
+    QuotaInfo,
     usage_field,
 )
+from pocket_agent.engines.rate_limits import format_rate_limit_quota
 
 log = logging.getLogger("pocket-agent")
 
@@ -156,6 +159,30 @@ class StandardChatCompletionsEngine(BaseEngine):
                 return val
         return None
 
+    @staticmethod
+    def _should_use_raw_response(completions: Any) -> bool:
+        """僅在真實 OpenAI SDK 或明確提供非同步 with_raw_response.create 時啟用標頭攔截。"""
+        raw_api = getattr(completions, "with_raw_response", None)
+        raw_create = getattr(raw_api, "create", None)
+        if raw_create is None:
+            return False
+        if inspect.iscoroutinefunction(raw_create):
+            return True
+        if inspect.iscoroutinefunction(getattr(raw_create, "__call__", None)):
+            return True
+        return type(completions).__module__.startswith("openai.")
+
+    async def get_quota(self) -> QuotaInfo:
+        """優先回傳最近一次對話回應標頭的即時限流快照。"""
+        from pocket_agent.system.i18n import t
+
+        snapshot = self.get_cached_rate_limit_snapshot()
+        if snapshot is not None:
+            return format_rate_limit_quota(snapshot)
+        if self.supports_header_quota:
+            return QuotaInfo(is_supported=False, message=t("quota.header_quota_pending"))
+        return await super().get_quota()
+
     def _build_extra_body(self, reasoning_param: Any) -> dict[str, Any] | None:
         """供子類別覆寫以注入供應商專屬之 extra_body 參數。"""
         return None
@@ -250,8 +277,18 @@ class StandardChatCompletionsEngine(BaseEngine):
             create_kwargs["extra_body"] = extra_body
 
         try:
-            stream = await self.client.chat.completions.create(**create_kwargs)
+            completions = self.client.chat.completions
+            if self._should_use_raw_response(completions):
+                raw_resp = await completions.with_raw_response.create(**create_kwargs)
+                self.record_rate_limit_headers(getattr(raw_resp, "headers", None))
+                parsed_stream = raw_resp.parse()
+                stream = await parsed_stream if inspect.isawaitable(parsed_stream) else parsed_stream
+            else:
+                stream = await completions.create(**create_kwargs)
         except Exception as e:
+            resp_headers = getattr(getattr(e, "response", None), "headers", None)
+            if resp_headers is not None:
+                self.record_rate_limit_headers(resp_headers)
             log.info(f"Standard chat completion failed: {e}")
             raise
 

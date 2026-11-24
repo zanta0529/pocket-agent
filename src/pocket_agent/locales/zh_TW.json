@@ -486,7 +486,21 @@
     "codex_7d_window": "7 天週額度視窗",
     "unknown": "未知",
     "codex_window_line": "Codex {label}: 已用 {used}% (重置時間：{reset})",
-    "openai_api_usage_hint": "OpenAI API Key 模式請至 platform.openai.com/usage 查看帳單與用量。"
+    "openai_api_usage_hint": "OpenAI API Key 模式請至 platform.openai.com/usage 查看帳單與用量。",
+    "header_quota_pending": "此供應商透過對話回應標頭回報即時限流額度，送出第一則訊息後即可於 /usage 檢視。",
+    "rl_metric_requests": "請求額度",
+    "rl_metric_tokens": "Token 額度",
+    "rl_metric_general": "API 額度",
+    "rl_window_minute": "每分鐘",
+    "rl_window_hour": "每小時",
+    "rl_window_day": "每日",
+    "rl_window_month": "每月",
+    "rl_bucket_full": "{label}：剩餘 {remaining:,} / 上限 {limit:,}（已用 {used:,}{reset_suffix}）",
+    "rl_bucket_remaining_only": "{label}：剩餘 {remaining:,}{reset_suffix}",
+    "rl_bucket_limit_only": "{label}：上限 {limit:,}{reset_suffix}",
+    "rl_reset_in": "，重置：{time}（約 {countdown}）",
+    "rl_reset_passed": "，應已於 {time} 重置",
+    "rl_captured_at": "（以上為最近一次 API 回應標頭快照：{time}）"
   },
   "context_usage": {
     "kind_estimate": "估算",

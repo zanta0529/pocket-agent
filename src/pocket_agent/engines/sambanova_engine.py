@@ -11,6 +11,7 @@ class SambaNovaEngine(StandardChatCompletionsEngine):
 
     provider_name = PROVIDER_SAMBANOVA
     supports_stream_usage = True
+    supports_header_quota = True
 
     def format_reasoning_param(self, reasoning_effort: str | None) -> str | None:
         """僅對明確指定的 low/medium/high 傳遞 reasoning_effort，auto/none 不額外送出。"""

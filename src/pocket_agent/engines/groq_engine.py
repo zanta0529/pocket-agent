@@ -12,6 +12,7 @@ class GroqEngine(StandardChatCompletionsEngine):
 
     provider_name = PROVIDER_GROQ
     supports_stream_usage = True
+    supports_header_quota = True
 
     def format_reasoning_param(self, reasoning_effort: str | None) -> str | None:
         """將統一的推理強度轉為 Groq 支援的等級；auto 不傳以避免非推理模型報錯。"""
