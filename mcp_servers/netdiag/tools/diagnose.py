@@ -2,7 +2,6 @@
 
 from typing import Any
 
-from mcp_servers._shared import CONSTANTS
 from mcp_servers.netdiag.dns_adapter import create_dns_adapter
 from mcp_servers.netdiag.pipeline import AUDIT, DiagnosticOrchestrator
 from mcp_servers.netdiag.policy import DefaultNetdiagPolicy
@@ -16,7 +15,7 @@ async def netdiag_diagnose(
     method: str = "HEAD",
     host_header: str = "",
     samples: int = 1,
-    timeout_sec: float = CONSTANTS.netdiag_default_timeout_sec,
+    timeout_sec: float | None = None,
 ) -> str:
     """執行階段式唯讀網站與網路診斷（DNS → TCP → TLS 憑證鏈 → HTTP），產出跨單位舉證報告。
 
@@ -26,7 +25,7 @@ async def netdiag_diagnose(
         method: 唯讀 HTTP 方法（僅允許 HEAD 或 GET，預設 HEAD；不回傳 HTML 正文）。
         host_header: 選填 Host／SNI 覆寫（專供內網私有 IP 虛擬主機除錯使用）。
         samples: 採樣次數（1~3，預設 1）。
-        timeout_sec: 單階段逾時秒數（3.0~15.0，預設 10.0）。
+        timeout_sec: 單階段逾時秒數（3.0~15.0，未指定時採用 NETDIAG_TIMEOUT 設定）。
     """
     policy = DefaultNetdiagPolicy()
     dns_adapter = create_dns_adapter()

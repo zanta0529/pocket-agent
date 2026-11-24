@@ -48,11 +48,19 @@ class DnspythonResolverAdapter(DnsResolverAdapter):
 
     def _resolve_sync(self, hostname: str, timeout_sec: float) -> DnsStageData:
         start = time.perf_counter()
+        deadline = start + timeout_sec
         resolver = self._build_resolver(None, timeout_sec)
         cname_chain: list[str] = []
         current = hostname
         seen: set[str] = {hostname.lower().rstrip(".")}
+        timed_out = False
         for _ in range(CONSTANTS.netdiag_dns_max_cname_hops):
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                timed_out = True
+                break
+            resolver.lifetime = remaining
+            resolver.timeout = max(0.1, min(remaining, 2.0))
             try:
                 ans = resolver.resolve(current, "CNAME")
                 target = str(ans[0].target).rstrip(".")
@@ -67,20 +75,27 @@ class DnspythonResolverAdapter(DnsResolverAdapter):
 
         ips: list[str] = []
         ttl_val: int | None = None
-        last_err = ""
-        for rtype in ("A", "AAAA"):
-            try:
-                ans = resolver.resolve(current, rtype)
-                if ttl_val is None and ans.rrset is not None:
-                    ttl_val = int(ans.rrset.ttl)
-                for rdata in ans:
-                    addr = str(rdata)
-                    if addr not in ips:
-                        ips.append(addr)
-            except (self._resolver_mod.NoAnswer, self._resolver_mod.NXDOMAIN) as exc:
-                last_err = type(exc).__name__
-            except self._exception_mod.DNSException as exc:
-                last_err = f"{type(exc).__name__}: {exc}"
+        last_err = "Timeout: DNS stage budget exhausted" if timed_out else ""
+        if not timed_out:
+            for rtype in ("A", "AAAA"):
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    last_err = "Timeout: DNS stage budget exhausted"
+                    break
+                resolver.lifetime = remaining
+                resolver.timeout = max(0.1, min(remaining, 2.0))
+                try:
+                    ans = resolver.resolve(current, rtype)
+                    if ttl_val is None and ans.rrset is not None:
+                        ttl_val = int(ans.rrset.ttl)
+                    for rdata in ans:
+                        addr = str(rdata)
+                        if addr not in ips:
+                            ips.append(addr)
+                except (self._resolver_mod.NoAnswer, self._resolver_mod.NXDOMAIN) as exc:
+                    last_err = type(exc).__name__
+                except self._exception_mod.DNSException as exc:
+                    last_err = f"{type(exc).__name__}: {exc}"
 
         elapsed_ms = round((time.perf_counter() - start) * 1000.0, 2)
         if not ips:
@@ -107,6 +122,7 @@ class DnspythonResolverAdapter(DnsResolverAdapter):
         timeout_sec: float,
     ) -> ResolverQueryResult:
         start = time.perf_counter()
+        deadline = start + timeout_sec
         label = nameserver if nameserver else "system_default"
         try:
             resolver = self._build_resolver(nameserver, timeout_sec)
@@ -122,7 +138,14 @@ class DnspythonResolverAdapter(DnsResolverAdapter):
         cname_chain: list[str] = []
         errors: list[str] = []
 
-        for rtype in record_types:
+        for idx, rtype in enumerate(record_types):
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                for rem_type in record_types[idx:]:
+                    errors.append(f"{rem_type}: Timeout")
+                break
+            resolver.lifetime = remaining
+            resolver.timeout = max(0.1, min(remaining, 2.0))
             try:
                 ans = resolver.resolve(domain, rtype)
                 ttl = int(ans.rrset.ttl) if ans.rrset is not None else None
@@ -213,6 +236,14 @@ class SocketFallbackResolverAdapter(DnsResolverAdapter):
                 status="failed",
                 error="dnspython required for custom nameserver queries",
             )
+        supported_types = tuple(rt for rt in record_types if rt in ("A", "AAAA"))
+        unsupported_types = tuple(rt for rt in record_types if rt not in ("A", "AAAA"))
+        if not supported_types:
+            return ResolverQueryResult(
+                resolver_label="system_default",
+                status="failed",
+                error=f"Socket fallback only supports A/AAAA (unsupported: {', '.join(unsupported_types)})",
+            )
         res = await self.resolve_host_ips(domain, timeout_sec)
         if res.status != "ok":
             return ResolverQueryResult(
@@ -224,13 +255,16 @@ class SocketFallbackResolverAdapter(DnsResolverAdapter):
         items: list[DnsRecordItem] = []
         for ip in res.ips:
             rtype = "AAAA" if ":" in ip else "A"
-            if rtype in record_types:
+            if rtype in supported_types:
                 items.append(DnsRecordItem(record_type=rtype, ttl=None, value=ip))
+        status = "partial" if unsupported_types else "ok"
+        err = f"Unsupported in socket fallback: {', '.join(unsupported_types)}" if unsupported_types else ""
         return ResolverQueryResult(
             resolver_label="system_default",
-            status="ok",
+            status=status,
             records=tuple(items),
             latency_ms=res.latency_ms,
+            error=err,
         )
 
 

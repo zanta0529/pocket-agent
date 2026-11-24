@@ -68,6 +68,10 @@ class EscalationMarkdownFormatter(ReportFormatter):
                 "- No access to internal firewall rules, load-balancer pools, or remote server configs.",
             ]
         )
+        if report.proxy_info.used:
+            lines.append(
+                "- Proxy mode active: DNS resolution and target IP egress enforcement depend on the corporate proxy."
+            )
         if report.escalation_hint:
             lines.extend(["", "## Escalation Hints", f"- {report.escalation_hint}"])
 

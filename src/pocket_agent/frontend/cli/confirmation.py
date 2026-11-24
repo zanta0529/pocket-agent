@@ -65,6 +65,13 @@ def _format_github_create_pr(tool_name: str, payload: dict[str, Any]) -> str:
     )
 
 
+def _format_netdiag_timeout(payload: dict[str, Any]) -> str:
+    timeout_val = payload.get("timeout_sec")
+    if timeout_val is None:
+        return t("confirmation.netdiag_timeout_default")
+    return t("confirmation.netdiag_timeout", timeout=timeout_val)
+
+
 def _format_netdiag_diagnose(tool_name: str, payload: dict[str, Any]) -> str:
     target = str(payload.get("target") or "")
     lines = [
@@ -81,7 +88,7 @@ def _format_netdiag_diagnose(tool_name: str, payload: dict[str, Any]) -> str:
             t("confirmation.netdiag_stage", max_stage=payload.get("max_stage") or "http"),
             t("confirmation.netdiag_method", method=payload.get("method") or "HEAD"),
             t("confirmation.netdiag_samples", samples=payload.get("samples", 1)),
-            t("confirmation.netdiag_timeout", timeout=payload.get("timeout_sec", 10.0)),
+            _format_netdiag_timeout(payload),
         ]
     )
     return "\n".join(lines)
@@ -96,7 +103,7 @@ def _format_netdiag_dns_compare(tool_name: str, payload: dict[str, Any]) -> str:
             t("confirmation.netdiag_domain", domain=payload.get("domain") or ""),
             t("confirmation.netdiag_record_types", record_types=payload.get("record_types") or "A,AAAA,CNAME"),
             t("confirmation.netdiag_nameservers", nameservers=nameservers),
-            t("confirmation.netdiag_timeout", timeout=payload.get("timeout_sec", 10.0)),
+            _format_netdiag_timeout(payload),
         ]
     )
 

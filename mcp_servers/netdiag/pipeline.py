@@ -144,10 +144,11 @@ class DiagnosticOrchestrator:
         method: str = "HEAD",
         host_header: str = "",
         samples: int = 1,
-        timeout_sec: float = 10.0,
+        timeout_sec: float | None = None,
     ) -> DiagnosticReport:
         local_ts, utc_ts = _utc_and_local_iso()
         safe_url = self.redaction.redact_url(target)
+        effective_timeout = self.policy.config.default_timeout_sec if timeout_sec is None else float(timeout_sec)
 
         stage_clean = (max_stage or "http").strip().lower()
         method_clean = (method or "HEAD").strip().upper()
@@ -163,11 +164,11 @@ class DiagnosticOrchestrator:
             raise ValueError(
                 t("netdiag_mcp.invalid_samples", samples=samples, max_samples=CONSTANTS.netdiag_max_samples)
             )
-        if not (CONSTANTS.netdiag_min_timeout_sec <= float(timeout_sec) <= CONSTANTS.netdiag_max_timeout_sec):
+        if not (CONSTANTS.netdiag_min_timeout_sec <= effective_timeout <= CONSTANTS.netdiag_max_timeout_sec):
             raise ValueError(
                 t(
                     "netdiag_mcp.invalid_timeout",
-                    timeout=timeout_sec,
+                    timeout=effective_timeout,
                     min_sec=CONSTANTS.netdiag_min_timeout_sec,
                     max_sec=CONSTANTS.netdiag_max_timeout_sec,
                 )
@@ -208,7 +209,7 @@ class DiagnosticOrchestrator:
                 proxy_info,
                 stage_clean,
                 method_clean,
-                float(timeout_sec),
+                effective_timeout,
             )
             runs.append(run)
 
@@ -373,17 +374,18 @@ class DnsCompareOrchestrator:
         domain: str,
         record_types: str = "A,AAAA,CNAME",
         nameservers: str = "",
-        timeout_sec: float = 10.0,
+        timeout_sec: float | None = None,
     ) -> DnsCompareReport:
         local_ts, utc_ts = _utc_and_local_iso()
+        effective_timeout = self.policy.config.default_timeout_sec if timeout_sec is None else float(timeout_sec)
         parsed_types = tuple(dict.fromkeys(rt.strip().upper() for rt in record_types.split(",") if rt.strip()))
         if not parsed_types or any(rt not in ALLOWED_DNS_RECORD_TYPES for rt in parsed_types):
             raise ValueError(t("netdiag_mcp.invalid_record_types", record_types=record_types))
-        if not (CONSTANTS.netdiag_min_timeout_sec <= float(timeout_sec) <= CONSTANTS.netdiag_max_timeout_sec):
+        if not (CONSTANTS.netdiag_min_timeout_sec <= effective_timeout <= CONSTANTS.netdiag_max_timeout_sec):
             raise ValueError(
                 t(
                     "netdiag_mcp.invalid_timeout",
-                    timeout=timeout_sec,
+                    timeout=effective_timeout,
                     min_sec=CONSTANTS.netdiag_min_timeout_sec,
                     max_sec=CONSTANTS.netdiag_max_timeout_sec,
                 )
@@ -394,17 +396,18 @@ class DnsCompareOrchestrator:
             validated_ns = self.policy.validate_nameservers(nameservers)
         except PolicyError as exc:
             err_msg = self.redaction.redact(str(exc))
+            safe_domain = self.redaction.redact(domain.strip()) or "<invalid-domain>"
             AUDIT.log(
                 "netdiag_dns_compare",
                 f"types={','.join(parsed_types)}",
-                target=domain,
+                target=safe_domain,
                 status="BLOCKED",
                 detail=err_msg,
             )
             return DnsCompareReport(
                 observed_at_local=local_ts,
                 observed_at_utc=utc_ts,
-                domain=domain.strip(),
+                domain=safe_domain,
                 record_types=parsed_types,
                 fallback_used=False,
                 results=(),
@@ -413,13 +416,17 @@ class DnsCompareOrchestrator:
             )
 
         targets: list[str | None] = [None, *validated_ns]
-        coros = [self.dns_adapter.query_records(clean_domain, parsed_types, ns, float(timeout_sec)) for ns in targets]
+        coros = [self.dns_adapter.query_records(clean_domain, parsed_types, ns, effective_timeout) for ns in targets]
         results = tuple(await asyncio.gather(*coros))
         fallback_used = type(self.dns_adapter).__name__ == "SocketFallbackResolverAdapter"
 
         answer_sets: dict[str, set[str]] = {}
         mail_signals: list[str] = []
+        failed_resolvers: list[str] = []
         for res in results:
+            if res.status != "ok":
+                failed_resolvers.append(f"{res.resolver_label}({res.status})")
+                continue
             vals = {f"{rec.record_type}:{rec.value}" for rec in res.records}
             answer_sets[res.resolver_label] = vals
             for rec in res.records:
@@ -429,16 +436,26 @@ class DnsCompareOrchestrator:
                     mail_signals.append(f"DMARC record found on {res.resolver_label}")
 
         unique_sets = {frozenset(v) for v in answer_sets.values()}
-        discrepancy = (
-            "Discrepancy detected across resolvers (possible Split-Horizon DNS or propagation delay)."
-            if len(unique_sets) > 1
-            else "All queried resolvers returned consistent answer sets."
-        )
+        if len(answer_sets) < 2:
+            suffix = f" ({', '.join(failed_resolvers)})." if failed_resolvers else "."
+            discrepancy = f"Unable to compare resolvers: fewer than 2 resolvers returned complete 'ok' results{suffix}"
+        elif len(unique_sets) > 1:
+            discrepancy = "Discrepancy detected across resolvers (possible Split-Horizon DNS or propagation delay)."
+        else:
+            discrepancy = "All queried resolvers returned consistent answer sets."
+
+        if not answer_sets:
+            audit_status = "FAILED"
+        elif failed_resolvers:
+            audit_status = "PARTIAL"
+        else:
+            audit_status = "OK"
+
         AUDIT.log(
             "netdiag_dns_compare",
             f"types={','.join(parsed_types)} ns={len(targets)}",
             target=clean_domain,
-            status="OK",
+            status=audit_status,
         )
         return DnsCompareReport(
             observed_at_local=local_ts,

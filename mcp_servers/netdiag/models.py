@@ -9,6 +9,7 @@ class NetdiagConfig:
 
     allow_private_networks: bool = False
     allow_loopback: bool = False
+    allow_proxy: bool = False
     allowed_cidrs: tuple[str, ...] = ()
     allowed_domains: tuple[str, ...] = ()
     allowed_ports: tuple[int, ...] = (80, 443, 8080, 8443)

@@ -41,6 +41,7 @@ def _clean_netdiag_env(monkeypatch, tmp_path):
     for key in (
         "NETDIAG_ALLOW_PRIVATE_NETWORKS",
         "NETDIAG_ALLOW_LOOPBACK",
+        "NETDIAG_ALLOW_PROXY",
         "NETDIAG_ALLOWED_CIDRS",
         "NETDIAG_ALLOWED_DOMAINS",
         "NETDIAG_ALLOWED_PORTS",
@@ -452,3 +453,215 @@ def test_ac_func_3_dns_compare_split_horizon_and_fallback():
     with patch("mcp_servers.netdiag.dns_adapter.importlib.import_module", side_effect=ImportError):
         adapter = nd_dns.create_dns_adapter()
     assert isinstance(adapter, nd_dns.SocketFallbackResolverAdapter)
+
+
+def test_proxy_policy_default_fail_closed_opt_in_and_redirect_switch(monkeypatch):
+    """預設拒用 Proxy（fail-closed）；顯式放行後揭露限制並阻斷跨 Proxy 轉址。"""
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy-a.corp.local:8080")
+    pol_default = nd_policy.DefaultNetdiagPolicy()
+    with pytest.raises(nd_policy.PolicyError):
+        pol_default.detect_proxy("https://example.com/")
+
+    monkeypatch.setenv("NETDIAG_ALLOW_PROXY", "true")
+    pol_allowed = nd_policy.DefaultNetdiagPolicy()
+    proxy_a = pol_allowed.detect_proxy("https://example.com/")
+    assert proxy_a.used is True
+
+    target = pol_allowed.validate_target_preflight("https://public.example.com/")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"Location": "https://other.example.org/next"})
+
+    real_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with (
+        patch("mcp_servers.netdiag.http_probe.httpx.AsyncClient") as mock_cls,
+        patch.object(
+            pol_allowed,
+            "detect_proxy",
+            return_value=nd_policy.ProxyInfo(
+                used=True,
+                display_proxy="http://proxy-b.corp.local:8080",
+                raw_url="http://proxy-b.corp.local:8080",
+            ),
+        ),
+    ):
+        mock_cls.return_value = real_client
+        http_res = asyncio.run(
+            nd_http.probe_http(
+                target,
+                None,
+                "HEAD",
+                pol_allowed,
+                _FakeDnsAdapter(),
+                NETDIAG_REDACTION,
+                proxy_a,
+                "certifi",
+                5.0,
+            )
+        )
+    assert http_res.status == "failed"
+    assert http_res.redirect_blocked_reason
+
+    report = nd_pipeline.DiagnosticReport(
+        observed_at_local="2026-11-24T10:00:00+08:00",
+        observed_at_utc="2026-11-24T02:00:00+00:00",
+        target_url="https://public.example.com/",
+        target_scope="domain",
+        host_header="",
+        max_stage="http",
+        method="HEAD",
+        samples_requested=1,
+        proxy_info=proxy_a,
+        first_failure_stage=None,
+        runs=(),
+    )
+    md = EscalationMarkdownFormatter().format_diagnostic(report)
+    assert "Proxy mode active" in md
+
+
+def test_preflight_validation_errors_omit_raw_url_and_host_header():
+    """預檢錯誤不回顯原始 URL、netloc 或未驗證 host_header。"""
+    pol = nd_policy.DefaultNetdiagPolicy()
+    with pytest.raises(nd_policy.PolicyError) as exc_ws:
+        pol.validate_target_preflight("https://example.com/ ?sig=TOP_SECRET_SIG")
+    assert "TOP_SECRET_SIG" not in str(exc_ws.value)
+
+    with pytest.raises(nd_policy.PolicyError) as exc_port:
+        pol.validate_target_preflight("https://example.com:badport/?token=SECRET_TOK")
+    assert "SECRET_TOK" not in str(exc_port.value)
+    assert "badport" not in str(exc_port.value)
+
+    with pytest.raises(nd_policy.PolicyError) as exc_host:
+        pol.validate_target_preflight("https://example.com/", host_header="bad host\r\nX-Inject: 1")
+    assert "X-Inject" not in str(exc_host.value)
+
+    orch = nd_pipeline.DiagnosticOrchestrator(pol, _FakeDnsAdapter())
+    report = asyncio.run(orch.run(target="https://example.com:badport/?sig=SECRET_SIG"))
+    assert report.first_failure_stage == "preflight"
+    assert "SECRET_SIG" not in report.preflight_error
+
+
+def test_stage_timeout_shared_deadline_for_tls_and_http():
+    """TLS 與 HTTP 單階段共享單一逾時預算。"""
+    from mcp_servers.netdiag import tls_probe as nd_tls
+
+    call_count = 0
+
+    async def slow_handshake(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        await asyncio.sleep(0.08)
+        return {
+            "ok": False,
+            "tls_version": None,
+            "cipher_suite": None,
+            "alpn_protocol": None,
+            "cert_chain": (),
+            "latency_ms": 80.0,
+            "error": "TimeoutError: timed out",
+        }
+
+    with patch("mcp_servers.netdiag.tls_probe._handshake_once", side_effect=slow_handshake):
+        tls_res = asyncio.run(nd_tls.probe_tls("93.184.216.34", 443, "example.com", 0.1))
+
+    assert tls_res.status == "failed"
+    assert tls_res.inspected_without_verification is False
+    assert call_count == 1
+
+    pol = nd_policy.DefaultNetdiagPolicy()
+    target = pol.validate_target_preflight("https://public.example.com/")
+
+    class _SlowTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(0.5)
+            return httpx.Response(200)
+
+    real_client = httpx.AsyncClient(transport=_SlowTransport())
+    with patch("mcp_servers.netdiag.http_probe.httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = real_client
+        http_res = asyncio.run(
+            nd_http.probe_http(
+                target,
+                "93.184.216.34",
+                "HEAD",
+                pol,
+                _FakeDnsAdapter(),
+                NETDIAG_REDACTION,
+                nd_policy.ProxyInfo(),
+                "certifi",
+                0.08,
+            )
+        )
+    assert http_res.status == "failed"
+    assert http_res.error
+
+
+def test_dns_compare_excludes_failed_resolvers_and_socket_fallback_status():
+    """僅比較 status=='ok' 解析器；Socket 降級遇到不支援型別回報 partial/failed。"""
+    fake_dns = _FakeDnsAdapter(
+        resolver_map={
+            "system_default": ResolverQueryResult(
+                resolver_label="system_default",
+                status="ok",
+                records=(DnsRecordItem("A", 60, "93.184.216.34"),),
+                latency_ms=2.0,
+            ),
+            "8.8.8.8": ResolverQueryResult(
+                resolver_label="8.8.8.8",
+                status="failed",
+                latency_ms=100.0,
+                error="Timeout",
+            ),
+        }
+    )
+    orch = nd_pipeline.DnsCompareOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
+    report = asyncio.run(orch.run(domain="example.com", record_types="A", nameservers="8.8.8.8"))
+    assert "Unable to compare resolvers" in report.discrepancy_summary
+
+    fallback = nd_dns.SocketFallbackResolverAdapter()
+    with patch.object(
+        fallback,
+        "resolve_host_ips",
+        new=AsyncMock(
+            return_value=nd_pipeline.DnsStageData(
+                status="ok",
+                ips=("93.184.216.34",),
+                pinned_ip="93.184.216.34",
+            )
+        ),
+    ):
+        res_partial = asyncio.run(fallback.query_records("example.com", ("A", "TXT"), None, 5.0))
+        res_failed = asyncio.run(fallback.query_records("example.com", ("TXT",), None, 5.0))
+    assert res_partial.status == "partial"
+    assert res_failed.status == "failed"
+
+
+def test_env_timeout_default_and_confirmation_preview_without_none(monkeypatch):
+    """未傳 timeout_sec 時套用 NETDIAG_TIMEOUT；確認面板正確顯示預設值而非 None。"""
+    monkeypatch.setenv("NETDIAG_TIMEOUT", "6")
+    fake_dns = _FakeDnsAdapter()
+    seen_timeouts: list[float] = []
+    orig_resolve = fake_dns.resolve_host_ips
+
+    async def spy_resolve(hostname: str, timeout_sec: float):
+        seen_timeouts.append(timeout_sec)
+        return await orig_resolve(hostname, timeout_sec)
+
+    fake_dns.resolve_host_ips = spy_resolve  # type: ignore[method-assign]
+    orch = nd_pipeline.DiagnosticOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
+    report = asyncio.run(orch.run(target="https://example.com/", max_stage="dns"))
+    assert report.runs[0].dns.status == "ok"
+    assert seen_timeouts == [6.0]
+
+    async def _check_preview() -> tuple[str, str]:
+        state = SimpleNamespace(accept_edits=True, session_approved_commands=set())
+        bridge = ConfirmationBridge(SimpleNamespace(accept_edits=True), state, MagicMock())
+        preview_diag = bridge._format_command(("mcp__netdiag__netdiag_diagnose", {"target": "https://example.com/"}))
+        preview_dns = bridge._format_command(
+            ("mcp__netdiag__netdiag_dns_compare", {"domain": "example.com", "timeout_sec": None})
+        )
+        return preview_diag, preview_dns
+
+    preview_diag, preview_dns = asyncio.run(_check_preview())
+    assert "None" not in preview_diag
+    assert "None" not in preview_dns

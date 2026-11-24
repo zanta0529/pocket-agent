@@ -318,4 +318,5 @@ Pocket Agent 的解決方案：
 | `NETDIAG_ALLOWED_DOMAINS` | 選填 | `""` | 允許診斷之網域白名單（逗號分隔，支援 `*.example.org`）。 |
 | `NETDIAG_ALLOWED_PORTS` | 選填 | `"80,443,8080,8443"` | 允許探測之連接埠白名單。 |
 | `NETDIAG_ALLOW_LOOPBACK` | 選填 | `"false"` | 設為 `"true"` 才允許診斷 `localhost`／`127.0.0.1`／`::1`。 |
+| `NETDIAG_ALLOW_PROXY` | 選填 | `"false"` | 預設 fail-closed 拒用環境 Proxy；企業代理環境請顯式設為 `"true"`（代理側 DNS／IP 須由代理 ACL 把關）。 |
 | `NETDIAG_TIMEOUT` | 選填 | `"10"` | 單階段逾時秒數（範圍 `3` ~ `15` 秒）。 |

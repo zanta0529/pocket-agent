@@ -103,123 +103,133 @@ async def probe_http(
         client_kwargs["proxy"] = current_proxy.raw_url
 
     try:
-        async with httpx.AsyncClient(**client_kwargs) as client:
-            for hop_idx in range(CONSTANTS.max_redirects + 1):
-                if current_proxy.used:
-                    req_url = current_url
-                    req_headers = {"User-Agent": _USER_AGENT, "Accept": "*/*"}
-                    if host_override:
-                        req_headers["Host"] = host_override
-                    extensions: dict[str, str] = {}
-                    connect_ip_label = f"proxy:{current_proxy.display_proxy}"
-                else:
-                    req_url, req_headers, extensions = _format_pinned_request(
-                        current_url,
-                        current_ip,
-                        current_target.port,
-                        host_override,
-                    )
-                    connect_ip_label = current_ip
-
-                start = time.perf_counter()
-                ttfb_ms = 0.0
-                bytes_read = 0
-                truncated = False
-
-                async with client.stream(
-                    method,
-                    req_url,
-                    headers=req_headers,
-                    extensions=extensions,
-                ) as resp:
-                    ttfb_ms = round((time.perf_counter() - start) * 1000.0, 2)
-                    async for chunk in resp.aiter_bytes():
-                        bytes_read += len(chunk)
-                        if bytes_read >= CONSTANTS.max_response_bytes:
-                            bytes_read = CONSTANTS.max_response_bytes
-                            truncated = True
-                            break
-                    total_ms = round((time.perf_counter() - start) * 1000.0, 2)
-                    filtered_headers, cookies = redaction.filter_response_headers(resp.headers.multi_items())
-                    raw_location = resp.headers.get("location") or ""
-                    safe_location = redaction.redact_url(raw_location) if raw_location else ""
-                    if "location" in filtered_headers and safe_location:
-                        filtered_headers["location"] = redaction.clip_text(
-                            safe_location,
-                            CONSTANTS.netdiag_max_header_value_chars,
+        async with asyncio.timeout(timeout_sec):
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                for hop_idx in range(CONSTANTS.max_redirects + 1):
+                    if current_proxy.used:
+                        req_url = current_url
+                        req_headers = {"User-Agent": _USER_AGENT, "Accept": "*/*"}
+                        if host_override:
+                            req_headers["Host"] = host_override
+                        extensions: dict[str, str] = {}
+                        connect_ip_label = f"proxy:{current_proxy.display_proxy}"
+                    else:
+                        req_url, req_headers, extensions = _format_pinned_request(
+                            current_url,
+                            current_ip,
+                            current_target.port,
+                            host_override,
                         )
-                    hops.append(
-                        HttpHop(
-                            hop_index=hop_idx,
-                            url=redaction.redact_url(current_url),
-                            connect_ip=connect_ip_label,
-                            http_version=resp.http_version,
-                            status_code=resp.status_code,
-                            ttfb_ms=ttfb_ms,
-                            total_ms=total_ms,
-                            bytes_read=bytes_read,
-                            truncated=truncated,
-                            headers=filtered_headers,
-                            set_cookies=cookies,
-                            location=safe_location,
-                        )
-                    )
+                        connect_ip_label = current_ip
 
-                    if resp.status_code not in _REDIRECT_CODES or not raw_location:
-                        return HttpStageData(
-                            status="ok" if resp.status_code < 400 else "failed",
-                            method=method,
-                            hops=tuple(hops),
-                            final_status_code=resp.status_code,
-                            ttfb_ms=ttfb_ms,
-                            total_ms=total_ms,
-                            error="" if resp.status_code < 400 else f"HTTP {resp.status_code}",
+                    start = time.perf_counter()
+                    ttfb_ms = 0.0
+                    bytes_read = 0
+                    truncated = False
+
+                    async with client.stream(
+                        method,
+                        req_url,
+                        headers=req_headers,
+                        extensions=extensions,
+                    ) as resp:
+                        ttfb_ms = round((time.perf_counter() - start) * 1000.0, 2)
+                        async for chunk in resp.aiter_bytes():
+                            bytes_read += len(chunk)
+                            if bytes_read >= CONSTANTS.max_response_bytes:
+                                bytes_read = CONSTANTS.max_response_bytes
+                                truncated = True
+                                break
+                        total_ms = round((time.perf_counter() - start) * 1000.0, 2)
+                        filtered_headers, cookies = redaction.filter_response_headers(resp.headers.multi_items())
+                        raw_location = resp.headers.get("location") or ""
+                        safe_location = redaction.redact_url(raw_location) if raw_location else ""
+                        if "location" in filtered_headers and safe_location:
+                            filtered_headers["location"] = redaction.clip_text(
+                                safe_location,
+                                CONSTANTS.netdiag_max_header_value_chars,
+                            )
+                        hops.append(
+                            HttpHop(
+                                hop_index=hop_idx,
+                                url=redaction.redact_url(current_url),
+                                connect_ip=connect_ip_label,
+                                http_version=resp.http_version,
+                                status_code=resp.status_code,
+                                ttfb_ms=ttfb_ms,
+                                total_ms=total_ms,
+                                bytes_read=bytes_read,
+                                truncated=truncated,
+                                headers=filtered_headers,
+                                set_cookies=cookies,
+                                location=safe_location,
+                            )
                         )
 
-                    if hop_idx >= CONSTANTS.max_redirects:
-                        msg = t("netdiag_mcp.redirect_limit_exceeded", max_redirects=CONSTANTS.max_redirects)
-                        return HttpStageData(
-                            status="failed",
-                            method=method,
-                            hops=tuple(hops),
-                            final_status_code=resp.status_code,
-                            ttfb_ms=ttfb_ms,
-                            total_ms=total_ms,
-                            error=msg,
-                        )
+                        if resp.status_code not in _REDIRECT_CODES or not raw_location:
+                            return HttpStageData(
+                                status="ok" if resp.status_code < 400 else "failed",
+                                method=method,
+                                hops=tuple(hops),
+                                final_status_code=resp.status_code,
+                                ttfb_ms=ttfb_ms,
+                                total_ms=total_ms,
+                                error="" if resp.status_code < 400 else f"HTTP {resp.status_code}",
+                            )
 
-                    next_url = urljoin(current_url, raw_location)
-                    try:
-                        next_target = policy.validate_target_preflight(next_url)
-                        next_proxy = policy.detect_proxy(next_url)
-                        if next_proxy.used != current_proxy.used:
-                            raise PolicyError("Proxy policy mismatch across redirect hop")
-                        next_ip = (
-                            next_target.hostname
-                            if next_proxy.used
-                            else await _resolve_hop_ip(next_target, policy, dns_adapter, timeout_sec)
-                        )
-                    except PolicyError as exc:
-                        reason = redaction.redact(str(exc))
-                        msg = t("netdiag_mcp.redirect_blocked", hop=hop_idx + 1, reason=reason)
-                        return HttpStageData(
-                            status="failed",
-                            method=method,
-                            hops=tuple(hops),
-                            final_status_code=resp.status_code,
-                            ttfb_ms=ttfb_ms,
-                            total_ms=total_ms,
-                            redirect_blocked_reason=reason,
-                            error=msg,
-                        )
+                        if hop_idx >= CONSTANTS.max_redirects:
+                            msg = t("netdiag_mcp.redirect_limit_exceeded", max_redirects=CONSTANTS.max_redirects)
+                            return HttpStageData(
+                                status="failed",
+                                method=method,
+                                hops=tuple(hops),
+                                final_status_code=resp.status_code,
+                                ttfb_ms=ttfb_ms,
+                                total_ms=total_ms,
+                                error=msg,
+                            )
 
-                    current_url = next_url
-                    current_target = next_target
-                    current_ip = next_ip
-                    host_override = ""
+                        next_url = urljoin(current_url, raw_location)
+                        try:
+                            next_target = policy.validate_target_preflight(next_url)
+                            next_proxy = policy.detect_proxy(next_url)
+                            if next_proxy.used != current_proxy.used or (
+                                current_proxy.used and next_proxy.raw_url != current_proxy.raw_url
+                            ):
+                                raise PolicyError(t("netdiag_mcp.proxy_switch_blocked"))
+                            next_ip = (
+                                next_target.hostname
+                                if next_proxy.used
+                                else await _resolve_hop_ip(next_target, policy, dns_adapter, timeout_sec)
+                            )
+                        except PolicyError as exc:
+                            reason = redaction.redact(str(exc))
+                            msg = t("netdiag_mcp.redirect_blocked", hop=hop_idx + 1, reason=reason)
+                            return HttpStageData(
+                                status="failed",
+                                method=method,
+                                hops=tuple(hops),
+                                final_status_code=resp.status_code,
+                                ttfb_ms=ttfb_ms,
+                                total_ms=total_ms,
+                                redirect_blocked_reason=reason,
+                                error=msg,
+                            )
+
+                        current_url = next_url
+                        current_target = next_target
+                        current_ip = next_ip
+                        host_override = ""
 
     except asyncio.CancelledError:
         raise
+    except TimeoutError:
+        return HttpStageData(
+            status="failed",
+            method=method,
+            hops=tuple(hops),
+            error=t("netdiag_mcp.stage_timeout", timeout=round(timeout_sec, 2)),
+        )
     except (httpx.HTTPError, OSError, ssl.SSLError) as exc:
         err_prefix = (
             t("netdiag_mcp.proxy_failed", error=str(exc)) if current_proxy.used else f"{type(exc).__name__}: {exc}"

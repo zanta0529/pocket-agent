@@ -66,6 +66,7 @@ def load_netdiag_config() -> NetdiagConfig:
     return NetdiagConfig(
         allow_private_networks=_parse_bool_env("NETDIAG_ALLOW_PRIVATE_NETWORKS", False),
         allow_loopback=_parse_bool_env("NETDIAG_ALLOW_LOOPBACK", False),
+        allow_proxy=_parse_bool_env("NETDIAG_ALLOW_PROXY", False),
         allowed_cidrs=_parse_csv_env("NETDIAG_ALLOWED_CIDRS"),
         allowed_domains=_parse_csv_env("NETDIAG_ALLOWED_DOMAINS"),
         allowed_ports=_parse_ports_env("NETDIAG_ALLOWED_PORTS", CONSTANTS.netdiag_default_allowed_ports),
@@ -128,12 +129,12 @@ class DefaultNetdiagPolicy(NetworkAccessPolicy):
     def validate_target_preflight(self, target: str, *, host_header: str = "") -> ValidatedTarget:
         raw = (target or "").strip()
         if not raw or _CTRL_OR_WS_RE.search(raw):
-            raise PolicyError(t("netdiag_mcp.invalid_url", url=repr(target)))
+            raise PolicyError(t("netdiag_mcp.invalid_url"))
 
         try:
             parts = urlsplit(raw)
         except ValueError as exc:
-            raise PolicyError(t("netdiag_mcp.invalid_url", url=repr(target))) from exc
+            raise PolicyError(t("netdiag_mcp.invalid_url")) from exc
 
         scheme = parts.scheme.lower()
         if scheme not in ("http", "https"):
@@ -143,12 +144,12 @@ class DefaultNetdiagPolicy(NetworkAccessPolicy):
 
         hostname = (parts.hostname or "").strip().strip("[]").lower()
         if not hostname:
-            raise PolicyError(t("netdiag_mcp.invalid_url", url=repr(target)))
+            raise PolicyError(t("netdiag_mcp.invalid_url"))
 
         try:
             port = parts.port or (443 if scheme == "https" else 80)
         except ValueError as exc:
-            raise PolicyError(t("netdiag_mcp.invalid_port", port=repr(parts.netloc))) from exc
+            raise PolicyError(t("netdiag_mcp.invalid_port")) from exc
 
         if port not in self.config.allowed_ports:
             raise PolicyError(t("netdiag_mcp.port_not_allowed", port=port))
@@ -156,7 +157,7 @@ class DefaultNetdiagPolicy(NetworkAccessPolicy):
         clean_host_header = (host_header or "").strip().rstrip(".")
         if clean_host_header:
             if _CTRL_OR_WS_RE.search(clean_host_header) or not _is_valid_hostname(clean_host_header):
-                raise PolicyError(t("netdiag_mcp.invalid_host_header", host_header=clean_host_header))
+                raise PolicyError(t("netdiag_mcp.invalid_host_header"))
             if self.config.allowed_domains and not _matches_domain_allowlist(
                 clean_host_header, self.config.allowed_domains
             ):
@@ -175,7 +176,7 @@ class DefaultNetdiagPolicy(NetworkAccessPolicy):
             scope_label = self._classify_ip_scope(norm_ip)
         else:
             if not _is_valid_hostname(hostname):
-                raise PolicyError(t("netdiag_mcp.invalid_url", url=repr(target)))
+                raise PolicyError(t("netdiag_mcp.invalid_url"))
             if (hostname == "localhost" or hostname.endswith(".localhost")) and not self.config.allow_loopback:
                 raise PolicyError(t("netdiag_mcp.loopback_blocked", ip=hostname))
             if self.config.allowed_domains and not _matches_domain_allowlist(hostname, self.config.allowed_domains):
@@ -194,15 +195,15 @@ class DefaultNetdiagPolicy(NetworkAccessPolicy):
     def validate_domain_preflight(self, domain: str) -> str:
         clean = (domain or "").strip().lower().rstrip(".")
         if not clean or _CTRL_OR_WS_RE.search(clean) or clean.startswith("-"):
-            raise PolicyError(t("netdiag_mcp.invalid_url", url=repr(domain)))
+            raise PolicyError(t("netdiag_mcp.invalid_url"))
         try:
             ipaddress.ip_address(clean.strip("[]"))
         except ValueError:
             pass
         else:
-            raise PolicyError(t("netdiag_mcp.invalid_url", url=repr(domain)))
+            raise PolicyError(t("netdiag_mcp.invalid_url"))
         if not _is_valid_hostname(clean):
-            raise PolicyError(t("netdiag_mcp.invalid_url", url=repr(domain)))
+            raise PolicyError(t("netdiag_mcp.invalid_url"))
         if (clean == "localhost" or clean.endswith(".localhost")) and not self.config.allow_loopback:
             raise PolicyError(t("netdiag_mcp.loopback_blocked", ip=clean))
         if self.config.allowed_domains and not _matches_domain_allowlist(clean, self.config.allowed_domains):
@@ -288,6 +289,8 @@ class DefaultNetdiagPolicy(NetworkAccessPolicy):
         p_scheme = p_parts.scheme.lower()
         if p_scheme not in ("http", "https"):
             raise PolicyError(t("netdiag_mcp.unsupported_proxy", scheme=p_scheme or "<empty>"))
+        if not self.config.allow_proxy:
+            raise PolicyError(t("netdiag_mcp.proxy_blocked_by_policy"))
         p_host = p_parts.hostname or ""
         p_port = p_parts.port or (443 if p_scheme == "https" else 80)
         return ProxyInfo(used=True, display_proxy=f"{p_scheme}://{p_host}:{p_port}", raw_url=proxy_url)

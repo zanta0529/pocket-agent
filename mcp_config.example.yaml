@@ -219,4 +219,5 @@ servers:
   #     NETDIAG_ALLOWED_DOMAINS: ""                # 選填：限制僅允許診斷指定網域（逗號分隔，支援 "*.example.org"）
   #     NETDIAG_ALLOWED_PORTS: "80,443,8080,8443"  # 允許探測之連接埠白名單
   #     NETDIAG_ALLOW_LOOPBACK: "false"            # 預設封鎖 localhost / 127.0.0.1 / ::1
+  #     NETDIAG_ALLOW_PROXY: "false"               # 預設 fail-closed 拒用環境 Proxy（企業代理環境請顯式設為 "true"）
   #     NETDIAG_TIMEOUT: "10"                      # 單階段逾時秒數（3~15）
