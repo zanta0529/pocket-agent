@@ -536,6 +536,15 @@ class BackgroundSubagentManager:
                 cancelled += 1
         return cancelled
 
+    def clear_finished(self) -> int:
+        """清除所有已結束（completed / failed / cancelled）的背景工作紀錄，保留執行中工作。"""
+        finished_ids = [jid for jid, job in self._jobs.items() if job.status != "running"]
+        for jid in finished_ids:
+            self._jobs.pop(jid, None)
+        if finished_ids:
+            self._notify_state_change()
+        return len(finished_ids)
+
     async def shutdown(self, timeout: float = 3.0) -> None:
         running = [j for j in self._jobs.values() if j.status == "running"]
         if not running:

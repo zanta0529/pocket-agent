@@ -488,3 +488,111 @@ def test_background_visibility_two_line_toolbar_footer_and_toast(monkeypatch) ->
         assert "[背景完成]" in out.getvalue()
 
     asyncio.run(_toast_scenario())
+
+
+def test_jobs_active_view_all_clear_formatting_and_new_session_cleanup(monkeypatch) -> None:
+    """方案 A: /jobs 預設只看活躍、/jobs all、/jobs clear、清單去重與摘要、/new 聯動清理。"""
+
+    async def _scenario() -> None:
+        mock_client = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.openai_tools.return_value = []
+
+        running_started = asyncio.Event()
+        release_running = asyncio.Event()
+
+        async def _chat_mock(self_sub, task: str) -> tuple[str, str, str]:
+            if task.startswith("slow"):
+                running_started.set()
+                await release_running.wait()
+                return "", "slow done", "0s"
+            return "", f"done: {task}", "0s"
+
+        sub_def = {"name": "researcher", "description": "r", "allowed_tools": ["read_file"], "system_prompt": "SP"}
+        monkeypatch.setattr(
+            "pocket_agent.core.subagents.get_subagent", lambda n: sub_def if n == "researcher" else None
+        )
+        monkeypatch.setattr(Agent, "chat", _chat_mock)
+        monkeypatch.setattr("pocket_agent.core.sessions.save_session", lambda *a, **kw: None)
+
+        agent = Agent(client=mock_client, mcp=mock_mcp, model="m", provider="openai")
+        state = CliState("openai", "m")
+        output = StringIO()
+        renderer = CliRenderer(Console(file=output, force_terminal=False, no_color=True, width=140))
+        handler = CommandHandler(agent, state, MagicMock(), renderer, [])
+
+        # 1. 啟動兩個短任務並等它們完成
+        await handler.dispatch("/bg researcher 上網研究 2026 年資安熱門新聞與防禦趨勢")
+        await handler.dispatch("/bg researcher 分析 AI 對企業資安治理的影響")
+        jobs = agent.list_background_jobs()
+        for j in jobs:
+            await agent.wait_background_job(j.job_id, timeout=1.0)
+
+        # 未取回前：預設 /jobs 應列出活躍工作，包含任務摘要且不含重複 "· completed"
+        output.truncate(0)
+        output.seek(0)
+        await handler.dispatch("/jobs")
+        before_collect = output.getvalue()
+        assert jobs[0].job_id in before_collect
+        assert "上網研究 2026 年資安熱門新聞" in before_collect
+        assert "· completed" not in before_collect
+
+        # check_background_subagent 不帶 job_id 也應去重並含任務摘要
+        bg_tool = BackgroundSubagentToolHandler()
+        llm_list = (await bg_tool.execute("check_background_subagent", {}, "c0", agent)).output
+        assert "| 進度: completed" not in llm_list
+        assert "上網研究 2026 年資安熱門新聞" in llm_list
+
+        # 2. 全部取回後：預設 /jobs 不再展開舊清單，且提示切換為 /jobs all 與 /jobs clear
+        await handler.dispatch("/jobs collect")
+        output.truncate(0)
+        output.seek(0)
+        await handler.dispatch("/jobs")
+        after_collect = output.getvalue()
+        assert jobs[0].job_id not in after_collect
+        assert "已取回歸檔紀錄" in after_collect
+        assert "/jobs all" in after_collect
+        assert "/jobs clear" in after_collect
+        assert "/jobs cancel" not in after_collect
+
+        # 3. /jobs all 可回查完整歷史含 [已取回]
+        output.truncate(0)
+        output.seek(0)
+        await handler.dispatch("/jobs all")
+        all_out = output.getvalue()
+        assert jobs[0].job_id in all_out
+        assert "[已取回]" in all_out
+
+        # check_background_subagent 亦應標示 [已取回]
+        llm_list_after = (await bg_tool.execute("check_background_subagent", {}, "c1", agent)).output
+        assert "[已取回]" in llm_list_after
+
+        # 4. 啟動一個仍在執行中的背景工作後，測試 /jobs clear 只清已完成，保留執行中
+        await handler.dispatch("/bg researcher slow background monitor")
+        await asyncio.wait_for(running_started.wait(), timeout=1.0)
+        slow_job = [j for j in agent.list_background_jobs() if j.status == "running"][0]
+
+        output.truncate(0)
+        output.seek(0)
+        await handler.dispatch("/jobs clear")
+        clear_out = output.getvalue()
+        assert "已清除 2 筆" in clear_out
+        remaining_ids = [j.job_id for j in agent.list_background_jobs()]
+        assert remaining_ids == [slow_job.job_id]
+
+        # 5. 再完成一筆並取回，驗證 /new 會清除已結束工作但保留仍在 running 的工作
+        await handler.dispatch("/bg researcher quick summary")
+        quick_job = [j for j in agent.list_background_jobs() if j.job_id != slow_job.job_id][0]
+        await agent.wait_background_job(quick_job.job_id, timeout=1.0)
+        await handler.dispatch(f"/jobs collect {quick_job.job_id}")
+
+        await handler.dispatch("/new")
+        after_new_ids = [j.job_id for j in agent.list_background_jobs()]
+        assert after_new_ids == [slow_job.job_id]
+        assert state.bg_jobs_running == 1
+        assert state.bg_jobs_done == 0
+
+        release_running.set()
+        await agent.shutdown(timeout=1.0)
+
+    asyncio.run(_scenario())

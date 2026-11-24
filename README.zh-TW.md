@@ -210,7 +210,7 @@ run.bat setup       # Windows
 - `/subagent <name> <任務>` 或 `/<name> <任務>`：**Zero-Token 路由**——系統於底層直接攔截並於**前景**啟動專屬子代理處理任務，不經主代理推論，零 Token 浪費（例如 `/researcher 搜集競品資料`）。
 - `/parallel <name:task> | <name:task>`：於前景平行啟動多個子代理進行分工（Map 階段），並由背景自動總結彙整成單一最終報告（Reduce 階段）。_注意：代理間請使用直線符號 `|` 分隔_。
 - `/bg <name> <任務>`：**非阻塞背景子代理**——於背景啟動唯讀子代理執行研究任務（最多同時 3 個），終端機立即交還輸入框，可持續進行其他前景對話。
-- `/jobs [list | show <id> | collect [id] | cancel <id|all>]`：管理背景子代理工作；`show` 僅預覽不耗用主對話 Token，`collect` 會將完成報告注入主對話歷史交由主代理接手處理。
+- `/jobs [list | all | show <id> | collect [id] | cancel <id|all> | clear]`：管理背景子代理工作；預設僅顯示執行中與待取回項目，`all` 查看完整歷史，`show` 僅預覽不耗用主對話 Token，`collect` 將完成報告注入主對話歷史，`clear` 清除已結束紀錄。
 - `/skills [name]`：列出當前所有可用的全域與專案專屬技能 (Skills)，或檢視特定技能 SOP。
 - `/learn`：由 AI 分析當前對話脈絡，互動式萃取並存為可重複呼叫的新技能。
 

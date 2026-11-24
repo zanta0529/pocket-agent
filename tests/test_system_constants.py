@@ -34,6 +34,7 @@ def test_constants_values_and_types():
     assert constants.DEFAULT_MAX_BACKGROUND_SUBAGENTS == 3
     assert constants.DEFAULT_MAX_BACKGROUND_JOB_HISTORY == 20
     assert constants.DEFAULT_BG_CHECK_MAX_WAIT_SEC == 30
+    assert constants.DEFAULT_BG_JOB_TASK_PREVIEW_CHARS == 36
 
     # AI 模型供應商識別常數
     assert constants.PROVIDER_CEREBRAS == "cerebras"

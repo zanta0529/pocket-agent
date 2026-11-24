@@ -2,6 +2,7 @@ from rich.status import Status
 from rich.text import Text
 
 from pocket_agent.frontend.cli.commands.core import CliCommand, CommandContext, CommandResult
+from pocket_agent.system.constants import DEFAULT_BG_JOB_TASK_PREVIEW_CHARS
 from pocket_agent.system.i18n import t
 
 
@@ -244,28 +245,144 @@ class BgCommand(CliCommand):
         return CommandResult("handled")
 
 
+_TERMINAL_PROGRESS_LABELS = frozenset({"completed", "failed", "cancelled"})
+
+
+def _summarize_task(task: str, max_chars: int = DEFAULT_BG_JOB_TASK_PREVIEW_CHARS) -> str:
+    """壓縮空白並將背景任務描述截斷為單行摘要。"""
+    clean = " ".join((task or "").split())
+    if not clean or len(clean) <= max_chars:
+        return clean
+    return f"{clean[: max(1, max_chars - 1)].rstrip()}…"
+
+
+def _format_job_line(job) -> tuple[str, str | None]:
+    """格式化 /jobs 單列輸出並回傳 (文字, Rich 樣式)。"""
+    status_meta = {
+        "running": ("⏳", t("subagent_cmd.job_status_running")),
+        "completed": ("✓", t("subagent_cmd.job_status_completed")),
+        "failed": ("✗", t("subagent_cmd.job_status_failed")),
+        "cancelled": ("⏹", t("subagent_cmd.job_status_cancelled")),
+    }
+    icon, status_label = status_meta.get(job.status, ("•", job.status))
+    prog = ""
+    if job.status == "running" and job.last_progress:
+        if job.last_progress.strip().lower() not in _TERMINAL_PROGRESS_LABELS:
+            prog = f" · {job.last_progress}"
+    collected_tag = t("subagent_cmd.jobs_collected_tag") if job.collected else ""
+    snippet = _summarize_task(getattr(job, "task", ""))
+    task_note = f' — "{snippet}"' if snippet else ""
+    line = (
+        f"  {icon} {job.job_id} [{job.subagent_name}] {status_label}"
+        f" ({job.elapsed_seconds():.1f}s){collected_tag}{prog}{task_note}"
+    )
+    if job.status != "running" and job.collected:
+        return line, "dim"
+    if job.status == "failed":
+        return line, "red"
+    if job.status == "completed":
+        return line, "green"
+    return line, None
+
+
+def _build_jobs_hint(
+    *,
+    has_running: bool,
+    has_uncollected: bool,
+    has_finished: bool,
+    has_archived_hidden: bool,
+    has_any_shown: bool,
+) -> str:
+    """依目前工作清單狀態動態組合 /jobs 底部提示。"""
+    parts: list[str] = []
+    if has_any_shown:
+        parts.append(t("subagent_cmd.jobs_hint_show"))
+    if has_uncollected:
+        parts.append(t("subagent_cmd.jobs_hint_collect"))
+    if has_running:
+        parts.append(t("subagent_cmd.jobs_hint_cancel"))
+    if has_archived_hidden:
+        parts.append(t("subagent_cmd.jobs_hint_all"))
+    if has_finished:
+        parts.append(t("subagent_cmd.jobs_hint_clear"))
+    if not parts:
+        return t("subagent_cmd.jobs_hint")
+    return t("subagent_cmd.jobs_hint_prefix") + " · ".join(parts)
+
+
 class JobsCommand(CliCommand):
     async def execute(self, ctx: CommandContext, args: str) -> CommandResult:
         raw = args.strip()
-        if not raw or raw == "list":
+        lower_raw = raw.lower()
+        if not raw or lower_raw in ("list", "all", "history"):
+            show_all = lower_raw in ("all", "history")
             jobs = ctx.agent.list_background_jobs()
             if not jobs:
                 ctx.renderer.message(t("subagent_cmd.jobs_empty"))
                 return CommandResult("handled")
-            ctx.renderer.message(t("subagent_cmd.jobs_header", count=len(jobs)), "bold cyan")
-            for job in jobs:
-                prog = f" · {job.last_progress}" if job.last_progress else ""
-                collected_tag = t("subagent_cmd.jobs_collected_tag") if job.collected else ""
+
+            active_jobs = [j for j in jobs if j.status == "running" or not j.collected]
+            archived_jobs = [j for j in jobs if j.status != "running" and j.collected]
+            has_running = any(j.status == "running" for j in jobs)
+            has_uncollected = any(j.status != "running" and not j.collected for j in jobs)
+            has_finished = any(j.status != "running" for j in jobs)
+
+            if not show_all and not active_jobs:
+                ctx.renderer.message(t("subagent_cmd.jobs_archived_only", archived=len(archived_jobs)), "dim")
                 ctx.renderer.message(
-                    f"  {job.job_id} [{job.subagent_name}] {job.status} ({job.elapsed_seconds():.1f}s)"
-                    f"{collected_tag}{prog}"
+                    _build_jobs_hint(
+                        has_running=False,
+                        has_uncollected=False,
+                        has_finished=True,
+                        has_archived_hidden=True,
+                        has_any_shown=False,
+                    ),
+                    "dim",
                 )
-            ctx.renderer.message(t("subagent_cmd.jobs_hint"), "dim")
+                return CommandResult("handled")
+
+            display_jobs = jobs if show_all else active_jobs
+            if show_all:
+                ctx.renderer.message(t("subagent_cmd.jobs_header_all", count=len(jobs)), "bold cyan")
+            else:
+                ctx.renderer.message(
+                    t("subagent_cmd.jobs_header_active", active=len(active_jobs), total=len(jobs)),
+                    "bold cyan",
+                )
+
+            for job in display_jobs:
+                line, style = _format_job_line(job)
+                ctx.renderer.message(line, style or "")
+
+            archived_hidden = not show_all and bool(archived_jobs)
+            if archived_hidden:
+                ctx.renderer.message(t("subagent_cmd.jobs_hidden_archived", archived=len(archived_jobs)), "dim")
+            ctx.renderer.message(
+                _build_jobs_hint(
+                    has_running=has_running,
+                    has_uncollected=has_uncollected,
+                    has_finished=has_finished,
+                    has_archived_hidden=archived_hidden,
+                    has_any_shown=True,
+                ),
+                "dim",
+            )
             return CommandResult("handled")
 
         parts = raw.split(maxsplit=1)
         sub_cmd = parts[0].lower()
         target = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub_cmd == "clear":
+            if target:
+                raise ValueError(t("subagent_cmd.jobs_usage"))
+            removed = ctx.agent.clear_finished_background_jobs()
+            _sync_bg_counts(ctx)
+            if removed > 0:
+                ctx.renderer.message(t("subagent_cmd.jobs_cleared", count=removed), "green")
+            else:
+                ctx.renderer.message(t("subagent_cmd.jobs_clear_empty"))
+            return CommandResult("handled")
 
         if sub_cmd == "cancel":
             if not target:

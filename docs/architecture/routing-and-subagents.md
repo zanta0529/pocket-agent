@@ -73,10 +73,11 @@ PocketAgent 現已原生支援**非阻塞背景子代理作業**，能在單一 
    - **執行與注入行為**：**非阻塞**，派發後主代理立即回覆並把輸入框交還使用者，使用者可持續進行其他前景對話。此模式採用**顯式拉取（Explicit Pull）**：唯有當主代理呼叫 `check_background_subagent(job_id)` 且該工作已完成時，系統才會將以 `<external_content>` 包覆的報告正式注入主代理上下文，同步合併 `activity` 變更紀錄、傳染 `is_sensitive_session` 敏感旗標，並附帶 `post_actions.require_save_prompt`（例如要求主代理詢問是否存檔），由主代理接手後續作業。
 
 4. **模式 4：背景子代理 — 使用者 CLI 手動控制（Background CLI-Controlled）**
-   - **觸發方式**：使用者直接輸入 `/bg <name> <task>` 派發，並透過 `/jobs`（`list`、`show <id>`、`collect [id]`、`cancel <id|all>`）管理。
+   - **觸發方式**：使用者直接輸入 `/bg <name> <task>` 派發，並透過 `/jobs`（預設僅顯示活躍工作，`all` 查看完整歷史，`show <id>`、`collect [id]`、`cancel <id|all>`、`clear` 清除已結束紀錄）管理。
    - **執行與注入行為**：**非阻塞**，且派發階段完全不經主代理推論（**零派發 Token 消耗**）。任務完成後提供兩種檢視路徑：
      - `/jobs show <id>`：僅在終端機**預覽**報告內容，**不會**寫入主對話歷史，也不消耗主代理 Token。
      - `/jobs collect [id]`：將指定（或全部）已完成報告**顯式注入**主代理的對話歷史（`history`），讓主代理在下一輪對話即可直接依據該報告接續撰寫、分析或詢問存檔。
+     - 記憶體中最多保留 `DEFAULT_MAX_BACKGROUND_JOB_HISTORY`（預設 `20` 筆）已結束紀錄，使用者可隨時透過 `/jobs clear` 或 `/new` 清除已結束紀錄（保留執行中工作）。
 
 ### 4.2 四種模式差異比較表
 

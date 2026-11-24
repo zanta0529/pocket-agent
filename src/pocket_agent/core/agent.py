@@ -547,13 +547,14 @@ class Agent:
         self.activity.rebuild_from_history(self.history)
 
     def reset_session(self) -> None:
-        """徹底清空當前會話歷史與相關狀態旗標。"""
+        """徹底清空當前會話歷史與相關狀態旗標，並清除已結束的背景工作紀錄。"""
         self.clear_history()
         self.is_sensitive_session = False
         self.accept_edits = False
         self.context_usage = None
         self.last_images.clear()
         self.last_files.clear()
+        self.clear_finished_background_jobs()
 
     async def compact_history(self, keep_recent: int = 4) -> tuple[bool, int, int]:
         """對目前會話歷史進行主動式高密度摘要壓縮（供 /compact 指令或主動調度使用）。
@@ -732,6 +733,11 @@ class Agent:
         if self.background_jobs is None:
             return 0
         return await self.background_jobs.cancel_all()
+
+    def clear_finished_background_jobs(self) -> int:
+        if self.background_jobs is None:
+            return 0
+        return self.background_jobs.clear_finished()
 
     async def extract_skill(self) -> str:
         """非同步呼叫 LLM 總結對話為 Skill Markdown。"""

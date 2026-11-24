@@ -142,6 +142,7 @@ DEFAULT_MAX_PARALLEL_SUBAGENTS = 3  # 平行子代理批次並發執行上限（
 DEFAULT_MAX_BACKGROUND_SUBAGENTS = 3  # 同時執行中之背景唯讀子代理數量上限
 DEFAULT_MAX_BACKGROUND_JOB_HISTORY = 20  # 記憶體保留之已完成／失敗／取消背景工作紀錄上限
 DEFAULT_BG_CHECK_MAX_WAIT_SEC = 30  # check_background_subagent 單次最長阻塞等待秒數
+DEFAULT_BG_JOB_TASK_PREVIEW_CHARS = 36  # /jobs 與背景清單中單列任務描述摘要截斷字元上限
 
 # Housekeeping 與日誌／暫存／備份生命週期管理常數
 DEFAULT_HOUSEKEEPING_TTL_DAYS = 7  # 暫存輸出、剪貼簿截圖、研究檢查點與孤兒備份預設保留天數

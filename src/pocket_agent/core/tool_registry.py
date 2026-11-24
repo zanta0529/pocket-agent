@@ -22,6 +22,7 @@ from pocket_agent.core.subagents import (
 from pocket_agent.extensions.mcp import parse_mcp_tool_name
 from pocket_agent.extensions.skills import call_skill_tool, is_skill_tool
 from pocket_agent.system.constants import (
+    DEFAULT_BG_JOB_TASK_PREVIEW_CHARS,
     DEFAULT_MAX_PARALLEL_SUBAGENTS,
     TOOL_NOT_FOUND_PREFIX,
     TOOL_OVERWRITE_REQUIRED_PREFIX,
@@ -273,9 +274,15 @@ class BackgroundSubagentToolHandler(ToolHandler):
                 return ToolExecutionResult(output="目前沒有任何背景子代理工作。")
             lines = ["目前背景子代理工作清單："]
             for j in jobs:
-                progress = f" | 進度: {j.last_progress}" if j.last_progress else ""
+                progress = f" | 進度: {j.last_progress}" if j.status == "running" and j.last_progress else ""
+                collected = " [已取回]" if j.collected else ""
+                raw_task = " ".join((getattr(j, "task", "") or "").split())
+                if len(raw_task) > DEFAULT_BG_JOB_TASK_PREVIEW_CHARS:
+                    raw_task = f"{raw_task[: DEFAULT_BG_JOB_TASK_PREVIEW_CHARS - 1].rstrip()}…"
+                task_note = f' — "{raw_task}"' if raw_task else ""
                 lines.append(
-                    f"- `{j.job_id}` [{j.subagent_name}] 狀態: {j.status} ({j.elapsed_seconds():.1f}s){progress}"
+                    f"- `{j.job_id}` [{j.subagent_name}] 狀態: {j.status}"
+                    f" ({j.elapsed_seconds():.1f}s){collected}{progress}{task_note}"
                 )
             return ToolExecutionResult(output="\n".join(lines))
 
