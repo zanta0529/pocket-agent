@@ -233,6 +233,13 @@ SENSITIVE_ENV_PREFIXES: tuple[str, ...] = (
     "POCKET_AGENT_TOKEN_",
 )
 
+SECRET_PLACEHOLDER_KEYRING = "USE_KEYRING"  # 憑證存於作業系統原生 Keyring 之佔位符號
+SECRET_PLACEHOLDER_ENCRYPTED = "USE_ENCRYPTED"  # 憑證存於主密碼 JWE 加密庫之佔位符號
+SECRET_PLACEHOLDERS: tuple[str, ...] = (
+    SECRET_PLACEHOLDER_KEYRING,
+    SECRET_PLACEHOLDER_ENCRYPTED,
+)
+
 
 @dataclass(frozen=True)
 class SystemConstants:

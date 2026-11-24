@@ -26,6 +26,15 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from pocket_agent.core.cancellation import run_sync
+from pocket_agent.extensions.mcp_secrets import (
+    ConfigManagerSecretStore,
+    ConnPromptResult,
+    MCPSecretStore,
+    SecretPersistResult,
+    is_secret_placeholder,
+    normalize_secret_placeholder,
+    update_mcp_config_env_value,
+)
 from pocket_agent.system.paths import bundle_dir, is_frozen, log_dir, mcp_config_path, mcp_example_path
 
 try:
@@ -67,6 +76,7 @@ class ConnParamSpec:
     label: str
     default: str | None = None
     is_secret: bool = False
+    supports_keyring: bool = False
 
 
 CONN_PARAM_SPECS: dict[str, ConnParamSpec] = {
@@ -90,7 +100,12 @@ CONN_PARAM_SPECS: dict[str, ConnParamSpec] = {
     "mssql_password": ConnParamSpec("MSSQL_PASSWORD", "SQL Server 登入密碼 (Password)", is_secret=True),
     "mssql_database": ConnParamSpec("MSSQL_DATABASE", "SQL Server 資料庫名稱 (Database)"),
     "db_path": ConnParamSpec("DB_PATH", "SQLite 資料庫路徑 (DB_PATH)"),
-    "github_token": ConnParamSpec("GITHUB_TOKEN", "GitHub Personal Access Token (GITHUB_TOKEN)", is_secret=True),
+    "github_token": ConnParamSpec(
+        "GITHUB_TOKEN",
+        "GitHub Personal Access Token (GITHUB_TOKEN)",
+        is_secret=True,
+        supports_keyring=True,
+    ),
 }
 
 _CONN_PARAM_MAP: dict[str, str] = {param: spec.env_key for param, spec in CONN_PARAM_SPECS.items()}
@@ -185,8 +200,14 @@ def is_mcp_server_enabled(spec: Any, server_name: str | None = None) -> bool:
 class MCPManager:
     """載入 mcp_config.yaml，建立所有 server 連線，提供統一工具查詢與執行介面。"""
 
-    def __init__(self, config_path: str | Path | None = None):
+    def __init__(
+        self,
+        config_path: str | Path | None = None,
+        *,
+        secret_store: MCPSecretStore | None = None,
+    ):
         self.config_path = Path(config_path) if config_path else mcp_config_path()
+        self._secret_store: MCPSecretStore = secret_store if secret_store is not None else ConfigManagerSecretStore()
         self._tools: dict[str, ToolEntry] = {}
         self._sessions: list[ClientSession] = []
         self._runners: dict[str, _ServerRunner] = {}
@@ -194,12 +215,19 @@ class MCPManager:
         self._server_envs: dict[str, dict[str, str]] = {}
         self._runtime_conn_cache: dict[str, dict[str, str]] = {}
         self._conn_prompt_locks: dict[str, asyncio.Lock] = {}
-        self.on_prompt_conn: Callable[[str, list[str]], dict[str, str]] | None = None
+        self._config_file_sig: tuple[int, int] | None = None
+        self._bypass_secret_store_keys: set[tuple[str, str]] = set()
+        self.on_prompt_conn: Callable[[str, list[str]], dict[str, str] | ConnPromptResult] | None = None
+        self.on_vault_unlock: Callable[[str, Callable[[str], bool]], bool] | None = None
+        self.on_vault_create: Callable[[str], str | None] | None = None
+        self.on_secret_persisted: Callable[[SecretPersistResult], None] | None = None
 
     # ── Lifecycle ─────────────────────────────────
 
     async def start(self, *, on_start: Callable[[int], None] | None = None) -> MCPStartupResult:
         config = self._load_config()
+        self._config_file_sig = self._stat_config_file()
+        self._bypass_secret_store_keys.clear()
         raw_servers = {name: spec for name, spec in (config.get("servers") or {}).items() if spec is not None}
         servers: dict[str, Any] = {}
         disabled_servers = 0
@@ -311,27 +339,194 @@ class MCPManager:
         """回傳送給模型的 tools 陣列（已隱藏 inject 參數）。"""
         return [entry.schema for entry in self._tools.values()]
 
-    async def _resolve_entry_ssh_conn(self, entry: ToolEntry) -> dict[str, str]:
+    def _stat_config_file(self) -> tuple[int, int] | None:
+        try:
+            st = self.config_path.stat()
+            return st.st_mtime_ns, st.st_size
+        except OSError:
+            return None
+
+    def _refresh_server_env_if_changed(self, server_name: str) -> None:
+        """偵測 mcp_config.yaml 檔案異動並熱重載 server env，清除已變更鍵的記憶體快取。"""
+        if self._config_file_sig is None:
+            return
+        current_sig = self._stat_config_file()
+        if current_sig is None or current_sig == self._config_file_sig:
+            return
+        try:
+            with open(self.config_path, encoding="utf-8") as fh:
+                parsed = yaml.safe_load(fh) or {}
+        except OSError, yaml.YAMLError:
+            return
+        self._config_file_sig = current_sig
+        if not isinstance(parsed, dict):
+            return
+        servers = parsed.get("servers")
+        if not isinstance(servers, dict):
+            return
+        spec = servers.get(server_name)
+        new_env: dict[str, str] = {}
+        if isinstance(spec, dict):
+            raw_env = spec.get("env") or {}
+            if isinstance(raw_env, dict):
+                new_env = {str(k): str(v) for k, v in raw_env.items() if v is not None}
+
+        old_env = self._server_envs.get(server_name, {})
+        self._server_envs[server_name] = new_env
+        cached = self._runtime_conn_cache.get(server_name)
+        for key in set(old_env) | set(new_env):
+            if old_env.get(key) != new_env.get(key):
+                if cached is not None:
+                    cached.pop(key, None)
+                self._bypass_secret_store_keys.discard((server_name, key))
+
+    async def _read_secret_store(self, server_name: str, env_key: str, placeholder: str) -> str | None:
+        """從 Keyring 或 JWE 加密庫讀取憑證，遇加密庫鎖定時觸發解鎖回呼。"""
+        from pocket_agent.system.config import AuthException
+
+        try:
+            return self._secret_store.get(server_name, env_key, placeholder)
+        except AuthException:
+            if self.on_vault_unlock is not None:
+                unlocked = await run_sync(self.on_vault_unlock, server_name, self._secret_store.unlock)
+                if unlocked:
+                    try:
+                        return self._secret_store.get(server_name, env_key, placeholder)
+                    except Exception:
+                        return None
+            return None
+        except Exception:
+            return None
+
+    async def _persist_conn_secret_locked(
+        self,
+        server_name: str,
+        env_key: str,
+        secret_val: str,
+    ) -> SecretPersistResult:
+        """將已驗證的連線憑證寫入 Keyring／JWE 加密庫，並原子回寫 mcp_config.yaml 佔位符號。"""
+        from pocket_agent.system.config import AuthException, RequireMasterPasswordException
+
+        placeholder: str | None = None
+        try:
+            placeholder = self._secret_store.set(server_name, env_key, secret_val)
+        except AuthException:
+            if self.on_vault_unlock is not None:
+                unlocked = await run_sync(self.on_vault_unlock, server_name, self._secret_store.unlock)
+                if unlocked:
+                    try:
+                        placeholder = self._secret_store.set(server_name, env_key, secret_val)
+                    except Exception:
+                        placeholder = None
+                else:
+                    return SecretPersistResult(
+                        server_name=server_name,
+                        env_key=env_key,
+                        saved=False,
+                        reason="cancelled",
+                    )
+            else:
+                return SecretPersistResult(
+                    server_name=server_name,
+                    env_key=env_key,
+                    saved=False,
+                    reason="vault_locked",
+                )
+        except RequireMasterPasswordException:
+            if self.on_vault_create is not None:
+                password = await run_sync(self.on_vault_create, server_name)
+                if password:
+                    try:
+                        placeholder = self._secret_store.create_vault_and_set(
+                            server_name,
+                            env_key,
+                            secret_val,
+                            password,
+                        )
+                    except Exception:
+                        placeholder = None
+                else:
+                    return SecretPersistResult(
+                        server_name=server_name,
+                        env_key=env_key,
+                        saved=False,
+                        reason="cancelled",
+                    )
+            else:
+                return SecretPersistResult(
+                    server_name=server_name,
+                    env_key=env_key,
+                    saved=False,
+                    reason="vault_create_unavailable",
+                )
+        except Exception:
+            placeholder = None
+
+        if not placeholder:
+            return SecretPersistResult(
+                server_name=server_name,
+                env_key=env_key,
+                saved=False,
+                reason="store_failed",
+            )
+
+        yaml_updated = update_mcp_config_env_value(self.config_path, server_name, env_key, placeholder)
+        if yaml_updated:
+            self._server_envs.setdefault(server_name, {})[env_key] = placeholder
+            self._config_file_sig = self._stat_config_file()
+        return SecretPersistResult(
+            server_name=server_name,
+            env_key=env_key,
+            saved=True,
+            placeholder=placeholder,
+            yaml_updated=yaml_updated,
+        )
+
+    async def _resolve_entry_ssh_conn(self, entry: ToolEntry) -> tuple[dict[str, str], dict[str, str]]:
         lock = self._conn_prompt_locks.setdefault(entry.server_name, asyncio.Lock())
         async with lock:
             return await self._resolve_entry_ssh_conn_locked(entry)
 
-    async def _resolve_entry_ssh_conn_locked(self, entry: ToolEntry) -> dict[str, str]:
+    async def _resolve_entry_ssh_conn_locked(self, entry: ToolEntry) -> tuple[dict[str, str], dict[str, str]]:
+        self._refresh_server_env_if_changed(entry.server_name)
         server_env = self._server_envs.get(entry.server_name, {})
         cached = self._runtime_conn_cache.setdefault(entry.server_name, {})
         resolved: dict[str, str] = {}
         missing: list[str] = []
+        pending_saves: dict[str, str] = {}
 
         # 預先解析已配置或快取的連線參數
         for env_key in entry.conn_params.values():
+            spec = get_conn_param_spec(env_key)
             val = cached.get(env_key)
-            if val is None or val == "":
-                val = server_env.get(env_key)
-            if val is None or val == "":
-                val = os.getenv(env_key) or ""
-            clean = str(val) if "PASSWORD" in env_key or "PASSPHRASE" in env_key else str(val).strip()
-            if clean and clean.lower() not in ("null", "none", "~"):
-                resolved[env_key] = clean
+            if val is not None and val != "":
+                clean = str(val) if "PASSWORD" in env_key or "PASSPHRASE" in env_key else str(val).strip()
+                if clean and clean.lower() not in ("null", "none", "~"):
+                    resolved[env_key] = clean
+                    continue
+
+            cfg_val = server_env.get(env_key)
+            placeholder = normalize_secret_placeholder(cfg_val)
+            if placeholder is not None:
+                if spec.supports_keyring and (entry.server_name, env_key) not in self._bypass_secret_store_keys:
+                    stored = await self._read_secret_store(entry.server_name, env_key, placeholder)
+                    if stored and stored.strip():
+                        clean_stored = stored.strip()
+                        cached[env_key] = clean_stored
+                        resolved[env_key] = clean_stored
+                continue
+
+            if cfg_val is not None and str(cfg_val).strip() != "":
+                clean_cfg = str(cfg_val) if "PASSWORD" in env_key or "PASSPHRASE" in env_key else str(cfg_val).strip()
+                if clean_cfg and clean_cfg.lower() not in ("null", "none", "~"):
+                    resolved[env_key] = clean_cfg
+                    continue
+
+            env_val = os.getenv(env_key) or ""
+            if not is_secret_placeholder(env_val):
+                clean_env = str(env_val) if "PASSWORD" in env_key or "PASSPHRASE" in env_key else str(env_val).strip()
+                if clean_env and clean_env.lower() not in ("null", "none", "~"):
+                    resolved[env_key] = clean_env
 
         # 判斷是否已配置金鑰路徑
         has_key = bool(resolved.get("RHEL_SSH_KEY_PATH"))
@@ -354,14 +549,29 @@ class MCPManager:
             missing.append(env_key)
 
         if missing and self.on_prompt_conn is not None:
-            prompted = await run_sync(self.on_prompt_conn, entry.server_name, missing)
-            for k, v in (prompted or {}).items():
-                clean_v = str(v) if "PASSWORD" in k or "PASSPHRASE" in k else str(v).strip()
-                if clean_v:
-                    cached[k] = clean_v
-                    resolved[k] = clean_v
+            raw_prompted = await run_sync(self.on_prompt_conn, entry.server_name, missing)
+            if isinstance(raw_prompted, ConnPromptResult):
+                prompted_values = raw_prompted.values
+                save_set: frozenset[str] | None = raw_prompted.save_to_keyring
+            else:
+                prompted_values = raw_prompted or {}
+                save_set = None
 
-        return {arg_name: resolved.get(env_key, "") for arg_name, env_key in entry.conn_params.items()}
+            for k, v in prompted_values.items():
+                clean_v = str(v) if "PASSWORD" in k or "PASSPHRASE" in k else str(v).strip()
+                if not clean_v or is_secret_placeholder(clean_v):
+                    continue
+                cached[k] = clean_v
+                resolved[k] = clean_v
+                self._bypass_secret_store_keys.discard((entry.server_name, k))
+                if save_set is not None and get_conn_param_spec(k).supports_keyring:
+                    if k in save_set:
+                        pending_saves[k] = clean_v
+                    else:
+                        self._secret_store.delete(entry.server_name, k)
+
+        conn_args = {arg_name: resolved.get(env_key, "") for arg_name, env_key in entry.conn_params.items()}
+        return conn_args, pending_saves
 
     def find_entry(self, tool_name: str) -> ToolEntry | None:
         """尋找工具 entry，支援前綴名稱（mcp__<server>__<tool>）與原始名稱。"""
@@ -392,8 +602,9 @@ class MCPManager:
 
         # 注入參數（模型看不到，但 server 需要）
         full_args = {**arguments, **entry.inject}
+        pending_saves: dict[str, str] = {}
         if entry.conn_params:
-            conn_args = await self._resolve_entry_ssh_conn(entry)
+            conn_args, pending_saves = await self._resolve_entry_ssh_conn(entry)
             full_args.update(conn_args)
 
         from pocket_agent.core.agent import log
@@ -427,8 +638,30 @@ class MCPManager:
         from pocket_agent.tools.fs import wrap_external_content
 
         joined = "\n".join(parts)
-        if entry.conn_params and _is_conn_auth_error(joined):
+        is_auth_err = bool(entry.conn_params and _is_conn_auth_error(joined))
+        if is_auth_err:
             self._runtime_conn_cache.pop(entry.server_name, None)
+            for env_key in entry.conn_params.values():
+                if get_conn_param_spec(env_key).supports_keyring:
+                    self._bypass_secret_store_keys.add((entry.server_name, env_key))
+            if pending_saves and self.on_secret_persisted is not None:
+                for env_key in pending_saves:
+                    await run_sync(
+                        self.on_secret_persisted,
+                        SecretPersistResult(
+                            server_name=entry.server_name,
+                            env_key=env_key,
+                            saved=False,
+                            reason="auth_error",
+                        ),
+                    )
+        elif pending_saves:
+            lock = self._conn_prompt_locks.setdefault(entry.server_name, asyncio.Lock())
+            async with lock:
+                for env_key, secret_val in pending_saves.items():
+                    outcome = await self._persist_conn_secret_locked(entry.server_name, env_key, secret_val)
+                    if self.on_secret_persisted is not None:
+                        await run_sync(self.on_secret_persisted, outcome)
         if actual_tool_name in _DB_SWITCH_TOOLS and joined.lstrip().startswith("[SUCCESS]"):
             target = str(arguments.get("target_db_path") or "").strip().strip("'\"")
             if target:
@@ -542,7 +775,7 @@ class MCPManager:
             env_dict.setdefault("POCKET_AGENT_LOG_FILE", str(log_dir() / "agent.log"))
             if isinstance(raw_env, dict):
                 for k, v in raw_env.items():
-                    if v is not None:
+                    if v is not None and not is_secret_placeholder(str(v)):
                         env_dict[str(k)] = str(v)
 
         return StdioServerParameters(command=command, args=resolved_args, env=env_dict)

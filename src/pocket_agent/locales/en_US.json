@@ -1,6 +1,14 @@
 {
   "cli": {
     "mcp_conn_prompt": "🔐 [{server_name}] Please provide missing remote connection details (stored only in local memory, not sent to AI models):",
+    "mcp_conn_prompt_keyring": "🔐 [{server_name}] Please provide missing credentials (never sent to AI models):",
+    "mcp_save_to_keyring_prompt": "Save {label} to system Keyring (updates mcp_config.yaml to placeholder)?",
+    "mcp_secret_saved_keyring": "✓ [{server_name}] Saved {env_key} to system Keyring and updated mcp_config.yaml to {placeholder}.",
+    "mcp_secret_saved_encrypted": "✓ [{server_name}] Native Keyring unavailable; saved {env_key} to JWE encrypted vault and updated mcp_config.yaml to {placeholder}.",
+    "mcp_secret_yaml_update_failed": "⚠ [{server_name}] Saved {env_key} to secure store, but could not auto-update mcp_config.yaml (complex YAML or read-only); please set it to \"{placeholder}\" manually.",
+    "mcp_secret_save_skipped_auth": "⚠ [{server_name}] {env_key} authentication failed (HTTP 401); skipped saving to credential store.",
+    "mcp_secret_save_cancelled": "ℹ [{server_name}] Cancelled saving {env_key}; kept in memory for this session only.",
+    "mcp_secret_save_failed": "⚠ [{server_name}] Failed to save {env_key} to credential store; kept in memory for this session only.",
     "stopping": "⏸ Stop request sent, waiting for ongoing operations to finish...",
     "generating_image": "Generating image (may take 1-2 minutes)...",
     "sensitive_session_warning": "【Security Notice】This session involves sensitive diagnostics and will not be persisted to disk per security policy.",

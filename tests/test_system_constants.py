@@ -44,6 +44,11 @@ def test_constants_values_and_types():
     assert constants.PROVIDER_OPENROUTER == "openrouter"
     assert constants.PROVIDER_SAMBANOVA == "sambanova"
 
+    # 憑證佔位符號常數
+    assert constants.SECRET_PLACEHOLDER_KEYRING == "USE_KEYRING"
+    assert constants.SECRET_PLACEHOLDER_ENCRYPTED == "USE_ENCRYPTED"
+    assert constants.SECRET_PLACEHOLDERS == ("USE_KEYRING", "USE_ENCRYPTED")
+
 
 def test_system_constants_container():
     """驗證 SystemConstants 容器類別預設值正確裝載。"""

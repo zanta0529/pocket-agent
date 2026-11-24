@@ -279,14 +279,14 @@ Pocket Agent 的解決方案：
 
 - **嚴格路徑驗證、搜尋範圍鎖定與重導向白名單**：強制驗證 `owner`、`repo` 與 `ref` 格式並執行 URL 路徑分段百分比編碼，徹底防範 `#` 片段截斷與 `..` 路徑穿越；`github_search_issues` 阻斷 `query` 內夾帶 `repo:`／`org:`／`user:` 範圍覆寫；支援 `GITHUB_ALLOWED_REPOS` 儲存庫白名單，並透過 `httpx` 事件鉤子攔截 HTTP `3xx` 重導向，阻斷跨網域、非 HTTPS 或未授權儲存庫之重導向繞過。
 - **PR 建立強制預覽確認與人工合併把關（No Auto-Merge）**：`github_create_pr` 由 `ConfirmationBridge` 強制攔截（不適用自動放行），於終端機面板完整列出預計執行的動作、目標儲存庫、`head -> base` 分支方向、PR 模式、標題與完整多行內文，須經使用者同意後才送出；伺服器故意不提供任何 Merge 工具，確保最終合併（Merge）永遠由人工於 GitHub 網站把關。
-- **彈性憑證解析、非互動防死鎖與連線池重用**：`GITHUB_TOKEN` 支援透過 `MCPManager` 隱藏參數（`github_token`）於執行期動態詢問並快取於記憶體（閒置 10 分鐘或遭遇 HTTP `401` 自動清除）；子行程在非互動 Stdio 管道下快速失敗拋出 `ConnAuthError` 交由主行程詢問，防止終端機 Spinner 競態死鎖；單一 Event Loop 下共用 `httpx.AsyncClient` TCP/TLS 連線池並單例快取 `truststore` 系統憑證庫注入。
+- **彈性憑證解析、Keyring／JWE 持久化、非互動防死鎖與連線池重用**：`GITHUB_TOKEN` 支援透過 `MCPManager` 隱藏參數（`github_token`）於執行期動態詢問並快取於記憶體（閒置 10 分鐘或遭遇 HTTP `401` 自動清除）；使用者輸入後可選擇保存至作業系統原生 `keyring`（不支援時自動降級至主密碼 JWE 加密庫），待該次 API 呼叫未回傳 `401` 後即落盤並將 `mcp_config.yaml` 更新為 `"USE_KEYRING"`／`"USE_ENCRYPTED"` 佔位符號（保留註解與排版）。當使用者清空該佔位符號後，下次執行（含同會話熱偵測）將重新提示輸入；若選擇不保存則一併清除 Keyring 舊憑證。子行程在非互動 Stdio 管道下快速失敗拋出 `ConnAuthError` 交由主行程詢問，防止終端機 Spinner 競態死鎖；單一 Event Loop 下共用 `httpx.AsyncClient` TCP/TLS 連線池並單例快取 `truststore` 系統憑證庫注入。
 - **雙向機密防護、預裁切防 ReDoS 與集中稽核**：單次回應受 `MAX_RESPONSE_BYTES`（2 MB）與 `MAX_OUTPUT_CHARS`（預設 12,000 字元）雙重限制，超長文字先以安全邊界緩衝預裁切再執行機密遮罩（保留邊界完整 `[REDACTED...]` 標記）；外發寫入工具（`github_create_pr`、`github_create_issue`、`github_create_comment`）於送出前自動掃描私鑰、各雲端／AI 平台 Token、內嵌帳密 URL 與敏感鍵值對，偵測到時立即阻斷外發，並將所有操作寫入防日誌注入清洗之 `agent.log` `[AUDIT] [MCP:github]` 紀錄。
 
 ### 3. 環境變數與配置參數表 (`servers.github.env`)
 
 | 參數名稱 | 必填 / 選填 | 預設值 | 說明 |
 | :--- | :--- | :--- | :--- |
-| `GITHUB_TOKEN` | 彈性 | `""` | GitHub Personal Access Token；建議留空或省略，於首次呼叫工具時在 CLI 以隱藏輸入方式動態提供並快取於記憶體。 |
+| `GITHUB_TOKEN` | 彈性 | `""` | GitHub Personal Access Token；建議留空（或設為 `"USE_KEYRING"`／`"USE_ENCRYPTED"`），留空時於首次呼叫工具於 CLI 以隱藏輸入提供並可選擇保存至系統 Keyring／JWE 加密庫；清空佔位符號將於下次執行重新詢問。 |
 | `GITHUB_ALLOWED_REPOS` | 選填 | `""` | 允許存取之儲存庫白名單（逗號分隔 `owner/repo`，不分大小寫）；留空時允許存取該 Token 授權範圍內之儲存庫。 |
 
 ---
