@@ -105,7 +105,7 @@ class SlashCommandCompleter(Completer):
         self.state = state
         self.agent = agent
 
-    def paths(self, prefix: str) -> Iterator[Completion]:
+    def paths(self, prefix: str, *, dirs_only: bool = False) -> Iterator[Completion]:
         quoted = prefix.startswith(QUOTE)
         value = prefix[1:] if quoted else prefix
         if QUOTE in value:
@@ -117,6 +117,8 @@ class SlashCommandCompleter(Completer):
                     if not entry.name.lower().startswith(basename.lower()):
                         continue
                     directory = entry.is_dir()
+                    if dirs_only and not directory:
+                        continue
                     candidate = os.path.join(dirname, entry.name) + (os.sep if directory else "")
                     if quoted or any(c.isspace() for c in candidate):
                         candidate = QUOTE + candidate + ("" if directory else QUOTE)
@@ -139,7 +141,12 @@ class SlashCommandCompleter(Completer):
         if match:
             yield from self.paths(match.group(1))
             return
-        if not text.startswith("/") or any(c.isspace() for c in text):
+        if not text.startswith("/"):
+            return
+        if any(c.isspace() for c in text):
+            from pocket_agent.frontend.cli.arg_completers import complete_slash_command_args
+
+            yield from complete_slash_command_args(text, self.state, self.agent, self.paths)
             return
         from pocket_agent.extensions.skills import list_skills
         from pocket_agent.system.commands import list_commands
@@ -298,9 +305,13 @@ def key_bindings(
     def submit(event: KeyPressEvent) -> None:
         buffer = event.current_buffer
         if completer and buffer.complete_state:
+            text_before = buffer.document.text_before_cursor
+            in_arg_completion = (
+                not selecting() and text_before.startswith("/") and any(ch.isspace() for ch in text_before)
+            )
             c = buffer.complete_state.current_completion
-            # 如果選單已開啟但沒有反白項目，自動選取第一個
-            if c is None and buffer.complete_state.completions:
+            # 參數補全階段若未手動選中項目，按 Enter 直接送出而非誤補第一項
+            if c is None and not in_arg_completion and buffer.complete_state.completions:
                 c = buffer.complete_state.completions[0]
 
             if c:
