@@ -98,7 +98,7 @@
     "file_panel_title": "【File Edit Confirmation】Agent requests file change",
     "planned_file_edit": "Planned file change:\n{command}",
     "session_approved": "✓ Auto-approved command for this session: {command}",
-    "allowlisted": "✓ Added \"{prefix}\" to the command allowlist for future auto-approval.",
+    "allowlisted": "✓ Added \"{command}\" to the command allowlist for future auto-approval.",
     "custom_instruction_empty": "No instruction entered; command execution cancelled.",
     "custom_instruction_received": "✓ Instruction received: \"{instruction}\". Forwarded to Agent and added to guidelines.",
     "prompt_options": "Allow? [y: once | a: session | A: allowlist | c: custom | N: deny] ",

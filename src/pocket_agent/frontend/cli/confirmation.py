@@ -243,9 +243,9 @@ class ConfirmationBridge:
             if self._is_netdiag_command(command):
                 self.renderer.message(t("confirmation.netdiag_allowlist_blocked"), "yellow")
                 return True
-            prefix = add_command_to_allowlist(command)
+            allowed_cmd = add_command_to_allowlist(command)
             self.renderer._ensure_newline()
-            self.renderer.message(t("confirmation.allowlisted", prefix=prefix), "green")
+            self.renderer.message(t("confirmation.allowlisted", command=allowed_cmd), "green")
             return True
         if answer in ("n", "N"):
             return False

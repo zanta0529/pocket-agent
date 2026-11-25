@@ -98,7 +98,7 @@
     "file_panel_title": "【檔案編輯確認】代理要求變更檔案",
     "planned_file_edit": "預計變更：\n{command}",
     "session_approved": "✓ 已同意本次對話中自動執行指令: {command}",
-    "allowlisted": "✓ 已將「{prefix}」加入指令白名單，未來將自動執行此指令。",
+    "allowlisted": "✓ 已將「{command}」加入指令白名單，未來將自動執行此指令。",
     "custom_instruction_empty": "未輸入指示，已取消執行指令。",
     "custom_instruction_received": "✓ 已收到您的指示：「{instruction}」，已轉達給 Agent 並加入規範。",
     "prompt_options": "允許？[y: 單次 | a: 本次對話 | A: 永遠加入白名單 | c: 自訂指示 | N: 拒絕] ",
