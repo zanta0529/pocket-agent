@@ -69,3 +69,16 @@ class CliState:
         if not 1 <= number <= len(self.pending_files):
             raise ValueError(t("cli.attachment_index_out_of_range"))
         return self.pending_files.pop(number - 1)
+
+
+def sync_session_context(state: CliState, agent: object | None, session_id: str) -> None:
+    """同步前端狀態、Agent 實例與 paths 上下文之 Session ID。"""
+    from pocket_agent.system.paths import set_active_session_id
+
+    state.session_id = session_id
+    if agent is not None:
+        if callable(getattr(type(agent), "set_session_id", None)):
+            agent.set_session_id(session_id)
+        else:
+            setattr(agent, "session_id", session_id)
+    set_active_session_id(session_id)

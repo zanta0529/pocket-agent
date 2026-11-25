@@ -508,7 +508,7 @@ def _backup_file(target: Path) -> None:
 
 
 def _is_current_workspace_scratch_target(target: Path) -> bool:
-    """判定已驗證路徑是否位於目前工作區專屬的隔離暫存目錄（scratch_dir）之下。"""
+    """判定已驗證路徑是否位於目前會話專屬的隔離暫存目錄（scratch/<session_id>/）之下。"""
     try:
         scratch_root = paths.scratch_dir().resolve(strict=False)
         resolved = target.resolve(strict=False)
@@ -518,7 +518,7 @@ def _is_current_workspace_scratch_target(target: Path) -> bool:
 
 
 def _should_skip_fs_confirm(target: Path, auto_allow_scratch: bool) -> bool:
-    """檢查目前寫入目標是否符合當前工作區暫存目錄的免確認條件。"""
+    """檢查目前寫入目標是否符合當前會話暫存目錄的免確認條件。"""
     return auto_allow_scratch and _is_current_workspace_scratch_target(target)
 
 

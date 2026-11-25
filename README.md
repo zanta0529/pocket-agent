@@ -327,7 +327,7 @@ flowchart TB
 - **Secret Injection & Interactive Prompting**: Passwords and API keys can be entered securely at runtime (in-memory only, never logged or sent to LLM context) or masked from LLM schemas via `inject`.
 - **Shell Sandbox**: Optional Docker isolation via `USE_SANDBOX=docker`.
 - **Context Budget Pipeline**: Dynamically manages context window usage with tool-output spillover to disk, history compaction (`HistoryCompactor`), and old tool-output pruning.
-- **Zero Project Pollution**: All runtime spillover files, screenshots, and logs are isolated under `~/.pocket-agent/workspaces/<workspace-slug>/`, keeping your repository's `git status` clean.
+- **Zero Project Pollution**: All runtime spillover files, screenshots, and notes are isolated under `~/.pocket-agent/scratch/<session_id>/` (with logs centralized in `~/.pocket-agent/logs/`), keeping your repository's `git status` clean.
 
 ### 5. Deep Dive Documentation
 

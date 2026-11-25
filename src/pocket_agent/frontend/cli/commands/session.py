@@ -8,6 +8,7 @@ from pocket_agent.frontend.cli.commands.core import (
     CommandContext,
     CommandResult,
 )
+from pocket_agent.frontend.cli.state import sync_session_context
 from pocket_agent.system.i18n import t
 
 
@@ -30,7 +31,7 @@ def _load_session_into_context(ctx: CommandContext, session_id: str) -> None:
         if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
             ctx.agent.activity.rebuild_from_history(ctx.agent.history)
 
-    ctx.state.session_id = data["id"]
+    sync_session_context(ctx.state, ctx.agent, data["id"])
     ctx.state.session_tokens = 0
     ctx.state.last_failed_input = ""
     ctx.renderer.message(
@@ -59,7 +60,7 @@ def _delete_session_by_id(ctx: CommandContext, session_id: str) -> None:
             ctx.agent.context_usage = None
             if hasattr(ctx.agent, "activity") and ctx.agent.activity is not None:
                 ctx.agent.activity.clear()
-        ctx.state.session_id = new_session_id()
+        sync_session_context(ctx.state, ctx.agent, new_session_id())
         ctx.state.session_tokens = 0
         ctx.state.last_failed_input = ""
     ctx.renderer.message(t("session_cmd.deleted", title=title))
@@ -395,7 +396,7 @@ class NewCommand(CliCommand):
                 ctx.agent.activity.clear()
             if callable(getattr(type(ctx.agent), "clear_finished_background_jobs", None)):
                 ctx.agent.clear_finished_background_jobs()
-        ctx.state.session_id = new_session_id()
+        sync_session_context(ctx.state, ctx.agent, new_session_id())
         ctx.state.pending_files.clear()
         ctx.state.last_failed_input = ""
         ctx.state.session_tokens = 0

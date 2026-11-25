@@ -232,12 +232,14 @@ class Agent:
         is_subagent: bool = False,  # 子代理不觸發 hooks、不能再開子代理
         allowed_tools: list[str] | None = None,  # 限定可使用的工具清單（None 代表全開）
         provider: str | None = None,  # 模型供應商 ID；未指定時由 EngineFactory 依 client 推論（向下相容）
+        session_id: str | None = None,  # 所屬會話 ID，用於隔離暫存與研究筆記目錄
     ):
         setup_logging()
         from pocket_agent.system.config import config
 
         self.client = client
         self.provider = provider
+        self.session_id: str | None = session_id
         self._engine_cache: tuple[tuple[str, int, str], BaseEngine] | None = None
         self.mcp = mcp
         self._is_subagent = is_subagent
@@ -352,99 +354,102 @@ class Agent:
         current_task = asyncio.current_task()
         self._current_task = current_task
 
-        if not self._is_subagent:
-            await run_sync(run_hooks, "before_send", {"user_input": user_input})
+        from pocket_agent.system.paths import session_scope
 
-        content = await self._build_content(user_input, attachments or [])
-        hist_len_before = len(self.history)
-        self.history.append({"role": "user", "content": content})
+        with session_scope(self.session_id):
+            if not self._is_subagent:
+                await run_sync(run_hooks, "before_send", {"user_input": user_input})
 
-        self.last_images = []
-        self.last_files = []
+            content = await self._build_content(user_input, attachments or [])
+            hist_len_before = len(self.history)
+            self.history.append({"role": "user", "content": content})
 
-        try:
-            thinking, reply = await self._run_loop()
-        except Exception as e:
-            engine = self.engine
-            if engine.is_context_overflow(e):
-                log.info("Context exceeded intercepted.")
+            self.last_images = []
+            self.last_files = []
+
+            try:
+                thinking, reply = await self._run_loop()
+            except Exception as e:
+                engine = self.engine
+                if engine.is_context_overflow(e):
+                    log.info("Context exceeded intercepted.")
+                    from pocket_agent.core.compaction import ensure_paired_tool_calls
+
+                    if len(self.history) == hist_len_before + 1:
+                        self.history.pop()  # Remove the failed user input from history
+                    else:
+                        self.history = ensure_paired_tool_calls(self.history)
+                    notice = {
+                        "role": "system",
+                        "content": (
+                            "[System] 發生 Context Exceeded (上下文超載) 錯誤。"
+                            "請改用 `run_subagents_parallel` 派發子代理，"
+                            "或使用 `indexed_search` 進行精準檢索。"
+                        ),
+                    }
+                    self.history.append(notice)
+                    return (
+                        "",
+                        "⚠️ **上下文超載 (Context Exceeded)**\n\n"
+                        "系統已自動攔截此錯誤並保護您的對話脈絡。\n"
+                        "建議作法：請明確指示我「**委派子代理**」或「**改用精準搜尋**」來拆解這個大型任務。",
+                        "",
+                    )
+
+                if engine.is_non_retryable_error(e):
+                    log.info(f"API Error {getattr(e, 'status_code', None)} intercepted.")
+                    from pocket_agent.core.compaction import ensure_paired_tool_calls
+
+                    if len(self.history) == hist_len_before + 1:
+                        self.history.pop()
+                    else:
+                        self.history = ensure_paired_tool_calls(self.history)
+                    if hasattr(engine, "format_api_error_async"):
+                        formatted_err = await engine.format_api_error_async(e)
+                    else:
+                        formatted_err = engine.format_api_error(e)
+                    raise RuntimeError(formatted_err) from e
+
                 from pocket_agent.core.compaction import ensure_paired_tool_calls
 
-                if len(self.history) == hist_len_before + 1:
-                    self.history.pop()  # Remove the failed user input from history
-                else:
-                    self.history = ensure_paired_tool_calls(self.history)
-                notice = {
-                    "role": "system",
-                    "content": (
-                        "[System] 發生 Context Exceeded (上下文超載) 錯誤。"
-                        "請改用 `run_subagents_parallel` 派發子代理，"
-                        "或使用 `indexed_search` 進行精準檢索。"
-                    ),
-                }
-                self.history.append(notice)
-                return (
-                    "",
-                    "⚠️ **上下文超載 (Context Exceeded)**\n\n"
-                    "系統已自動攔截此錯誤並保護您的對話脈絡。\n"
-                    "建議作法：請明確指示我「**委派子代理**」或「**改用精準搜尋**」來拆解這個大型任務。",
-                    "",
+                self.history = ensure_paired_tool_calls(self.history)
+                hint = engine.connection_error_hint(e)
+                if hint:
+                    raise RuntimeError(f"{e}{hint}") from e
+                raise
+
+            if self.last_images:
+                paths = "\n".join(f"🖼️ {p}" for p in self.last_images)
+                reply = (f"{reply}\n\n" if reply.strip() else "") + f"圖片已存檔：\n{paths}"
+            if self.last_files:
+                paths = "\n".join(f"📄 {p}" for p in self.last_files)
+                reply = (f"{reply}\n\n" if reply.strip() else "") + f"檔案已產生：\n{paths}"
+
+            elapsed = time.time() - start_time
+            if self.total_tokens:
+                usage_str = f"Thought for {elapsed:.1f}s, {self.total_tokens} tokens"
+            else:
+                usage_str = f"Thought for {elapsed:.1f}s"
+
+            self.history.append({"role": "assistant", "content": reply})
+
+            if not self._is_subagent:
+                from pocket_agent.core.auto_learn import AutoLearnService
+                from pocket_agent.system.config import config
+
+                if config.get("system.auto_learn") is True and AutoLearnService.should_trigger(reply):
+                    log.info("Auto-Learn 觸發：背景進行知識萃取...")
+                    self.spawn_background_task(AutoLearnService.learn_from_history(self))
+
+                await run_sync(
+                    run_hooks,
+                    "after_response",
+                    {"user_input": user_input, "reply": reply},
                 )
 
-            if engine.is_non_retryable_error(e):
-                log.info(f"API Error {getattr(e, 'status_code', None)} intercepted.")
-                from pocket_agent.core.compaction import ensure_paired_tool_calls
-
-                if len(self.history) == hist_len_before + 1:
-                    self.history.pop()
-                else:
-                    self.history = ensure_paired_tool_calls(self.history)
-                if hasattr(engine, "format_api_error_async"):
-                    formatted_err = await engine.format_api_error_async(e)
-                else:
-                    formatted_err = engine.format_api_error(e)
-                raise RuntimeError(formatted_err) from e
-
-            from pocket_agent.core.compaction import ensure_paired_tool_calls
-
-            self.history = ensure_paired_tool_calls(self.history)
-            hint = engine.connection_error_hint(e)
-            if hint:
-                raise RuntimeError(f"{e}{hint}") from e
-            raise
-
-        if self.last_images:
-            paths = "\n".join(f"🖼️ {p}" for p in self.last_images)
-            reply = (f"{reply}\n\n" if reply.strip() else "") + f"圖片已存檔：\n{paths}"
-        if self.last_files:
-            paths = "\n".join(f"📄 {p}" for p in self.last_files)
-            reply = (f"{reply}\n\n" if reply.strip() else "") + f"檔案已產生：\n{paths}"
-
-        elapsed = time.time() - start_time
-        if self.total_tokens:
-            usage_str = f"Thought for {elapsed:.1f}s, {self.total_tokens} tokens"
-        else:
-            usage_str = f"Thought for {elapsed:.1f}s"
-
-        self.history.append({"role": "assistant", "content": reply})
-
-        if not self._is_subagent:
-            from pocket_agent.core.auto_learn import AutoLearnService
-            from pocket_agent.system.config import config
-
-            if config.get("system.auto_learn") is True and AutoLearnService.should_trigger(reply):
-                log.info("Auto-Learn 觸發：背景進行知識萃取...")
-                self.spawn_background_task(AutoLearnService.learn_from_history(self))
-
-            await run_sync(
-                run_hooks,
-                "after_response",
-                {"user_input": user_input, "reply": reply},
-            )
-
-        if self._current_task is current_task:
-            self._current_task = None
-        return thinking, reply, usage_str
+            if self._current_task is current_task:
+                self._current_task = None
+            return thinking, reply, usage_str
 
     def request_stop(self) -> bool:
         """要求停止本輪工作（從 GUI 執行緒或訊號處理常式呼叫）。
@@ -531,29 +536,39 @@ class Agent:
     def _stopped_reply(text: str) -> str:
         return (f"{text}\n\n" if text.strip() else "") + "⏹ 已由使用者停止"
 
+    def set_session_id(self, session_id: str | None) -> None:
+        """更新目前會話 ID。"""
+        self.session_id = session_id
+
     def clear_history(self) -> None:
         self.history.clear()
         self.user_instructions.clear()
         self.activity.clear()
 
-    def load_session_history(self, history: list[dict]) -> None:
+    def load_session_history(self, history: list[dict], *, session_id: str | None = None) -> None:
         """載入既有會話歷史並重設相關執行狀態。"""
+        if session_id is not None:
+            self.session_id = session_id
         self.history = list(history)
         self.is_sensitive_session = False
         self.context_usage = None
         self.user_instructions.clear()
         self.last_images.clear()
         self.last_files.clear()
+        self.scratch_note_paths.clear()
         self.activity.rebuild_from_history(self.history)
 
-    def reset_session(self) -> None:
+    def reset_session(self, *, session_id: str | None = None) -> None:
         """徹底清空當前會話歷史與相關狀態旗標，並清除已結束的背景工作紀錄。"""
+        if session_id is not None:
+            self.session_id = session_id
         self.clear_history()
         self.is_sensitive_session = False
         self.accept_edits = False
         self.context_usage = None
         self.last_images.clear()
         self.last_files.clear()
+        self.scratch_note_paths.clear()
         self.clear_finished_background_jobs()
 
     async def compact_history(self, keep_recent: int = 4) -> tuple[bool, int, int]:
@@ -644,6 +659,7 @@ class Agent:
             allowed_tools=allowed_tools,
             reasoning_effort=reasoning_effort,
             max_tool_rounds=max_tool_rounds or self.max_tool_rounds,
+            session_id=self.session_id,
         )
         sub.workspace_dirs = list(self.workspace_dirs)
         sub.on_confirm = self.on_confirm
@@ -883,7 +899,7 @@ class Agent:
         """靜態前綴置頂（Prefix Cache 友善）＋動態狀態與檢索尾綴。"""
         from pathlib import Path
 
-        from pocket_agent.system.paths import scratch_dir
+        from pocket_agent.system.paths import scratch_dir, session_scope
 
         # ── 1. 靜態前綴（會話期間保持位元組穩定，最大化供應商 Prefix Cache 命中） ──
         static_parts: list[str] = [
@@ -908,23 +924,24 @@ class Agent:
             and "write_scratch_note" in self.allowed_tools
             and "write_to_file" not in self.allowed_tools
         )
-        if use_scratch_note_only:
-            suggested_note = self.scratch_note_filename or "research_notes.md"
-            note_dest = scratch_dir() / "notes" / suggested_note
-            scratch_guidance = (
-                "\n2. 若檢索與分析過程冗長，請務必善用 `write_scratch_note` 工具"
-                f"（建議檔名 `{suggested_note}`，對應沙盒路徑 `{note_dest}`），"
-                "將已確認的重點、來源 URL 與待查項目增量寫入全域沙盒暫存區，"
-                "確保資訊不受 Context Overflow 截斷或中斷影響，且絕不污染專案工作區。"
-            )
-        else:
-            notes_path = scratch_dir() / "notes.md"
-            scratch_guidance = (
-                "\n2. 若檢索與分析過程冗長，請務必善用 `write_to_file` 工具，"
-                "將關鍵資訊、變數名稱與待辦事項 (TODO) "
-                f"整理並寫入 `{notes_path}` 等全域沙盒暫存檔中（建立外部草稿區/Scratchpad）。"
-                "這樣能確保重要資訊不受 Context Overflow 截斷影響，且不污染專案工作區。"
-            )
+        with session_scope(self.session_id):
+            if use_scratch_note_only:
+                suggested_note = self.scratch_note_filename or "research_notes.md"
+                note_dest = scratch_dir() / "notes" / suggested_note
+                scratch_guidance = (
+                    "\n2. 若檢索與分析過程冗長，請務必善用 `write_scratch_note` 工具"
+                    f"（建議檔名 `{suggested_note}`，對應沙盒路徑 `{note_dest}`），"
+                    "將已確認的重點、來源 URL 與待查項目增量寫入全域沙盒暫存區，"
+                    "確保資訊不受 Context Overflow 截斷或中斷影響，且絕不污染專案工作區。"
+                )
+            else:
+                notes_path = scratch_dir() / "notes.md"
+                scratch_guidance = (
+                    "\n2. 若檢索與分析過程冗長，請務必善用 `write_to_file` 工具，"
+                    "將關鍵資訊、變數名稱與待辦事項 (TODO) "
+                    f"整理並寫入 `{notes_path}` 等全域沙盒暫存檔中（建立外部草稿區/Scratchpad）。"
+                    "這樣能確保重要資訊不受 Context Overflow 截斷影響，且不污染專案工作區。"
+                )
 
         static_parts.append(
             "[資源管理] 在處理需閱讀大量原始碼或進行深度網路研究的大型任務時："
@@ -1223,14 +1240,17 @@ class Agent:
 
     def _build_subagent_handoff_notice(self, sub: "Agent", *, run_id: str, reason: str) -> str:
         """子代理中斷或達上限時，統一落盤檢查點並組裝交接提示給主代理。"""
+        from pocket_agent.system.paths import session_scope
+
         note_paths = list(getattr(sub, "scratch_note_paths", []) or [])
-        ckpt_path, tool_count = self._write_research_checkpoint(
-            sub.history,
-            reason,
-            filename=f"research_checkpoint_{run_id}.md",
-            is_sensitive=bool(getattr(sub, "is_sensitive_session", False)),
-            extra_note_paths=note_paths,
-        )
+        with session_scope(getattr(sub, "session_id", None)):
+            ckpt_path, tool_count = self._write_research_checkpoint(
+                sub.history,
+                reason,
+                filename=f"research_checkpoint_{run_id}.md",
+                is_sensitive=bool(getattr(sub, "is_sensitive_session", False)),
+                extra_note_paths=note_paths,
+            )
         if not ckpt_path and not note_paths and tool_count == 0:
             return ""
         parts = [f"💾 **子代理進度保護**（已完成 {tool_count} 次工具呼叫）："]

@@ -199,6 +199,27 @@ def test_fs_validate_safe_path_global_root_files_forbidden(tmp_path):
             _validate_safe_path(str(allowlist_file))
 
 
+def test_fs_validate_safe_path_allows_session_scratch_and_blocks_sessions_dir(tmp_path):
+    """驗證全域目錄放行 scratch/<session_id>/，但嚴格封鎖 sessions/*.json。"""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_global = tmp_path / "home" / ".pocket-agent"
+    scratch_out = fake_global / "scratch" / "20261125-090000-abc123" / "outputs" / "out.log"
+    scratch_out.parent.mkdir(parents=True)
+    scratch_out.write_text("ok", encoding="utf-8")
+    sess_file = fake_global / "sessions" / "20261125-090000-abc123.json"
+    sess_file.parent.mkdir(parents=True)
+    sess_file.write_text("{}", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.cwd", return_value=project_dir),
+        patch("pocket_agent.system.paths.user_dir", return_value=fake_global),
+    ):
+        assert _validate_safe_path(str(scratch_out), is_write=True) == scratch_out.resolve()
+        with pytest.raises(ValueError, match="安全限制：禁止存取敏感目錄或檔案"):
+            _validate_safe_path(str(sess_file))
+
+
 def test_fs_confirm_contract_blocks_custom_text_refusal_when_accept_edits_off(tmp_path):
     """確認 Accept-edits 關閉時，on_confirm 回傳文字拒絕不會修改或建立檔案。"""
     workspace = tmp_path / "workspace"

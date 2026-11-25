@@ -203,3 +203,47 @@ def test_housekeeper_cleans_scratch_notes_and_dynamic_checkpoints(tmp_path):
     assert cleaned_ckpts == 1
     assert not old_ckpt.exists()
     assert fresh_ckpt.exists()
+
+
+def test_background_subagent_keeps_original_session_after_foreground_switch(tmp_path, monkeypatch):
+    from pocket_agent.system.paths import set_active_session_id
+
+    monkeypatch.setattr("pocket_agent.system.paths.user_dir", lambda: tmp_path)
+    sub_def = {
+        "name": "researcher",
+        "description": "ro",
+        "allowed_tools": ["read_file", "write_scratch_note"],
+        "system_prompt": "SP",
+    }
+    monkeypatch.setattr("pocket_agent.core.subagents.get_subagent", lambda n: sub_def if n == "researcher" else None)
+
+    async def _scenario() -> None:
+        started = asyncio.Event()
+        proceed = asyncio.Event()
+
+        async def _fake_chat(self_sub, task: str) -> tuple[str, str, str]:
+            started.set()
+            await proceed.wait()
+            res = call_scratch_tool("write_scratch_note", {"filename": "bg.md", "content": "from bg"})
+            assert res.startswith("[SUCCESS]")
+            return "", "bg done", "0s"
+
+        monkeypatch.setattr(Agent, "chat", _fake_chat)
+        mock_mcp = Mock()
+        mock_mcp.openai_tools.return_value = []
+        parent = Agent(client=Mock(), mcp=mock_mcp, model="m", provider="openai", session_id="sess-origin")
+        set_active_session_id("sess-origin")
+
+        job = parent.start_background_subagent("researcher", "bg task")
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        # 前景切換為全新會話
+        parent.set_session_id("sess-new")
+        set_active_session_id("sess-new")
+        proceed.set()
+
+        await parent.wait_background_job(job.job_id, timeout=1.0)
+        assert job.status == "completed"
+        assert (tmp_path / "scratch" / "sess-origin" / "notes" / "bg.md").read_text(encoding="utf-8") == "from bg"
+        assert not (tmp_path / "scratch" / "sess-new" / "notes" / "bg.md").exists()
+
+    asyncio.run(_scenario())

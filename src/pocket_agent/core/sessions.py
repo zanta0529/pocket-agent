@@ -263,6 +263,7 @@ def list_sessions() -> list[dict]:
 
 def delete_session(session_id: str) -> None:
     _path(session_id).unlink(missing_ok=True)
+    paths.delete_session_scratch(session_id)
 
 
 def rename_session(session_id: str, new_title: str) -> bool:
@@ -282,6 +283,10 @@ def _session_file_size(session_id: str) -> int:
         return _path(session_id).stat().st_size
     except OSError, ValueError:
         return 0
+
+
+def _session_total_size(session_id: str) -> int:
+    return _session_file_size(session_id) + paths.get_session_scratch_size(session_id)
 
 
 def find_prunable_sessions(
@@ -306,7 +311,7 @@ def find_prunable_sessions(
     total_bytes = 0
     enriched: list[dict] = []
     for s in all_sessions:
-        sz = _session_file_size(s["id"])
+        sz = _session_total_size(s["id"])
         total_bytes += sz
         enriched.append({**s, "size_bytes": sz})
 
@@ -338,7 +343,7 @@ def prune_sessions(session_ids: list[str], exclude_session_id: str | None = None
     for sid in session_ids:
         if exclude_session_id and sid == exclude_session_id:
             continue
-        sz = _session_file_size(sid)
+        sz = _session_total_size(sid)
         try:
             delete_session(sid)
             deleted += 1

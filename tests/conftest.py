@@ -15,13 +15,19 @@ def _isolate_pocket_user_dir(tmp_path_factory: pytest.TempPathFactory, monkeypat
         fake_user_dir.mkdir(parents=True, exist_ok=True)
         return fake_user_dir
 
+    from pocket_agent.system import paths
+
     monkeypatch.setattr("pocket_agent.system.paths.user_dir", _fake_user_dir)
     monkeypatch.setattr("pocket_agent.system.housekeeping.user_dir", _fake_user_dir)
     monkeypatch.setattr("pocket_agent.core.sessions.SESSIONS_DIR", None)
     monkeypatch.setattr("pocket_agent.core.sessions.SESSION_SALT_PATH", None)
     monkeypatch.setattr("pocket_agent.core.sessions._CACHED_HMAC_KEY", None)
     monkeypatch.setattr("pocket_agent.core.sessions._CACHED_LEGACY_HMAC_KEY", None)
-    return fake_user_dir
+    paths.set_active_session_id(None)
+    try:
+        yield fake_user_dir
+    finally:
+        paths.set_active_session_id(None)
 
 
 @pytest.fixture(autouse=True)

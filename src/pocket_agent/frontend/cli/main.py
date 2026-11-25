@@ -519,8 +519,9 @@ class CliFrontend(FrontendStrategy):
         from pocket_agent.extensions.mcp import MCPManager
         from pocket_agent.frontend.cli.input import CliInput
         from pocket_agent.frontend.cli.render import CliRenderer
-        from pocket_agent.frontend.cli.state import CliState
+        from pocket_agent.frontend.cli.state import CliState, sync_session_context
         from pocket_agent.system.auth import fetch_available_models, get_model, get_provider_client, load_config
+        from pocket_agent.system.paths import set_active_session_id
 
         renderer = CliRenderer(Console())
 
@@ -569,6 +570,7 @@ class CliFrontend(FrontendStrategy):
                 try:
                     client = get_provider_client()
                     state = CliState(load_config().get("active_provider", "openai"), get_model())
+                    set_active_session_id(state.session_id)
                     try:
                         available = await asyncio.to_thread(fetch_available_models, state.provider)
                     except Exception:
@@ -634,7 +636,12 @@ class CliFrontend(FrontendStrategy):
                     renderer.message(t("cli.mcp_disabled_hint", disabled=disabled), "dim")
 
             agent = Agent(
-                client=client, mcp=mcp, model=state.model, system_prompt=system_prompt, provider=state.provider
+                client=client,
+                mcp=mcp,
+                model=state.model,
+                system_prompt=system_prompt,
+                provider=state.provider,
+                session_id=state.session_id,
             )
             state.reasoning_effort = getattr(agent, "reasoning_effort", "auto")
 
@@ -680,7 +687,7 @@ class CliFrontend(FrontendStrategy):
                             agent.load_session_history(latest["history"])
                         else:
                             agent.history = list(latest["history"])
-                        state.session_id = latest["id"]
+                        sync_session_context(state, agent, latest["id"])
                         renderer.message(
                             t(
                                 "cli.session_resumed",
@@ -764,4 +771,5 @@ class CliFrontend(FrontendStrategy):
                     )
                 except Exception as apply_exc:
                     log.warning("啟動更新套用腳本失敗：%s", apply_exc)
+            set_active_session_id(None)
         return update_exit_code

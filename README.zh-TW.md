@@ -327,7 +327,7 @@ flowchart TB
 - **敏感資訊注入 (Inject) 與動態詢問**：連線密碼或 API Key 支援於執行期由終端機隱藏輸入（僅存於記憶體，不寫入 Context 與日誌），或透過 `inject` 自動抹除 LLM Schema 中的機密欄位。
 - **指令沙盒 (Shell Sandbox)**：支援透過設定 `USE_SANDBOX=docker`，將終端機指令隔離於容器內執行。
 - **Context Budget 上下文預算管線**：基於動態預算公式控管視窗水位，提供「工具巨量輸出落盤虛擬化 (Spillover)」、「歷史對話壓縮 (History Compactor)」與「工具輸出置換」多層防護，根除 Context Overflow。
-- **工作區零污染 (Zero Project Pollution)**：所有執行期產生的工具溢出檔案、截圖暫存與日誌，一律自動隔離於全域 `~/.pocket-agent/workspaces/<workspace-slug>/` 沙盒中，專案目錄絕不產生未受追蹤的暫存檔案，確保 Git 狀態絕對乾淨。
+- **工作區零污染 (Zero Project Pollution)**：所有執行期產生的工具溢出檔案、截圖與筆記暫存，一律自動隔離於全域 `~/.pocket-agent/scratch/<session_id>/` 沙盒中（系統日誌集中於 `~/.pocket-agent/logs/`），專案目錄絕不產生未受追蹤的暫存檔案，確保 Git 狀態絕對乾淨。
 
 ### 5. 深入架構與實作文件 (Deep Dive Documentation)
 

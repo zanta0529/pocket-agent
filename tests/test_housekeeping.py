@@ -406,3 +406,44 @@ def test_housekeeper_clean_all_workspaces_removes_empty_dirs(tmp_path, monkeypat
     assert protected_ws.exists()
     assert notes.exists()
     assert cur_ws.exists()
+
+
+def test_housekeeper_clean_all_session_scratches_and_run_cleanup(tmp_path, monkeypatch):
+    fake_user_dir = tmp_path / "user"
+    scratch_root_dir = fake_user_dir / "scratch"
+    ten_days_ago = time.time() - (10 * 86400)
+
+    # 1. 其他過期會話暫存：清理後應連同空目錄一起移除
+    old_sess = scratch_root_dir / "sess-expired"
+    (old_sess / "outputs").mkdir(parents=True)
+    old_log = old_sess / "outputs" / "out.log"
+    old_log.write_text("expired", encoding="utf-8")
+    os.utime(old_log, (ten_days_ago, ten_days_ago))
+
+    # 2. 其他含受保護筆記之會話：目錄必須保留
+    prot_sess = scratch_root_dir / "sess-protected"
+    (prot_sess / "notes").mkdir(parents=True)
+    notes = prot_sess / "notes" / "notes.md"
+    notes.write_text("keep", encoding="utf-8")
+    os.utime(notes, (ten_days_ago, ten_days_ago))
+
+    # 3. 當前進行中會話：空目錄亦保留
+    cur_sess = scratch_root_dir / "sess-current"
+    cur_sess.mkdir(parents=True)
+
+    monkeypatch.setattr("pocket_agent.system.housekeeping.user_dir", lambda: fake_user_dir)
+    monkeypatch.setattr("pocket_agent.system.paths.user_dir", lambda: fake_user_dir)
+
+    hk = Housekeeper(
+        target_log_dir=fake_user_dir / "logs",
+        target_scratch_dir=cur_sess,
+        cwd=tmp_path,
+        timestamp_file=tmp_path / "ts",
+    )
+    res = hk.run_cleanup(force=True)
+    assert res["status"] == "success"
+    assert res["cleaned_files"] == 1
+    assert not old_sess.exists()
+    assert prot_sess.exists()
+    assert notes.exists()
+    assert cur_sess.exists()

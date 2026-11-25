@@ -299,7 +299,7 @@
     "prune_none": "✓ No sessions matching \"{rule}\" to clean (total {total}, {size}).",
     "prune_found": "Found {count} session(s) matching \"{rule}\" (will free {size}):",
     "prune_more": "  … and {count} more",
-    "prune_confirm_prompt": "Permanently delete these {count} session(s)?",
+    "prune_confirm_prompt": "Permanently delete these {count} session(s) and their scratch files?",
     "prune_confirm_yes": "Confirm Delete",
     "prune_done": "✓ Cleaned {deleted} session(s), freed {size}.",
     "compact_no_args": "/compact takes no arguments",

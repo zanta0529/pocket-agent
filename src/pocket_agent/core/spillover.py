@@ -29,23 +29,31 @@ class SpilloverManager:
     """負責工具輸出的動態落盤與雙端預覽切片。"""
 
     def __init__(self, output_dir: Path | None = None):
-        if output_dir is not None:
-            self.output_dir = output_dir
-        else:
-            from pocket_agent.system.paths import scratch_dir
+        self._explicit_output_dir: Path | None = output_dir
 
-            self.output_dir = scratch_dir() / "outputs"
+    @property
+    def output_dir(self) -> Path:
+        if self._explicit_output_dir is not None:
+            return self._explicit_output_dir
+        from pocket_agent.system.paths import scratch_dir
+
+        return scratch_dir() / "outputs"
+
+    @output_dir.setter
+    def output_dir(self, value: Path | None) -> None:
+        self._explicit_output_dir = value
 
     def _ensure_dir(self) -> Path:
+        target = self.output_dir
         try:
-            self.output_dir.mkdir(parents=True, exist_ok=True)
+            target.mkdir(parents=True, exist_ok=True)
         except OSError:
-            from pocket_agent.system.paths import user_dir
+            from pocket_agent.system.paths import DEFAULT_SCRATCH_SESSION_ID, user_dir
 
-            fallback = user_dir() / "scratch" / "outputs"
+            fallback = user_dir() / "scratch" / DEFAULT_SCRATCH_SESSION_ID / "outputs"
             fallback.mkdir(parents=True, exist_ok=True)
             return fallback
-        return self.output_dir
+        return target
 
     def spill_or_pass(
         self,

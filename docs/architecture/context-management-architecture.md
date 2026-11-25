@@ -87,7 +87,7 @@ flowchart TD
 ### 2.1 關鍵階段保護原則
 
 1. **附加時截斷與巨量落盤 (Append-time Truncation & Spillover)**：
-   單筆工具輸出超過有效視窗的 `8%`（`DEFAULT_TOOL_OUTPUT_RATIO = 0.08`）或落盤門檻時，會將完整輸出寫入工作區沙盒 `scratch/outputs/`，僅將頭尾預覽（預設各 `1,500` 字元）與檔案路徑注入 Context，避免單次工具結果撐爆預算。
+   單筆工具輸出超過有效視窗的 `8%`（`DEFAULT_TOOL_OUTPUT_RATIO = 0.08`）或落盤門檻時，會將完整輸出寫入會話暫存沙盒 `~/.pocket-agent/scratch/<session_id>/outputs/`，僅將頭尾預覽（預設各 `1,500` 字元）與檔案路徑注入 Context，避免單次工具結果撐爆預算。
 2. **優先清除舊工具輸出 (`compact`)**：
    達門檻時由舊至新將 `function_call_output` 置換為語意佔位符（保留最近 `2` 筆原樣輸出與所有對話原文）。
 3. **AI 歷史摘要壓縮 (`HistoryCompactor`)**：
