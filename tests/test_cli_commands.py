@@ -389,3 +389,57 @@ def test_prune_ignores_forged_meta_and_mismatched_filename_id(tmp_path, monkeypa
     assert sess_mod.load_session("victim-sess") is not None
     assert sess_mod.load_session("recent-sess") is not None
     assert sess_mod.load_session("cur-sess") is not None
+
+
+def test_session_delete_and_prune_remove_scratch_dirs(tmp_path, monkeypatch):
+    """/session delete 與 /prune 應同步刪除對應之 scratch/<session_id>/ 目錄，並保護進行中會話。"""
+    import json
+    import time
+
+    from pocket_agent.core import sessions as sess_mod
+    from pocket_agent.system.paths import scratch_dir
+
+    monkeypatch.setattr("pocket_agent.core.sessions._CACHED_HMAC_KEY", b"test-key-32-bytes-long-enough-1234")
+    sess_mod.save_session("cur-sess", [{"role": "user", "content": "cur"}], title="進行中")
+    sess_mod.save_session("del-sess", [{"role": "user", "content": "del"}], title="單筆刪除")
+    sess_mod.save_session("old-sess", [{"role": "user", "content": "old"}], title="過期清理")
+
+    cur_scratch = scratch_dir("cur-sess", create=True)
+    (cur_scratch / "notes.md").write_text("keep", encoding="utf-8")
+    del_scratch = scratch_dir("del-sess", create=True)
+    (del_scratch / "notes.md").write_text("remove me", encoding="utf-8")
+    old_scratch = scratch_dir("old-sess", create=True)
+    (old_scratch / "outputs").mkdir(parents=True)
+    (old_scratch / "outputs" / "big.log").write_text("x" * 2048, encoding="utf-8")
+
+    old_data = sess_mod.load_session("old-sess")
+    old_data["updated_at"] = time.time() - (40 * 86400)
+    payload_str = json.dumps(old_data, ensure_ascii=False)
+    sig = sess_mod._sign_data(payload_str)
+    sess_mod._path("old-sess").write_text(
+        json.dumps(
+            {
+                "signature": sig,
+                "meta": {"id": "old-sess", "title": "過期清理", "updated_at": old_data["updated_at"]},
+                "payload": payload_str,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    state = CliState("openai", "model")
+    state.session_id = "cur-sess"
+    renderer = Mock()
+    reader = SimpleNamespace(choose=AsyncMock(return_value="確認刪除"))
+    handler = CommandHandler(Mock(), state, reader, renderer, [])
+
+    asyncio.run(handler.dispatch("/session delete del-sess"))
+    assert sess_mod.load_session("del-sess") is None
+    assert not del_scratch.exists()
+
+    asyncio.run(handler.dispatch("/prune 30"))
+    assert sess_mod.load_session("old-sess") is None
+    assert not old_scratch.exists()
+    assert sess_mod.load_session("cur-sess") is not None
+    assert cur_scratch.exists()

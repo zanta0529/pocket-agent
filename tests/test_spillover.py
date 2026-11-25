@@ -1,6 +1,7 @@
 """SpilloverManager 巨量輸出落盤虛擬化單元測試。"""
 
 from pocket_agent.core.spillover import SpilloverManager
+from pocket_agent.system.paths import session_scope
 
 
 def test_spillover_bypasses_short_text(tmp_path):
@@ -46,3 +47,21 @@ def test_spillover_non_string_passthrough(tmp_path):
     mgr = SpilloverManager(output_dir=tmp_path)
     assert mgr.spill_or_pass(None) is None
     assert mgr.spill_or_pass(12345) == 12345
+
+
+def test_spillover_default_manager_follows_session_scope_lazily(tmp_path, monkeypatch):
+    monkeypatch.setattr("pocket_agent.system.paths.user_dir", lambda: tmp_path)
+    mgr = SpilloverManager()
+
+    with session_scope("sess-1"):
+        assert mgr.spill_or_pass("short", tool_name="read_file", call_id="c1", max_chars=100) == "short"
+        assert not (tmp_path / "scratch" / "sess-1").exists()
+
+        res1 = mgr.spill_or_pass("A" * 500, tool_name="read_file", call_id="c2", max_chars=100)
+        assert "[系統日誌虛擬化]" in res1
+        assert len(list((tmp_path / "scratch" / "sess-1" / "outputs").glob("*.log"))) == 1
+
+    with session_scope("sess-2"):
+        res2 = mgr.spill_or_pass("B" * 500, tool_name="read_file", call_id="c3", max_chars=100)
+        assert "[系統日誌虛擬化]" in res2
+        assert len(list((tmp_path / "scratch" / "sess-2" / "outputs").glob("*.log"))) == 1

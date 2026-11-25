@@ -363,56 +363,59 @@ class BackgroundSubagentManager:
         sub.on_stream = _on_bg_stream
 
         async def _runner() -> None:
+            from pocket_agent.system.paths import session_scope
+
             token = current_scope.set(job_scope)
-            try:
-                _thinking, reply, _usage = await sub.chat(clean_task)
-                if "已達工具呼叫上限" in (reply or "") and hasattr(self._parent, "_build_subagent_handoff_notice"):
-                    handoff = self._parent._build_subagent_handoff_notice(
-                        sub,
-                        run_id=job_id,
-                        reason="已達子代理工具呼叫輪次上限",
-                    )
-                    if handoff:
-                        reply = f"{reply}\n\n{handoff}"
-                job.result = reply or ""
-                job.status = "completed"
-                job.last_progress = "completed"
-            except asyncio.CancelledError:
-                job.status = "cancelled"
-                job.last_progress = "cancelled"
-                if hasattr(self._parent, "_build_subagent_handoff_notice"):
-                    handoff = self._parent._build_subagent_handoff_notice(
-                        sub,
-                        run_id=job_id,
-                        reason="背景工作已取消",
-                    )
-                    if handoff:
-                        job.result = handoff
-            except Exception as exc:
-                job.status = "failed"
-                job.error = f"{type(exc).__name__}: {exc}"
-                job.last_progress = "failed"
-                if hasattr(self._parent, "_build_subagent_handoff_notice"):
-                    handoff = self._parent._build_subagent_handoff_notice(
-                        sub,
-                        run_id=job_id,
-                        reason=job.error,
-                    )
-                    if handoff:
-                        job.error = f"{job.error}\n\n{handoff}"
-            finally:
-                job.is_sensitive = bool(getattr(sub, "is_sensitive_session", False))
-                if job.finished_at is None:
-                    job.finished_at = time.time()
-                await job_scope.drain()
-                current_scope.reset(token)
-                self._prune_history()
-                self._notify_state_change()
-                if job.status in ("completed", "failed") and callable(self.on_job_finished):
-                    try:
-                        self.on_job_finished(job)
-                    except Exception:
-                        log.debug("background_jobs on_job_finished 回呼失敗", exc_info=True)
+            with session_scope(getattr(sub, "session_id", None)):
+                try:
+                    _thinking, reply, _usage = await sub.chat(clean_task)
+                    if "已達工具呼叫上限" in (reply or "") and hasattr(self._parent, "_build_subagent_handoff_notice"):
+                        handoff = self._parent._build_subagent_handoff_notice(
+                            sub,
+                            run_id=job_id,
+                            reason="已達子代理工具呼叫輪次上限",
+                        )
+                        if handoff:
+                            reply = f"{reply}\n\n{handoff}"
+                    job.result = reply or ""
+                    job.status = "completed"
+                    job.last_progress = "completed"
+                except asyncio.CancelledError:
+                    job.status = "cancelled"
+                    job.last_progress = "cancelled"
+                    if hasattr(self._parent, "_build_subagent_handoff_notice"):
+                        handoff = self._parent._build_subagent_handoff_notice(
+                            sub,
+                            run_id=job_id,
+                            reason="背景工作已取消",
+                        )
+                        if handoff:
+                            job.result = handoff
+                except Exception as exc:
+                    job.status = "failed"
+                    job.error = f"{type(exc).__name__}: {exc}"
+                    job.last_progress = "failed"
+                    if hasattr(self._parent, "_build_subagent_handoff_notice"):
+                        handoff = self._parent._build_subagent_handoff_notice(
+                            sub,
+                            run_id=job_id,
+                            reason=job.error,
+                        )
+                        if handoff:
+                            job.error = f"{job.error}\n\n{handoff}"
+                finally:
+                    job.is_sensitive = bool(getattr(sub, "is_sensitive_session", False))
+                    if job.finished_at is None:
+                        job.finished_at = time.time()
+                    await job_scope.drain()
+                    current_scope.reset(token)
+                    self._prune_history()
+                    self._notify_state_change()
+                    if job.status in ("completed", "failed") and callable(self.on_job_finished):
+                        try:
+                            self.on_job_finished(job)
+                        except Exception:
+                            log.debug("background_jobs on_job_finished 回呼失敗", exc_info=True)
 
         self._jobs[job_id] = job
         job.asyncio_task = loop.create_task(_runner())

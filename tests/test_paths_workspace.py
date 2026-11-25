@@ -3,56 +3,73 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from pocket_agent.system.housekeeping import Housekeeper
 from pocket_agent.system.paths import (
-    get_workspace_slug,
+    DEFAULT_SCRATCH_SESSION_ID,
+    delete_session_scratch,
+    get_active_session_id,
+    get_session_scratch_size,
     log_dir,
     scratch_dir,
-    workspace_dir,
+    scratch_root,
+    session_scope,
+    validate_session_id,
 )
 
 
-def test_get_workspace_slug_windows():
-    # 模擬 Windows 磁碟代號與路徑
-    slug1 = get_workspace_slug(r"C:\Users\test\project")
-    assert slug1 == "C--Users-test-project"
-
-    slug_root = get_workspace_slug("D:\\")
-    assert slug_root == "D--"
-
-    slug_spaces = get_workspace_slug(r"E:\My Projects\app (v2)")
-    assert slug_spaces == "E--My-Projects-app-v2"
-
-
-def test_get_workspace_slug_posix():
-    slug = get_workspace_slug("/home/user/projects/web-app")
-    assert slug == "-home-user-projects-web-app"
-
-
-def test_get_workspace_slug_long_path_truncated_with_hash():
-    long_path = "/home/user/" + ("very_long_nested_directory_name/" * 5) + "project"
-    slug = get_workspace_slug(long_path)
-    # 驗證長度在安全範圍 (<= 60)
-    assert len(slug) <= 60
-    # 驗證包含底線與 8 碼雜湊後綴
-    assert "_" in slug
-    suffix = slug.split("_")[-1]
-    assert len(suffix) == 8
-
-
-def test_centralized_workspace_dirs(tmp_path):
+def test_centralized_log_and_session_scratch_dirs(tmp_path):
     with patch("pocket_agent.system.paths.user_dir", return_value=tmp_path):
-        target_cwd = Path("/fake/test/repo")
-        ws = workspace_dir(target_cwd)
-        assert ws.parent == tmp_path / "workspaces"
+        l_dir_a = log_dir(Path("/fake/repo_a"))
+        l_dir_b = log_dir(Path("/fake/repo_b"))
+        assert l_dir_a == tmp_path / "logs"
+        assert l_dir_b == tmp_path / "logs"
+        assert l_dir_a.is_dir()
 
-        s_dir = scratch_dir(target_cwd)
-        assert s_dir == ws / "scratch"
-        assert s_dir.exists()
+        # scratch_dir 採延遲建立：未傳 create=True 時不主動建資料夾
+        s_default = scratch_dir()
+        assert s_default == scratch_root() / DEFAULT_SCRATCH_SESSION_ID
+        assert not s_default.exists()
 
-        l_dir = log_dir(target_cwd)
-        assert l_dir == ws / "logs"
-        assert l_dir.exists()
+        s_created = scratch_dir("20261125-090000-abc123", create=True)
+        assert s_created == tmp_path / "scratch" / "20261125-090000-abc123"
+        assert s_created.is_dir()
+
+
+def test_session_scope_and_invalid_session_id(tmp_path):
+    with patch("pocket_agent.system.paths.user_dir", return_value=tmp_path):
+        assert get_active_session_id() is None
+        with session_scope("sess-a"):
+            assert get_active_session_id() == "sess-a"
+            assert scratch_dir() == tmp_path / "scratch" / "sess-a"
+            with session_scope("sess-b"):
+                assert get_active_session_id() == "sess-b"
+                assert scratch_dir() == tmp_path / "scratch" / "sess-b"
+            assert scratch_dir() == tmp_path / "scratch" / "sess-a"
+        assert get_active_session_id() is None
+        assert scratch_dir() == tmp_path / "scratch" / DEFAULT_SCRATCH_SESSION_ID
+
+    for bad_id in ("", "   ", "../escape", "a/b", "a\\b", "bad id"):
+        with pytest.raises(ValueError, match="無效的 Session ID 格式"):
+            validate_session_id(bad_id)
+
+
+def test_delete_session_scratch_and_protects_default(tmp_path):
+    with patch("pocket_agent.system.paths.user_dir", return_value=tmp_path):
+        default_dir = scratch_dir(DEFAULT_SCRATCH_SESSION_ID, create=True)
+        (default_dir / "keep.txt").write_text("keep", encoding="utf-8")
+        assert delete_session_scratch(DEFAULT_SCRATCH_SESSION_ID) == 0
+        assert default_dir.exists()
+
+        sess_dir = scratch_dir("sess-del-1", create=True)
+        (sess_dir / "notes.md").write_text("hello", encoding="utf-8")
+        assert get_session_scratch_size("sess-del-1") == 5
+
+        freed = delete_session_scratch("sess-del-1")
+        assert freed == 5
+        assert not sess_dir.exists()
+        assert delete_session_scratch("sess-del-1") == 0
 
 
 def test_housekeeper_clean_all_workspaces(tmp_path):

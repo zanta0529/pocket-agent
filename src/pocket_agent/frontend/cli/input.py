@@ -207,8 +207,10 @@ def key_bindings(
         from pathlib import Path
 
         from pocket_agent.frontend.cli.clipboard import get_clipboard_attachments
+        from pocket_agent.system.paths import session_scope
 
-        valid_paths, is_screenshot = get_clipboard_attachments()
+        with session_scope(getattr(state, "session_id", None)):
+            valid_paths, is_screenshot = get_clipboard_attachments()
         if not valid_paths:
             return
 

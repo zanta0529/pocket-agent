@@ -87,7 +87,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
   - 送出前採用統一流程：優先清除舊工具輸出（至目標水位 60%）→ 嘗試 `HistoryCompactor` 歷史摘要壓縮（串流結束後須再次驗證 `cancel_check`，禁止於使用者取消後提交半截摘要）→ 安全滑動視窗降級 → 不可縮減超限強制停止。
   - 使用者可透過 `system.context_window`、`system.context_reserve_output`、`system.context_safety_margin` 與 `system.context_compact_target_ratio` 微調設定。
   - `read_file` 具備 500 行與 12,000 字元雙重限制，並支援 `char_offset` 單行行內字元游標續讀；讀取大型檔案應優先使用 `search_files` 或搭配精準範圍閱讀。
-  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入集中式暫存區**（PocketAgent 執行期沙盒 `~/.pocket-agent/workspaces/<slug>/scratch/notes.md` 或外部開發代理專屬暫存區 `<artifact_dir>`）以建立外部長期記憶；**嚴禁在工作目錄建立 `.agents/scratch`** 避免污染版本庫。詳見 [context-management-architecture.md](architecture/context-management-architecture.md) 與 [configuration-specification.md](guides/configuration-specification.md)。
+  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入集中式暫存區**（PocketAgent 執行期沙盒 `~/.pocket-agent/scratch/<session_id>/notes.md` 或外部開發代理專屬暫存區 `<artifact_dir>`）以建立外部長期記憶；**嚴禁在工作目錄建立 `.agents/scratch`** 避免污染版本庫。詳見 [context-management-architecture.md](architecture/context-management-architecture.md) 與 [configuration-specification.md](guides/configuration-specification.md)。
 
 ### 3.1 多語系（i18n）開發規範
 
@@ -99,7 +99,7 @@ _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，
 
 ## 4. 資料、擴充與安全邊界
 
-- **資源存取**：隨附資源透過 `bundle_dir()` 取得。PocketAgent 執行期之使用者資料與動態暫存一律集中於 `user_dir()`（`~/.pocket-agent/`，其中日誌與暫存依工作區路徑 Slug 隔離存放於 `~/.pocket-agent/workspaces/<slug>/logs/` 與 `scratch/`）。專案目錄內僅存放受版本控制之靜態規範（如 `AGENTS.md`、`.agents/skills/`），嚴禁在工作目錄隨意建立 `.agents/logs` 或 `.agents/scratch` 污染版本庫。不得將可寫資料塞入唯讀 bundle。
+- **資源存取**：隨附資源透過 `bundle_dir()` 取得。PocketAgent 執行期之使用者資料與動態暫存一律集中於 `user_dir()`（`~/.pocket-agent/`，其中系統日誌集中於 `~/.pocket-agent/logs/`，筆記與動態暫存依會話 ID 隔離存放於 `~/.pocket-agent/scratch/<session_id>/`）。專案目錄內僅存放受版本控制之靜態規範（如 `AGENTS.md`、`.agents/skills/`），嚴禁在工作目錄隨意建立 `.agents/logs` 或 `.agents/scratch` 污染版本庫。不得將可寫資料塞入唯讀 bundle。
 - **既有資料防護**：對話保存在 `sessions/*.json`（含 HMAC-SHA256 簽章），修改格式須考慮向下相容。禁止讀取、列印或提交真實 `.env`、token、私人 session 或 `agent.log`。
 - **關鍵安全不變量**：
   - **確認回呼契約（`on_confirm`）**：檔案寫入工具（`fs.py`）與敏感操作僅在 `decision is True` 時放行；若回傳非空字串（使用者自訂指示）或 `(False, str)` 等任何非 `True` 值，一律視為拒絕且不得執行寫入或建立備份。CLI 端透過 `ConfirmationBridge` 統一橋接同步／非同步確認流程，啟用 `Accept-edits` 時須同步套用至主代理與所有 `active_subagents`；`github_create_pr` 強制於確認面板列出預計動作、分支方向、標題與完整內文預覽（不受自動放行豁免），且不提供自動 Merge 工具。

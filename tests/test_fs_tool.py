@@ -570,10 +570,11 @@ def test_scratch_dir_write_append_replace_auto_allowed_only_for_current_workspac
     assert assess_file.read_text(encoding="utf-8") == "v2_updated\nv3\n"
     assert confirm_calls == []
 
-    # 2. 專案檔、其他工作區 scratch 與 skills 目錄仍須觸發人工確認
-    other_scratch = user_dir() / "workspaces" / "other-slug" / "scratch" / "a.md"
+    # 2. 專案檔、其他工作區／其他會話 scratch 與 skills 目錄仍須觸發人工確認
+    other_scratch = user_dir() / "scratch" / "other-session-id" / "a.md"
+    legacy_scratch = user_dir() / "workspaces" / "other-slug" / "scratch" / "a.md"
     skill_file = user_dir() / "skills" / "demo" / "SKILL.md"
-    for must_confirm_path in (tmp_path / "repo.py", other_scratch, skill_file):
+    for must_confirm_path in (tmp_path / "repo.py", other_scratch, legacy_scratch, skill_file):
         res_other = call_fs_tool(
             "write_to_file",
             {"path": str(must_confirm_path), "content": "x\n"},
@@ -582,7 +583,7 @@ def test_scratch_dir_write_append_replace_auto_allowed_only_for_current_workspac
             auto_allow_scratch=True,
         )
         assert res_other.startswith("[SUCCESS]")
-    assert len(confirm_calls) == 3
+    assert len(confirm_calls) == 4
 
     # 3. 敏感檔名 (.env) 即使在 scratch_dir 下仍應被安全限制拒絕
     res_env = call_fs_tool(
@@ -593,7 +594,7 @@ def test_scratch_dir_write_append_replace_auto_allowed_only_for_current_workspac
         auto_allow_scratch=True,
     )
     assert res_env.startswith("[ERROR]")
-    assert len(confirm_calls) == 3
+    assert len(confirm_calls) == 4
 
 
 def test_fs_tool_handler_parallel_safety_distinguishes_read_and_write():

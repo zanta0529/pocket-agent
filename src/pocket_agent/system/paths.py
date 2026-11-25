@@ -11,10 +11,53 @@
 skills/commands/agents）一律走 user_dir()。
 """
 
+import logging
+import re
+import shutil
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from pathlib import Path
 
 from pocket_agent.system.constants import USER_DATA_DIR_NAME
+
+DEFAULT_SCRATCH_SESSION_ID = "default"
+_SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9\-_]+$")
+_active_session_id: ContextVar[str | None] = ContextVar("pocket_agent_session_id", default=None)
+
+
+def validate_session_id(session_id: str) -> str:
+    """驗證並正規化 Session ID，防止路徑穿越或非法字元。"""
+    clean = str(session_id or "").strip()
+    if not clean or not _SESSION_ID_RE.match(clean):
+        raise ValueError(f"無效的 Session ID 格式: {session_id}")
+    return clean
+
+
+def get_active_session_id() -> str | None:
+    """取得目前執行上下文的作用中 Session ID（未設定時回傳 None）。"""
+    return _active_session_id.get()
+
+
+def set_active_session_id(session_id: str | None) -> Token[str | None]:
+    """設定目前執行上下文的作用中 Session ID，回傳可供還原之 Token。"""
+    if session_id is None or not str(session_id).strip():
+        return _active_session_id.set(None)
+    return _active_session_id.set(validate_session_id(str(session_id)))
+
+
+@contextmanager
+def session_scope(session_id: str | None) -> Iterator[None]:
+    """於指定區段內綁定作用中 Session ID，離開時自動還原外層上下文。"""
+    if session_id is None or not str(session_id).strip():
+        yield
+        return
+    token = set_active_session_id(session_id)
+    try:
+        yield
+    finally:
+        _active_session_id.reset(token)
 
 
 def is_frozen() -> bool:
@@ -66,58 +109,6 @@ def user_dir() -> Path:
     return d
 
 
-def get_workspace_slug(cwd: Path | str | None = None) -> str:
-    r"""依工作目錄絕對路徑產生唯一且安全的路徑 Slug（借鑑 Claude Code 規範）。
-
-    轉換規則：
-    1. 解析為絕對路徑。
-    2. Windows 磁碟代號（如 C:\ 或 D:\）轉為 C-- 或 D--。
-    3. 特殊字元與分隔符號轉為單一連字號 -。
-    4. 若轉換後長度超過 60 字元，取前 48 字元並加上該完整路徑之 sha256 前 8 碼作為後綴，
-       防止超出作業系統路徑長度上限。
-    """
-    import hashlib
-    import re
-
-    if cwd is None:
-        path_str = str(Path.cwd().resolve())
-    else:
-        raw_str = str(cwd).replace("\\", "/")
-        if raw_str.startswith("/") and not re.match(r"^[a-zA-Z]:", raw_str):
-            path_str = raw_str
-        else:
-            path_str = str(Path(cwd).resolve())
-
-    m = re.match(r"^([a-zA-Z]):[\\/](.*)$", path_str)
-    if m:
-        drive = m.group(1).upper()
-        rest = m.group(2)
-        sanitized_rest = re.sub(r"[^a-zA-Z0-9_\-]+", "-", rest).strip("-")
-        sanitized_rest = re.sub(r"-+", "-", sanitized_rest)
-        slug = f"{drive}--{sanitized_rest}" if sanitized_rest else f"{drive}--"
-    else:
-        sanitized = re.sub(r"[^a-zA-Z0-9_\-]+", "-", path_str).strip("-")
-        sanitized = re.sub(r"-+", "-", sanitized)
-        slug = f"-{sanitized}" if sanitized else "-"
-
-    if len(slug) > 60:
-        h = hashlib.sha256(path_str.encode("utf-8")).hexdigest()[:8]
-        slug = f"{slug[:48].rstrip('-')}_{h}"
-
-    return slug or "default"
-
-
-def workspace_dir(cwd: Path | str | None = None) -> Path:
-    """取得當前工作區在全域家目錄中的專屬隔離沙盒目錄。
-
-    結構為：~/.pocket-agent/workspaces/<workspace-slug>/
-    """
-    slug = get_workspace_slug(cwd)
-    d = user_dir() / "workspaces" / slug
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
 def mcp_config_path() -> Path:
     """可寫的 mcp_config.yaml。
 
@@ -144,33 +135,79 @@ def env_path() -> Path:
 def log_dir(cwd: Path | str | None = None) -> Path:
     """系統日誌目錄。
 
-    全域集中於 ~/.pocket-agent/workspaces/<slug>/logs，
+    全域集中於 ~/.pocket-agent/logs/（依日期切分與輪轉），
     避免在工作目錄隨意產生 .agents/logs 污染版本庫。
     """
-    try:
-        d = workspace_dir(cwd) / "logs"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-    except OSError:
-        d = user_dir() / "logs"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+    _ = cwd
+    d = user_dir() / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
-def scratch_dir(cwd: Path | str | None = None) -> Path:
-    """臨時暫存目錄。
+def scratch_root() -> Path:
+    """所有會話暫存目錄的根路徑（~/.pocket-agent/scratch），不主動建立目錄。"""
+    return user_dir() / "scratch"
 
-    全域集中於 ~/.pocket-agent/workspaces/<slug>/scratch，
-    避免在工作目錄隨意產生 .agents/scratch 污染版本庫。
+
+def scratch_dir(session_id: str | None = None, *, create: bool = False) -> Path:
+    """依會話隔離的臨時暫存目錄（~/.pocket-agent/scratch/<session_id>/）。
+
+    採延遲建立策略，預設僅回傳安全驗證後的路徑，於實際寫入時才建立目錄。
     """
+    if session_id is not None:
+        sid = validate_session_id(session_id)
+    else:
+        sid = get_active_session_id() or DEFAULT_SCRATCH_SESSION_ID
+    root = scratch_root()
+    d = root / sid
+    if not d.resolve(strict=False).is_relative_to(root.resolve(strict=False)):
+        raise ValueError(f"Session ID 超出安全路徑範圍: {sid}")
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _resolve_session_scratch_dir(session_id: str) -> Path | None:
+    """解析特定會話之暫存目錄；若為保留預設名稱或非安全子目錄則回傳 None。"""
+    sid = validate_session_id(session_id)
+    if sid == DEFAULT_SCRATCH_SESSION_ID:
+        return None
+    root = scratch_root().resolve(strict=False)
+    raw_target = scratch_root() / sid
+    target = raw_target.resolve(strict=False)
+    if target.parent != root or raw_target.is_symlink() or not target.is_dir():
+        return None
+    return target
+
+
+def get_session_scratch_size(session_id: str) -> int:
+    """計算指定會話暫存目錄下所有檔案的總位元組數。"""
+    target = _resolve_session_scratch_dir(session_id)
+    if target is None:
+        return 0
+    total = 0
+    for p in target.rglob("*"):
+        try:
+            if p.is_symlink() or not p.is_file():
+                continue
+            total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def delete_session_scratch(session_id: str) -> int:
+    """刪除指定會話之暫存目錄，回傳釋放的位元組數（失敗時記錄警告並回傳 0）。"""
+    target = _resolve_session_scratch_dir(session_id)
+    if target is None:
+        return 0
+    freed = get_session_scratch_size(session_id)
     try:
-        d = workspace_dir(cwd) / "scratch"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-    except OSError:
-        d = user_dir() / "scratch"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+        shutil.rmtree(target)
+        return freed
+    except OSError as exc:
+        logging.getLogger("pocket-agent").warning("刪除會話暫存目錄失敗 %s: %s", target, exc)
+        return 0
 
 
 def format_display_path(path_str: str, base_dir: Path | None = None) -> str:

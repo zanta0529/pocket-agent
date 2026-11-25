@@ -299,7 +299,7 @@
     "prune_none": "✓ 沒有符合「{rule}」的歷史對話需清理（目前共 {total} 筆，佔 {size}）。",
     "prune_found": "找到 {count} 筆符合「{rule}」的歷史對話（預計釋放 {size}）：",
     "prune_more": "  … 及另外 {count} 筆",
-    "prune_confirm_prompt": "確定要永久刪除上述 {count} 筆歷史對話嗎？",
+    "prune_confirm_prompt": "確定要永久刪除上述 {count} 筆歷史對話（含對應暫存檔）嗎？",
     "prune_confirm_yes": "確認刪除",
     "prune_done": "✓ 已清理 {deleted} 筆歷史對話，釋放 {size} 磁碟空間。",
     "compact_no_args": "/compact 不接受參數",

@@ -1,8 +1,8 @@
 """自動管家維護模組 (Housekeeping Manager)。
 
-負責定時或手動清理 `~/.pocket-agent/workspaces/<slug>/logs/` 與 `scratch/` 下的過期日誌、
-溢出落盤檔案 (Spillover outputs)、截圖暫存與根目錄舊日誌，防止磁碟空間隨時間耗盡。
-具備白名單保護、TTL 過期淘汰、檔案數量上限與容量配額防護。
+負責定時或手動清理 `~/.pocket-agent/logs/`、`~/.pocket-agent/scratch/<session_id>/`
+及舊版 `workspaces/` 下的過期日誌、溢出落盤檔案 (Spillover outputs)、截圖暫存與根目錄舊日誌，
+防止磁碟空間隨時間耗盡。具備白名單保護、TTL 過期淘汰、檔案數量上限與容量配額防護。
 """
 
 import json
@@ -515,13 +515,82 @@ class Housekeeper:
 
         return (deleted_count, freed_bytes)
 
+    def _clean_scratch_bundle(
+        self,
+        target_scratch: Path,
+        ttl_days: int | None = None,
+        max_files: int | None = None,
+        max_size_mb: int | None = None,
+    ) -> tuple[int, int]:
+        """清理單一暫存目錄下的 outputs、clipboard、checkpoints 與 notes。"""
+        sub_hk = Housekeeper(
+            target_log_dir=self.log_dir,
+            target_scratch_dir=target_scratch,
+            cwd=self.cwd,
+        )
+        c1, b1 = sub_hk.clean_scratch_outputs(ttl_days, max_files, max_size_mb)
+        c2, b2 = sub_hk.clean_scratch_clipboard(ttl_days, max_files, max_size_mb)
+        c3, b3 = sub_hk.clean_scratch_checkpoints(ttl_days, max_files, max_size_mb)
+        c4, b4 = sub_hk.clean_scratch_notes(ttl_days, max_files, max_size_mb)
+        return (c1 + c2 + c3 + c4, b1 + b2 + b3 + b4)
+
+    def clean_all_session_scratches(
+        self,
+        ttl_days: int | None = None,
+        max_files: int | None = None,
+        max_size_mb: int | None = None,
+    ) -> tuple[int, int]:
+        """清理全域 ~/.pocket-agent/scratch/ 底下所有其他會話之過期暫存檔案。"""
+        scratch_root_dir = user_dir() / "scratch"
+        if not scratch_root_dir.is_dir():
+            return (0, 0)
+
+        total_cleaned = 0
+        total_freed = 0
+        try:
+            current_scratch = self.scratch_dir.resolve(strict=False)
+        except OSError:
+            current_scratch = None
+
+        try:
+            root_resolved = scratch_root_dir.resolve(strict=False)
+        except OSError:
+            root_resolved = scratch_root_dir
+
+        if current_scratch != root_resolved:
+            c_fb, b_fb = self._clean_scratch_bundle(scratch_root_dir, ttl_days, max_files, max_size_mb)
+            total_cleaned += c_fb
+            total_freed += b_fb
+
+        reserved_subdirs = {"outputs", "clipboard", "notes"}
+        for entry in scratch_root_dir.iterdir():
+            if entry.is_symlink() or not entry.is_dir() or entry.name in reserved_subdirs:
+                continue
+            try:
+                if current_scratch is not None and entry.resolve(strict=False) == current_scratch:
+                    continue
+            except OSError:
+                continue
+
+            c_sess, b_sess = self._clean_scratch_bundle(entry, ttl_days, max_files, max_size_mb)
+            total_cleaned += c_sess
+            total_freed += b_sess
+
+            try:
+                if not any(p.is_file() for p in entry.rglob("*")):
+                    shutil.rmtree(entry, ignore_errors=True)
+            except OSError:
+                pass
+
+        return (total_cleaned, total_freed)
+
     def clean_all_workspaces(
         self,
         ttl_days: int | None = None,
         max_files: int | None = None,
         max_size_mb: int | None = None,
     ) -> tuple[int, int]:
-        """清理全域 ~/.pocket-agent/workspaces/ 底下所有其他工作區的過期暫存與日誌。"""
+        """清理舊版 ~/.pocket-agent/workspaces/ 底下殘留工作區的過期暫存與日誌（向下相容）。"""
         workspaces_root = user_dir() / "workspaces"
         if not workspaces_root.exists():
             return (0, 0)
@@ -543,18 +612,15 @@ class Housekeeper:
             ws_scratch = ws / "scratch"
             ws_log = ws / "logs"
 
+            c_sc, b_sc = self._clean_scratch_bundle(ws_scratch, ttl_days, max_files, max_size_mb)
             sub_hk = Housekeeper(
                 target_log_dir=ws_log,
                 target_scratch_dir=ws_scratch,
                 cwd=self.cwd,
             )
-            c1, b1 = sub_hk.clean_scratch_outputs(ttl_days, max_files, max_size_mb)
-            c2, b2 = sub_hk.clean_scratch_clipboard(ttl_days, max_files, max_size_mb)
-            c3, b3 = sub_hk.clean_logs(ttl_days)
-            c4, b4 = sub_hk.clean_scratch_checkpoints(ttl_days, max_files, max_size_mb)
-            c5, b5 = sub_hk.clean_scratch_notes(ttl_days, max_files, max_size_mb)
-            total_cleaned += c1 + c2 + c3 + c4 + c5
-            total_freed += b1 + b2 + b3 + b4 + b5
+            c_log, b_log = sub_hk.clean_logs(ttl_days)
+            total_cleaned += c_sc + c_log
+            total_freed += b_sc + b_log
 
             # 若該非當前工作區清理後已完全不含任何檔案，移除空工作區骨架
             try:
@@ -571,46 +637,43 @@ class Housekeeper:
         max_files: int | None = None,
         max_size_mb: int | None = None,
     ) -> tuple[int, int]:
-        """清理 paths.py 在 OSError 時的 fallback 全域目錄（~/.pocket-agent/logs 與 scratch）。"""
+        """清理全域 fallback 日誌目錄（若與目前 log_dir 不同時）。"""
+        _ = (max_files, max_size_mb)
         fallback_log = user_dir() / "logs"
-        fallback_scratch = user_dir() / "scratch"
-        if not fallback_log.exists() and not fallback_scratch.exists():
+        if not fallback_log.exists():
             return (0, 0)
 
         try:
-            cur_log = self.log_dir.resolve()
-            cur_scratch = self.scratch_dir.resolve()
-            if fallback_log.resolve() == cur_log and fallback_scratch.resolve() == cur_scratch:
+            if fallback_log.resolve(strict=False) == self.log_dir.resolve(strict=False):
                 return (0, 0)
         except OSError:
             pass
 
         sub_hk = Housekeeper(
             target_log_dir=fallback_log,
-            target_scratch_dir=fallback_scratch,
+            target_scratch_dir=self.scratch_dir,
             cwd=self.cwd,
         )
-        c1, b1 = sub_hk.clean_scratch_outputs(ttl_days, max_files, max_size_mb)
-        c2, b2 = sub_hk.clean_scratch_clipboard(ttl_days, max_files, max_size_mb)
-        c3, b3 = sub_hk.clean_logs(ttl_days)
-        c4, b4 = sub_hk.clean_scratch_checkpoints(ttl_days, max_files, max_size_mb)
-        c5, b5 = sub_hk.clean_scratch_notes(ttl_days, max_files, max_size_mb)
-        return (c1 + c2 + c3 + c4 + c5, b1 + b2 + b3 + b4 + b5)
+        return sub_hk.clean_logs(ttl_days)
 
     def _collect_managed_stats(self) -> tuple[int, int]:
-        """統計目前受管目錄（工作區暫存／日誌與全域備份）中現存的檔案數與總位元組數。"""
+        """統計目前受管目錄（日誌、會話暫存與全域備份）中現存的檔案數與總位元組數。"""
         file_count = 0
         total_bytes = 0
-        targets: list[tuple[Path, str | None]] = [
-            (self.scratch_dir / "outputs", "*.log"),
-            (self.scratch_dir / "clipboard", "screenshot_*.png"),
-            (self.scratch_dir / "notes", "*.md"),
-            (self.scratch_dir, "research_checkpoint*.md"),
-            (self.log_dir, None),
-        ]
-        for directory, pattern in targets:
+        seen_dirs: set[Path] = set()
+
+        def _scan_dir(directory: Path, pattern: str | None) -> None:
+            nonlocal file_count, total_bytes
             if not directory.is_dir():
-                continue
+                return
+            try:
+                resolved_dir = directory.resolve(strict=False)
+            except OSError:
+                resolved_dir = directory
+            if resolved_dir in seen_dirs:
+                return
+            seen_dirs.add(resolved_dir)
+
             entries = directory.glob(pattern) if pattern else directory.iterdir()
             for p in entries:
                 if not p.is_file():
@@ -620,6 +683,25 @@ class Housekeeper:
                     file_count += 1
                 except OSError:
                     continue
+
+        def _scan_scratch_tree(base_scratch: Path) -> None:
+            _scan_dir(base_scratch / "outputs", "*.log")
+            _scan_dir(base_scratch / "clipboard", "screenshot_*.png")
+            _scan_dir(base_scratch / "notes", "*.md")
+            _scan_dir(base_scratch, "research_checkpoint*.md")
+
+        _scan_scratch_tree(self.scratch_dir)
+        _scan_dir(self.log_dir, None)
+
+        if not self._is_custom_scratch:
+            scratch_root_dir = user_dir() / "scratch"
+            if scratch_root_dir.is_dir():
+                _scan_scratch_tree(scratch_root_dir)
+                reserved_subdirs = {"outputs", "clipboard", "notes"}
+                for entry in scratch_root_dir.iterdir():
+                    if entry.is_symlink() or not entry.is_dir() or entry.name in reserved_subdirs:
+                        continue
+                    _scan_scratch_tree(entry)
 
         backups_dir = user_dir() / "backups"
         if backups_dir.is_dir():
@@ -655,6 +737,7 @@ class Housekeeper:
             notes_count, notes_bytes = self.clean_scratch_notes()
             log_count, log_bytes = self.clean_logs()
             backup_count, backup_bytes = self.clean_backups()
+            other_sess_count, other_sess_bytes = self.clean_all_session_scratches()
             other_ws_count, other_ws_bytes = self.clean_all_workspaces()
             fb_count, fb_bytes = self._clean_fallback_dirs()
 
@@ -666,6 +749,7 @@ class Housekeeper:
                 + notes_count
                 + log_count
                 + backup_count
+                + other_sess_count
                 + other_ws_count
                 + fb_count
             )
@@ -677,6 +761,7 @@ class Housekeeper:
                 + notes_bytes
                 + log_bytes
                 + backup_bytes
+                + other_sess_bytes
                 + other_ws_bytes
                 + fb_bytes
             )
