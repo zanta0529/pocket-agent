@@ -392,10 +392,24 @@ class MCPManager:
                 if unlocked:
                     try:
                         return self._secret_store.get(server_name, env_key, placeholder)
-                    except Exception:
+                    except Exception as exc:
+                        logging.getLogger("pocket-agent").warning(
+                            "解鎖後讀取 MCP 憑證庫失敗 (server=%s, env_key=%s, type=%s): %s",
+                            server_name,
+                            env_key,
+                            type(exc).__name__,
+                            exc,
+                        )
                         return None
             return None
-        except Exception:
+        except Exception as exc:
+            logging.getLogger("pocket-agent").warning(
+                "讀取 MCP 憑證庫失敗 (server=%s, env_key=%s, type=%s): %s",
+                server_name,
+                env_key,
+                type(exc).__name__,
+                exc,
+            )
             return None
 
     async def _persist_conn_secret_locked(

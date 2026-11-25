@@ -16,7 +16,7 @@ from rich.text import Text
 
 from pocket_agent.core.cancellation import check_cancelled, current_scope
 from pocket_agent.extensions.mcp import parse_mcp_tool_name
-from pocket_agent.frontend.cli.render import toolbar
+from pocket_agent.frontend.cli.render import reset_live_render_shape, toolbar
 from pocket_agent.system.i18n import t
 from pocket_agent.system.permissions import add_command_to_allowlist, is_command_allowed
 
@@ -204,6 +204,7 @@ class ConfirmationBridge:
         status = getattr(self.renderer, "_active_status", None)
         if status:
             status.stop()
+            reset_live_render_shape(status)
         if is_fs_edit:
             title = t("confirmation.file_panel_title")
             planned = t("confirmation.planned_file_edit", command=command)
@@ -310,6 +311,7 @@ class ConfirmationBridge:
             return False
         finally:
             if status:
+                reset_live_render_shape(status)
                 status.start()
 
     async def confirm(self, *args: Any) -> bool | str:
@@ -365,4 +367,5 @@ class ConfirmationBridge:
             if scope is not None and task is not None:
                 scope.prompts.discard(task)
             if status and not (scope is not None and scope.cancelled.is_set()):
+                reset_live_render_shape(status)
                 status.start()

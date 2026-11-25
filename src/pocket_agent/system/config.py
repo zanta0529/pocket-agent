@@ -260,8 +260,8 @@ class KeyringConfigProvider(ConfigProvider):
 
                 val = keyring.get_password(self.service_name, key)
                 return val
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("讀取系統 Keyring 失敗 (key=%s, type=%s): %s", key, type(exc).__name__, exc)
         return None
 
     def set(self, key: str, value: str) -> bool:
@@ -270,11 +270,18 @@ class KeyringConfigProvider(ConfigProvider):
                 import keyring
 
                 # 測試是否為 fail backend (無實際 keyring 功能)
-                if isinstance(keyring.get_keyring(), keyring.backends.fail.Keyring):
+                backend = keyring.get_keyring()
+                if isinstance(backend, keyring.backends.fail.Keyring):
+                    log.warning(
+                        "系統 Keyring 為不可用後端 (%s)，無法寫入 key=%s",
+                        type(backend).__name__,
+                        key,
+                    )
                     return False
                 keyring.set_password(self.service_name, key, value)
                 return True
-            except Exception:
+            except Exception as exc:
+                log.warning("寫入系統 Keyring 失敗 (key=%s, type=%s): %s", key, type(exc).__name__, exc)
                 return False
         return False
 
@@ -282,12 +289,17 @@ class KeyringConfigProvider(ConfigProvider):
         if self._is_secret_key(key):
             try:
                 import keyring
+                from keyring.errors import PasswordDeleteError
 
                 if isinstance(keyring.get_keyring(), keyring.backends.fail.Keyring):
                     return False
                 keyring.delete_password(self.service_name, key)
                 return True
-            except Exception:
+            except PasswordDeleteError:
+                log.debug("系統 Keyring 無此憑證可刪除 (key=%s)", key)
+                return False
+            except Exception as exc:
+                log.warning("刪除系統 Keyring 失敗 (key=%s, type=%s): %s", key, type(exc).__name__, exc)
                 return False
         return False
 
