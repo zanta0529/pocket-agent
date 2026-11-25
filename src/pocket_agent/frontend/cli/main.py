@@ -26,11 +26,13 @@ def _prompt_mcp_conn_params(
     from rich.prompt import Confirm, Prompt
 
     from pocket_agent.extensions.mcp import get_conn_param_spec
+    from pocket_agent.frontend.cli.render import reset_live_render_shape
     from pocket_agent.system.i18n import t
 
     status = renderer._active_status
     if status:
         status.stop()
+        reset_live_render_shape(status)
 
     has_keyring_param = any(get_conn_param_spec(k).supports_keyring for k in missing_keys)
     header_key = "cli.mcp_conn_prompt_keyring" if has_keyring_param else "cli.mcp_conn_prompt"
@@ -65,6 +67,7 @@ def _prompt_mcp_conn_params(
         return ConnPromptResult(values=collected, save_to_keyring=frozenset(save_keys))
     finally:
         if status:
+            reset_live_render_shape(status)
             status.start()
 
 
@@ -76,12 +79,14 @@ def _prompt_mcp_vault_unlock(
     """暫停 Spinner 並引導使用者輸入主密碼以解鎖既有 JWE 加密庫。"""
     from rich.prompt import Prompt
 
+    from pocket_agent.frontend.cli.render import reset_live_render_shape
     from pocket_agent.system.constants import CLI_MAX_AUTH_RETRIES
     from pocket_agent.system.i18n import t
 
     status = getattr(renderer, "_active_status", None)
     if status:
         status.stop()
+        reset_live_render_shape(status)
     renderer._ensure_newline()
     try:
         renderer.message(t("provider_setup.vault_locked"), "yellow")
@@ -100,6 +105,7 @@ def _prompt_mcp_vault_unlock(
         return False
     finally:
         if status:
+            reset_live_render_shape(status)
             status.start()
 
 
@@ -107,11 +113,13 @@ def _prompt_mcp_vault_create(renderer: "CliRenderer", _server_name: str) -> str 
     """暫停 Spinner 並引導使用者建立 JWE 加密庫主密碼（原生 Keyring 不可用時）。"""
     from rich.prompt import Prompt
 
+    from pocket_agent.frontend.cli.render import reset_live_render_shape
     from pocket_agent.system.i18n import t
 
     status = getattr(renderer, "_active_status", None)
     if status:
         status.stop()
+        reset_live_render_shape(status)
     renderer._ensure_newline()
     try:
         renderer.message(t("provider_setup.vault_creating"), "yellow")
@@ -134,17 +142,20 @@ def _prompt_mcp_vault_create(renderer: "CliRenderer", _server_name: str) -> str 
         return None
     finally:
         if status:
+            reset_live_render_shape(status)
             status.start()
 
 
 def _render_mcp_secret_persist(renderer: "CliRenderer", result: SecretPersistResult) -> None:
     """顯示 MCP 憑證持久化與設定檔回寫結果。"""
+    from pocket_agent.frontend.cli.render import reset_live_render_shape
     from pocket_agent.system.constants import SECRET_PLACEHOLDER_KEYRING
     from pocket_agent.system.i18n import t
 
     status = getattr(renderer, "_active_status", None)
     if status:
         status.stop()
+        reset_live_render_shape(status)
     renderer._ensure_newline()
     try:
         if result.saved and result.placeholder:
@@ -207,6 +218,7 @@ def _render_mcp_secret_persist(renderer: "CliRenderer", result: SecretPersistRes
             )
     finally:
         if status:
+            reset_live_render_shape(status)
             status.start()
 
 

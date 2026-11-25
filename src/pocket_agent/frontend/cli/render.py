@@ -265,6 +265,18 @@ _SOFT_TOOL_STATUS_STYLES: dict[str, tuple[str, str]] = {
 }
 
 
+def reset_live_render_shape(status: object) -> None:
+    """清除 Rich Live / Status 停止後殘留的 _live_render._shape，避免重啟時上移游標抹除既有輸出。"""
+    from rich.live_render import LiveRender
+
+    for candidate in (status, getattr(status, "_live", None)):
+        if candidate is None:
+            continue
+        live_render = getattr(candidate, "_live_render", None)
+        if isinstance(live_render, LiveRender):
+            live_render._shape = None
+
+
 class CliRenderer:
     def __init__(self, console: Console):
         self.console = console
@@ -289,6 +301,7 @@ class CliRenderer:
         if self._active_status is not None:
             try:
                 self._active_status.stop()
+                reset_live_render_shape(self._active_status)
             except Exception:
                 pass
             self._active_status = None

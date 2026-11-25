@@ -461,9 +461,99 @@ def test_cli_prompt_mcp_conn_params_default_false_and_spinner_lifecycle():
 def test_config_manager_secret_store_adapter(tmp_path):
     mgr = _isolated_config_manager(tmp_path)
     adapter = ConfigManagerSecretStore(mgr)
-    with patch.object(mgr.keyring_provider, "set", return_value=False):
+    with (
+        patch.object(mgr.keyring_provider, "get", return_value=None),
+        patch.object(mgr.keyring_provider, "set", return_value=False),
+        patch.object(mgr.keyring_provider, "delete", return_value=False),
+    ):
         assert (
             adapter.create_vault_and_set("github", "GITHUB_TOKEN", "tok_v", "pw-vault") == SECRET_PLACEHOLDER_ENCRYPTED
         )
-    assert adapter.get("github", "GITHUB_TOKEN", SECRET_PLACEHOLDER_ENCRYPTED) == "tok_v"
-    assert adapter.delete("github", "GITHUB_TOKEN") is True
+        assert adapter.get("github", "GITHUB_TOKEN", SECRET_PLACEHOLDER_ENCRYPTED) == "tok_v"
+        assert adapter.delete("github", "GITHUB_TOKEN") is True
+
+
+def test_live_pause_resume_resets_shape_and_preserves_messages():
+    """驗證暫停 Live Status 並輸出 MCP 憑證回饋訊息後，重啟不會送出上移游標控制碼抹除訊息。"""
+    from io import StringIO
+
+    from rich.console import Console, Group
+    from rich.live import Live
+
+    from pocket_agent.frontend.cli.main import _render_mcp_secret_persist
+
+    buf = StringIO()
+    console = Console(file=buf, force_terminal=True, width=100, color_system="standard")
+    live = Live(Group("line1", "line2"), console=console, auto_refresh=False, transient=True)
+    renderer = CliRenderer(console)
+    renderer._active_status = live
+
+    live.start(refresh=True)
+    try:
+        assert live._live_render._shape is not None
+        assert live._live_render._shape[1] == 2
+
+        _render_mcp_secret_persist(
+            renderer,
+            SecretPersistResult(
+                server_name="github",
+                env_key="GITHUB_TOKEN",
+                saved=True,
+                placeholder=SECRET_PLACEHOLDER_KEYRING,
+                yaml_updated=True,
+            ),
+        )
+
+        # 檢查已印出成功訊息，接著清空緩衝區並模擬重啟後的首次 refresh()
+        assert "GITHUB_TOKEN" in buf.getvalue()
+        buf.seek(0)
+        buf.truncate(0)
+        live.refresh()
+        assert "\x1b[1A" not in buf.getvalue()
+    finally:
+        live.stop()
+
+
+def test_keyring_provider_logs_warning_without_leaking_secret(caplog):
+    """驗證 Keyring 讀寫異常時記錄 WARNING 日誌且不洩漏明文憑證，PasswordDeleteError 僅記 debug。"""
+    import logging
+
+    from keyring.errors import PasswordDeleteError
+
+    provider = KeyringConfigProvider()
+    secret_val = "super_secret_pat_999"
+
+    with caplog.at_level(logging.WARNING, logger="pocket-agent"):
+        with patch("keyring.get_password", side_effect=RuntimeError("cred read err")):
+            assert provider.get("mcp.github.github_token") is None
+        with patch("keyring.get_keyring", return_value=object()):
+            with patch("keyring.set_password", side_effect=RuntimeError("cred write err")):
+                assert provider.set("mcp.github.github_token", secret_val) is False
+
+    warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("讀取系統 Keyring 失敗" in m and "mcp.github.github_token" in m for m in warning_msgs)
+    assert any("寫入系統 Keyring 失敗" in m and "mcp.github.github_token" in m for m in warning_msgs)
+    assert all(secret_val not in r.getMessage() for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="pocket-agent"):
+        with patch("keyring.get_keyring", return_value=object()):
+            with patch("keyring.delete_password", side_effect=PasswordDeleteError("missing")):
+                assert provider.delete("mcp.github.github_token") is False
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_pytest_isolates_system_keyring():
+    """驗證 pytest 測試期間系統 Keyring 已被記憶體後端隔離，不會存取真實作業系統憑證庫。"""
+    import keyring
+    from keyring.errors import PasswordDeleteError
+
+    backend = keyring.get_keyring()
+    assert "WinVaultKeyring" not in type(backend).__name__
+
+    keyring.set_password("pocket-agent", "mcp.github.github_token", "in_mem_only")
+    assert keyring.get_password("pocket-agent", "mcp.github.github_token") == "in_mem_only"
+    keyring.delete_password("pocket-agent", "mcp.github.github_token")
+    assert keyring.get_password("pocket-agent", "mcp.github.github_token") is None
+    with pytest.raises(PasswordDeleteError):
+        keyring.delete_password("pocket-agent", "mcp.github.github_token")
