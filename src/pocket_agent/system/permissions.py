@@ -12,6 +12,7 @@ from pocket_agent.system.paths import user_dir
 log = logging.getLogger("pocket-agent")
 
 ALLOWLIST_PATH = user_dir() / "allowlist.json"
+ALLOWLIST_KEY = "allowed_commands"
 
 
 class CommandVerdict(StrEnum):
@@ -144,7 +145,7 @@ def _match_caution_git(command: str) -> tuple[str, str] | None:
     return None
 
 
-# 內建唯讀白名單 (基於前綴比對，請使用小寫)
+# 內建唯讀 Git 子命令清單（實際嚴格比對見 _is_builtin_allowed）
 BUILTIN_ALLOWLIST = [
     "git rev-parse",
     "git status",
@@ -160,10 +161,8 @@ def _load_allowlist() -> List[str]:
         return []
     try:
         data = json.loads(ALLOWLIST_PATH.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and isinstance(data.get("allowed_prefixes"), list):
-            return data["allowed_prefixes"]
-        elif isinstance(data, list):
-            return data
+        if isinstance(data, dict) and isinstance(data.get(ALLOWLIST_KEY), list):
+            return data[ALLOWLIST_KEY]
     except Exception as e:
         log.warning("讀取 allowlist.json 失敗: %s", e)
     return []
@@ -279,12 +278,12 @@ def is_command_allowed(command: str) -> bool:
 
 def add_command_to_allowlist(command: str) -> str:
     """將指令加入自訂白名單（完整指令比對，非前綴），回傳被加入的字串"""
-    prefix_normalized = _normalize_command(command)
+    cmd_normalized = _normalize_command(command)
 
-    if not prefix_normalized:
+    if not cmd_normalized:
         return ""
 
-    prefix = command.strip()
+    entry = command.strip()
 
     current_list = _load_allowlist()
     # 避免重複加入
@@ -292,13 +291,13 @@ def add_command_to_allowlist(command: str) -> str:
     def normalize(cmd):
         return _normalize_command(str(cmd))
 
-    if not any(normalize(p) == prefix_normalized for p in current_list):
-        current_list.append(prefix)
+    if not any(normalize(item) == cmd_normalized for item in current_list):
+        current_list.append(entry)
         try:
             ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-            output = {"allowed_prefixes": current_list}
+            output = {ALLOWLIST_KEY: current_list}
             ALLOWLIST_PATH.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             log.warning("儲存 allowlist.json 失敗: %s", e)
 
-    return prefix
+    return entry

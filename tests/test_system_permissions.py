@@ -31,31 +31,31 @@ def test_builtin_allowlist(mock_allowlist_path):
 
 
 def test_add_to_allowlist_and_check(mock_allowlist_path):
-    """測試使用者按下 A 後，指令前綴寫入 allowlist.json 並能生效"""
+    """測試使用者按下 A 後，完整指令寫入 allowlist.json 並能生效"""
     # 初始狀態：不被允許
     assert is_command_allowed("npm run dev") is False
 
     # 加入白名單
-    prefix = add_command_to_allowlist("npm run dev")
-    assert prefix == "npm run dev"  # 新邏輯預期為完整指令
+    added = add_command_to_allowlist("npm run dev")
+    assert added == "npm run dev"  # 完整指令
 
     # 確認檔案已正確寫入
     assert mock_allowlist_path.exists()
     data = json.loads(mock_allowlist_path.read_text(encoding="utf-8"))
-    assert "npm run dev" in data["allowed_prefixes"]
+    assert "npm run dev" in data["allowed_commands"]
 
     # 再次檢查：現在應該允許了
     assert is_command_allowed("npm run dev") is True
     assert is_command_allowed("npm run build") is False  # 嚴格比對，不同指令應攔截
-    assert is_command_allowed("npm install") is False  # 不同前綴應攔截
+    assert is_command_allowed("npm install") is False  # 不同指令應攔截
 
 
 def test_add_single_word_command(mock_allowlist_path):
     """測試單字指令加入白名單的行為"""
     assert is_command_allowed("docker") is False
 
-    prefix = add_command_to_allowlist("docker")
-    assert prefix == "docker"
+    added = add_command_to_allowlist("docker")
+    assert added == "docker"
 
     assert is_command_allowed("docker ps") is False  # 嚴格比對，所以為 False
     assert is_command_allowed("docker") is True
@@ -70,12 +70,12 @@ def test_add_duplicate_prevention(mock_allowlist_path):
     add_command_to_allowlist("poetry run test")
 
     data = json.loads(mock_allowlist_path.read_text(encoding="utf-8"))
-    prefixes = data["allowed_prefixes"]
+    commands = data["allowed_commands"]
 
     # 現已存入完整指令，故兩個指令皆會成功存入，總長度為 2
-    assert "poetry run" in prefixes
-    assert "poetry run test" in prefixes
-    assert len(prefixes) == 2
+    assert "poetry run" in commands
+    assert "poetry run test" in commands
+    assert len(commands) == 2
 
 
 def test_allowlist_preserves_argument_boundaries_and_fails_closed(mock_allowlist_path):
@@ -114,9 +114,15 @@ def test_classify_command_safety_blocks_and_git_caution(mock_allowlist_path):
     assert classify_command_safety("Remove-Item -Recurse -Force C:\\").verdict == CommandVerdict.BLOCKED
 
     # 即使手動將 git reset --hard 寫入 allowlist.json，仍必須判定為 CAUTION 且不予自動放行
-    mock_allowlist_path.write_text(json.dumps({"allowed_prefixes": ["git reset --hard"]}), encoding="utf-8")
+    mock_allowlist_path.write_text(json.dumps({"allowed_commands": ["git reset --hard"]}), encoding="utf-8")
     res = classify_command_safety("git reset --hard")
     assert res.verdict == CommandVerdict.CAUTION
     assert res.reason
     assert is_command_allowed("git reset --hard") is False
     assert classify_command_safety("git push --force origin main").verdict == CommandVerdict.CAUTION
+
+
+def test_legacy_allowed_prefixes_key_ignored(mock_allowlist_path):
+    """驗證已移除向下相容：舊鍵名 allowed_prefixes 不會被載入放行。"""
+    mock_allowlist_path.write_text(json.dumps({"allowed_prefixes": ["npm run dev"]}), encoding="utf-8")
+    assert is_command_allowed("npm run dev") is False
