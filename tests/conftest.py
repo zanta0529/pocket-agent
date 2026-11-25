@@ -42,3 +42,37 @@ def _isolate_i18n_locale(monkeypatch: pytest.MonkeyPatch):
     i18n.clear_cache()
     i18n.set_locale(i18n.DEFAULT_LOCALE)
     monkeypatch.delenv("POCKET_AGENT_LANG", raising=False)
+
+
+class _InMemoryKeyring:
+    """純記憶體 Keyring 測試替身，防止測試讀寫或刪除作業系統真實憑證庫。"""
+
+    priority = 1
+
+    def __init__(self) -> None:
+        self._store: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service_name: str, username: str) -> str | None:
+        return self._store.get((service_name, username))
+
+    def set_password(self, service_name: str, username: str, password: str) -> None:
+        self._store[(service_name, username)] = password
+
+    def delete_password(self, service_name: str, username: str) -> None:
+        from keyring.errors import PasswordDeleteError
+
+        if (service_name, username) not in self._store:
+            raise PasswordDeleteError(service_name)
+        self._store.pop((service_name, username), None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_system_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
+    """全域隔離系統 Keyring，避免測試覆寫或刪除使用者真實儲存的憑證。"""
+    import keyring.backend
+    import keyring.core
+
+    class _Backend(_InMemoryKeyring, keyring.backend.KeyringBackend):
+        pass
+
+    monkeypatch.setattr(keyring.core, "_keyring_backend", _Backend())

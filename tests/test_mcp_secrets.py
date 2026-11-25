@@ -461,12 +461,16 @@ def test_cli_prompt_mcp_conn_params_default_false_and_spinner_lifecycle():
 def test_config_manager_secret_store_adapter(tmp_path):
     mgr = _isolated_config_manager(tmp_path)
     adapter = ConfigManagerSecretStore(mgr)
-    with patch.object(mgr.keyring_provider, "set", return_value=False):
+    with (
+        patch.object(mgr.keyring_provider, "get", return_value=None),
+        patch.object(mgr.keyring_provider, "set", return_value=False),
+        patch.object(mgr.keyring_provider, "delete", return_value=False),
+    ):
         assert (
             adapter.create_vault_and_set("github", "GITHUB_TOKEN", "tok_v", "pw-vault") == SECRET_PLACEHOLDER_ENCRYPTED
         )
-    assert adapter.get("github", "GITHUB_TOKEN", SECRET_PLACEHOLDER_ENCRYPTED) == "tok_v"
-    assert adapter.delete("github", "GITHUB_TOKEN") is True
+        assert adapter.get("github", "GITHUB_TOKEN", SECRET_PLACEHOLDER_ENCRYPTED) == "tok_v"
+        assert adapter.delete("github", "GITHUB_TOKEN") is True
 
 
 def test_live_pause_resume_resets_shape_and_preserves_messages():
@@ -537,3 +541,19 @@ def test_keyring_provider_logs_warning_without_leaking_secret(caplog):
             with patch("keyring.delete_password", side_effect=PasswordDeleteError("missing")):
                 assert provider.delete("mcp.github.github_token") is False
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_pytest_isolates_system_keyring():
+    """驗證 pytest 測試期間系統 Keyring 已被記憶體後端隔離，不會存取真實作業系統憑證庫。"""
+    import keyring
+    from keyring.errors import PasswordDeleteError
+
+    backend = keyring.get_keyring()
+    assert "WinVaultKeyring" not in type(backend).__name__
+
+    keyring.set_password("pocket-agent", "mcp.github.github_token", "in_mem_only")
+    assert keyring.get_password("pocket-agent", "mcp.github.github_token") == "in_mem_only"
+    keyring.delete_password("pocket-agent", "mcp.github.github_token")
+    assert keyring.get_password("pocket-agent", "mcp.github.github_token") is None
+    with pytest.raises(PasswordDeleteError):
+        keyring.delete_password("pocket-agent", "mcp.github.github_token")
