@@ -22,9 +22,26 @@ def test_windows_installers_are_pure_ascii_and_verify_checksums():
     cmd_text = (INSTALLER_DIR / "install.cmd").read_text(encoding="ascii")
     assert "setx" not in cmd_text.lower()
     assert "--uninstall" in cmd_text
+    assert "%PA_HOME%.staging." in cmd_text
+    assert "PA_NO_PAUSE=1" in cmd_text
+    assert 'endlocal & set "PATH=' in cmd_text
+    assert "echo ;%CUR_USER_PATH%;" not in cmd_text
+    assert '"%PA_HOME%\\bin\\pocket-agent.cmd" or run' not in cmd_text
 
     ps1_text = (INSTALLER_DIR / "install.ps1").read_text(encoding="ascii")
-    assert "-Uninstall" in ps1_text
+    assert "[switch]$Uninstall" in ps1_text
+    assert "POCKET_AGENT_UNINSTALL" in ps1_text
+    assert '$ProgressPreference = "SilentlyContinue"' in ps1_text
+    assert "$InstallDir.staging." in ps1_text
+    assert "PA_NO_PAUSE=1" in ps1_text
+
+
+def test_portable_launcher_matches_updater_and_respects_no_pause():
+    import build_scripts.build_portable as bp
+    from pocket_agent.system import updater
+
+    assert bp.POCKET_BAT == updater.PORTABLE_LAUNCHER_BAT
+    assert "PA_NO_PAUSE" in bp.POCKET_BAT
 
 
 def test_posix_installer_is_portable_sh_and_enforces_python314():

@@ -28,6 +28,7 @@ if (-not $InstallDir) {
         Join-Path $env:LOCALAPPDATA "PocketAgent"
     }
 }
+$InstallDir = $InstallDir.TrimEnd("\")
 
 $RequireChecksum = ($env:POCKET_AGENT_REQUIRE_CHECKSUM -eq "1")
 $DoUninstall = $Uninstall.IsPresent -or ($env:POCKET_AGENT_UNINSTALL -eq "1")
@@ -125,10 +126,18 @@ $SumsUrl = "$BaseUrl/SHA256SUMS.txt"
 $TempRoot = Join-Path $env:TEMP ("pocket-agent-install-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
 
+$ParentDir = Split-Path -Parent $InstallDir
+if ($ParentDir -and -not (Test-Path -LiteralPath $ParentDir -PathType Container)) {
+    New-Item -ItemType Directory -Path $ParentDir -Force | Out-Null
+}
+$StagingRoot = "$InstallDir.staging." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+$PrevProgressPreference = $ProgressPreference
+
 try {
+    $ProgressPreference = "SilentlyContinue"
     $ZipFile = Join-Path $TempRoot $AssetName
     $SumsFile = Join-Path $TempRoot "SHA256SUMS.txt"
-    $ExtractDir = Join-Path $TempRoot "extract"
+    $ExtractDir = $StagingRoot
 
     Write-Host "[INFO] Downloading $AssetName ($Version) from $Repo..."
     Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipFile -UseBasicParsing
@@ -176,11 +185,6 @@ try {
         throw "Extracted archive does not contain a valid PocketAgent portable layout."
     }
 
-    $ParentDir = Split-Path -Parent $InstallDir
-    if ($ParentDir -and -not (Test-Path -LiteralPath $ParentDir -PathType Container)) {
-        New-Item -ItemType Directory -Path $ParentDir -Force | Out-Null
-    }
-
     $BackupDir = "$InstallDir.bak." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
     $MovedBackup = $false
     if (Test-Path -LiteralPath $InstallDir) {
@@ -206,7 +210,7 @@ try {
     }
 
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
-    $LauncherCmd = "@echo off`r`n`"%~dp0..\pocket.bat`" %*`r`n"
+    $LauncherCmd = "@echo off`r`nsetlocal`r`nset `"PA_NO_PAUSE=1`"`r`ncall `"%~dp0..\pocket.bat`" %*`r`nendlocal & exit /b %ERRORLEVEL%`r`n"
     [System.IO.File]::WriteAllText((Join-Path $BinDir "pocket-agent.cmd"), $LauncherCmd, [System.Text.Encoding]::ASCII)
 
     Add-UserPathEntry $BinDir
@@ -216,8 +220,12 @@ try {
     Write-Host "Next steps:"
     Write-Host "  1. Run: pocket-agent setup"
     Write-Host "  2. Run: pocket-agent"
-    Write-Host "To uninstall later: set POCKET_AGENT_UNINSTALL=1 or pass -Uninstall"
+    Write-Host "To uninstall later: `$env:POCKET_AGENT_UNINSTALL=`"1`"; irm https://raw.githubusercontent.com/$Repo/main/build_scripts/install.ps1 | iex"
 } finally {
+    $ProgressPreference = $PrevProgressPreference
+    if (Test-Path -LiteralPath $StagingRoot) {
+        Remove-Item -LiteralPath $StagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if (Test-Path -LiteralPath $TempRoot) {
         Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
     }

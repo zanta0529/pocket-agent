@@ -127,6 +127,7 @@ goto FINISH
 
 :FINISH
 if exist "%PA_UPDATE_HANDOFF%" del /f /q "%PA_UPDATE_HANDOFF%" >nul 2>&1
+if "%PA_NO_PAUSE%"=="1" goto DONE_EXIT
 REM If launched from Explorer (double-clicked), keep window open on error
 echo %cmdcmdline% | find /i "/c" >nul
 if not errorlevel 1 (
@@ -137,6 +138,7 @@ if not errorlevel 1 (
     )
 )
 
+:DONE_EXIT
 endlocal & exit /b %EXIT_CODE%
 """
 

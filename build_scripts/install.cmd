@@ -56,6 +56,7 @@ echo   --uninstall       Remove PocketAgent installation ^(preserves %%USERPROFI
 exit /b 0
 
 :ARGS_DONE
+if "!PA_HOME:~-1!"=="\" set "PA_HOME=!PA_HOME:~0,-1!"
 set "PA_BIN=%PA_HOME%\bin"
 
 if "%PA_UNINSTALL%"=="1" goto DO_UNINSTALL
@@ -81,7 +82,8 @@ set "PA_ASSET=PocketAgent-portable.zip"
 set "PA_TMP=%TEMP%\pocket-agent-install-%RANDOM%-%RANDOM%"
 set "PA_ZIP=%PA_TMP%\%PA_ASSET%"
 set "PA_SUMS=%PA_TMP%\SHA256SUMS.txt"
-set "PA_EXT=%PA_TMP%\extract"
+for %%P in ("%PA_HOME%\..") do if not exist "%%~fP" mkdir "%%~fP" >nul 2>&1
+set "PA_EXT=%PA_HOME%.staging.%RANDOM%-%RANDOM%"
 
 mkdir "%PA_TMP%" >nul 2>&1
 if errorlevel 1 (
@@ -89,6 +91,10 @@ if errorlevel 1 (
     exit /b 1
 )
 mkdir "%PA_EXT%" >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Failed to create staging directory: %PA_EXT%
+    goto FAIL_CLEANUP
+)
 
 echo [INFO] Downloading %PA_ASSET% (%PA_VERSION%) from %PA_REPO%...
 curl.exe -fsSL "%PA_BASE_URL%/%PA_ASSET%" -o "%PA_ZIP%"
@@ -185,19 +191,29 @@ if "%MOVED_BAK%"=="1" if exist "%PA_BAK%" rmdir /s /q "%PA_BAK%" >nul 2>&1
 if not exist "%PA_BIN%" mkdir "%PA_BIN%" >nul 2>&1
 (
     echo @echo off
-    echo "%%~dp0..\pocket.bat" %%*
+    echo setlocal
+    echo set "PA_NO_PAUSE=1"
+    echo call "%%~dp0..\pocket.bat" %%*
+    echo endlocal ^& exit /b %%ERRORLEVEL%%
 ) > "%PA_BIN%\pocket-agent.cmd"
 
 call :ADD_USER_PATH "%PA_BIN%"
 
+rmdir /s /q "%PA_EXT%" >nul 2>&1
 rmdir /s /q "%PA_TMP%" >nul 2>&1
 echo.
 echo [OK] PocketAgent installed to "%PA_HOME%".
-echo Next steps ^(open a new cmd.exe window if PATH was just updated^):
+echo Next steps ^(ready immediately in this cmd.exe window^):
 echo   1. pocket-agent setup
 echo   2. pocket-agent
-echo To uninstall later: "%PA_HOME%\bin\pocket-agent.cmd" or run install.cmd --uninstall
-exit /b 0
+echo Note: New terminals opened from Explorer may require signing out/in to reload User PATH.
+echo To uninstall later: install.cmd --uninstall
+set "_PROC_CHECK=;%PATH%;"
+for %%T in ("%PA_BIN%") do set "_PROC_REPL=!_PROC_CHECK:;%%~T;=!"
+if /i "!_PROC_REPL!"=="!_PROC_CHECK!" (
+    endlocal & set "PATH=%PA_BIN%;%PATH%" & exit /b 0
+)
+endlocal & exit /b 0
 
 :DO_UNINSTALL
 if not exist "%PA_HOME%" (
@@ -220,23 +236,32 @@ exit /b 0
 
 :ADD_USER_PATH
 set "TARGET_BIN=%~1"
+if "!TARGET_BIN:~-1!"=="\" set "TARGET_BIN=!TARGET_BIN:~0,-1!"
 set "CUR_USER_PATH="
 for /f "tokens=2,*" %%A in ('reg query "HKCU\Environment" /v Path 2^>nul ^| find /i "Path"') do set "CUR_USER_PATH=%%B"
-if "%CUR_USER_PATH%"=="" (
-    reg add "HKCU\Environment" /v Path /t REG_EXPAND_SZ /d "%TARGET_BIN%" /f >nul
-    echo [INFO] Added "%TARGET_BIN%" to User PATH.
+:STRIP_SEMI
+if not "!CUR_USER_PATH!"=="" if "!CUR_USER_PATH:~-1!"==";" (
+    set "CUR_USER_PATH=!CUR_USER_PATH:~0,-1!"
+    goto STRIP_SEMI
+)
+if "!CUR_USER_PATH!"=="" (
+    reg add "HKCU\Environment" /v Path /t REG_EXPAND_SZ /d "!TARGET_BIN!" /f >nul
+    echo [INFO] Added "!TARGET_BIN!" to User PATH.
     goto :EOF
 )
-echo ;%CUR_USER_PATH%; | find /i ";%TARGET_BIN%;" >nul
-if not errorlevel 1 goto :EOF
-reg add "HKCU\Environment" /v Path /t REG_EXPAND_SZ /d "%CUR_USER_PATH%;%TARGET_BIN%" /f >nul
+set "_CHECK=;!CUR_USER_PATH!;"
+for %%T in ("!TARGET_BIN!") do set "_REPL=!_CHECK:;%%~T;=!"
+if /i not "!_REPL!"=="!_CHECK!" goto :EOF
+set "NEW_USER_PATH=!CUR_USER_PATH!;!TARGET_BIN!"
+reg add "HKCU\Environment" /v Path /t REG_EXPAND_SZ /d "!NEW_USER_PATH!" /f >nul
 if not errorlevel 1 (
-    echo [INFO] Added "%TARGET_BIN%" to User PATH.
+    echo [INFO] Added "!TARGET_BIN!" to User PATH.
 ) else (
-    echo [WARN] Could not update HKCU\Environment Path automatically. Add "%TARGET_BIN%" manually.
+    echo [WARN] Could not update HKCU\Environment Path automatically. Add "!TARGET_BIN!" manually.
 )
 goto :EOF
 
 :FAIL_CLEANUP
+if exist "%PA_EXT%" rmdir /s /q "%PA_EXT%" >nul 2>&1
 if exist "%PA_TMP%" rmdir /s /q "%PA_TMP%" >nul 2>&1
 exit /b 1
