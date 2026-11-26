@@ -804,10 +804,18 @@ def test_dns_compare_queries_dmarc_subdomain_and_caa_signals():
                 latency_ms=2.0,
             )
 
+    from mcp_servers._shared import t
+
     orch = nd_dns_compare.DnsCompareOrchestrator(nd_policy.DefaultNetdiagPolicy(), _GovDnsAdapter())
     report = asyncio.run(orch.run(domain="corp.example.org", record_types="TXT,CAA", nameservers="1.1.1.1"))
-    assert any("p=reject" in sig for sig in report.mail_security_signals)
-    assert any("CAA" in sig and "letsencrypt.org" in sig for sig in report.mail_security_signals)
+    expected_dmarc = t("netdiag_mcp.dns_sig_dmarc", resolver="system_default", policy="p=reject")
+    expected_caa = t(
+        "netdiag_mcp.dns_sig_caa",
+        resolver="system_default",
+        values='0 issue "letsencrypt.org"',
+    )
+    assert expected_dmarc in report.mail_security_signals
+    assert expected_caa in report.mail_security_signals
 
 
 def test_signals_cert_expiring_weak_tls_security_headers_and_edge_fingerprints():
