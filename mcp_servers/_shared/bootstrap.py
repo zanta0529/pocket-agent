@@ -48,6 +48,15 @@ class McpConstants:
     netdiag_dns_max_nameservers: int = 4
     netdiag_dns_max_cname_hops: int = 10
     netdiag_default_allowed_ports: tuple[int, ...] = (80, 443, 8080, 8443)
+    rhel_creds_cache_ttl_sec: float = 600.0
+    rhel_default_connect_timeout_sec: int = 10
+    rhel_min_connect_timeout_sec: int = 3
+    rhel_max_connect_timeout_sec: int = 60
+    rhel_cmd_extra_timeout_sec: int = 15
+    rhel_min_cmd_timeout_sec: int = 5
+    rhel_max_cmd_timeout_sec: int = 120
+    rhel_max_batch_services: int = 10
+    rhel_max_cert_files: int = 30
 
 
 def load_constants() -> McpConstants:
@@ -75,6 +84,15 @@ def load_constants() -> McpConstants:
             netdiag_dns_max_nameservers=sys_const.NETDIAG_DNS_MAX_NAMESERVERS,
             netdiag_dns_max_cname_hops=sys_const.NETDIAG_DNS_MAX_CNAME_HOPS,
             netdiag_default_allowed_ports=sys_const.NETDIAG_DEFAULT_ALLOWED_PORTS,
+            rhel_creds_cache_ttl_sec=sys_const.RHEL_CREDS_CACHE_TTL_SEC,
+            rhel_default_connect_timeout_sec=sys_const.RHEL_DEFAULT_CONNECT_TIMEOUT_SEC,
+            rhel_min_connect_timeout_sec=sys_const.RHEL_MIN_CONNECT_TIMEOUT_SEC,
+            rhel_max_connect_timeout_sec=sys_const.RHEL_MAX_CONNECT_TIMEOUT_SEC,
+            rhel_cmd_extra_timeout_sec=sys_const.RHEL_CMD_EXTRA_TIMEOUT_SEC,
+            rhel_min_cmd_timeout_sec=sys_const.RHEL_MIN_CMD_TIMEOUT_SEC,
+            rhel_max_cmd_timeout_sec=sys_const.RHEL_MAX_CMD_TIMEOUT_SEC,
+            rhel_max_batch_services=sys_const.RHEL_MAX_BATCH_SERVICES,
+            rhel_max_cert_files=sys_const.RHEL_MAX_CERT_FILES,
         )
     except ImportError:
         return McpConstants()

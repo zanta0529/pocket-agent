@@ -317,12 +317,13 @@ def test_list_directory_and_selinux_context(monkeypatch):
         assert out.startswith("[ERROR]")
         mock_run.assert_not_called()
 
-        # 測試 SELinux context 查詢
+        # 測試 SELinux context 查詢（含遠端 realpath -e 守衛）
         out_ctx = rhel_mcp.rhel_selinux_context("/srv/web/index.html")
         assert out_ctx == "drwxr-xr-x file.conf"
         called_cmd_ctx = shlex.split(mock_run.call_args.args[0][-1])[2]
-        assert "ls -dZ -- /srv/web/index.html" in called_cmd_ctx
-        assert "matchpathcon /srv/web/index.html" in called_cmd_ctx
+        assert "realpath -e -- /srv/web/index.html" in called_cmd_ctx
+        assert 'ls -dZ -- "$real"' in called_cmd_ctx
+        assert 'matchpathcon -- "$real"' in called_cmd_ctx
 
 
 def test_process_inspect_and_validation(monkeypatch):
@@ -342,13 +343,15 @@ def test_process_inspect_and_validation(monkeypatch):
         assert bad_pid.startswith("[ERROR]")
         mock_run.assert_not_called()
 
-    # 關鍵字搜尋與注入防禦
+    # 關鍵字搜尋與注入防禦（awk 固定字串比對並保留表頭）
     with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=fake_proc) as mock_run:
         out_search = rhel_mcp.rhel_process_inspect(search="nginx", show_selinux=True)
         assert out_search == "1234 root python"
         called_cmd_search = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "label" in called_cmd_search
-        assert "grep -i -- nginx" in called_cmd_search
+        assert "awk -v q=nginx" in called_cmd_search
+        assert "index(tolower($0), tolower(q)) > 0" in called_cmd_search
+        assert "查無符合條件的行程" in called_cmd_search
 
     with patch("mcp_servers.rhel.ssh_client.capture_ssh") as mock_run:
         bad_search = rhel_mcp.rhel_process_inspect(search="nginx && cat /etc/shadow")
@@ -705,10 +708,15 @@ def test_diagnostic_commands_enriched_sections(monkeypatch):
         cmd_storage = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS --list" in cmd_storage
         assert "/dev/shm" in cmd_storage
+        assert "vgs --noheadings" in cmd_storage
+        assert "data_percent,metadata_percent" in cmd_storage
+        assert "/proc/mdstat" in cmd_storage
 
         rhel_mcp.rhel_network_status()
         cmd_net = shlex.split(mock_run.call_args.args[0][-1])[2]
         assert "ss -tulnp" in cmd_net
+        assert "ip -6 route" in cmd_net
+        assert "ip -s -br link" in cmd_net
 
         rhel_mcp.rhel_security_status()
         cmd_sec = shlex.split(mock_run.call_args.args[0][-1])[2]
@@ -718,7 +726,7 @@ def test_diagnostic_commands_enriched_sections(monkeypatch):
 
         rhel_mcp.rhel_process_inspect(search="nginx")
         cmd_proc = shlex.split(mock_run.call_args.args[0][-1])[2]
-        assert "|| echo '查無符合條件的行程'" in cmd_proc
+        assert "查無符合條件的行程" in cmd_proc
 
         rhel_mcp.rhel_cron_and_timers()
         cmd_timers = shlex.split(mock_run.call_args.args[0][-1])[2]
@@ -830,3 +838,265 @@ def test_rhel_parallel_resolve_connection_params_prompts_once(monkeypatch):
 
     assert all(r == ("10.0.0.20", "22", "admin", "pw!", "") for r in results)
     assert len(prompt_log) == 4
+
+
+def test_ipv6_ssh_target_strips_brackets_and_known_hosts_port_matching(monkeypatch, tmp_path):
+    """驗證 IPv6 傳給 OpenSSH CLI 時剝除方括號，且 known_hosts 精確區分 Port 與多主機列。"""
+    monkeypatch.setenv("RHEL_HOST", "fe80::1")
+    monkeypatch.setenv("RHEL_SSH_PORT", "2222")
+    monkeypatch.setenv("RHEL_SSH_USER", "opsuser")
+    monkeypatch.setenv("RHEL_SSH_PASSWORD", "Ipv6Secret!99")
+
+    fake_home = tmp_path / "home"
+    ssh_dir = fake_home / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "known_hosts").write_text(
+        "[fe80::1]:22 ssh-ed25519 KEY22\nalias.local,[fe80::1]:2222 ssh-ed25519 KEY2222\n",
+        encoding="utf-8",
+    )
+    custom_kh = tmp_path / "rhel_known_hosts"
+    custom_kh.write_text("[fe80::1]:22 ssh-ed25519 KEY22\n", encoding="utf-8")
+    monkeypatch.setenv("RHEL_KNOWN_HOSTS_FILE", str(custom_kh))
+
+    with patch.object(rhel_ssh.Path, "home", return_value=fake_home):
+        args, _, _ = rhel_ssh.build_ssh_args("uptime")
+
+    assert args[-2] == "opsuser@fe80::1"
+    kh_lines = custom_kh.read_text(encoding="utf-8").splitlines()
+    assert "alias.local,[fe80::1]:2222 ssh-ed25519 KEY2222" in kh_lines
+
+
+def _make_openssh_key_bytes(cipher: bytes) -> bytes:
+    import base64
+    import struct
+
+    payload = b"openssh-key-v1\x00" + struct.pack(">I", len(cipher)) + cipher + b"\x00\x00\x00\x00"
+    b64 = base64.b64encode(payload)
+    return b"-----BEGIN OPENSSH PRIVATE KEY-----\n" + b64 + b"\n-----END OPENSSH PRIVATE KEY-----\n"
+
+
+def test_is_encrypted_private_key_and_passphrase_prompt(tmp_path, monkeypatch):
+    """驗證加密私鑰偵測（PKCS#8/PEM/OpenSSH）與未設 Passphrase 時觸發互動詢問。"""
+    enc_pem = tmp_path / "enc_pem"
+    enc_pem.write_text("-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n", encoding="utf-8")
+    enc_pkcs8 = tmp_path / "enc_pkcs8"
+    enc_pkcs8.write_text("-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAA\n", encoding="utf-8")
+    enc_ossh = tmp_path / "enc_ossh"
+    enc_ossh.write_bytes(_make_openssh_key_bytes(b"aes256-ctr"))
+    plain_ossh = tmp_path / "plain_ossh"
+    plain_ossh.write_bytes(_make_openssh_key_bytes(b"none"))
+
+    assert rhel_ssh.is_encrypted_private_key(str(enc_pem)) is True
+    assert rhel_ssh.is_encrypted_private_key(str(enc_pkcs8)) is True
+    assert rhel_ssh.is_encrypted_private_key(str(enc_ossh)) is True
+    assert rhel_ssh.is_encrypted_private_key(str(plain_ossh)) is False
+
+    monkeypatch.setenv("RHEL_HOST", "192.168.1.50")
+    monkeypatch.setenv("RHEL_SSH_PORT", "22")
+    monkeypatch.setenv("RHEL_SSH_USER", "opsuser")
+    monkeypatch.setenv("RHEL_SSH_KEY_PATH", str(enc_ossh))
+
+    with patch("mcp_servers.rhel.ssh_client.tty_prompt_secret", return_value="KeyPass!99") as mock_sec:
+        _, _, _, pw, key = rhel_ssh.resolve_connection_params()
+    assert key == str(enc_ossh.resolve())
+    assert pw == "KeyPass!99"
+    mock_sec.assert_called_once()
+
+
+def test_mcp_manager_prompts_passphrase_for_encrypted_key(tmp_path):
+    """驗證 MCPManager 於加密私鑰模式自動詢問 RHEL_SSH_KEY_PASSPHRASE 並注入 ssh_password。"""
+    enc_ossh = tmp_path / "id_ed25519_enc"
+    enc_ossh.write_bytes(_make_openssh_key_bytes(b"aes256-gcm@openssh.com"))
+
+    manager = MCPManager()
+    manager._server_envs["rhel_ops"] = {
+        "RHEL_HOST": "192.168.1.50",
+        "RHEL_SSH_PORT": "22",
+        "RHEL_SSH_USER": "opsuser",
+        "RHEL_SSH_KEY_PATH": str(enc_ossh),
+    }
+    fake_tools = [
+        SimpleNamespace(
+            name="rhel_system_overview",
+            description="overview",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ssh_host": {"type": "string"},
+                    "ssh_port": {"type": "string"},
+                    "ssh_user": {"type": "string"},
+                    "ssh_password": {"type": "string"},
+                    "ssh_key_path": {"type": "string"},
+                },
+            },
+        ),
+    ]
+    fake_session = SimpleNamespace(
+        list_tools=AsyncMock(return_value=SimpleNamespace(tools=fake_tools)),
+        call_tool=AsyncMock(return_value=MagicMock(content=[MagicMock(text="OK")])),
+    )
+    asyncio.run(manager._register_tools("rhel_ops", fake_session, inject={}, safe_read_tools=["rhel_system_overview"]))
+
+    prompt_calls = []
+
+    def fake_prompt(server_name, missing_keys):
+        prompt_calls.append((server_name, missing_keys))
+        return {"RHEL_SSH_KEY_PASSPHRASE": "UnlockKey!77"}
+
+    manager.on_prompt_conn = fake_prompt
+    asyncio.run(manager.call("rhel_system_overview", {}))
+
+    assert prompt_calls == [("rhel_ops", ["RHEL_SSH_KEY_PASSPHRASE"])]
+    _, sent_args = fake_session.call_tool.call_args.args
+    assert sent_args["ssh_password"] == "UnlockKey!77"
+
+
+def test_run_remote_conn_fail_clears_cache_and_cmd_timeout_clamping(monkeypatch):
+    """驗證 exit 255 CONN_FAIL 清除快取，且 RHEL_CMD_TIMEOUT 獨立夾緊於 5~120 秒。"""
+    _set_full_creds(monkeypatch)
+    rhel_ssh.CREDS_CACHE.set("RHEL_HOST", "192.168.1.10")
+    conn_fail = SimpleNamespace(
+        returncode=255, stdout="", stderr="ssh: connect to host 192.168.1.10: Connection refused"
+    )
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=conn_fail):
+        res = rhel_mcp.rhel_system_overview(ssh_host="192.168.1.10")
+    assert "[CONN_AUTH]" in res
+    assert rhel_ssh.CREDS_CACHE.get("RHEL_HOST") == ""
+
+    monkeypatch.setenv("RHEL_CMD_TIMEOUT", "999")
+    assert rhel_ssh._resolve_cmd_timeout(10) == 120
+    monkeypatch.setenv("RHEL_CMD_TIMEOUT", "1")
+    assert rhel_ssh._resolve_cmd_timeout(10) == 5
+    monkeypatch.delenv("RHEL_CMD_TIMEOUT", raising=False)
+    assert rhel_ssh._resolve_cmd_timeout(10) == 25
+
+
+def test_cron_missing_crontab_and_journal_truncated_flag(monkeypatch):
+    """驗證 /etc/crontab 缺檔容錯，以及 rhel_query_journal 輸出 truncated 布林欄位。"""
+    _set_full_creds(monkeypatch)
+    fake_proc = SimpleNamespace(returncode=0, stdout="system_crontab_entries=0", stderr="")
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=fake_proc) as mock_run:
+        rhel_mcp.rhel_cron_and_timers()
+        cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "[ -r /etc/crontab ]" in cmd
+
+    long_line = '{"__CURSOR":"' + ("a" * 220) + '","PRIORITY":"4"}\n'
+    long_proc = SimpleNamespace(returncode=0, stdout=long_line * 60, stderr="")
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=long_proc):
+        out_trunc = rhel_mcp.rhel_query_journal(lines=100)
+        assert '"truncated": true' in out_trunc
+
+    short_proc = SimpleNamespace(returncode=0, stdout='{"PRIORITY":"3"}', stderr="")
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=short_proc):
+        out_ok = rhel_mcp.rhel_query_journal(lines=10)
+        assert '"truncated": false' in out_ok
+
+
+def test_read_config_allowlist_strategies_and_fstab_redaction(monkeypatch):
+    """驗證白名單設定檔結構化策略與 /etc/fstab 敏感掛載選項遮罩。"""
+    _set_full_creds(monkeypatch)
+
+    sshd_ok = SimpleNamespace(returncode=0, stdout="Port 22\nPermitRootLogin no\n", stderr="")
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=sshd_ok):
+        out = rhel_mcp.rhel_read_config("/etc/ssh/sshd_config")
+        assert "Port 22" in out
+        assert "PermitRootLogin no" in out
+
+    sshd_bad = SimpleNamespace(returncode=0, stdout="AuthorizedKeysFile .ssh/authorized_keys\n", stderr="")
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=sshd_bad):
+        assert rhel_mcp.rhel_read_config("/etc/ssh/sshd_config").startswith("[ERROR]")
+
+    sysctl_ok = SimpleNamespace(returncode=0, stdout="vm.swappiness=10\n", stderr="")
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=sysctl_ok):
+        assert rhel_mcp.rhel_read_config("/etc/sysctl.conf") == "vm.swappiness=10"
+
+    limits_ok = SimpleNamespace(returncode=0, stdout="* soft nofile 65536\n", stderr="")
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=limits_ok):
+        assert rhel_mcp.rhel_read_config("/etc/security/limits.conf") == "* soft nofile 65536"
+
+    from mcp_servers.rhel.config_parsers import FstabConfigStrategy
+
+    local_fstab = FstabConfigStrategy().validate_output(
+        "[device-omitted] /mnt/share cifs username=alice,password=TopSecret,rw 0 0",
+        120,
+    )
+    assert "TopSecret" not in local_fstab
+    assert "alice" not in local_fstab
+    assert "[REDACTED_OPT],[REDACTED_OPT],rw" in local_fstab
+
+    fstab_raw = SimpleNamespace(
+        returncode=0,
+        stdout="[device-omitted] /mnt/share cifs username=alice,password=TopSecret,rw 0 0\n",
+        stderr="",
+    )
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=fstab_raw) as mock_run:
+        out_fstab = rhel_mcp.rhel_read_config("/etc/fstab")
+        assert "TopSecret" not in out_fstab
+        assert "alice" not in out_fstab
+        assert "[REDACTED" in out_fstab
+        remote_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "[REDACTED_OPT]" in remote_cmd
+
+
+def test_package_info_extended_modes_and_network_summary_only(monkeypatch):
+    """驗證 rhel_package_info 近期套件／搜尋模式，與 rhel_network_connections summary_only。"""
+    _set_full_creds(monkeypatch)
+    fake_proc = SimpleNamespace(returncode=0, stdout="openssl-3.0.7\n", stderr="")
+
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh", return_value=fake_proc) as mock_run:
+        out_recent = rhel_mcp.rhel_package_info(recent_count=10)
+        assert "openssl-3.0.7" in out_recent
+        cmd_recent = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "rpm -qa --last" in cmd_recent
+
+        out_search = rhel_mcp.rhel_package_info(search="openssl")
+        assert "openssl-3.0.7" in out_search
+        cmd_search = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "rpm -qa --qf" in cmd_search
+
+        out_ss = rhel_mcp.rhel_network_connections(summary_only=True)
+        assert "openssl-3.0.7" in out_ss
+        assert "ss -s" in shlex.split(mock_run.call_args.args[0][-1])[2]
+
+    with patch("mcp_servers.rhel.ssh_client.capture_ssh") as mock_run:
+        assert rhel_mcp.rhel_package_info().startswith("[ERROR]")
+        mock_run.assert_not_called()
+
+
+def test_diagnostics_tools_and_mcp_registration(monkeypatch):
+    """驗證綜合健檢、核心健康解碼、憑證到期巡檢與 MCP 工具註冊清單。"""
+    from mcp_servers.rhel.tools.diagnostics import decode_kernel_taint
+
+    assert decode_kernel_taint(0) == []
+    assert "proprietary_module" in decode_kernel_taint(1)
+    assert "out_of_tree_module" in decode_kernel_taint(1 << 12)
+
+    _set_full_creds(monkeypatch)
+    kernel_out = "tainted=4096\noom_kill=2\nfile_nr=1200\t0\t100000\nthreads_max=64000\npriority_3=1"
+    with patch(
+        "mcp_servers.rhel.ssh_client.capture_ssh",
+        return_value=SimpleNamespace(returncode=0, stdout=kernel_out, stderr=""),
+    ):
+        res_k = rhel_mcp.rhel_kernel_health()
+        assert "tainted_decoded=out_of_tree_module" in res_k
+        assert "oom_kill=2" in res_k
+
+    with patch(
+        "mcp_servers.rhel.ssh_client.capture_ssh",
+        return_value=SimpleNamespace(returncode=0, stdout="OK", stderr=""),
+    ) as mock_run:
+        rhel_mcp.rhel_health_snapshot()
+        snap_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "recent_err_sample_count=" in snap_cmd
+        assert "--output-fields=PRIORITY" in snap_cmd
+
+        rhel_mcp.rhel_cert_expiry("/etc/pki/tls/certs")
+        cert_cmd = shlex.split(mock_run.call_args.args[0][-1])[2]
+        assert "openssl x509 -noout -subject -issuer -enddate" in cert_cmd
+        assert "PRIVATE KEY" in cert_cmd
+
+    registered_names = {tool.name for tool in asyncio.run(rhel_mcp.mcp.list_tools())}
+    assert "rhel_health_snapshot" in registered_names
+    assert "rhel_kernel_health" in registered_names
+    assert "rhel_cert_expiry" in registered_names
+    assert "rhel_list_directory" not in registered_names

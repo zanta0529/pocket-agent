@@ -1,9 +1,9 @@
 """RHEL 資安狀態、SELinux 與受限設定檔探查工具群組（Command / Registrar Pattern）。"""
 
-import shlex
 from typing import Any
 
 from mcp_servers.rhel import security, ssh_client
+from mcp_servers.rhel.config_parsers import SUPPORTED_CONFIG_PATHS, get_config_strategy
 
 
 def rhel_security_status(
@@ -41,31 +41,21 @@ def rhel_read_config(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """僅提供 /etc/selinux/config 的 SELINUX 列舉值；不提供任意設定檔原文。"""
+    """以白名單結構化策略唯讀摘要指定系統設定檔（絕不回傳任意檔案原文）。"""
     clean_path = file_path.strip()
-    if clean_path != "/etc/selinux/config":
-        ssh_client.AUDIT.log(
+    strategy = get_config_strategy(clean_path)
+    if strategy is None:
+        allowed = "、".join(SUPPORTED_CONFIG_PATHS)
+        return ssh_client.audit_blocked(
             "rhel_read_config",
             f"file_path={file_path!r}",
-            target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-            status="BLOCKED",
-            detail="Only /etc/selinux/config is permitted",
+            f"安全摘要模式僅支援白名單設定檔（{allowed}），不讀取其他設定檔。",
+            ssh_host,
+            ssh_port,
+            ssh_user,
         )
-        return "[ERROR] 安全摘要模式僅支援 /etc/selinux/config 的 SELINUX 欄位，不讀取其他設定檔。"
-    cmd = (
-        security.remote_path_guard(clean_path, directory=False) + "awk -F= -- '/^[[:space:]]*SELINUX[[:space:]]*=/ {"
-        'v=$2; gsub(/[[:space:]]/,"",v); '
-        'if (v == "enforcing" || v == "permissive" || v == "disabled") print "SELINUX=" v'
-        '}\' "$real"'
-    )
-    result = ssh_client.run_remote(
-        cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_read_config"
-    )
-    if ssh_client.is_transport_or_auth_error(result):
-        return result
-    if result not in {"SELINUX=enforcing", "SELINUX=permissive", "SELINUX=disabled"}:
-        return "[ERROR] 無法取得唯一且有效的 SELINUX 設定，已捨棄內容。"
-    return result
+    safe_lines = max(1, min(int(max_lines or 120), 120))
+    return strategy.inspect(safe_lines, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path)
 
 
 def rhel_list_directory(
@@ -79,14 +69,14 @@ def rhel_list_directory(
     ssh_key_path: str = "",
 ) -> str:
     """目錄列舉暫停提供；保留介面，但不讀取或回傳檔名及符號連結目標。"""
-    ssh_client.AUDIT.log(
+    return ssh_client.audit_blocked(
         "rhel_list_directory",
         f"dir_path={dir_path!r}",
-        target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-        status="BLOCKED",
-        detail="Directory listing disabled in safe summary mode",
+        "安全摘要模式不提供目錄列舉；請使用特定的系統診斷工具。",
+        ssh_host,
+        ssh_port,
+        ssh_user,
     )
-    return "[ERROR] 安全摘要模式不提供目錄列舉；請使用特定的系統診斷工具。"
 
 
 def rhel_selinux_context(
@@ -101,20 +91,21 @@ def rhel_selinux_context(
     try:
         safe_path = security.validate_config_path(target_path)
     except ValueError as exc:
-        ssh_client.AUDIT.log(
+        return ssh_client.audit_blocked(
             "rhel_selinux_context",
             f"target_path={target_path!r}",
-            target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-            status="BLOCKED",
-            detail=str(exc),
+            str(exc),
+            ssh_host,
+            ssh_port,
+            ssh_user,
+            redact=True,
         )
-        return security.redact_and_truncate(f"[ERROR] {exc}")
 
-    quoted_path = shlex.quote(safe_path)
     cmd = (
-        f"echo '=== Current SELinux Context (ls -dZ) ===' && ls -dZ -- {quoted_path} 2>&1; "
+        security.remote_path_guard(safe_path, directory=None) + "echo '=== Current SELinux Context (ls -dZ) ===' && "
+        "(ls -dZ -- \"$real\" 2>/dev/null || echo '無法讀取 SELinux 標籤'); "
         "echo '=== Expected Context (matchpathcon) ===' && "
-        f"(matchpathcon {quoted_path} 2>/dev/null || echo '無 matchpathcon 紀錄或工具未安裝')"
+        "(matchpathcon -- \"$real\" 2>/dev/null || echo '無 matchpathcon 紀錄或工具未安裝')"
     )
     return ssh_client.run_remote(
         cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_selinux_context"
@@ -123,5 +114,5 @@ def rhel_selinux_context(
 
 def register(mcp: Any) -> None:
     """註冊 RHEL 資安與 SELinux 工具至 MCPServer。"""
-    for fn in (rhel_security_status, rhel_read_config, rhel_list_directory, rhel_selinux_context):
+    for fn in (rhel_security_status, rhel_read_config, rhel_selinux_context):
         mcp.tool()(fn)

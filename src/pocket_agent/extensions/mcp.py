@@ -109,7 +109,17 @@ CONN_PARAM_SPECS: dict[str, ConnParamSpec] = {
 }
 
 _CONN_PARAM_MAP: dict[str, str] = {param: spec.env_key for param, spec in CONN_PARAM_SPECS.items()}
-_SPEC_BY_ENV_KEY: dict[str, ConnParamSpec] = {spec.env_key: spec for spec in CONN_PARAM_SPECS.values()}
+_EXTRA_CONN_PARAM_SPECS: dict[str, ConnParamSpec] = {
+    "RHEL_SSH_KEY_PASSPHRASE": ConnParamSpec(
+        "RHEL_SSH_KEY_PASSPHRASE",
+        "SSH 私鑰解鎖通行碼 (Passphrase)",
+        is_secret=True,
+    ),
+}
+_SPEC_BY_ENV_KEY: dict[str, ConnParamSpec] = {
+    **{spec.env_key: spec for spec in CONN_PARAM_SPECS.values()},
+    **_EXTRA_CONN_PARAM_SPECS,
+}
 
 
 def get_conn_param_spec(env_key: str) -> ConnParamSpec:
@@ -542,8 +552,17 @@ class MCPManager:
                 if clean_env and clean_env.lower() not in ("null", "none", "~"):
                     resolved[env_key] = clean_env
 
-        # 判斷是否已配置金鑰路徑
+        # 判斷是否已配置金鑰路徑；若有金鑰則一併嘗試解析 Passphrase
         has_key = bool(resolved.get("RHEL_SSH_KEY_PATH"))
+        if has_key and "RHEL_SSH_KEY_PASSPHRASE" not in resolved:
+            pass_cached = cached.get("RHEL_SSH_KEY_PASSPHRASE")
+            pass_cfg = server_env.get("RHEL_SSH_KEY_PASSPHRASE")
+            pass_env = os.getenv("RHEL_SSH_KEY_PASSPHRASE") or ""
+            for cand in (pass_cached, pass_cfg, pass_env):
+                if cand is not None and str(cand) != "" and str(cand).strip().lower() not in ("null", "none", "~"):
+                    if not is_secret_placeholder(str(cand)):
+                        resolved["RHEL_SSH_KEY_PASSPHRASE"] = str(cand)
+                        break
 
         # 判定哪些必要參數缺失需要動態向使用者詢問
         for env_key in entry.conn_params.values():
@@ -561,6 +580,15 @@ class MCPManager:
             if has_key and env_key == "RHEL_SSH_PASSWORD":
                 continue
             missing.append(env_key)
+
+        if has_key and not resolved.get("RHEL_SSH_KEY_PASSPHRASE") and not resolved.get("RHEL_SSH_PASSWORD"):
+            try:
+                from mcp_servers.rhel.ssh_client import is_encrypted_private_key
+
+                if is_encrypted_private_key(resolved["RHEL_SSH_KEY_PATH"]):
+                    missing.append("RHEL_SSH_KEY_PASSPHRASE")
+            except ImportError:
+                pass
 
         if missing and self.on_prompt_conn is not None:
             raw_prompted = await run_sync(self.on_prompt_conn, entry.server_name, missing)
@@ -585,6 +613,8 @@ class MCPManager:
                         self._secret_store.delete(entry.server_name, k)
 
         conn_args = {arg_name: resolved.get(env_key, "") for arg_name, env_key in entry.conn_params.items()}
+        if has_key and "ssh_password" in conn_args and not conn_args["ssh_password"]:
+            conn_args["ssh_password"] = resolved.get("RHEL_SSH_KEY_PASSPHRASE", "")
         return conn_args, pending_saves
 
     def find_entry(self, tool_name: str) -> ToolEntry | None:

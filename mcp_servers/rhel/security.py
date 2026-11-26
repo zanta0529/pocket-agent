@@ -4,7 +4,7 @@ import posixpath
 import re
 import shlex
 
-from mcp_servers._shared import CONSTANTS
+from mcp_servers._shared import CONSTANTS, RedactionPolicy, t
 from mcp_servers._shared import validate_host as shared_validate_host
 
 MAX_OUTPUT_CHARS = CONSTANTS.max_output_chars
@@ -44,6 +44,13 @@ _ALLOWED_CONFIG_PREFIXES = (
     "/usr/local/etc/",
     "/usr/share/",
     "/var/log/",
+)
+
+_ALLOWED_CERT_PREFIXES = (
+    "/etc/pki/tls/certs/",
+    "/etc/pki/ca-trust/source/anchors/",
+    "/etc/nginx/ssl/",
+    "/etc/httpd/conf/ssl.crt/",
 )
 
 _DENIED_PATH_KEYWORDS = (
@@ -126,7 +133,11 @@ def validate_since(value: str) -> str:
     return clean
 
 
-def validate_config_path(file_path: str) -> str:
+def _validate_path_against_prefixes(
+    file_path: str,
+    prefixes: tuple[str, ...],
+    error_prefix: str,
+) -> str:
     raw = file_path.strip()
     if not raw.startswith("/"):
         raise ValueError("設定檔路徑必須為絕對路徑（以 / 開頭）。")
@@ -134,9 +145,9 @@ def validate_config_path(file_path: str) -> str:
         raise ValueError("拒絕存取：路徑不得包含 '..' 跳躍符號。")
 
     norm = posixpath.normpath(raw)
-    if not any(norm.startswith(prefix) or norm == prefix.rstrip("/") for prefix in _ALLOWED_CONFIG_PREFIXES):
-        allowed_str = "、".join(_ALLOWED_CONFIG_PREFIXES)
-        raise ValueError(f"拒絕存取：指定路徑不在允許的唯讀探查目錄白名單內（{allowed_str}）。")
+    if not any(norm.startswith(prefix) or norm == prefix.rstrip("/") for prefix in prefixes):
+        allowed_str = "、".join(prefixes)
+        raise ValueError(f"{error_prefix}（{allowed_str}）。")
 
     lower_path = norm.lower()
     for kw in _DENIED_PATH_KEYWORDS:
@@ -145,13 +156,39 @@ def validate_config_path(file_path: str) -> str:
     return norm
 
 
-def remote_path_guard(path: str, *, directory: bool) -> str:
+def validate_config_path(file_path: str) -> str:
+    return _validate_path_against_prefixes(
+        file_path,
+        _ALLOWED_CONFIG_PREFIXES,
+        "拒絕存取：指定路徑不在允許的唯讀探查目錄白名單內",
+    )
+
+
+def validate_cert_dir(dir_path: str) -> str:
+    return _validate_path_against_prefixes(
+        dir_path,
+        _ALLOWED_CERT_PREFIXES,
+        "拒絕存取：指定目錄不在允許的公開憑證目錄白名單內",
+    )
+
+
+def _build_remote_path_guard(
+    path: str,
+    prefixes: tuple[str, ...],
+    *,
+    directory: bool | None = False,
+) -> str:
     """以同一套規則在遠端檢查實際解析後路徑。"""
     denied = "|".join(f"*{keyword}*" for keyword in _DENIED_PATH_KEYWORDS)
-    allowed = [f"{prefix.rstrip('/')}/*" for prefix in _ALLOWED_CONFIG_PREFIXES]
-    if directory:
-        allowed.extend(prefix.rstrip("/") for prefix in _ALLOWED_CONFIG_PREFIXES)
-    kind = "d" if directory else "f"
+    allowed = [f"{prefix.rstrip('/')}/*" for prefix in prefixes]
+    if directory is True or directory is None:
+        allowed.extend(prefix.rstrip("/") for prefix in prefixes)
+    if directory is True:
+        type_check = '[ -d "$real" ]'
+    elif directory is False:
+        type_check = '[ -f "$real" ]'
+    else:
+        type_check = '( [ -f "$real" ] || [ -d "$real" ] )'
     return (
         f"real=$(realpath -e -- {shlex.quote(path)} 2>/dev/null) || "
         "{ echo '[ERROR] 路徑不存在或無法解析'; exit 1; }; "
@@ -160,9 +197,19 @@ def remote_path_guard(path: str, *, directory: bool) -> str:
         "echo '[ERROR] 拒絕存取：解析後路徑包含敏感關鍵字'; exit 1 ;; esac; "
         f'case "$real" in {"|".join(allowed)}) ;; '
         "*) echo '[ERROR] 拒絕存取：解析後路徑不在目錄白名單內'; exit 1 ;; esac; "
-        f'[ -{kind} "$real" ] || '
+        f"{type_check} || "
         "{ echo '[ERROR] 不支援的檔案類型'; exit 1; }; "
     )
+
+
+def remote_path_guard(path: str, *, directory: bool | None = False) -> str:
+    """以同一套規則在遠端檢查實際解析後路徑。"""
+    return _build_remote_path_guard(path, _ALLOWED_CONFIG_PREFIXES, directory=directory)
+
+
+def remote_cert_dir_guard(path: str) -> str:
+    """在遠端檢查憑證目錄真實路徑仍位於公開憑證目錄白名單且不含敏感關鍵字。"""
+    return _build_remote_path_guard(path, _ALLOWED_CERT_PREFIXES, directory=True)
 
 
 def diagnostic_command(command: str) -> str:
@@ -174,35 +221,63 @@ def diagnostic_command(command: str) -> str:
     return "bash -c " + shlex.quote(script)
 
 
+class RhelRedactionPolicy(RedactionPolicy):
+    """RHEL 專屬嚴格輸出檢查（二進位／多行未知敏感邊界整份 fail-closed 拒收）與安全截斷。"""
+
+    @staticmethod
+    def check_fail_closed(text: str) -> str | None:
+        if any(ord(char) < 32 and char not in "\n\r\t" for char in text) or "\ufffd" in text:
+            return "[ERROR] 輸出包含二進位或無法安全解碼的內容，已捨棄。"
+        if re.search(
+            r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
+            r"|psk|authorization|private_key|preshared_key)\b[\"']?\s*[:=][ \t]*"
+            r"(?:[|>][^\r\n]*|\"[^\"\r\n]*|'[^'\r\n]*|[ \t]*)(?:\r?\n|\Z)",
+            text,
+        ):
+            return "[ERROR] 偵測到無法安全判定範圍的敏感欄位，已捨棄內容。"
+        if re.search(
+            r"(?im)^[^\r\n]*(?:password|passwd|secret|token|passphrase|api[_-]?key|psk)"
+            r"[^\r\n]*[:=][^\r\n]*\r?\n[ \t]+\S",
+            text,
+        ):
+            return "[ERROR] 敏感欄位後含縮排延續內容，已捨棄內容。"
+        if re.search(r"(?im)^\s*(?:machine|default|login|password)\s*$", text):
+            return "[ERROR] 偵測到跨行憑證格式，已捨棄內容。"
+        return None
+
+    def redact(self, text: str, *, extra_secret: str = "") -> str:
+        if not text:
+            return text
+        out = text.replace(extra_secret, "[REDACTED]") if extra_secret else text
+        out = _REDACT_PEM_RE.sub("[REDACTED PRIVATE KEY]", out)
+        out = _REDACT_KV_RE.sub(r"\1[REDACTED]", out)
+        out = _REDACT_SECRET_LINE_RE.sub("[REDACTED]", out)
+        return _REDACT_URL_RE.sub(r"\1[REDACTED]@", out)
+
+    def redact_and_truncate_with_meta(self, text: str) -> tuple[str, bool]:
+        if not text:
+            return "(沒有輸出)", False
+        blocked = self.check_fail_closed(text)
+        if blocked is not None:
+            return blocked, False
+        redacted = self.redact(text)
+        if len(redacted) <= MAX_OUTPUT_CHARS:
+            return redacted, False
+        cut = self.safe_cut_index(redacted, MAX_OUTPUT_CHARS)
+        if cut >= len(redacted):
+            return redacted, False
+        notice = t("rhel_mcp.output_truncated", max_chars=MAX_OUTPUT_CHARS)
+        return redacted[:cut] + notice, True
+
+
+RHEL_REDACTION_POLICY = RhelRedactionPolicy()
+
+
+def redact_and_truncate_with_meta(text: str) -> tuple[str, bool]:
+    """執行 RHEL 嚴格遮罩與截斷，並回傳 (處理後文字, 是否已截斷)。"""
+    return RHEL_REDACTION_POLICY.redact_and_truncate_with_meta(text)
+
+
 def redact_and_truncate(text: str) -> str:
     """RHEL 專屬嚴格輸出檢查（二進位／多行未知敏感邊界整份 fail-closed 拒收）與截斷。"""
-    if not text:
-        return "(沒有輸出)"
-    if any(ord(char) < 32 and char not in "\n\r\t" for char in text) or "\ufffd" in text:
-        return "[ERROR] 輸出包含二進位或無法安全解碼的內容，已捨棄。"
-    if re.search(
-        r"(?im)\b(?:[\w-]*(?:password|passwd|secret|token|passphrase|api[_-]?key)[\w-]*"
-        r"|psk|authorization|private_key|preshared_key)\b[\"']?\s*[:=][ \t]*"
-        r"(?:[|>][^\r\n]*|\"[^\"\r\n]*|'[^'\r\n]*|[ \t]*)(?:\r?\n|\Z)",
-        text,
-    ):
-        return "[ERROR] 偵測到無法安全判定範圍的敏感欄位，已捨棄內容。"
-    if re.search(
-        r"(?im)^[^\r\n]*(?:password|passwd|secret|token|passphrase|api[_-]?key|psk)"
-        r"[^\r\n]*[:=][^\r\n]*\r?\n[ \t]+\S",
-        text,
-    ):
-        return "[ERROR] 敏感欄位後含縮排延續內容，已捨棄。"
-    if re.search(r"(?im)^\s*(?:machine|default|login|password)\s*$", text):
-        return "[ERROR] 偵測到跨行憑證格式，已捨棄內容。"
-
-    redacted = _REDACT_PEM_RE.sub("[REDACTED PRIVATE KEY]", text)
-    redacted = _REDACT_KV_RE.sub(r"\1[REDACTED]", redacted)
-    redacted = _REDACT_SECRET_LINE_RE.sub("[REDACTED]", redacted)
-    redacted = _REDACT_URL_RE.sub(r"\1[REDACTED]@", redacted)
-    if len(redacted) > MAX_OUTPUT_CHARS:
-        return (
-            redacted[:MAX_OUTPUT_CHARS] + f"\n... (輸出過長已截斷，已達 {MAX_OUTPUT_CHARS} 字元上限)\n"
-            "[提示：若需檢視後續內容或縮小範圍，請指定更精確的查詢條件、縮短 since 時間範圍，或調整行數上限]"
-        )
-    return redacted
+    return RHEL_REDACTION_POLICY.redact_and_truncate_with_meta(text)[0]

@@ -1,19 +1,56 @@
 """RHEL SSH 雙軌連線轉接器（Adapter Pattern）：憑證快取、Askpass、known_hosts 同步與 1 MB 安全串流擷取。"""
 
+import base64
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-from mcp_servers._shared import CONSTANTS, AuditLogger, CredentialCache, tty_prompt_secret, tty_prompt_text
+from mcp_servers._shared import CONSTANTS, AuditLogger, CredentialCache, t, tty_prompt_secret, tty_prompt_text
 from mcp_servers.rhel import security
 
 MAX_CAPTURE_BYTES = CONSTANTS.max_capture_bytes
 
-CREDS_CACHE = CredentialCache(ttl_seconds=600.0)
+CREDS_CACHE = CredentialCache(ttl_seconds=CONSTANTS.rhel_creds_cache_ttl_sec)
 AUDIT = AuditLogger("rhel-ops")
+
+
+def is_encrypted_private_key(key_path: str) -> bool:
+    """唯讀偵測 SSH 私鑰是否設有 Passphrase 加密；無法判定時安全回傳 False。"""
+    try:
+        raw = Path(key_path).expanduser().resolve().read_bytes()[:4096]
+    except OSError:
+        return False
+    if b"BEGIN ENCRYPTED PRIVATE KEY" in raw or b"Proc-Type: 4,ENCRYPTED" in raw:
+        return True
+    header = b"-----BEGIN OPENSSH PRIVATE KEY-----"
+    footer = b"-----END OPENSSH PRIVATE KEY-----"
+    if header not in raw:
+        return False
+    start = raw.find(header) + len(header)
+    end = raw.find(footer, start)
+    b64_bytes = raw[start:] if end == -1 else raw[start:end]
+    cleaned = b"".join(b64_bytes.split())
+    pad = (-len(cleaned)) % 4
+    if pad:
+        cleaned += b"=" * pad
+    try:
+        decoded = base64.b64decode(cleaned, validate=False)
+    except ValueError:
+        return False
+    magic = b"openssh-key-v1\x00"
+    if not decoded.startswith(magic) or len(decoded) < len(magic) + 4:
+        return False
+    offset = len(magic)
+    cipher_len = struct.unpack(">I", decoded[offset : offset + 4])[0]
+    offset += 4
+    if cipher_len == 0 or offset + cipher_len > len(decoded):
+        return False
+    cipher_name = decoded[offset : offset + cipher_len]
+    return cipher_name != b"none"
 
 
 def clear_creds_cache(target_host: str = "") -> None:
@@ -47,21 +84,21 @@ def resolve_connection_params(
         key_path = ssh_key_path.strip() or cached_key or (os.getenv("RHEL_SSH_KEY_PATH") or "").strip()
 
         if not host:
-            host = tty_prompt_text("請輸入 RHEL 主機 IP 或位址 (RHEL_HOST): ").strip()
+            host = tty_prompt_text(t("rhel_mcp.prompt_host")).strip()
         if not port:
-            port = tty_prompt_text("請輸入 SSH 連接埠 (RHEL_SSH_PORT) [預設 22]: ").strip() or "22"
+            port = tty_prompt_text(t("rhel_mcp.prompt_port")).strip() or "22"
         if not user:
-            user = tty_prompt_text(f"請輸入 {host} 的 SSH 登入帳號 (RHEL_SSH_USER): ").strip()
+            user = tty_prompt_text(t("rhel_mcp.prompt_user", host=host)).strip()
 
         if not host:
-            raise ValueError("未提供 RHEL 主機位址 (RHEL_HOST)。")
+            raise ValueError(t("rhel_mcp.missing_host"))
         if not user:
-            raise ValueError("未提供 SSH 登入帳號 (RHEL_SSH_USER)。")
+            raise ValueError(t("rhel_mcp.missing_user"))
 
         if key_path:
             resolved_key = Path(key_path).expanduser().resolve()
             if not resolved_key.is_file():
-                raise ValueError(f"指定的 SSH 私鑰檔案不存在或無法存取：{key_path!r}")
+                raise ValueError(t("rhel_mcp.invalid_key_path", key_path=repr(key_path)))
             key_path = str(resolved_key)
 
         host = security.validate_host(host)
@@ -96,9 +133,13 @@ def resolve_connection_params(
 
         if not key_path:
             if not password:
-                password = tty_prompt_secret(f"請輸入 {user}@{host} 的 SSH 登入密碼: ")
+                password = tty_prompt_secret(t("rhel_mcp.prompt_password", user=user, host=host))
             if not password:
-                raise ValueError("未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；未指定私鑰時必須提供密碼驗證。")
+                raise ValueError(t("rhel_mcp.missing_password"))
+        elif not password and is_encrypted_private_key(key_path):
+            password = tty_prompt_secret(t("rhel_mcp.prompt_key_passphrase", key_name=Path(key_path).name))
+            if not password:
+                raise ValueError(t("rhel_mcp.missing_key_passphrase"))
 
         CREDS_CACHE.update(
             {
@@ -111,6 +152,34 @@ def resolve_connection_params(
         CREDS_CACHE.set_secret("RHEL_SSH_PASSWORD", password)
         CREDS_CACHE.set_target_secret(target, password)
         return host, port, user, password, key_path
+
+
+def _match_known_hosts_line(line: str, clean_host: str, port: str) -> bool:
+    """精確比對 known_hosts 單行是否符合目標主機與連接埠（支援逗號多主機列）。"""
+    stripped = line.strip()
+    if not stripped or stripped.startswith(("#", "|1|", "@")):
+        return False
+    host_field = stripped.split(None, 1)[0]
+    tokens = [tok.strip() for tok in host_field.split(",") if tok.strip()]
+    if port == "22":
+        targets = {clean_host, f"[{clean_host}]:22"}
+    else:
+        targets = {f"[{clean_host}]:{port}"}
+    return any(tok in targets for tok in tokens)
+
+
+def _resolve_cmd_timeout(connect_timeout: int) -> int:
+    """解析遠端診斷指令執行逾時秒數（支援 RHEL_CMD_TIMEOUT 獨立設定）。"""
+    raw_cmd_timeout = (os.getenv("RHEL_CMD_TIMEOUT") or "").strip()
+    if raw_cmd_timeout:
+        try:
+            return max(
+                CONSTANTS.rhel_min_cmd_timeout_sec,
+                min(int(raw_cmd_timeout), CONSTANTS.rhel_max_cmd_timeout_sec),
+            )
+        except ValueError:
+            pass
+    return connect_timeout + CONSTANTS.rhel_cmd_extra_timeout_sec
 
 
 def build_ssh_args(
@@ -140,16 +209,15 @@ def build_ssh_args(
         try:
             content = Path(known_hosts_file).read_text(encoding="utf-8", errors="ignore")
             clean_host = host.strip("[]")
-            host_prefixes = (f"{clean_host} ", f"[{clean_host}]:", f"{host} ")
             existing_lines = [line.strip() for line in content.splitlines() if line.strip()]
-            has_entry = any(line.startswith(host_prefixes) for line in existing_lines)
+            has_entry = any(_match_known_hosts_line(line, clean_host, port) for line in existing_lines)
             if not has_entry:
                 user_known_hosts = Path.home() / ".ssh" / "known_hosts"
                 if user_known_hosts.exists():
                     user_lines = [
                         line
                         for line in user_known_hosts.read_text(encoding="utf-8", errors="ignore").splitlines()
-                        if line.strip() and line.strip().startswith(host_prefixes)
+                        if _match_known_hosts_line(line, clean_host, port)
                     ]
                     if user_lines:
                         prefix_nl = "\n" if content and not content.endswith("\n") else ""
@@ -162,9 +230,13 @@ def build_ssh_args(
             pass
 
     try:
-        timeout = max(3, min(int(os.getenv("RHEL_CONNECT_TIMEOUT") or "10"), 60))
+        raw_timeout = int(os.getenv("RHEL_CONNECT_TIMEOUT") or str(CONSTANTS.rhel_default_connect_timeout_sec))
+        timeout = max(
+            CONSTANTS.rhel_min_connect_timeout_sec,
+            min(raw_timeout, CONSTANTS.rhel_max_connect_timeout_sec),
+        )
     except ValueError:
-        timeout = 10
+        timeout = CONSTANTS.rhel_default_connect_timeout_sec
 
     strict_env = (os.getenv("RHEL_STRICT_HOST_KEY") or "accept-new").strip().lower()
     strict_host = "yes" if strict_env in ("yes", "strict", "true", "1") else "accept-new"
@@ -225,7 +297,8 @@ def build_ssh_args(
             ]
         )
 
-    args.extend(["--", f"{user}@{host}", remote_cmd])
+    ssh_target_host = host.strip("[]")
+    args.extend(["--", f"{user}@{ssh_target_host}", remote_cmd])
     return args, password, timeout
 
 
@@ -385,7 +458,29 @@ def run_with_askpass(
         env.setdefault("DISPLAY", "1")
         env.pop("SSH_AUTH_SOCK", None)
 
-        return capture_ssh(ssh_args, timeout=timeout + 15, creationflags=creationflags, env=env)
+        return capture_ssh(ssh_args, timeout=_resolve_cmd_timeout(timeout), creationflags=creationflags, env=env)
+
+
+def audit_blocked(
+    tool_name: str,
+    command_summary: str,
+    reason: str,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    *,
+    redact: bool = False,
+) -> str:
+    """統一記錄參數或安全政策攔截稽核日誌，並回傳標準化錯誤訊息。"""
+    AUDIT.log(
+        tool_name,
+        command_summary,
+        target=format_audit_target(ssh_host, ssh_port, ssh_user),
+        status="BLOCKED",
+        detail=reason,
+    )
+    msg = reason if reason.startswith("[ERROR]") else f"[ERROR] {reason}"
+    return security.redact_and_truncate(msg) if redact else msg
 
 
 def is_transport_or_auth_error(msg: str) -> bool:
@@ -395,7 +490,7 @@ def is_transport_or_auth_error(msg: str) -> bool:
     return any(marker in msg for marker in ("[CONN_AUTH]", "[HOST_KEY_MISMATCH]", "執行逾時"))
 
 
-def run_remote(
+def run_remote_with_meta(
     remote_cmd: str,
     ssh_host: str = "",
     ssh_port: str = "",
@@ -404,7 +499,8 @@ def run_remote(
     ssh_key_path: str = "",
     *,
     tool_name: str = "rhel_remote",
-) -> str:
+) -> tuple[str, bool]:
+    """執行遠端安全指令，並回傳 (遮罩與截斷後文字, 是否超過輸出上限)。"""
     try:
         ssh_args, password, timeout = build_ssh_args(
             security.diagnostic_command(remote_cmd),
@@ -430,7 +526,8 @@ def run_remote(
                 )
                 return (
                     "[ERROR] [HOST_KEY_MISMATCH] 目標主機金鑰驗證失敗 (exit 255)\n"
-                    "提示：目標主機公鑰與專屬已知清單紀錄不符（可能主機金鑰曾變更或存在安全風險），連線已被拒絕。"
+                    "提示：目標主機公鑰與專屬已知清單紀錄不符（可能主機金鑰曾變更或存在安全風險），連線已被拒絕。",
+                    False,
                 )
 
             if "permission denied" in stderr_lower:
@@ -444,7 +541,8 @@ def run_remote(
                 clear_creds_cache(ssh_host)
                 return (
                     "[ERROR] [CONN_AUTH] 遠端 SSH 認證失敗 (Permission denied, exit 255)\n"
-                    "提示：請確認帳號與密碼/金鑰是否正確，且目標主機已啟用對應認證方式。"
+                    "提示：請確認帳號與密碼/金鑰是否正確，且目標主機已啟用對應認證方式。",
+                    False,
                 )
 
             AUDIT.log(
@@ -454,9 +552,11 @@ def run_remote(
                 status="CONN_FAIL",
                 detail="SSH connection or authentication failed (exit 255)",
             )
+            clear_creds_cache(ssh_host)
             return (
                 "[ERROR] [CONN_AUTH] 遠端 SSH 連線或認證失敗 (exit 255)\n"
-                "提示：請確認網路連線、目標主機防火牆與 SSH 連接埠，或檢查已知主機清單。"
+                "提示：請確認網路連線、目標主機防火牆與 SSH 連接埠，或檢查已知主機清單。",
+                False,
             )
 
         combined = (proc.stdout or "").strip()
@@ -468,9 +568,9 @@ def run_remote(
                 "輸出無法安全解碼，已捨棄內容。",
             ):
                 AUDIT.log(tool_name, remote_cmd, target=target_str, status="ERROR", detail=stderr_msg)
-                return f"[ERROR] {stderr_msg}"
+                return f"[ERROR] {stderr_msg}", False
             AUDIT.log(tool_name, remote_cmd, target=target_str, status="ERROR", detail=f"exit {proc.returncode}")
-            return f"[ERROR] 遠端執行失敗 (exit {proc.returncode})"
+            return f"[ERROR] 遠端執行失敗 (exit {proc.returncode})", False
 
         if proc.returncode != 0:
             AUDIT.log(
@@ -483,7 +583,7 @@ def run_remote(
             combined = f"[ERROR] 遠端指令部分或全部失敗 (exit {proc.returncode})\n{combined}"
         else:
             AUDIT.log(tool_name, remote_cmd, target=target_str, status="OK")
-        return security.redact_and_truncate(combined)
+        return security.redact_and_truncate_with_meta(combined)
     except ValueError as exc:
         AUDIT.log(
             tool_name,
@@ -493,7 +593,7 @@ def run_remote(
             detail=str(exc),
         )
         clear_creds_cache(ssh_host)
-        return "[ERROR] [CONN_AUTH] 連線參數或安全檢查失敗，請確認設定。"
+        return "[ERROR] [CONN_AUTH] 連線參數或安全檢查失敗，請確認設定。", False
     except subprocess.TimeoutExpired:
         AUDIT.log(
             tool_name,
@@ -502,7 +602,7 @@ def run_remote(
             status="TIMEOUT",
             detail="SSH command execution timed out",
         )
-        return "[ERROR] SSH 遠端指令執行逾時，已中止連線。"
+        return "[ERROR] SSH 遠端指令執行逾時，已中止連線。", False
     except Exception:
         AUDIT.log(
             tool_name,
@@ -511,4 +611,26 @@ def run_remote(
             status="ERROR",
             detail="SSH execution exception",
         )
-        return "[ERROR] SSH 執行或安全擷取失敗，未回傳原始例外內容。"
+        return "[ERROR] SSH 執行或安全擷取失敗，未回傳原始例外內容。", False
+
+
+def run_remote(
+    remote_cmd: str,
+    ssh_host: str = "",
+    ssh_port: str = "",
+    ssh_user: str = "",
+    ssh_password: str = "",
+    ssh_key_path: str = "",
+    *,
+    tool_name: str = "rhel_remote",
+) -> str:
+    """執行遠端安全指令並回傳遮罩與截斷後文字。"""
+    return run_remote_with_meta(
+        remote_cmd,
+        ssh_host,
+        ssh_port,
+        ssh_user,
+        ssh_password,
+        ssh_key_path,
+        tool_name=tool_name,
+    )[0]

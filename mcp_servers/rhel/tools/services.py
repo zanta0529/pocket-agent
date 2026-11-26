@@ -5,6 +5,7 @@ import re
 import shlex
 from typing import Any
 
+from mcp_servers._shared import CONSTANTS
 from mcp_servers.rhel import security, ssh_client
 
 
@@ -34,29 +35,30 @@ def rhel_service_status(
         )
 
     raw_units = [u for u in re.split(r"[\s,]+", service_name.strip()) if u]
-    if len(raw_units) > 10:
-        ssh_client.AUDIT.log(
+    if len(raw_units) > CONSTANTS.rhel_max_batch_services:
+        return ssh_client.audit_blocked(
             "rhel_service_status",
             f"service_name={service_name!r}",
-            target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-            status="BLOCKED",
-            detail="Too many service names (max 10)",
+            f"單次查詢的服務數量不得超過 {CONSTANTS.rhel_max_batch_services} 個。",
+            ssh_host,
+            ssh_port,
+            ssh_user,
         )
-        return "[ERROR] 單次查詢的服務數量不得超過 10 個。"
 
     quoted_units: list[str] = []
     for unit_item in raw_units:
         try:
             safe_unit = security.validate_identifier(unit_item, "service_name")
         except ValueError as exc:
-            ssh_client.AUDIT.log(
+            return ssh_client.audit_blocked(
                 "rhel_service_status",
                 f"service_name={service_name!r}",
-                target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-                status="BLOCKED",
-                detail=str(exc),
+                str(exc),
+                ssh_host,
+                ssh_port,
+                ssh_user,
+                redact=True,
             )
-            return security.redact_and_truncate(f"[ERROR] {exc}")
         quoted_units.append(shlex.quote(safe_unit))
 
     joined_units = " ".join(quoted_units)
@@ -85,42 +87,43 @@ def rhel_query_journal(
 ) -> str:
     """查詢有界 journald 等級計數；不回傳訊息原文。grep 暫不支援，lines 為樣本上限。"""
     if grep.strip():
-        ssh_client.AUDIT.log(
+        return ssh_client.audit_blocked(
             "rhel_query_journal",
             f"unit={unit!r} grep={grep!r}",
-            target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-            status="BLOCKED",
-            detail="grep parameter rejected in safe summary mode",
+            "安全摘要模式不接受訊息關鍵字；請使用 unit、priority 與 since 篩選。",
+            ssh_host,
+            ssh_port,
+            ssh_user,
         )
-        return "[ERROR] 安全摘要模式不接受訊息關鍵字；請使用 unit、priority 與 since 篩選。"
 
     parts = ["journalctl", "--no-pager", "--output=json", "--output-fields=PRIORITY", "--quiet"]
     if unit.strip():
         try:
             safe_unit = security.validate_identifier(unit, "unit")
         except ValueError as exc:
-            ssh_client.AUDIT.log(
+            return ssh_client.audit_blocked(
                 "rhel_query_journal",
                 f"unit={unit!r}",
-                target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-                status="BLOCKED",
-                detail=str(exc),
+                str(exc),
+                ssh_host,
+                ssh_port,
+                ssh_user,
+                redact=True,
             )
-            return security.redact_and_truncate(f"[ERROR] {exc}")
         parts.extend(["-u", shlex.quote(safe_unit)])
 
     prio_aliases = {"error": "err", "warn": "warning", "critical": "crit"}
     prio = prio_aliases.get(priority.strip().lower(), priority.strip().lower())
     if prio and prio not in ("all", "none"):
         if prio not in security.VALID_PRIORITIES:
-            ssh_client.AUDIT.log(
+            return ssh_client.audit_blocked(
                 "rhel_query_journal",
                 f"priority={priority!r}",
-                target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-                status="BLOCKED",
-                detail="Invalid priority",
+                f"非法的 priority 參數（允許值：{sorted(security.VALID_PRIORITIES)}）",
+                ssh_host,
+                ssh_port,
+                ssh_user,
             )
-            return f"[ERROR] 非法的 priority 參數（允許值：{sorted(security.VALID_PRIORITIES)}）"
         parts.extend(["-p", shlex.quote(prio)])
 
     since_clean = since.strip()
@@ -128,19 +131,19 @@ def rhel_query_journal(
         try:
             since_clean = security.validate_since(since_clean)
         except ValueError:
-            ssh_client.AUDIT.log(
+            return ssh_client.audit_blocked(
                 "rhel_query_journal",
                 f"since={since!r}",
-                target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-                status="BLOCKED",
-                detail="Invalid since format",
+                "非法的 since 時間格式（僅允許安全字元集且限 40 字元以內）",
+                ssh_host,
+                ssh_port,
+                ssh_user,
             )
-            return "[ERROR] 非法的 since 時間格式（僅允許安全字元集且限 40 字元以內）"
         parts.extend(["--since", shlex.quote(since_clean)])
 
     safe_lines = max(1, min(int(lines or 50), 200))
     parts.extend(["-n", str(safe_lines)])
-    result = ssh_client.run_remote(
+    result, was_truncated = ssh_client.run_remote_with_meta(
         " ".join(parts), ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_query_journal"
     )
     if ssh_client.is_transport_or_auth_error(result):
@@ -149,16 +152,15 @@ def rhel_query_journal(
         return "[ERROR] 日誌摘要查詢失敗；可能缺少權限或不支援指定的 journalctl 選項。"
 
     counts = {str(level): 0 for level in range(8)}
-    was_truncated = "\n... (輸出過長已截斷" in result
-    clean_result = result.split("\n... (輸出過長已截斷", 1)[0] if was_truncated else result
-    raw_lines = [] if clean_result == "(沒有輸出)" else clean_result.splitlines()
-    if was_truncated and raw_lines and not raw_lines[-1].strip().endswith("}"):
-        raw_lines = raw_lines[:-1]
+    raw_lines = [] if result == "(沒有輸出)" else result.splitlines()
     try:
         for line in raw_lines:
-            if not line.strip():
+            stripped = line.strip()
+            if not stripped:
                 continue
-            record = json.loads(line)
+            if was_truncated and (not stripped.startswith("{") or not stripped.endswith("}")):
+                break
+            record = json.loads(stripped)
             if not isinstance(record, dict):
                 return "[ERROR] 日誌摘要格式不符，已捨棄。"
             level = record.get("PRIORITY")
@@ -173,7 +175,14 @@ def rhel_query_journal(
             counts[level] += 1
     except ValueError, AttributeError:
         return "[ERROR] 日誌摘要格式不符，已捨棄。"
-    return json.dumps({"sample_limit": safe_lines, "sample_count": sum(counts.values()), "priorities": counts})
+    return json.dumps(
+        {
+            "sample_limit": safe_lines,
+            "sample_count": sum(counts.values()),
+            "priorities": counts,
+            "truncated": was_truncated,
+        }
+    )
 
 
 def rhel_process_inspect(
@@ -195,14 +204,15 @@ def rhel_process_inspect(
         try:
             safe_pid = security.validate_pid(pid)
         except ValueError as exc:
-            ssh_client.AUDIT.log(
+            return ssh_client.audit_blocked(
                 "rhel_process_inspect",
                 f"pid={pid!r}",
-                target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-                status="BLOCKED",
-                detail=str(exc),
+                str(exc),
+                ssh_host,
+                ssh_port,
+                ssh_user,
+                redact=True,
             )
-            return security.redact_and_truncate(f"[ERROR] {exc}")
         cmd = (
             f"echo '=== Process Detail (PID: {safe_pid}) ===' && "
             f"ps -p {safe_pid} -o pid,ppid,user,stat,comm 2>/dev/null || echo '行程不存在或已終止'; "
@@ -222,19 +232,23 @@ def rhel_process_inspect(
         try:
             safe_search = security.validate_search_pattern(search, "search")
         except ValueError as exc:
-            ssh_client.AUDIT.log(
+            return ssh_client.audit_blocked(
                 "rhel_process_inspect",
                 f"search={search!r}",
-                target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-                status="BLOCKED",
-                detail=str(exc),
+                str(exc),
+                ssh_host,
+                ssh_port,
+                ssh_user,
+                redact=True,
             )
-            return security.redact_and_truncate(f"[ERROR] {exc}")
         quoted_search = shlex.quote(safe_search)
         cmd = (
             f"echo '=== Search Processes matching {quoted_search} ===' && "
-            f"(ps -eo {cols} | grep -i -- {quoted_search} | grep -v grep | sed -n '1,{safe_lines}p' "
-            "|| echo '查無符合條件的行程')"
+            f"ps -eo {cols} | awk -v q={quoted_search} -v lim={safe_lines} "
+            "'NR==1 {hdr=$0; next} "
+            "index(tolower($0), tolower(q)) > 0 { "
+            "if (found == 0) print hdr; if (found < lim) print; found++ } "
+            'END { if (found == 0) print "查無符合條件的行程" }\''
         )
         return ssh_client.run_remote(
             cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_process_inspect"
@@ -242,14 +256,14 @@ def rhel_process_inspect(
 
     sort_clean = sort_by.strip().lower()
     if sort_clean not in security.VALID_SORT_KEYS:
-        ssh_client.AUDIT.log(
+        return ssh_client.audit_blocked(
             "rhel_process_inspect",
             f"sort_by={sort_by!r}",
-            target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-            status="BLOCKED",
-            detail="Invalid sort_by parameter",
+            "非法的 sort_by 參數（僅允許 'cpu'、'mem' 或 'memory'）。",
+            ssh_host,
+            ssh_port,
+            ssh_user,
         )
-        return "[ERROR] 非法的 sort_by 參數（僅允許 'cpu'、'mem' 或 'memory'）。"
 
     sort_col = "-%mem" if sort_clean in ("mem", "memory") else "-%cpu"
     cmd = (
