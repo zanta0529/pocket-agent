@@ -34,9 +34,17 @@ jobs:
         run: |
           venv\Scripts\python.exe build_scripts/build_portable.py
 
+      - name: Generate SHA-256 Checksums
+        shell: pwsh
+        run: |
+          $zipPath = "dist/PocketAgent-portable.zip"
+          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  PocketAgent-portable.zip" | Out-File -FilePath "dist/SHA256SUMS.txt" -Encoding ascii -NoNewline
+          "`n" | Out-File -FilePath "dist/SHA256SUMS.txt" -Encoding ascii -Append -NoNewline
+
       - name: Create Release and Upload Assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          gh release create "$env:TAG_NAME" "dist/PocketAgent-portable.zip" --title "$env:TAG_NAME" --generate-notes
+          gh release create "$env:TAG_NAME" "dist/PocketAgent-portable.zip" "dist/SHA256SUMS.txt" --title "$env:TAG_NAME" --generate-notes

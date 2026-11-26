@@ -19,6 +19,7 @@
 ### 📑 目錄 (Table of Contents)
 
 - [🚀 初次安裝與快速啟動 (Installation & First Run)](#-初次安裝與快速啟動-installation--first-run)
+  - [一鍵安裝 (One-Line Install) [最快速]](#一鍵安裝-one-line-install-最快速)
   - [途徑 A：Windows 免安裝可攜版 (Modern Portable) [推薦一般使用者]](#途徑-awindows-免安裝可攜版-modern-portable-推薦一般使用者)
   - [途徑 B：跨平台一鍵啟動腳本 [推薦快速體驗]](#途徑-b跨平台一鍵啟動腳本-推薦快速體驗)
   - [途徑 C：開發者手動安裝 [推薦二次開發]](#途徑-c開發者手動安裝-推薦二次開發)
@@ -47,8 +48,34 @@
 
 ### 系統環境需求
 
-- **Python 3.14 或以上版本**（若選擇「途徑 A：可攜版」則本機無需安裝 Python）。
+- **Python 3.14 或以上版本**（若選擇「一鍵安裝」或「途徑 A：可攜版」，Windows 本機無需預裝 Python；Linux／macOS 若已安裝 `uv` 亦會自動取得 Python 3.14）。
 - 支援作業系統：Windows 10/11、macOS (Apple Silicon / Intel)、Linux (Ubuntu, Debian, RHEL 等)。
+
+---
+
+### 一鍵安裝 (One-Line Install) [最快速]
+
+安裝腳本會自動完成下載、SHA-256 完整性驗證（若 Release 附帶 `SHA256SUMS.txt`）、隔離環境建置並註冊 `pocket-agent` 指令：
+
+- **🪟 Windows (PowerShell)**：
+
+  ```powershell
+  irm https://raw.githubusercontent.com/zanta0529/pocket-agent/main/build_scripts/install.ps1 | iex
+  ```
+
+- **🏢 Windows 受控企業環境 (CMD，免 PowerShell)**：
+
+  ```cmd
+  curl -fsSLO https://raw.githubusercontent.com/zanta0529/pocket-agent/main/build_scripts/install.cmd && install.cmd
+  ```
+
+- **🐧 Linux / 🍎 macOS**：
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/zanta0529/pocket-agent/main/build_scripts/install.sh | sh
+  ```
+
+> 💡 **安全與解除安裝提示**：Windows 安裝於 `%LOCALAPPDATA%\PocketAgent`（完整保留 Modern Portable 架構與 `/update` 線上更新）；Linux／macOS 安裝於 `~/.local/share/pocket-agent` 並建立 `~/.local/bin/pocket-agent`。若需指定版本或強制校驗，可設定環境變數 `POCKET_AGENT_VERSION` 或 `POCKET_AGENT_REQUIRE_CHECKSUM=1`；解除安裝可使用 `install.ps1 -Uninstall`、`install.cmd --uninstall` 或 `install.sh --uninstall`（個人設定 `~/.pocket-agent` 將完整保留）。
 
 ---
 
