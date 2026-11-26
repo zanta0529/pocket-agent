@@ -63,6 +63,15 @@ TOOL_OVERWRITE_REQUIRED_PREFIX = "[OVERWRITE_REQUIRED]"  # 自動編輯覆寫既
 TOOL_TARGET_NOT_FOUND_PREFIX = "[TARGET_NOT_FOUND]"  # replace_file_content 查無相符目標之不可翻譯內部狀態前綴
 REPLACE_SCOPE_DRIFT_LINES = 20  # replace_file_content 在指定行數範圍附近容許自動對齊的最大上下行數偏移
 REPLACE_DIAGNOSTIC_MAX_MATCHES = 5  # replace_file_content 回報實際行號診斷時最多列出的位置數量
+BINARY_SNIFF_BYTES = 8192  # search_files 判定純文字檔時讀取檔頭檢查 Null-byte 之位元組數
+SEARCH_FTS_THRESHOLD_FILES = 300  # 門檻自動啟用：可搜尋檔案數超過此值時啟用 SQLite FTS5 Trigram 索引
+SEARCH_FTS_MAX_FILE_BYTES = 512 * 1024  # 512 KB: 單檔寫入 FTS5 Trigram 索引上限（大檔仍由 Stage 2 補掃）
+SEARCH_FTS_MAX_INDEXED_FILES = 10_000  # 單一 FTS5 Trigram 索引最多納管之純文字檔案數上限
+SEARCH_FTS_MAX_DB_SIZE_MB = 64  # FTS5 Trigram 索引資料庫容量配額上限 (MB)
+SEARCH_FTS_SYNC_BUDGET_SEC = 5.0  # 單次同步建立 FTS5 索引的時間預算上限（逾時由 Stage 2 補掃）
+SEARCH_MAX_SCAN_FILES = 20_000  # 單次 os.walk 掃描檔案數防護上限（防範超大工作區 DoS）
+SEARCH_MAX_REGEX_LENGTH = 500  # search_files 正規表示式最大長度上限（防範異常模式與 ReDoS）
+SEARCH_MAX_REGEX_LINE_CHARS = 10_000  # search_files 正規表示式單行比對最大字元切片上限
 
 
 # ==============================================================================

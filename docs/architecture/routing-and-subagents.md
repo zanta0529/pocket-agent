@@ -37,7 +37,7 @@ flowchart TD
 
 | 比較維度 | 第一層：指令巨集（Command） | 第二層：動態技能（Skill） | 第三層：子代理（Subagent） |
 | :--- | :--- | :--- | :--- |
-| **代表範例** | `/plan 實作登入功能` | `/factory 分析專案` 或 `use_skill` | `/researcher 查漏洞`、`/parallel a:任務1 \| b:任務2` |
+| **代表範例** | `/plan 實作登入功能` | `/factory 分析專案` 或 `use_skill` | `/researcher 查漏洞`、`/finder 找設定檔`、`/parallel a:任務1 \| b:任務2` |
 | **上下文狀態** | 與主代理共用歷史紀錄 | 與主代理共用歷史紀錄 | **絕對隔離**，僅接收任務描述（Fresh Context） |
 | **載入與消耗** | **預先載入 (Eager)**：送出前展開模板，消耗固定 Token | **惰性載入 (Lazy)**：僅在呼叫 `use_skill` 時讀入全文 | **Zero-Token 派發**：CLI 底層攔截直通，免主代理推論 |
 | **AI 自主性** | 僅限人類手動輸入觸發 | 可透過 SQLite FTS5 / BM25 目錄自主發現與調閱 | CLI 捷徑由人類直通；主代理亦可自主呼叫 `run_subagent` |
@@ -51,6 +51,9 @@ flowchart TD
 - **進度串流轉發 (Stream Forwarding)**：子代理的思考過程與工具呼叫會加上專屬前綴（如 `[researcher]`）即時串流至終端機，兼顧隔離與可觀測性。
 - **安全防失控邊界**：子代理執行時不會觸發全域 Hooks，亦禁止無限遞迴再開子代理；任務結束後僅回傳摘要成果，維持主會話上下文乾淨。
 - **權限確認同步**：CLI 端透過 `ConfirmationBridge` 統一橋接確認流程，啟用 `Accept-edits` 時會同步套用至主代理與所有 `active_subagents`。
+- **內建子代理分工**：
+  - `researcher`（`subagents/researcher.md`）：專職跨網路與本機的深度調研與架構分析（含 `write_scratch_note` 與 `require_save_prompt`）。
+  - `finder`（`subagents/finder.md`）：純本機唯讀極速定位專家（`search_files` 跨 CWD ＋ `/add-dir`、檔名模糊搜尋、純文字檔全文檢索，`max_tool_rounds: 6`，無 `require_save_prompt`）。
 
 ---
 

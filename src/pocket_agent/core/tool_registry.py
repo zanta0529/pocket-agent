@@ -392,6 +392,8 @@ class FsToolHandler(ToolHandler):
             extra_kwargs["require_overwrite_flag"] = True
         if is_write_op and not is_sensitive and _callable_accepts_kwarg(fn, "auto_allow_scratch"):
             extra_kwargs["auto_allow_scratch"] = True
+        if name == "search_files" and is_sensitive and _callable_accepts_kwarg(fn, "allow_disk_index"):
+            extra_kwargs["allow_disk_index"] = False
         result = await run_sync(fn, name, args, fs_confirm, agent.workspace_dirs, **extra_kwargs)
         return ToolExecutionResult(output=result, existed_before=existed_before)
 

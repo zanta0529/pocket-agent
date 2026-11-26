@@ -16,7 +16,7 @@ from pocket_agent.system.constants import (
 )
 from pocket_agent.system.i18n import t
 from pocket_agent.system.paths import format_display_path, user_dir
-from pocket_agent.tools.fs import is_sensitive_part, wrap_external_content
+from pocket_agent.tools.fs import is_sensitive_part, resolve_workspace_roots, wrap_external_content
 
 log = logging.getLogger("pocket-agent")
 
@@ -43,20 +43,7 @@ _last_sync_state: int | None = None
 
 
 def _resolve_workspace_roots(workspace_dirs: list[str] | None) -> list[Path]:
-    if not workspace_dirs:
-        try:
-            return [Path.cwd().resolve()]
-        except Exception:
-            return []
-    roots: list[Path] = []
-    for wd in workspace_dirs:
-        try:
-            rp = Path(wd).expanduser().resolve()
-            if rp.exists():
-                roots.append(rp)
-        except Exception:
-            continue
-    return roots
+    return resolve_workspace_roots(workspace_dirs)
 
 
 def _collect_indexable_files(workspace_dirs: list[str] | None) -> list[tuple[Path, float]]:

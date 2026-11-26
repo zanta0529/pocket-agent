@@ -621,7 +621,13 @@
     "write_target_is_dir": "{path} is a directory and cannot be overwritten as a file.",
     "replace_target_not_found_in_range": "Target text was not found within lines {start}-{end} (file has {total_lines} lines). Use read_file to inspect the actual content and line numbers first.",
     "replace_target_not_found_elsewhere": "Target text was not found within lines {start}-{end} (file has {total_lines} lines), but matching content was found at {locations}; adjust start_line/end_line or inspect with read_file before retrying.",
-    "replace_target_not_found": "Target text was not found (file has {total_lines} lines). Use read_file to verify the exact content and indentation."
+    "replace_target_not_found": "Target text was not found (file has {total_lines} lines). Use read_file to verify the exact content and indentation.",
+    "search_target_not_found": "Directory or file not found: {path}",
+    "search_regex_too_long": "Regular expression is too long (limit: {max_len} characters).",
+    "search_invalid_regex": "Invalid regular expression: {error}",
+    "search_no_content_match": "No content found containing '{query}'.",
+    "search_no_file_match": "No files found matching {pattern}.",
+    "search_results_header": "Search results:"
   },
   "shell_tool": {
     "empty_command": "No command provided.",

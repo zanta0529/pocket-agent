@@ -22,6 +22,7 @@ from pocket_agent.system.constants import (
     DEFAULT_HOUSEKEEPING_MAX_FILES,
     DEFAULT_HOUSEKEEPING_MAX_SIZE_MB,
     DEFAULT_HOUSEKEEPING_TTL_DAYS,
+    SEARCH_FTS_MAX_DB_SIZE_MB,
 )
 from pocket_agent.system.paths import log_dir, scratch_dir, user_dir
 
@@ -515,6 +516,20 @@ class Housekeeper:
 
         return (deleted_count, freed_bytes)
 
+    def clean_search_index(
+        self,
+        ttl_days: int | None = None,
+        max_size_mb: int | None = None,
+        db_path: Path | None = None,
+    ) -> tuple[int, int]:
+        """清理工作區 FTS5 Trigram 檢索索引中的孤兒紀錄、過期列與超額資料庫。"""
+        from pocket_agent.tools.search_index import WorkspaceSearchIndex, default_search_index
+
+        eff_ttl = ttl_days if ttl_days is not None else self.ttl_days
+        eff_max_mb = max_size_mb if max_size_mb is not None else SEARCH_FTS_MAX_DB_SIZE_MB
+        target_index = WorkspaceSearchIndex(db_path=db_path) if db_path is not None else default_search_index
+        return target_index.prune_stale_entries(ttl_days=eff_ttl, max_size_mb=eff_max_mb)
+
     def _clean_scratch_bundle(
         self,
         target_scratch: Path,
@@ -716,6 +731,18 @@ class Housekeeper:
                 except OSError:
                     continue
 
+        if not self._is_custom_scratch:
+            db_dir = user_dir() / "db"
+            if db_dir.is_dir():
+                for suffix in ("", "-wal", "-shm"):
+                    idx_file = db_dir / f"workspace_search_index.db{suffix}"
+                    if idx_file.is_file():
+                        try:
+                            total_bytes += idx_file.stat().st_size
+                            file_count += 1
+                        except OSError:
+                            continue
+
         return (file_count, total_bytes)
 
     def run_cleanup(self, force: bool = False) -> dict[str, Any]:
@@ -740,6 +767,7 @@ class Housekeeper:
             other_sess_count, other_sess_bytes = self.clean_all_session_scratches()
             other_ws_count, other_ws_bytes = self.clean_all_workspaces()
             fb_count, fb_bytes = self._clean_fallback_dirs()
+            idx_count, idx_bytes = self.clean_search_index() if not self._is_custom_scratch else (0, 0)
 
             total_files = (
                 cleaned_root
@@ -752,6 +780,7 @@ class Housekeeper:
                 + other_sess_count
                 + other_ws_count
                 + fb_count
+                + idx_count
             )
             total_bytes = (
                 root_bytes
@@ -764,6 +793,7 @@ class Housekeeper:
                 + other_sess_bytes
                 + other_ws_bytes
                 + fb_bytes
+                + idx_bytes
             )
 
             self.mark_executed()

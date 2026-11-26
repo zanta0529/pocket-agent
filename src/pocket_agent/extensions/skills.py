@@ -414,14 +414,9 @@ def _call_use_skill(args: dict, workspace_dirs: list[str] | None = None) -> str:
         return f"[ERROR] 找不到 skill「{name}」。可用：{available}"
 
     # 注入工作區上下文，防止模型幻覺出錯誤的絕對路徑。
-    # workspace_dirs 是使用者明確授權的目錄；若為空則退回 cwd。
-    import os
+    from pocket_agent.tools.fs import resolve_workspace_roots, wrap_external_content
 
-    if workspace_dirs:
-        roots = workspace_dirs
-    else:
-        roots = [os.getcwd()]
-
+    roots = [str(p) for p in resolve_workspace_roots(workspace_dirs)]
     roots_display = "\n".join(f"  - {r}" for r in roots)
     resources = _list_skill_relative_resources(name, workspace_dirs)
     if resources:
@@ -444,8 +439,6 @@ def _call_use_skill(args: dict, workspace_dirs: list[str] | None = None) -> str:
         "Do not guess host absolute paths.\n"
         "- For all project codebase files, derive paths relative to the workspace roots listed above.\n\n"
     )
-
-    from pocket_agent.tools.fs import wrap_external_content
 
     return f"# Skill: {name}\n\n{workspace_context}{wrap_external_content(body)}"
 

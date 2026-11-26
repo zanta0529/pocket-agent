@@ -1,6 +1,8 @@
 import datetime
+import fnmatch
 import hashlib
 import json
+import locale
 import logging
 import os
 import re
@@ -9,6 +11,7 @@ import shutil
 import tempfile
 import threading
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -16,6 +19,7 @@ from typing import Callable
 from pocket_agent.core.cancellation import check_cancelled
 from pocket_agent.system import paths
 from pocket_agent.system.constants import (
+    BINARY_SNIFF_BYTES,
     DEFAULT_READ_FILE_LINES,
     DEFAULT_SEARCH_LINE_MAX_CHARS,
     DEFAULT_SEARCH_MAX_RESULTS,
@@ -24,6 +28,10 @@ from pocket_agent.system.constants import (
     MAX_READ_FILE_BYTES,
     REPLACE_DIAGNOSTIC_MAX_MATCHES,
     REPLACE_SCOPE_DRIFT_LINES,
+    SEARCH_FTS_THRESHOLD_FILES,
+    SEARCH_MAX_REGEX_LENGTH,
+    SEARCH_MAX_REGEX_LINE_CHARS,
+    SEARCH_MAX_SCAN_FILES,
     TIME_MACHINE_BACKUP_MAX_BYTES,
     TOOL_NOT_FOUND_PREFIX,
     TOOL_OVERWRITE_REQUIRED_PREFIX,
@@ -32,6 +40,7 @@ from pocket_agent.system.constants import (
 )
 from pocket_agent.system.i18n import t
 from pocket_agent.system.paths import format_display_path
+from pocket_agent.tools.search_index import ScannedFile, SearchCandidateIndex, default_search_index
 
 log = logging.getLogger("pocket-agent")
 
@@ -42,7 +51,83 @@ SEARCH_MAX_RESULTS = DEFAULT_SEARCH_MAX_RESULTS
 
 _ALLOWED_GLOBAL_SUBDIRS = frozenset({"workspaces", "scratch", "backups", "skills"})
 _READONLY_GLOBAL_SUBDIRS = frozenset({"backups"})
-_SEARCH_EXCLUDED_DIRS = frozenset({".git", "node_modules", "venv", "__pycache__"})
+_SEARCH_EXCLUDED_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        ".venv",
+        "venv",
+        "env",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        ".agents",
+    }
+)
+_BINARY_EXTENSIONS = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".ico",
+        ".svgz",
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".flac",
+        ".mp4",
+        ".avi",
+        ".mkv",
+        ".mov",
+        ".webm",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".rar",
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".ppt",
+        ".pptx",
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+        ".pyd",
+        ".pyc",
+        ".pyo",
+        ".o",
+        ".a",
+        ".lib",
+        ".pdb",
+        ".class",
+        ".jar",
+        ".war",
+        ".db",
+        ".sqlite",
+        ".sqlite3",
+        ".ttf",
+        ".otf",
+        ".woff",
+        ".woff2",
+        ".eot",
+        ".dat",
+        ".bin",
+        ".iso",
+    }
+)
 _EXTERNAL_TAG_RE = re.compile(r"<\s*/?\s*external_content(?:\s+[^>]*)?\s*>", re.IGNORECASE)
 
 
@@ -197,10 +282,10 @@ FS_TOOLS = [
         "type": "function",
         "name": "search_files",
         "description": (
-            "Search for files by name/pattern and/or text content in a directory. "
-            "Use this for exploring codebases, reading documentation, or finding files. "
-            "If only file_pattern is provided, it returns matching file names. "
-            "If query is provided, it performs a full-text search, optionally filtered by file_pattern."
+            "Search for files by name/pattern (supports fuzzy matching) and/or full-text content "
+            "(text files only; binary files are automatically skipped). "
+            "When `path` is omitted, searches across the current working directory AND all authorized "
+            "/add-dir workspace directories."
         ),
         "parameters": {
             "type": "object",
@@ -208,16 +293,29 @@ FS_TOOLS = [
                 "path": {
                     "type": "string",
                     "description": (
-                        "Directory or specific file to search in. Defaults to the current working directory (.)."
+                        "Optional directory or specific file to limit the search scope. "
+                        "Omit to search all authorized workspaces (CWD + /add-dir)."
                     ),
                 },
                 "query": {
                     "type": "string",
-                    "description": "Text query to search for inside files. Leave empty to only search by file name.",
+                    "description": "Text or regex query to search inside text files. Leave empty to search file names.",
                 },
                 "file_pattern": {
                     "type": "string",
-                    "description": "Glob pattern to filter files (e.g., '*.py', '*.md').",
+                    "description": "Glob pattern (e.g., '*.py') or fuzzy filename/path query when fuzzy=true.",
+                },
+                "fuzzy": {
+                    "type": "boolean",
+                    "description": "Enable case-insensitive fuzzy filename/path matching and relevance ranking.",
+                },
+                "case_sensitive": {
+                    "type": "boolean",
+                    "description": "Whether text content search is case-sensitive (default: false).",
+                },
+                "is_regex": {
+                    "type": "boolean",
+                    "description": "Treat `query` as a regular expression during text search (default: false).",
                 },
             },
             "required": [],
@@ -1032,68 +1130,431 @@ def _tool_read_file(target: Path, rel_display_path: str, args: dict) -> str:
     return wrap_external_content(inner)
 
 
-def _tool_search_files(target: Path, args: dict, workspace_dirs: list[str] | None) -> str:
-    """執行 search_files 工具。"""
-    if not target.exists():
-        return f"[ERROR] 目錄或檔案不存在: {target}"
+def resolve_workspace_roots(workspace_dirs: list[str] | None = None) -> list[Path]:
+    """回傳去重後的作用中工作區根目錄清單（CWD + 額外授權 /add-dir，移除被外層涵蓋之子目錄）。"""
+    candidates: list[Path] = []
+    try:
+        candidates.append(Path.cwd().resolve())
+    except Exception:
+        pass
 
-    query = args.get("query", "")
-    file_pattern = args.get("file_pattern", "")
+    if workspace_dirs:
+        for wd in workspace_dirs:
+            try:
+                rp = Path(wd).expanduser().resolve()
+                if rp.exists():
+                    candidates.append(rp)
+            except Exception:
+                continue
 
-    results: list[str] = []
-    spec, gitignore_root = _get_ignore_spec(target) if target.is_dir() else (None, None)
+    unique: list[Path] = []
+    for cand in candidates:
+        if cand not in unique:
+            unique.append(cand)
 
+    # 若目錄 A 已是目錄 B 的子目錄，保留外層 B 避免重複掃描；單一檔案保留
+    deduped: list[Path] = []
+    for cand in unique:
+        if cand.is_dir() and any(other != cand and other.is_dir() and cand.is_relative_to(other) for other in unique):
+            continue
+        deduped.append(cand)
+    return deduped
+
+
+def _has_binary_control_bytes(sample: bytes) -> bool:
+    """檢查位元組樣本是否包含 Null-byte 或過高比例之非文字控制字元。"""
+    if not sample:
+        return False
+    if b"\x00" in sample:
+        return True
+    bad_ctrl = sum(1 for b in sample if b < 32 and b not in (9, 10, 12, 13, 8))
+    return (bad_ctrl / len(sample)) > 0.10
+
+
+def _decode_text_bytes(raw: bytes) -> tuple[str | None, str | None]:
+    """安全解碼純文字位元組，支援 UTF-8（含 BOM）與系統預設編碼（如 Windows CP950）。"""
+    if _has_binary_control_bytes(raw[:BINARY_SNIFF_BYTES]):
+        return None, None
+
+    encodings: list[str] = ["utf-8-sig"]
+    try:
+        pref = locale.getpreferredencoding(False)
+        if pref and pref.lower() not in ("utf-8", "utf8", "utf-8-sig"):
+            encodings.append(pref)
+    except Exception:
+        pass
+    if os.name == "nt" and all(e.lower() != "cp950" for e in encodings):
+        encodings.append("cp950")
+
+    for enc in encodings:
+        try:
+            text = raw.decode(enc)
+            return text, enc
+        except UnicodeDecodeError, LookupError:
+            continue
+    return None, None
+
+
+def is_text_file(path: Path) -> bool:
+    """快速判定檔案是否為可檢索之純文字檔（副檔名黑名單 + 檔頭 Null-byte 探測）。"""
+    if path.suffix.lower() in _BINARY_EXTENSIONS:
+        return False
+    try:
+        if path.stat().st_size > MAX_FILE_SEARCH_SIZE_BYTES:
+            return False
+        with path.open("rb") as f:
+            head = f.read(BINARY_SNIFF_BYTES)
+        return not _has_binary_control_bytes(head)
+    except OSError:
+        return False
+
+
+def read_text_file_safe(path: Path) -> tuple[str | None, str | None]:
+    """安全讀取純文字檔內容，略過二進位與過大檔案，回傳 (內容, 使用編碼)。"""
+    if path.suffix.lower() in _BINARY_EXTENSIONS:
+        return None, None
+    try:
+        if path.stat().st_size > MAX_FILE_SEARCH_SIZE_BYTES:
+            return None, None
+        raw = path.read_bytes()
+    except OSError:
+        return None, None
+    return _decode_text_bytes(raw)
+
+
+def _subsequence_span(needle: str, haystack: str) -> int | None:
+    """檢查 needle 是否為 haystack 之子序列，命中時回傳跨距長度，否則回傳 None。"""
+    if not needle:
+        return 0
+    idx = 0
+    first = -1
+    last = -1
+    n_len = len(needle)
+    for pos, ch in enumerate(haystack):
+        if ch == needle[idx]:
+            if first == -1:
+                first = pos
+            last = pos
+            idx += 1
+            if idx == n_len:
+                return last - first + 1
+    return None
+
+
+def score_fuzzy_filename(display_path: str, filename: str, pattern: str) -> int | None:
+    """對路徑與檔名進行不分大小寫模糊評分，未命中回傳 None。"""
+    q = pattern.strip().lower()
+    if not q:
+        return 0
+    fname = filename.lower()
+    dpath = display_path.replace("\\", "/").lower()
+
+    if fname == q:
+        return 1000
+    if fname.startswith(q):
+        return 900 - min(len(fname), 80)
+    sub_pos = fname.find(q)
+    if sub_pos != -1:
+        return 800 - sub_pos - min(len(fname) // 4, 40)
+    path_pos = dpath.find(q)
+    if path_pos != -1:
+        return 700 - min(path_pos, 150)
+
+    tokens = [tok for tok in q.split() if tok]
+    if len(tokens) > 1 and all(tok in dpath for tok in tokens):
+        return 600 - min(len(dpath) // 4, 80)
+
+    f_span = _subsequence_span(q, fname)
+    if f_span is not None:
+        return 500 - min(f_span, 150)
+    p_span = _subsequence_span(q, dpath)
+    if p_span is not None:
+        return 400 - min(p_span, 200)
+    return None
+
+
+def _is_ignored_by_spec(path_obj: Path, spec, gitignore_root: Path | None, *, is_dir: bool = False) -> bool:
+    if spec is None or gitignore_root is None:
+        return False
+    try:
+        rel = path_obj.resolve(strict=False).relative_to(gitignore_root).as_posix()
+    except ValueError:
+        return False
+    if not rel or rel == ".":
+        return False
+    return bool(spec.match_file(rel + "/" if is_dir else rel))
+
+
+def _is_path_allowed_for_search(
+    path_obj: Path,
+    global_user_dir: Path | None,
+    user_dir_name_lower: str,
+    workspace_dirs: list[str] | None,
+) -> bool:
+    if any(_is_sensitive_part(part) or part.lower() in _SEARCH_EXCLUDED_DIRS for part in path_obj.parts):
+        return False
+    in_global = global_user_dir is not None and path_obj.is_relative_to(global_user_dir)
+    if in_global and global_user_dir is not None:
+        rel_g = path_obj.relative_to(global_user_dir)
+        if len(rel_g.parts) == 0 or rel_g.parts[0] not in _ALLOWED_GLOBAL_SUBDIRS:
+            return False
+    elif any(part.lower() == user_dir_name_lower for part in path_obj.parts):
+        return False
+    if path_obj.is_symlink():
+        try:
+            resolved = path_obj.resolve(strict=False)
+            _validate_safe_path(str(resolved), workspace_dirs)
+        except Exception:
+            return False
+    return True
+
+
+def iter_workspace_files(
+    roots: list[Path],
+    workspace_dirs: list[str] | None,
+    *,
+    max_files: int = SEARCH_MAX_SCAN_FILES,
+    is_explicit_file: bool = False,
+) -> tuple[list[ScannedFile], bool]:
+    """以 os.walk 原地剪枝走訪指定工作區根目錄，回傳 (ScannedFile 清單, 是否達掃描上限)。"""
+    try:
+        cwd = Path.cwd().resolve()
+    except Exception:
+        cwd = None
     try:
         global_user_dir: Path | None = paths.user_dir().resolve()
     except Exception:
         global_user_dir = None
-
     user_dir_name_lower = USER_DATA_DIR_NAME.lower()
 
-    # 決定搜尋範圍
-    if target.is_file():
-        paths_to_search = [target]
-    else:
-        glob_pattern = file_pattern if file_pattern else "*"
-        paths_to_search = target.rglob(glob_pattern)
+    results: list[ScannedFile] = []
+    seen_paths: set[Path] = set()
+    truncated = False
 
-    for p in paths_to_search:
+    def _display_for(file_path: Path) -> str:
+        if is_explicit_file:
+            return file_path.name
+        if cwd is not None and file_path.is_relative_to(cwd):
+            return str(file_path.relative_to(cwd))
+        return str(file_path)
+
+    for root in roots:
         check_cancelled()
-        if any(_is_sensitive_part(part) or part.lower() in _SEARCH_EXCLUDED_DIRS for part in p.parts):
+        if not root.exists():
             continue
-        p_in_global = global_user_dir is not None and p.is_relative_to(global_user_dir)
-        if p_in_global and global_user_dir is not None:
-            rel_g = p.relative_to(global_user_dir)
-            if len(rel_g.parts) == 0 or rel_g.parts[0] not in _ALLOWED_GLOBAL_SUBDIRS:
+        if root.is_file():
+            if not _is_path_allowed_for_search(root, global_user_dir, user_dir_name_lower, workspace_dirs):
                 continue
-        elif any(part.lower() == user_dir_name_lower for part in p.parts):
-            continue
-
-        if p.is_symlink():
             try:
-                resolved = p.resolve(strict=False)
-                _validate_safe_path(str(resolved), workspace_dirs)
-            except Exception:
+                resolved = root.resolve()
+                if resolved not in seen_paths:
+                    st = resolved.stat()
+                    seen_paths.add(resolved)
+                    results.append(
+                        ScannedFile(
+                            path=resolved,
+                            root=root,
+                            display_path=_display_for(resolved),
+                            mtime=st.st_mtime,
+                            size=st.st_size,
+                        )
+                    )
+            except OSError:
                 continue
-
-        if not p.is_file():
             continue
 
-        if target.is_file():
-            rel_path = target.name
-        else:
-            rel_path = str(p.relative_to(target))
-            if spec is not None and gitignore_root is not None:
-                try:
-                    ignore_rel = p.resolve(strict=False).relative_to(gitignore_root).as_posix()
-                    if spec.match_file(ignore_rel):
-                        continue
-                except ValueError:
-                    pass
+        spec, gitignore_root = _get_ignore_spec(root)
+        if _is_ignored_by_spec(root, spec, gitignore_root, is_dir=True):
+            continue
 
-        # 如果沒有給 query，就只是搜檔名
-        if not query:
-            results.append(rel_path)
+        for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+            check_cancelled()
+            cur_dir = Path(dirpath)
+            kept_dirs: list[str] = []
+            for dname in dirnames:
+                d_path = cur_dir / dname
+                if not _is_path_allowed_for_search(d_path, global_user_dir, user_dir_name_lower, workspace_dirs):
+                    continue
+                if _is_ignored_by_spec(d_path, spec, gitignore_root, is_dir=True):
+                    continue
+                kept_dirs.append(dname)
+            kept_dirs.sort(key=str.lower)
+            dirnames[:] = kept_dirs
+
+            filenames.sort(key=str.lower)
+            for fname in filenames:
+                check_cancelled()
+                f_path = cur_dir / fname
+                if not _is_path_allowed_for_search(f_path, global_user_dir, user_dir_name_lower, workspace_dirs):
+                    continue
+                if _is_ignored_by_spec(f_path, spec, gitignore_root, is_dir=False):
+                    continue
+                try:
+                    resolved = f_path.resolve()
+                    if resolved in seen_paths or not resolved.is_file():
+                        continue
+                    st = resolved.stat()
+                except OSError:
+                    continue
+                seen_paths.add(resolved)
+                results.append(
+                    ScannedFile(
+                        path=resolved,
+                        root=root,
+                        display_path=_display_for(resolved),
+                        mtime=st.st_mtime,
+                        size=st.st_size,
+                    )
+                )
+                if len(results) >= max_files:
+                    truncated = True
+                    return results, truncated
+    return results, truncated
+
+
+def _match_file_pattern(sf: ScannedFile, file_pattern: str) -> bool:
+    """比對檔名／路徑 glob 模式（不分大小寫）。"""
+    pat = file_pattern.strip()
+    if not pat:
+        return True
+    pat_low = pat.lower()
+    if "/" in pat_low or "\\" in pat_low:
+        norm_pat = pat_low.replace("\\", "/")
+        norm_path = sf.display_path.replace("\\", "/").lower()
+        return fnmatch.fnmatch(norm_path, norm_pat)
+    return fnmatch.fnmatch(sf.path.name.lower(), pat_low)
+
+
+class _FileNameFilterStrategy(ABC):
+    """檔名／路徑篩選策略介面。"""
+
+    @abstractmethod
+    def filter(self, files: list[ScannedFile]) -> list[ScannedFile]:
+        """依策略篩選並排序檔案清單。"""
+
+
+class _GlobFileNameFilter(_FileNameFilterStrategy):
+    def __init__(self, pattern: str) -> None:
+        self._pattern = pattern.strip().lower()
+
+    def filter(self, files: list[ScannedFile]) -> list[ScannedFile]:
+        return [sf for sf in files if _match_file_pattern(sf, self._pattern)]
+
+
+class _FuzzyFileNameFilter(_FileNameFilterStrategy):
+    def __init__(self, pattern: str) -> None:
+        self._pattern = pattern
+
+    def filter(self, files: list[ScannedFile]) -> list[ScannedFile]:
+        scored: list[tuple[int, ScannedFile]] = []
+        for sf in files:
+            sc = score_fuzzy_filename(sf.display_path, sf.path.name, self._pattern)
+            if sc is not None:
+                scored.append((sc, sf))
+        scored.sort(key=lambda item: (-item[0], item[1].display_path.lower()))
+        return [item[1] for item in scored]
+
+
+def _create_filename_filter(file_pattern: str, *, fuzzy: bool) -> _FileNameFilterStrategy | None:
+    """檔名篩選策略工廠：依 fuzzy 旗標建立對應策略。"""
+    if not file_pattern.strip():
+        return None
+    if fuzzy:
+        return _FuzzyFileNameFilter(file_pattern)
+    return _GlobFileNameFilter(file_pattern)
+
+
+class _LineMatchStrategy(ABC):
+    """純文字單行內容比對策略介面。"""
+
+    @abstractmethod
+    def matches(self, line: str) -> bool:
+        """判斷單行文字是否命中查詢條件。"""
+
+
+class _SubstringLineMatcher(_LineMatchStrategy):
+    def __init__(self, query: str, *, case_sensitive: bool) -> None:
+        self._case_sensitive = case_sensitive
+        self._needle = query if case_sensitive else query.lower()
+
+    def matches(self, line: str) -> bool:
+        if self._case_sensitive:
+            return self._needle in line
+        return self._needle in line.lower()
+
+
+class _RegexLineMatcher(_LineMatchStrategy):
+    def __init__(self, compiled: re.Pattern[str]) -> None:
+        self._compiled = compiled
+
+    def matches(self, line: str) -> bool:
+        return bool(self._compiled.search(line[:SEARCH_MAX_REGEX_LINE_CHARS]))
+
+
+def _create_line_matcher(
+    query: str,
+    *,
+    case_sensitive: bool,
+    is_regex: bool,
+) -> tuple[_LineMatchStrategy | None, str | None]:
+    """單行內容比對策略工廠，並集中驗證正規表示式安全上限。"""
+    if not is_regex:
+        return _SubstringLineMatcher(query, case_sensitive=case_sensitive), None
+    if len(query) > SEARCH_MAX_REGEX_LENGTH:
+        return None, f"[ERROR] {t('fs_tool.search_regex_too_long', max_len=SEARCH_MAX_REGEX_LENGTH)}"
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        compiled = re.compile(query, flags)
+    except re.error as exc:
+        return None, f"[ERROR] {t('fs_tool.search_invalid_regex', error=exc)}"
+    return _RegexLineMatcher(compiled), None
+
+
+def _tool_search_files(
+    targets: list[Path],
+    args: dict,
+    workspace_dirs: list[str] | None,
+    *,
+    allow_disk_index: bool = True,
+    is_explicit_file: bool = False,
+    search_index: SearchCandidateIndex | None = None,
+) -> str:
+    """執行 search_files 工具（跨工作區、模糊檔名搜尋與兩階段純文字檔全文檢索）。"""
+    valid_targets = [tgt for tgt in targets if tgt.exists()]
+    if not valid_targets:
+        missing = str(targets[0]) if targets else "."
+        return f"[ERROR] {t('fs_tool.search_target_not_found', path=missing)}"
+
+    query = str(args.get("query") or "")
+    file_pattern = str(args.get("file_pattern") or "")
+    fuzzy = bool(args.get("fuzzy", False))
+    case_sensitive = bool(args.get("case_sensitive", False))
+    is_regex = bool(args.get("is_regex", False))
+
+    line_matcher: _LineMatchStrategy | None = None
+    if query:
+        line_matcher, err_msg = _create_line_matcher(
+            query,
+            case_sensitive=case_sensitive,
+            is_regex=is_regex,
+        )
+        if err_msg is not None:
+            return err_msg
+
+    scanned_files, _scan_truncated = iter_workspace_files(
+        valid_targets,
+        workspace_dirs,
+        is_explicit_file=is_explicit_file,
+    )
+
+    name_filter = _create_filename_filter(file_pattern, fuzzy=fuzzy)
+    filtered_files = name_filter.filter(scanned_files) if name_filter is not None else scanned_files
+    header = t("fs_tool.search_results_header")
+
+    if not query:
+        results: list[str] = []
+        for sf in filtered_files:
+            results.append(sf.display_path)
             if len(results) >= DEFAULT_SEARCH_MAX_RESULTS:
                 results.append(
                     f"... (結果過多，已自動截斷前 {DEFAULT_SEARCH_MAX_RESULTS} 筆)\n"
@@ -1101,41 +1562,60 @@ def _tool_search_files(target: Path, args: dict, workspace_dirs: list[str] | Non
                     "或利用 `file_pattern` 限縮範圍。"
                 )
                 break
-            continue
+        if not results:
+            return t("fs_tool.search_no_file_match", pattern=file_pattern)
+        return f"{header}\n" + "\n".join(results)
 
-        # 如果有 query，進行全文檢索
-        # DoS 防護：略過超過 MAX_FILE_SEARCH_SIZE_BYTES 的大檔
-        try:
-            if p.stat().st_size > MAX_FILE_SEARCH_SIZE_BYTES:
+    # 全文檢索：僅當檔案數超過門檻、非 Regex 且查詢 >= 3 字元時啟用 FTS5 Trigram 預篩
+    candidate_files = filtered_files
+    active_index = search_index if search_index is not None else default_search_index
+    if (
+        allow_disk_index
+        and not is_regex
+        and len(query.strip()) >= 3
+        and len(scanned_files) > SEARCH_FTS_THRESHOLD_FILES
+    ):
+        fts_candidates = active_index.sync_and_query_candidates(
+            scanned_files,
+            valid_targets,
+            query,
+            read_text_file_safe,
+        )
+        if fts_candidates is not None:
+            if file_pattern:
+                allowed_set = {sf.path for sf in filtered_files}
+                candidate_files = [sf for sf in fts_candidates if sf.path in allowed_set]
+            else:
+                candidate_files = fts_candidates
+
+    results = []
+    assert line_matcher is not None
+    for sf in candidate_files:
+        check_cancelled()
+        text, _enc = read_text_file_safe(sf.path)
+        if text is None:
+            continue
+        for i, line in enumerate(text.splitlines()):
+            if i % 200 == 0:
+                check_cancelled()
+            if not line_matcher.matches(line):
                 continue
-        except Exception:
-            continue
-
-        try:
-            with p.open("r", encoding="utf-8", errors="ignore") as f:
-                for i, line in enumerate(f):
-                    if query in line:
-                        snippet = line.strip()
-                        if len(snippet) > DEFAULT_SEARCH_LINE_MAX_CHARS:
-                            snippet = snippet[:DEFAULT_SEARCH_LINE_MAX_CHARS] + "..."
-                        results.append(f"{rel_path}:{i + 1}: {snippet}")
-                        if len(results) >= DEFAULT_SEARCH_MAX_RESULTS:
-                            results.append(
-                                f"... (結果過多，已自動截斷前 {DEFAULT_SEARCH_MAX_RESULTS} 筆)\n"
-                                "[系統建議] 若要繼續閱讀特定檔案，"
-                                "請使用 `read_file` 並設定 `start_line`/`end_line`；\n"
-                                "若要精準搜尋，請在 `search_files` 設定更精確的 `query` 或 `file_pattern`。"
-                            )
-                            return wrap_external_content("搜尋結果：\n" + "\n".join(results))
-        except Exception:
-            continue
+            snippet = line.strip()
+            if len(snippet) > DEFAULT_SEARCH_LINE_MAX_CHARS:
+                snippet = snippet[:DEFAULT_SEARCH_LINE_MAX_CHARS] + "..."
+            results.append(f"{sf.display_path}:{i + 1}: {snippet}")
+            if len(results) >= DEFAULT_SEARCH_MAX_RESULTS:
+                results.append(
+                    f"... (結果過多，已自動截斷前 {DEFAULT_SEARCH_MAX_RESULTS} 筆)\n"
+                    "[系統建議] 若要繼續閱讀特定檔案，"
+                    "請使用 `read_file` 並設定 `start_line`/`end_line`；\n"
+                    "若要精準搜尋，請在 `search_files` 設定更精確的 `query` 或 `file_pattern`。"
+                )
+                return wrap_external_content(f"{header}\n" + "\n".join(results))
 
     if not results:
-        if query:
-            return f"找不到包含 '{query}' 的內容。"
-        return f"找不到符合 {file_pattern} 的檔案。"
-    body = "搜尋結果：\n" + "\n".join(results)
-    return wrap_external_content(body) if query else body
+        return t("fs_tool.search_no_content_match", query=query)
+    return wrap_external_content(f"{header}\n" + "\n".join(results))
 
 
 def call_fs_tool(
@@ -1146,6 +1626,7 @@ def call_fs_tool(
     *,
     require_overwrite_flag: bool = False,
     auto_allow_scratch: bool = False,
+    allow_disk_index: bool = True,
 ) -> str:
     """執行檔案操作工具。"""
     try:
@@ -1153,7 +1634,14 @@ def call_fs_tool(
         if not path_str and name != "replace_file_content":
             path_str = args.get("target") or ""
         if not path_str and name == "search_files":
-            path_str = "."
+            roots = resolve_workspace_roots(workspace_dirs)
+            return _tool_search_files(
+                roots,
+                args,
+                workspace_dirs,
+                allow_disk_index=allow_disk_index,
+                is_explicit_file=False,
+            )
         if not path_str:
             return "[ERROR] 缺少必填參數 'path'"
 
@@ -1278,7 +1766,13 @@ def call_fs_tool(
             return f"[SUCCESS] 成功替換檔案 {target} 的局部內容"
 
         elif name == "search_files":
-            return _tool_search_files(target, args, workspace_dirs)
+            return _tool_search_files(
+                [target],
+                args,
+                workspace_dirs,
+                allow_disk_index=allow_disk_index,
+                is_explicit_file=target.is_file(),
+            )
 
         return f"[ERROR] 未知的工具名稱: {name}"
 

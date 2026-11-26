@@ -621,7 +621,13 @@
     "write_target_is_dir": "{path} 是一個目錄，無法直接寫入檔案。",
     "replace_target_not_found_in_range": "在指定的行數範圍內 ({start}-{end}，全檔共 {total_lines} 行) 找不到 target 字串。請先使用 read_file 確認該區段實際內容與行號。",
     "replace_target_not_found_elsewhere": "在指定的行數範圍內 ({start}-{end}，全檔共 {total_lines} 行) 找不到 target 字串，但偵測到相符內容位於 {locations}；請調整 start_line/end_line 或使用 read_file 確認後重試。",
-    "replace_target_not_found": "找不到指定的 target 字串（全檔共 {total_lines} 行）。請先使用 read_file 確認實際內容與縮排。"
+    "replace_target_not_found": "找不到指定的 target 字串（全檔共 {total_lines} 行）。請先使用 read_file 確認實際內容與縮排。",
+    "search_target_not_found": "目錄或檔案不存在：{path}",
+    "search_regex_too_long": "正規表示式過長（上限 {max_len} 字元）。",
+    "search_invalid_regex": "無效的正規表示式：{error}",
+    "search_no_content_match": "找不到包含 '{query}' 的內容。",
+    "search_no_file_match": "找不到符合 {pattern} 的檔案。",
+    "search_results_header": "搜尋結果："
   },
   "shell_tool": {
     "empty_command": "沒有提供指令。",

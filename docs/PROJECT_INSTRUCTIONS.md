@@ -24,9 +24,9 @@
 | `src/pocket_agent/frontend/`   | 使用者介面策略：實作 `cli/`（包含 `main`、`input`、`render`、`state`、`confirmation`、`interrupts`、`clipboard`、`commands/` 等模組）。 |
 | `src/pocket_agent/system/`     | 系統基礎設施：全域常數（`constants`）、多語系（`i18n` 與 `locales/`）、認證（`auth`）、供應商策略（`providers/`）、路徑解析（`paths`）、設定（`config`）、指令白名單（`permissions`）、Markdown 註冊表（`registry`）、巨集與系統指令（`commands`、`sys_commands`）、設定精靈（`wizard`）、自動清理（`housekeeping`）、相容處理（`compat`）與線上更新（`updater`）。 |
 | `src/pocket_agent/extensions/` | 擴充功能：MCP 伺服器生命週期、白名單授權與動態連線參數注入管理（`mcp`）、漸進式技能載入與遮蔽（`skills`）、生命週期事件鉤子（`hooks`）與外掛封裝管理（`plugins`）。                                                                                      |
-| `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行（`shell`）、原生檔案操作（`fs`）、網路請求（`web`）、圖片生成（`image`）、文件產出（`doc`）、文件讀取（`document`）、FTS5 檢索（`rag`）與 AST 結構圖（`repo_map`）。 |
+| `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行（`shell`）、原生檔案操作（`fs`）、門檻式工作區 FTS5 Trigram 全文索引（`search_index`）、網路請求（`web`）、圖片生成（`image`）、文件產出（`doc`）、文件讀取（`document`）、FTS5 檢索（`rag`）與 AST 結構圖（`repo_map`）。 |
 | `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器薄入口（`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`github_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`、`netdiag_mcp.py`）、對應領域子套件（`sqlite/`、`mysql/`、`mssql/`、`github/`、`rhel/`、`win_rdp/`、`netdiag/`）、輕量單檔伺服器（`browser_mcp.py`、`memory_mcp.py`）與共用基礎設施（`_shared/`，以 `--internal-mcp-server` 獨立啟動時須確保目錄在 `sys.path`）。 |
-| `subagents/`                   | 隨附之內建子代理人設定義檔（`.md`）。                                                                                                                                                                                         |
+| `subagents/`                   | 隨附之內建子代理人設定義檔（`.md`，目前包含 `researcher.md` 與唯讀檢索專家 `finder.md`）。                                                                                                                                    |
 | `build_scripts/`、`scripts/`   | 可攜版打包腳本（`build_scripts/build_portable.py`）與依賴完整性檢查工具（`scripts/check_imports.py`）。                                                                                                                       |
 
 _其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，`docs/` 為工程規範與架構文件。_
