@@ -257,31 +257,46 @@ Pocket Agent 的解決方案：
 
 ## 內建 GitHub PR／Issue 整合伺服器 (`mcp_servers/github_mcp.py`)
 
-`github_mcp.py` 提供 GitHub REST API 之 Pull Request／Issue 檢索、Diff／Code Review／CI Check 狀態查詢、三階段範本感知 PR 建立、Issue 開立與留言新增功能，並整合連線池重用、企業環境 TLS 憑證鏈與雙向機密防護。
+`github_mcp.py` 提供 GitHub REST API 之 Pull Request／Issue 檢索與更新、行內 Code Review 讀取與提交、CI Check／Actions Workflow 狀態與 Annotations 診斷、儲存庫唯讀探索、三階段範本感知 PR 建立及留言功能，並整合連線池重用、企業環境 TLS 憑證鏈、GitHub Enterprise Server（GHES）端點支援與雙向機密防護。
 
 ### 1. 提供的結構化工具清單
 
 | 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
 | :--- | :--- | :--- | :--- |
-| `github_list_prs` | 是 | 列出指定儲存庫的 Pull Requests（含 Draft 與 `head -> base` 分支資訊） | `owner`、`repo`、`state`（預設 `"open"`）、`per_page`（`1`~`100`）、`page`（預設 `1`） |
-| `github_read_issue` | 是 | 讀取指定 Issue 或 Pull Request 的標題、作者、狀態、標籤、留言數與內文 | `owner`、`repo`、`issue_number`（正整數） |
-| `github_read_comments` | 是 | 讀取指定 Issue 或 Pull Request 的留言討論串（支援分頁） | `owner`、`repo`、`issue_number`、`per_page`、`page` |
+| `github_list_prs` | 是 | 列出指定儲存庫的 Pull Requests（含 Draft 與 `head -> base` 分支資訊） | `owner`、`repo`、`state`（預設 `"open"`）、`head`、`base`、`sort`、`direction`、`per_page`（`1`~`100`）、`page`（預設 `1`） |
+| `github_get_pr` | 是 | 取得單一 Pull Request 完整詳情（含 `head.sha`、分支方向、合併狀態、待審查者與變更統計） | `owner`、`repo`、`pull_number`（正整數） |
 | `github_get_pr_files` | 是 | 取得指定 PR 的變更檔案清單、行數統計與各檔 Diff Patch | `owner`、`repo`、`pull_number`、`per_page`、`page`、`include_patch`（預設 `True`） |
-| `github_list_issues` | 是 | 列出指定儲存庫的 Issues（支援狀態、標籤篩選，預設排除 PR） | `owner`、`repo`、`state`、`labels`、`per_page`、`page`、`include_prs`（預設 `False`） |
-| `github_search_issues` | 是 | 在指定儲存庫內以關鍵字搜尋 Issues 與 PR（強制鎖定 `repo:owner/repo` 範圍） | `owner`、`repo`、`query`、`state`（預設 `"all"`）、`per_page`、`page` |
 | `github_get_pr_reviews` | 是 | 取得指定 PR 的 Code Review 審查紀錄（`APPROVED`、`CHANGES_REQUESTED` 等）與審查意見 | `owner`、`repo`、`pull_number`、`per_page`、`page` |
-| `github_get_pr_checks` | 是 | 查詢指定 Commit SHA、分支或標籤的 GitHub Actions／CI Check Runs 狀態 | `owner`、`repo`、`ref`、`per_page`、`page` |
-| `github_prepare_pr_context` | 是 | 依「本機範本 ➔ 遠端範本 ➔ 內建業界標準範本」取得 PR 範本，並比對 `base...head` 分支變更摘要 | `owner`、`repo`、`head`（支援 `branch` 或 `owner:branch`）、`base`（選填，留空自動查詢 `default_branch`） |
-| `github_create_pr` | **否（強制預覽確認）** | 建立 Pull Request（CLI 強制彈出完整動作、分支方向、標題與內文預覽，同意後才送出，且絕不自動 Merge） | `owner`、`repo`、`title`、`head`、`base`（選填）、`body`、`draft`（預設 `False`） |
-| `github_create_issue` | **否（強制互動確認）** | 在指定儲存庫建立新的 Issue（自動掃描標題、內文與標籤以防機密外洩） | `owner`、`repo`、`title`、`body`、`labels` |
+| `github_get_pr_review_comments` | 是 | 讀取指定 PR 掛載於程式碼檔案與行號上的行內審查留言（含 `diff_hunk` 與回覆串） | `owner`、`repo`、`pull_number`、`per_page`、`page` |
+| `github_prepare_pr_context` | 是 | 依「本機範本 ➔ 遠端範本（含大小寫與 `docs/` 路徑） ➔ 內建業界標準範本」取得 PR 範本，並比對 `base...head` 分支變更摘要 | `owner`、`repo`、`head`（支援 `branch` 或 `owner:branch`）、`base`（選填，留空自動查詢 `default_branch`） |
+| `github_get_pr_checks` | 是 | 查詢指定 Commit SHA、分支或標籤的 GitHub Actions／CI Check Runs 狀態（含 `check_run_id` 與摘要） | `owner`、`repo`、`ref`、`per_page`、`page` |
+| `github_get_check_annotations` | 是 | 取得指定 Check Run 的詳細錯誤／警告註記（檔案、行號與訊息） | `owner`、`repo`、`check_run_id`（正整數）、`per_page`、`page` |
+| `github_list_workflow_runs` | 是 | 列出指定儲存庫的 GitHub Actions Workflow 執行紀錄 | `owner`、`repo`、`branch`、`status`、`event`、`per_page`、`page` |
+| `github_get_workflow_run_jobs` | 是 | 查詢指定 Workflow Run 內的 Jobs 與 Steps 執行狀態 | `owner`、`repo`、`run_id`（正整數）、`filter_mode`（`latest`/`all`）、`per_page`、`page` |
+| `github_read_issue` | 是 | 讀取指定 Issue 或 Pull Request 的標題、作者、狀態、標籤、指派人、里程碑、留言數與內文 | `owner`、`repo`、`issue_number`（正整數） |
+| `github_read_comments` | 是 | 讀取指定 Issue 或 Pull Request 的留言討論串（支援分頁） | `owner`、`repo`、`issue_number`、`per_page`、`page` |
+| `github_list_issues` | 是 | 列出指定儲存庫的 Issues（支援狀態、標籤、指派人、建立者、里程碑與排序篩選，預設排除 PR） | `owner`、`repo`、`state`、`labels`、`assignee`、`creator`、`milestone`、`sort`、`direction`、`per_page`、`page`、`include_prs`（預設 `False`） |
+| `github_search_issues` | 是 | 在指定儲存庫內以關鍵字搜尋 Issues 與 PR（強制鎖定 `repo:owner/repo` 範圍） | `owner`、`repo`、`query`、`state`（預設 `"all"`）、`per_page`、`page` |
+| `github_get_repo` | 是 | 查詢指定儲存庫的預設分支、可見性、主要語言、Topics 與基本統計 | `owner`、`repo` |
+| `github_list_branches` | 是 | 列出指定儲存庫的遠端分支清單（可篩選僅受保護分支） | `owner`、`repo`、`protected_only`（預設 `False`）、`per_page`、`page` |
+| `github_list_tags` | 是 | 列出指定儲存庫的 Git Tags 清單 | `owner`、`repo`、`per_page`、`page` |
+| `github_list_commits` | 是 | 列出指定儲存庫的 Commit 歷史紀錄（支援分支／SHA、路徑與作者篩選） | `owner`、`repo`、`sha`、`path`、`author`、`per_page`、`page` |
+| `github_get_file_content` | 是 | 唯讀取得指定儲存庫與 `ref` 下的單一檔案內容或目錄清單（含二進位偵測與大小限制） | `owner`、`repo`、`path`（選填）、`ref`（選填） |
+| `github_list_releases` | 是 | 列出指定儲存庫的 Releases 發行版本清單與摘要 | `owner`、`repo`、`per_page`、`page` |
+| `github_list_labels` | 是 | 列出指定儲存庫目前可用的標籤（Labels）與說明 | `owner`、`repo`、`per_page`、`page` |
+| `github_create_pr` | **否（強制預覽確認）** | 建立 Pull Request（CLI 強制彈出完整動作、分支方向、標題與內文預覽，可選附加標籤與審查者，且絕不自動 Merge） | `owner`、`repo`、`title`、`head`、`base`（選填）、`body`、`draft`（預設 `False`）、`labels`、`reviewers` |
+| `github_update_pr` | **否（強制預覽確認）** | 更新既有 PR 的標題、內文、狀態（`open`/`closed`）或目標分支（`base`） | `owner`、`repo`、`pull_number`、`title`、`body`、`state`、`base` |
+| `github_create_pr_review` | **否（強制預覽確認）** | 提交 PR 審查意見與行內留言（僅允許 `COMMENT` 或 `REQUEST_CHANGES`，**禁止 `APPROVE`**） | `owner`、`repo`、`pull_number`、`event`（預設 `"COMMENT"`）、`body`、`comments`、`commit_id` |
+| `github_create_issue` | **否（強制互動確認）** | 在指定儲存庫建立新的 Issue（自動掃描標題、內文、標籤與指派人以防機密外洩） | `owner`、`repo`、`title`、`body`、`labels`、`assignees`、`milestone` |
+| `github_update_issue` | **否（強制互動確認）** | 更新既有 Issue 的標題、內文、狀態、關閉原因、標籤、指派人或里程碑 | `owner`、`repo`、`issue_number`、`title`、`body`、`state`、`state_reason`、`labels`、`assignees`、`milestone` |
 | `github_create_comment` | **否（強制互動確認）** | 在指定的 Issue 或 Pull Request 新增留言 | `owner`、`repo`、`issue_number`、`body` |
 
 ### 2. 安全防禦邊界
 
-- **嚴格路徑驗證、搜尋範圍鎖定與重導向白名單**：強制驗證 `owner`、`repo` 與 `ref` 格式並執行 URL 路徑分段百分比編碼，徹底防範 `#` 片段截斷與 `..` 路徑穿越；`github_search_issues` 阻斷 `query` 內夾帶 `repo:`／`org:`／`user:` 範圍覆寫；支援 `GITHUB_ALLOWED_REPOS` 儲存庫白名單，並透過 `httpx` 事件鉤子攔截 HTTP `3xx` 重導向，阻斷跨網域、非 HTTPS 或未授權儲存庫之重導向繞過。
-- **PR 建立強制預覽確認與人工合併把關（No Auto-Merge）**：`github_create_pr` 由 `ConfirmationBridge` 強制攔截（不適用自動放行），於終端機面板完整列出預計執行的動作、目標儲存庫、`head -> base` 分支方向、PR 模式、標題與完整多行內文，須經使用者同意後才送出；伺服器故意不提供任何 Merge 工具，確保最終合併（Merge）永遠由人工於 GitHub 網站把關。
+- **嚴格路徑驗證、搜尋範圍鎖定與重導向白名單**：強制驗證 `owner`、`repo`、`ref` 與儲存庫內相對 `path` 格式並執行 URL 路徑分段百分比編碼，徹底防範 `#` 片段截斷與 `..` 路徑穿越；`github_search_issues` 阻斷 `query` 內夾帶 `repo:`／`org:`／`user:` 範圍覆寫；支援 `GITHUB_ALLOWED_REPOS` 儲存庫白名單與選填 `GITHUB_API_BASE_URL`（強制 HTTPS 且驗證主機、連接埠與 API 前綴），並透過 `httpx` 事件鉤子攔截 HTTP `3xx` 重導向，阻斷跨網域、非 HTTPS 或未授權儲存庫之重導向繞過。
+- **PR 建立／更新／審查強制預覽確認與人工核准合併把關（No Auto-Merge / No Auto-Approve）**：`github_create_pr`、`github_update_pr` 與 `github_create_pr_review` 由 `ConfirmationBridge` 強制攔截（不適用自動放行），於終端機面板完整列出預計執行的動作與內容預覽（`github_create_issue`、`github_update_issue` 與 `github_create_comment` 亦提供結構化預覽面板）；`github_create_pr_review` 強制阻擋 `APPROVE` 事件，且伺服器故意不提供任何 Merge 或刪除工具，確保最終核准與合併永遠由人工於 GitHub 網站把關。
 - **彈性憑證解析、Keyring／JWE 持久化、非互動防死鎖與連線池重用**：`GITHUB_TOKEN` 支援透過 `MCPManager` 隱藏參數（`github_token`）於執行期動態詢問並快取於記憶體（閒置 10 分鐘或遭遇 HTTP `401` 自動清除）；使用者輸入後可選擇保存至作業系統原生 `keyring`（不支援時自動降級至主密碼 JWE 加密庫），待該次 API 呼叫未回傳 `401` 後即落盤並將 `mcp_config.yaml` 更新為 `"USE_KEYRING"`／`"USE_ENCRYPTED"` 佔位符號（保留註解與排版）。當使用者清空該佔位符號後，下次執行（含同會話熱偵測）將重新提示輸入；若選擇不保存則一併清除 Keyring 舊憑證。子行程在非互動 Stdio 管道下快速失敗拋出 `ConnAuthError` 交由主行程詢問，防止終端機 Spinner 競態死鎖；單一 Event Loop 下共用 `httpx.AsyncClient` TCP/TLS 連線池並單例快取 `truststore` 系統憑證庫注入。
-- **雙向機密防護、預裁切防 ReDoS 與集中稽核**：單次回應受 `MAX_RESPONSE_BYTES`（2 MB）與 `MAX_OUTPUT_CHARS`（預設 12,000 字元）雙重限制，超長文字先以安全邊界緩衝預裁切再執行機密遮罩（保留邊界完整 `[REDACTED...]` 標記）；外發寫入工具（`github_create_pr`、`github_create_issue`、`github_create_comment`）於送出前自動掃描私鑰、各雲端／AI 平台 Token、內嵌帳密 URL 與敏感鍵值對，偵測到時立即阻斷外發，並將所有操作寫入防日誌注入清洗之 `agent.log` `[AUDIT] [MCP:github]` 紀錄。
+- **雙向機密防護、預裁切防 ReDoS 與集中稽核**：單次回應受 `MAX_RESPONSE_BYTES`（2 MB）與 `MAX_OUTPUT_CHARS`（預設 12,000 字元）雙重限制，超長文字先以安全邊界緩衝預裁切再執行機密遮罩（保留邊界完整 `[REDACTED...]` 標記）；所有外發寫入工具（`github_create_pr`、`github_update_pr`、`github_create_pr_review`、`github_create_issue`、`github_update_issue`、`github_create_comment`）於送出前自動掃描私鑰、各雲端／AI 平台 Token、內嵌帳密 URL 與敏感鍵值對，偵測到時立即阻斷外發，並將所有操作寫入防日誌注入清洗之 `agent.log` `[AUDIT] [MCP:github]` 紀錄。
 
 ### 3. 環境變數與配置參數表 (`servers.github.env`)
 
@@ -289,6 +304,7 @@ Pocket Agent 的解決方案：
 | :--- | :--- | :--- | :--- |
 | `GITHUB_TOKEN` | 彈性 | `""` | GitHub Personal Access Token；建議留空（或設為 `"USE_KEYRING"`／`"USE_ENCRYPTED"`），留空時於首次呼叫工具於 CLI 以隱藏輸入提供並可選擇保存至系統 Keyring／JWE 加密庫；清空佔位符號將於下次執行重新詢問。 |
 | `GITHUB_ALLOWED_REPOS` | 選填 | `""` | 允許存取之儲存庫白名單（逗號分隔 `owner/repo`，不分大小寫）；留空時允許存取該 Token 授權範圍內之儲存庫。 |
+| `GITHUB_API_BASE_URL` | 選填 | `""` | 企業自架 GitHub Enterprise Server (GHES) 之 API 基底網址（須為 HTTPS 且不可含查詢參數或使用者憑證，例如 `https://github.corp.com/api/v3`）；留空時使用官方 `https://api.github.com`。 |
 
 ---
 

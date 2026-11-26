@@ -1,8 +1,10 @@
 """Safe, scrollback-friendly CLI presentation."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from time import monotonic, time
+from typing import Any
 
 from prompt_toolkit.formatted_text import FormattedText
 from rich.cells import cell_len
@@ -264,6 +266,109 @@ _SOFT_TOOL_STATUS_STYLES: dict[str, tuple[str, str]] = {
     "target_not_found": ("bold yellow", "cli.tool_target_not_found_suffix"),
 }
 
+TargetExtractor = Callable[[str, dict[str, Any]], tuple[str, bool] | None]
+
+_SHELL_TOOL_KEYWORDS = ("run_command", "bash", "shell", "python", "powershell", "node", "cmd")
+_FILE_WRITE_KEYWORDS = ("replace", "edit", "patch", "write", "create")
+_FILE_READ_KEYWORDS = ("read", "view", "list", "find", "grep", "search")
+_WEB_TOOL_KEYWORDS = ("web", "fetch", "curl", "url", "browser")
+
+_TOOL_ACTION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Read", ("read", "list", "search", "view", "find", "grep", "get", "prepare")),
+    ("Write", ("write", "replace", "edit", "patch", "delete", "create")),
+)
+
+
+def _classify_tool_action(name_lower: str) -> str:
+    """依工具名稱關鍵字分類顯示動作（Read / Write / Action）。"""
+    for action, keywords in _TOOL_ACTION_RULES:
+        if any(kw in name_lower for kw in keywords):
+            return action
+    return "Action"
+
+
+def _extract_github_target(_name_lower: str, parsed: dict[str, Any]) -> tuple[str, bool] | None:
+    owner = parsed.get("owner")
+    repo = parsed.get("repo")
+    if not owner or not repo:
+        return None
+    base_repo = f"{owner}/{repo}"
+    issue_no = parsed.get("issue_number")
+    if issue_no is None or str(issue_no).strip() == "":
+        issue_no = parsed.get("pull_number")
+    if issue_no is not None and str(issue_no).strip() != "":
+        return f"{base_repo}#{issue_no}", False
+    if parsed.get("head") and str(parsed["head"]).strip():
+        head_s = str(parsed["head"]).strip()
+        base_s = str(parsed.get("base") or "").strip() or "default"
+        return f"{base_repo} ({head_s} -> {base_s})", False
+    if parsed.get("check_run_id") is not None and str(parsed["check_run_id"]).strip():
+        return f"{base_repo} check#{parsed['check_run_id']}", False
+    if parsed.get("run_id") is not None and str(parsed["run_id"]).strip():
+        return f"{base_repo} run#{parsed['run_id']}", False
+    if parsed.get("path") and str(parsed["path"]).strip():
+        path_s = str(parsed["path"]).strip()
+        ref_s = str(parsed.get("ref") or "").strip()
+        return f"{base_repo}:{path_s}" + (f"@{ref_s}" if ref_s else ""), False
+    if parsed.get("ref") and str(parsed["ref"]).strip():
+        return f"{base_repo}@{str(parsed['ref']).strip()}", False
+    return base_repo, False
+
+
+def _extract_shell_target(name_lower: str, parsed: dict[str, Any]) -> tuple[str, bool] | None:
+    if not any(k in name_lower for k in _SHELL_TOOL_KEYWORDS):
+        return None
+    cmd = parsed.get("command") or parsed.get("cmd") or ""
+    return " ".join(str(cmd).splitlines()).strip(), False
+
+
+def _extract_file_write_target(name_lower: str, parsed: dict[str, Any]) -> tuple[str, bool] | None:
+    if not any(k in name_lower for k in _FILE_WRITE_KEYWORDS):
+        return None
+    path_val = parsed.get("target_file") or parsed.get("file_path") or parsed.get("path") or ""
+    return str(path_val), True
+
+
+def _extract_file_read_target(name_lower: str, parsed: dict[str, Any]) -> tuple[str, bool] | None:
+    if not any(k in name_lower for k in _FILE_READ_KEYWORDS):
+        return None
+    path_val = parsed.get("file_path") or parsed.get("path") or parsed.get("directory") or ""
+    if not path_val:
+        return str(parsed.get("query") or parsed.get("pattern") or ""), False
+    val = str(path_val)
+    start_l = parsed.get("start_line") or parsed.get("offset")
+    end_l = parsed.get("end_line") or parsed.get("limit")
+    if start_l is not None and end_l is not None:
+        return f"{val}#L{start_l}-L{end_l}", True
+    if start_l is not None:
+        return f"{val}#L{start_l}", True
+    return val, True
+
+
+def _extract_web_target(name_lower: str, parsed: dict[str, Any]) -> tuple[str, bool] | None:
+    if not any(k in name_lower for k in _WEB_TOOL_KEYWORDS):
+        return None
+    return str(parsed.get("url") or parsed.get("endpoint") or ""), False
+
+
+def _extract_subagent_target(name_lower: str, parsed: dict[str, Any]) -> tuple[str, bool] | None:
+    if "subagent" not in name_lower:
+        return None
+    tasks = parsed.get("tasks")
+    if isinstance(tasks, list) and tasks and isinstance(tasks[0], dict):
+        return str(tasks[0].get("task", "")), False
+    return str(parsed.get("task", "")), False
+
+
+_TOOL_TARGET_EXTRACTORS: tuple[TargetExtractor, ...] = (
+    _extract_github_target,
+    _extract_shell_target,
+    _extract_file_write_target,
+    _extract_file_read_target,
+    _extract_web_target,
+    _extract_subagent_target,
+)
+
 
 def reset_live_render_shape(status: object) -> None:
     """清除 Rich Live / Status 停止後殘留的 _live_render._shape，避免重啟時上移游標抹除既有輸出。"""
@@ -353,46 +458,13 @@ class CliRenderer:
         is_path = False
 
         if parsed and isinstance(parsed, dict):
-            if parsed.get("owner") and parsed.get("repo"):
-                issue_no = parsed.get("issue_number")
-                if issue_no is None or str(issue_no).strip() == "":
-                    issue_no = parsed.get("pull_number")
-                if issue_no is not None and str(issue_no).strip() != "":
-                    val = f"{parsed['owner']}/{parsed['repo']}#{issue_no}"
-                elif parsed.get("head") and str(parsed["head"]).strip():
-                    head_s = str(parsed["head"]).strip()
-                    base_s = str(parsed.get("base") or "").strip() or "default"
-                    val = f"{parsed['owner']}/{parsed['repo']} ({head_s} -> {base_s})"
-                elif parsed.get("ref") and str(parsed["ref"]).strip():
-                    val = f"{parsed['owner']}/{parsed['repo']}@{str(parsed['ref']).strip()}"
-                else:
-                    val = f"{parsed['owner']}/{parsed['repo']}"
-            elif any(k in name_lower for k in ("run_command", "bash", "shell", "python", "powershell", "node", "cmd")):
-                val = parsed.get("command") or parsed.get("cmd") or ""
-                val = " ".join(val.splitlines()).strip()
-            elif any(k in name_lower for k in ("replace", "edit", "patch", "write", "create")):
-                val = parsed.get("target_file") or parsed.get("file_path") or parsed.get("path") or ""
-                is_path = True
-            elif any(k in name_lower for k in ("read", "view", "list", "find", "grep", "search")):
-                path_val = parsed.get("file_path") or parsed.get("path") or parsed.get("directory") or ""
-                if path_val:
-                    val = path_val
-                    is_path = True
-                    start_l = parsed.get("start_line") or parsed.get("offset")
-                    end_l = parsed.get("end_line") or parsed.get("limit")
-                    if start_l is not None and end_l is not None:
-                        val = f"{val}#L{start_l}-L{end_l}"
-                    elif start_l is not None:
-                        val = f"{val}#L{start_l}"
-                else:
-                    val = parsed.get("query") or parsed.get("pattern") or ""
-            elif any(k in name_lower for k in ("web", "fetch", "curl", "url", "browser")):
-                val = parsed.get("url") or parsed.get("endpoint") or ""
-            elif "subagent" in name_lower:
-                if "tasks" in parsed and isinstance(parsed["tasks"], list) and parsed["tasks"]:
-                    val = parsed["tasks"][0].get("task", "")
-                else:
-                    val = parsed.get("task", "")
+            extracted: tuple[str, bool] | None = None
+            for extractor in _TOOL_TARGET_EXTRACTORS:
+                extracted = extractor(name_lower, parsed)
+                if extracted is not None:
+                    break
+            if extracted is not None:
+                val, is_path = extracted
             else:
                 val = next((str(v) for v in parsed.values() if v), "")
 
@@ -539,353 +611,359 @@ class CliRenderer:
             footer += bg_badge
         self.message(footer)
 
-    def event(self, kind: str, data: object) -> None:
-        if kind == "system":
-            self.message(data)
+    def _is_multi_status(self) -> bool:
+        return self._active_status is not None and type(self._active_status).__name__ == "MultiStatus"
 
-        elif kind == "error_panel":
-            self._ensure_newline()
+    def _on_system(self, data: object) -> None:
+        self.message(data)
+
+    def _on_error_panel(self, data: object) -> None:
+        self._ensure_newline()
+        self._stop_status()
+
+        from rich.panel import Panel
+
+        from pocket_agent.system.i18n import t
+
+        default_err = t("cli.status_error")
+        title = data.get("title", default_err) if isinstance(data, dict) else default_err
+        text = data.get("text", str(data)) if isinstance(data, dict) else str(data)
+
+        panel = Panel(
+            Text(text, style="white"),
+            title=f"⚠️ {title}",
+            title_align="left",
+            border_style="bold red",
+            expand=False,
+        )
+        self.console.print()
+        self.console.print(panel)
+        self.console.print()
+
+    def _on_file_saved(self, data: object) -> None:
+        self._ensure_newline()
+        from pocket_agent.system.i18n import t
+
+        self.message(t("cli.file_saved", path=data), "green")
+
+    def _on_round_start(self, _data: object) -> None:
+        self._flush_text_buffer()
+        # 工具呼叫後重跑：若已串流了文字，換行確認，再開始新輪
+        if self._stream_has_content:
+            self.console.print()
+        # 不重置 self._stream_header_printed，讓主標頭保留
+        self._round_text_printed = False
+        self._stream_has_content = False
+        self._thinking_buffer = ""
+
+    def _on_text(self, data: object) -> None:
+        # 判斷是否為「非首次」的後續輪次文字（例如工具執行完畢後的延續或最終回覆）
+        is_intermediate = self._stream_header_printed and not self._round_text_printed
+        is_first_token = not self._stream_header_printed or is_intermediate
+
+        if not self._stream_header_printed:
+            # 第一個 token 到來：先停止思考中 spinner，再印標頭
             self._stop_status()
-
-            from rich.panel import Panel
-
-            from pocket_agent.system.i18n import t
-
-            default_err = t("cli.status_error")
-            title = data.get("title", default_err) if isinstance(data, dict) else default_err
-            text = data.get("text", str(data)) if isinstance(data, dict) else str(data)
-
-            panel = Panel(
-                Text(text, style="white"),
-                title=f"⚠️ {title}",
-                title_align="left",
-                border_style="bold red",
-                expand=False,
-            )
+            self.console.print()  # 與上一條訊息間隔
+            label = f"● Pocket Agent ({self._state.model})" if self._state is not None else "● Pocket Agent"
+            self.console.print(Text(label, style="bold #B8860B"))
+            self._stream_header_printed = True
+            self._round_text_printed = True
+        elif is_intermediate:
+            # 工具迴圈後續輪次文字：停止 spinner 並空一行區隔，以正常前景顏色輸出
+            self._stop_status()
             self.console.print()
-            self.console.print(panel)
-            self.console.print()
+            self._round_text_printed = True
 
-        elif kind in ("image_saved", "file_saved"):
-            self._ensure_newline()
-            from pocket_agent.system.i18n import t
-
-            self.message(t("cli.file_saved", path=data), "green")
-
-        elif kind == "round_start":
+        text_str = str(data)
+        self._text_buffer.append(text_str)
+        self._text_buffer_len += len(text_str)
+        now = monotonic()
+        if is_first_token or "\n" in text_str or self._text_buffer_len >= 16 or (now - self._last_text_flush) >= 0.04:
             self._flush_text_buffer()
-            # 工具呼叫後重跑：若已串流了文字，換行確認，再開始新輪
-            if self._stream_has_content:
-                self.console.print()
-            # 不重置 self._stream_header_printed，讓主標頭保留
-            self._round_text_printed = False
-            self._stream_has_content = False
-            self._thinking_buffer = ""
+        else:
+            self._stream_has_content = True
 
-        elif kind == "text":
-            # 判斷是否為「非首次」的後續輪次文字（例如工具執行完畢後的延續或最終回覆）
-            is_intermediate = self._stream_header_printed and not self._round_text_printed
-            is_first_token = not self._stream_header_printed or is_intermediate
-
-            if not self._stream_header_printed:
-                # 第一個 token 到來：先停止思考中 spinner，再印標頭
-                self._stop_status()
-                self.console.print()  # 與上一條訊息間隔
-                label = f"● Pocket Agent ({self._state.model})" if self._state is not None else "● Pocket Agent"
-                self.console.print(Text(label, style="bold #B8860B"))
-                self._stream_header_printed = True
-                self._round_text_printed = True
-            elif is_intermediate:
-                # 工具迴圈後續輪次文字：停止 spinner 並空一行區隔，以正常前景顏色輸出
-                self._stop_status()
-                self.console.print()
-                self._round_text_printed = True
-
-            text_str = str(data)
-            self._text_buffer.append(text_str)
-            self._text_buffer_len += len(text_str)
-            now = monotonic()
-            if (
-                is_first_token
-                or "\n" in text_str
-                or self._text_buffer_len >= 16
-                or (now - self._last_text_flush) >= 0.04
-            ):
-                self._flush_text_buffer()
-            else:
-                self._stream_has_content = True
-
-        elif kind == "parallel_subagents_start":
-            labels = data.get("labels", []) if isinstance(data, dict) else []
-            is_multi = self._active_status is not None and type(self._active_status).__name__ == "MultiStatus"
-            if self.console.is_terminal and labels and not is_multi:
-                self._stop_status()
-                self._ensure_newline()
-                from pocket_agent.system.i18n import t
-
-                title = (data.get("title") if isinstance(data, dict) else None) or t(
-                    "subagent_cmd.parallel_running", count=len(labels)
-                )
-                status = MultiStatus(title, labels, console=self.console)
-                self._active_status = status
-                self._auto_multi_status = True
-                status.start()
-
-        elif kind == "parallel_subagents_done":
-            if self._auto_multi_status:
-                self._stop_status()
-                self._auto_multi_status = False
-
-        elif kind == "thinking":
-            is_multi = self._active_status is not None and type(self._active_status).__name__ == "MultiStatus"
-            if is_multi:
-                line = " ".join(str(data).splitlines()).strip()
-                if line:
-                    self._active_status.update(line)
-                return
-            self._thinking_buffer += str(data)
-            if self._active_status:
-                now = monotonic()
-                if (now - self._last_thinking_update) < 0.1:
-                    return
-                self._last_thinking_update = now
-                snippet = self._thinking_buffer.replace("\n", " ").strip()
-                if len(snippet) > 60:
-                    snippet = "..." + snippet[-57:]
-                if type(self._active_status).__name__ in ("Status", "MultiStatus", "Mock", "MagicMock", "AsyncMock"):
-                    from pocket_agent.system.i18n import t
-
-                    self._active_status.update(f"{t('cli.status_thinking')} {snippet}")
-
-        elif kind == "read":
-            self._ensure_newline()
-            self.console.print(Text.assemble(("● ", "bold green"), ("Read", "bold yellow"), (f" ({plain(data)})", "")))
-
-        elif kind == "tool_stream_start":
+    def _on_parallel_subagents_start(self, data: object) -> None:
+        labels = data.get("labels", []) if isinstance(data, dict) else []
+        if self.console.is_terminal and labels and not self._is_multi_status():
+            self._stop_status()
             self._ensure_newline()
             from pocket_agent.system.i18n import t
 
-            msg = t("cli.tool_preparing", name=data)
-            if self._active_status:
-                self._active_status.update(msg)
-            else:
-                from rich.status import Status
+            title = (data.get("title") if isinstance(data, dict) else None) or t(
+                "subagent_cmd.parallel_running", count=len(labels)
+            )
+            status = MultiStatus(title, labels, console=self.console)
+            self._active_status = status
+            self._auto_multi_status = True
+            status.start()
 
-                status = Status(msg, spinner="dots", console=self.console)
-                self._active_status = status
-                status.start()
+    def _on_parallel_subagents_done(self, _data: object) -> None:
+        if self._auto_multi_status:
+            self._stop_status()
+            self._auto_multi_status = False
 
-        elif kind == "tool_start":
-            is_multi = self._active_status is not None and type(self._active_status).__name__ == "MultiStatus"
-            if not is_multi:
-                self._stop_status()
-            self._ensure_newline()
-            self._thinking_buffer = ""
+    def _on_thinking(self, data: object) -> None:
+        if self._is_multi_status():
+            line = " ".join(str(data).splitlines()).strip()
+            if line and self._active_status is not None:
+                self._active_status.update(line)
+            return
+        self._thinking_buffer += str(data)
+        if not self._active_status:
+            return
+        now = monotonic()
+        if (now - self._last_thinking_update) < 0.1:
+            return
+        self._last_thinking_update = now
+        snippet = self._thinking_buffer.replace("\n", " ").strip()
+        if len(snippet) > 60:
+            snippet = "..." + snippet[-57:]
+        if type(self._active_status).__name__ in ("Status", "MultiStatus", "Mock", "MagicMock", "AsyncMock"):
+            from pocket_agent.system.i18n import t
 
-            if isinstance(data, dict):
-                name = data.get("name", str(data))
-                args_raw = data.get("arguments", "") or ""
-                is_safe_read = data.get("is_safe_read", False)
-                call_id = data.get("call_id", name)
-            else:
-                name = str(data)
-                args_raw = ""
-                is_safe_read = False
-                call_id = name
+            self._active_status.update(f"{t('cli.status_thinking')} {snippet}")
 
-            real_name = name.split("::")[-1]
-            sa_name = name.split("::", 1)[0] if "::" in name else None
-            server_tag, real_name = parse_mcp_tool_name(real_name)
+    def _on_read(self, data: object) -> None:
+        self._ensure_newline()
+        self.console.print(Text.assemble(("● ", "bold green"), ("Read", "bold yellow"), (f" ({plain(data)})", "")))
 
-            name_lower = real_name.lower()
+    def _on_tool_stream_start(self, data: object) -> None:
+        self._ensure_newline()
+        from pocket_agent.system.i18n import t
 
-            if any(kw in name_lower for kw in ["read", "list", "search", "view", "find", "grep", "get", "prepare"]):
-                action = "Read"
-            elif any(kw in name_lower for kw in ["write", "replace", "edit", "patch", "delete", "create"]):
-                action = "Write"
-            else:
-                action = "Action"
+        msg = t("cli.tool_preparing", name=data)
+        if self._active_status:
+            self._active_status.update(msg)
+            return
+        from rich.status import Status
 
-            action_color = "bold yellow"
-            name_color = "bold green" if is_safe_read else "bold cyan"
-            target = self._extract_tool_target(name, args_raw)
+        status = Status(msg, spinner="dots", console=self.console)
+        self._active_status = status
+        status.start()
 
-            # 暫存供 tool_done 使用
-            self._pending_tools[call_id] = {
-                "name": name,
-                "real_name": real_name,
-                "action": action,
-                "action_color": action_color,
-                "name_color": name_color,
-                "target": plain(target) if target else "",
-                "summary": plain(target) if target else "",
-                "sa_name": sa_name,
-                "server_tag": server_tag,
-            }
+    def _on_tool_start(self, data: object) -> None:
+        is_multi = self._is_multi_status()
+        if not is_multi:
+            self._stop_status()
+        self._ensure_newline()
+        self._thinking_buffer = ""
 
-            if is_multi:
-                if sa_name:
-                    target_suffix = f" {plain(target)}" if target else ""
-                    self._active_status.update(f"[{sa_name}] {action} ({real_name}){target_suffix}")
-            elif self.console.is_terminal:
-                self._stop_status()
-                from rich.console import Group
-                from rich.live import Live
-                from rich.spinner import Spinner
+        if isinstance(data, dict):
+            name = data.get("name", str(data))
+            args_raw = data.get("arguments", "") or ""
+            is_safe_read = data.get("is_safe_read", False)
+            call_id = data.get("call_id", name)
+        else:
+            name = str(data)
+            args_raw = ""
+            is_safe_read = False
+            call_id = name
+
+        real_name = name.split("::")[-1]
+        sa_name = name.split("::", 1)[0] if "::" in name else None
+        server_tag, real_name = parse_mcp_tool_name(real_name)
+
+        action = _classify_tool_action(real_name.lower())
+        action_color = "bold yellow"
+        name_color = "bold green" if is_safe_read else "bold cyan"
+        target = self._extract_tool_target(name, args_raw)
+
+        # 暫存供 tool_done 使用
+        self._pending_tools[call_id] = {
+            "name": name,
+            "real_name": real_name,
+            "action": action,
+            "action_color": action_color,
+            "name_color": name_color,
+            "target": plain(target) if target else "",
+            "summary": plain(target) if target else "",
+            "sa_name": sa_name,
+            "server_tag": server_tag,
+        }
+
+        if is_multi:
+            if sa_name and self._active_status is not None:
+                target_suffix = f" {plain(target)}" if target else ""
+                self._active_status.update(f"[{sa_name}] {action} ({real_name}){target_suffix}")
+            return
+        if self.console.is_terminal:
+            self._stop_status()
+            from rich.console import Group
+            from rich.live import Live
+            from rich.spinner import Spinner
+
+            from pocket_agent.system.i18n import t
+
+            group_items = list(self._format_tool_lines(("  ", ""), self._pending_tools[call_id]))
+            spinner = Spinner("dots", text=Text(t("cli.tool_running"), style="default"))
+            group_items.append(spinner)
+
+            self._active_status = Live(Group(*group_items), console=self.console, refresh_per_second=12, transient=True)
+            self._active_status.start()
+
+    def _on_ask_question(self, data: object) -> None:
+        self._ensure_newline()
+        self._stop_status()
+
+        questions = data.get("questions", []) if isinstance(data, dict) else []
+        callback = data.get("callback") if isinstance(data, dict) else None
+
+        def _ask_worker() -> None:
+            try:
+                from prompt_toolkit import prompt
+                from rich.panel import Panel
 
                 from pocket_agent.system.i18n import t
 
-                group_items = list(self._format_tool_lines(("  ", ""), self._pending_tools[call_id]))
-                spinner = Spinner("dots", text=Text(t("cli.tool_running"), style="default"))
-                group_items.append(spinner)
-
-                self._active_status = Live(
-                    Group(*group_items), console=self.console, refresh_per_second=12, transient=True
-                )
-                self._active_status.start()
-
-        elif kind == "ask_question":
-            self._ensure_newline()
-            self._stop_status()
-
-            questions = data.get("questions", [])
-            callback = data.get("callback")
-
-            def _ask_worker():
-                try:
-                    from rich.panel import Panel
-
-                    answers = []
-                    for q in questions:
-                        text = q.get("question", "")
-                        options = q.get("options", [])
-                        is_multi = q.get("is_multi_select", False)
-
-                        from pocket_agent.system.i18n import t
-
-                        self.console.print()
-                        self.console.print(
-                            Panel(
-                                Text(text),
-                                title=t("cli.ask_question_title"),
-                                title_align="left",
-                                border_style="bold blue",
-                            )
-                        )
-                        for i, opt in enumerate(options):
-                            self.console.print(f"  [{i + 1}] {opt}")
-
-                        hint = t("cli.ask_question_hint")
-                        if is_multi:
-                            hint += t("cli.ask_question_multi")
-
-                        from prompt_toolkit import prompt
-
-                        ans = prompt(f"👉 {hint}: ")
-
-                        # 若輸入為編號，嘗試轉換為對應選項文字，讓模型更好理解
-                        if ans.isdigit() and 1 <= int(ans) <= len(options):
-                            ans = options[int(ans) - 1]
-
-                        answers.append(ans)
-                        self.console.print()
-
-                    if callback:
-                        callback({"answers": answers})
-                except BaseException as e:
-                    if callback:
-                        callback({"error": str(e) or "User cancelled"})
-
-            import threading
-
-            threading.Thread(target=_ask_worker, daemon=True).start()
-
-        elif kind == "tool_done":
-            is_multi = self._active_status and type(self._active_status).__name__ == "MultiStatus"
-            if not is_multi:
-                self._stop_status()
-
-            if isinstance(data, dict):
-                name = data.get("name", "")
-                call_id = data.get("call_id", name)
-                ok = data.get("ok", True)
-                status = data.get("status") or ("ok" if ok else "error")
-
-                info = self._pending_tools.pop(call_id, None)
-                if info:
-                    from pocket_agent.system.i18n import t
-
-                    is_error = status == "error" or not ok
-                    if is_error:
-                        bullet_color = "bold red"
-                        status_note = ""
-                    elif status in _SOFT_TOOL_STATUS_STYLES:
-                        bullet_color, i18n_key = _SOFT_TOOL_STATUS_STYLES[status]
-                        status_note = t(i18n_key)
-                    else:
-                        bullet_color = "bold green"
-                        status_note = ""
-                    lines = self._format_tool_lines(("● ", bullet_color), info, status_note=status_note)
-                    for line in lines:
-                        self.console.print(line)
-
-                if status == "error" or not ok:
-                    if is_multi and info and info.get("sa_name"):
-                        self._active_status.update(f"[{info['sa_name']}] ✗ {info['real_name']}")
-                    if "::" in name:
-                        sa_name, inner_name = name.split("::", 1)
-                        server_tag, real_name = parse_mcp_tool_name(inner_name)
-                        if server_tag:
-                            formatted_name = f"[{sa_name}] [{server_tag}] {real_name}"
-                        else:
-                            formatted_name = f"[{sa_name}] {real_name}"
-                    else:
-                        server_tag, real_name = parse_mcp_tool_name(name)
-                        formatted_name = f"[{server_tag}] {real_name}" if server_tag else name
-
-                    result_text = str(data.get("result", ""))
-
-                    from rich.panel import Panel
-                    from rich.syntax import Syntax
-
-                    # 嘗試以 Syntax 高亮，若為 JSON 格式
-                    is_json = False
-                    if result_text.strip().startswith("{") or result_text.strip().startswith("["):
-                        try:
-                            import json
-
-                            json.loads(result_text)
-                            is_json = True
-                        except Exception:
-                            pass
-
-                    if is_json:
-                        content = Syntax(
-                            result_text, "json", theme="monokai", background_color="default", word_wrap=True
-                        )
-                    else:
-                        content = Text(result_text, style="red")
-
-                    from pocket_agent.system.i18n import t
+                answers = []
+                for q in questions:
+                    text = q.get("question", "")
+                    options = q.get("options", [])
+                    is_multi = q.get("is_multi_select", False)
 
                     self.console.print()
                     self.console.print(
                         Panel(
-                            content,
-                            title=t("cli.tool_failed_title", name=formatted_name),
+                            Text(text),
+                            title=t("cli.ask_question_title"),
                             title_align="left",
-                            border_style="bold red",
-                            expand=False,
+                            border_style="bold blue",
                         )
                     )
+                    for i, opt in enumerate(options):
+                        self.console.print(f"  [{i + 1}] {opt}")
 
-            is_cancelled = False
-            if isinstance(data, dict):
-                res = str(data.get("result", ""))
-                is_cancelled = not data.get("ok", True) or "[操作已由使用者取消中斷" in res
+                    hint = t("cli.ask_question_hint")
+                    if is_multi:
+                        hint += t("cli.ask_question_multi")
 
-            if self.console.is_terminal and not is_multi and not is_cancelled:
-                from rich.status import Status
+                    ans = prompt(f"👉 {hint}: ")
 
-                self._active_status = Status("思考中…", spinner="dots", console=self.console)
-                self._active_status.start()
+                    # 若輸入為編號，嘗試轉換為對應選項文字，讓模型更好理解
+                    if ans.isdigit() and 1 <= int(ans) <= len(options):
+                        ans = options[int(ans) - 1]
+
+                    answers.append(ans)
+                    self.console.print()
+
+                if callback:
+                    callback({"answers": answers})
+            except BaseException as e:
+                if callback:
+                    callback({"error": str(e) or "User cancelled"})
+
+        import threading
+
+        threading.Thread(target=_ask_worker, daemon=True).start()
+
+    def _on_tool_done(self, data: object) -> None:
+        is_multi = self._is_multi_status()
+        if not is_multi:
+            self._stop_status()
+
+        if isinstance(data, dict):
+            name = data.get("name", "")
+            call_id = data.get("call_id", name)
+            ok = data.get("ok", True)
+            status = data.get("status") or ("ok" if ok else "error")
+
+            info = self._pending_tools.pop(call_id, None)
+            if info:
+                from pocket_agent.system.i18n import t
+
+                is_error = status == "error" or not ok
+                if is_error:
+                    bullet_color = "bold red"
+                    status_note = ""
+                elif status in _SOFT_TOOL_STATUS_STYLES:
+                    bullet_color, i18n_key = _SOFT_TOOL_STATUS_STYLES[status]
+                    status_note = t(i18n_key)
+                else:
+                    bullet_color = "bold green"
+                    status_note = ""
+                lines = self._format_tool_lines(("● ", bullet_color), info, status_note=status_note)
+                for line in lines:
+                    self.console.print(line)
+
+            if status == "error" or not ok:
+                if is_multi and info and info.get("sa_name") and self._active_status is not None:
+                    self._active_status.update(f"[{info['sa_name']}] ✗ {info['real_name']}")
+                if "::" in name:
+                    sa_name, inner_name = name.split("::", 1)
+                    server_tag, real_name = parse_mcp_tool_name(inner_name)
+                    if server_tag:
+                        formatted_name = f"[{sa_name}] [{server_tag}] {real_name}"
+                    else:
+                        formatted_name = f"[{sa_name}] {real_name}"
+                else:
+                    server_tag, real_name = parse_mcp_tool_name(name)
+                    formatted_name = f"[{server_tag}] {real_name}" if server_tag else name
+
+                result_text = str(data.get("result", ""))
+
+                from rich.panel import Panel
+                from rich.syntax import Syntax
+
+                # 嘗試以 Syntax 高亮，若為 JSON 格式
+                is_json = False
+                if result_text.strip().startswith("{") or result_text.strip().startswith("["):
+                    try:
+                        json.loads(result_text)
+                        is_json = True
+                    except Exception:
+                        pass
+
+                if is_json:
+                    content = Syntax(result_text, "json", theme="monokai", background_color="default", word_wrap=True)
+                else:
+                    content = Text(result_text, style="red")
+
+                from pocket_agent.system.i18n import t
+
+                self.console.print()
+                self.console.print(
+                    Panel(
+                        content,
+                        title=t("cli.tool_failed_title", name=formatted_name),
+                        title_align="left",
+                        border_style="bold red",
+                        expand=False,
+                    )
+                )
+
+        is_cancelled = False
+        if isinstance(data, dict):
+            res = str(data.get("result", ""))
+            is_cancelled = not data.get("ok", True) or "[操作已由使用者取消中斷" in res
+
+        if self.console.is_terminal and not is_multi and not is_cancelled:
+            from rich.status import Status
+
+            from pocket_agent.system.i18n import t
+
+            self._active_status = Status(t("cli.status_thinking"), spinner="dots", console=self.console)
+            self._active_status.start()
+
+    _EVENT_HANDLERS: dict[str, Callable[["CliRenderer", object], None]] = {
+        "system": _on_system,
+        "error_panel": _on_error_panel,
+        "image_saved": _on_file_saved,
+        "file_saved": _on_file_saved,
+        "round_start": _on_round_start,
+        "text": _on_text,
+        "parallel_subagents_start": _on_parallel_subagents_start,
+        "parallel_subagents_done": _on_parallel_subagents_done,
+        "thinking": _on_thinking,
+        "read": _on_read,
+        "tool_stream_start": _on_tool_stream_start,
+        "tool_start": _on_tool_start,
+        "ask_question": _on_ask_question,
+        "tool_done": _on_tool_done,
+    }
+
+    def event(self, kind: str, data: object) -> None:
+        handler = self._EVENT_HANDLERS.get(kind)
+        if handler is not None:
+            handler(self, data)

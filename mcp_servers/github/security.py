@@ -9,10 +9,38 @@ import httpx
 
 from mcp_servers._shared import CONSTANTS, DefaultRedactionPolicy
 
+DEFAULT_API_BASE = "https://api.github.com"
+
 MAX_OUTPUT_CHARS = CONSTANTS.max_output_chars
 MAX_RESPONSE_BYTES = CONSTANTS.max_response_bytes
 
 _ALLOWED_PR_STATES = frozenset({"open", "closed", "all"})
+_ALLOWED_UPDATE_STATES = frozenset({"open", "closed"})
+_ALLOWED_STATE_REASONS = frozenset({"completed", "not_planned", "reopened"})
+ALLOWED_DIRECTIONS = frozenset({"asc", "desc"})
+ALLOWED_PR_SORTS = frozenset({"created", "updated", "popularity", "long-running"})
+ALLOWED_ISSUE_SORTS = frozenset({"created", "updated", "comments"})
+_ALLOWED_REVIEW_EVENTS = frozenset({"COMMENT", "REQUEST_CHANGES"})
+ALLOWED_WORKFLOW_STATUSES = frozenset(
+    {
+        "completed",
+        "action_required",
+        "cancelled",
+        "failure",
+        "neutral",
+        "skipped",
+        "stale",
+        "success",
+        "timed_out",
+        "in_progress",
+        "queued",
+        "requested",
+        "waiting",
+        "pending",
+    }
+)
+ALLOWED_JOB_FILTERS = frozenset({"latest", "all"})
+ALLOWED_DIFF_SIDES = frozenset({"LEFT", "RIGHT"})
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _REF_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
 _SEARCH_SCOPE_OVERRIDE_RE = re.compile(r"(?i)\b(?:repo|org|user)\s*:")
@@ -33,7 +61,7 @@ _TOKEN_RE = re.compile(
 )
 _AUTH_BEARER_RE = re.compile(r"(?i)(\bauthorization\s*[:=]\s*(?:bearer|token)\s+)([^\s\"',;]+)")
 _SENSITIVE_KV_KEYS = (
-    r"(?:password|passwd|secret|github_token|(?:access|auth|refresh|bearer|session|api)[_-]token"
+    r"(?:password|passwd|secret(?:[_-]?key)?|github_token|(?:access|auth|refresh|bearer|session|api)[_-]token"
     r"|api[_-]?key|client_secret|passphrase|connectionstring)"
 )
 _OUTBOUND_PLACEHOLDER_RE = (
@@ -173,15 +201,41 @@ def check_search_query_scope(query: str) -> str:
     return clean_query
 
 
+def get_api_base_url() -> str:
+    """取得並驗證 GitHub API 基底網址（預設官方端點，支援企業自架 GHES）。"""
+    raw = (os.getenv("GITHUB_API_BASE_URL") or "").strip()
+    if not raw:
+        return DEFAULT_API_BASE
+    if any(ch in raw for ch in ("\r", "\n", "\x00")):
+        raise ValueError("GITHUB_API_BASE_URL 包含無效的控制字元。")
+    try:
+        parsed = httpx.URL(raw)
+    except Exception as exc:
+        raise ValueError(f"無效的 GITHUB_API_BASE_URL 格式：{raw!r}") from exc
+    if parsed.scheme.lower() != "https":
+        raise ValueError("無效的 GITHUB_API_BASE_URL：僅允許 HTTPS 協定。")
+    if parsed.userinfo:
+        raise ValueError("無效的 GITHUB_API_BASE_URL：禁止於網址內嵌使用者憑證資訊。")
+    if not parsed.host:
+        raise ValueError("無效的 GITHUB_API_BASE_URL：缺少主機名稱。")
+    if parsed.query or parsed.fragment:
+        raise ValueError("無效的 GITHUB_API_BASE_URL：不可包含查詢參數或片段。")
+    norm_path = parsed.path.rstrip("/")
+    return str(parsed.copy_with(path=norm_path))
+
+
 def validate_redirect_url(target_url: httpx.URL) -> None:
-    """驗證 HTTPX 解析後之實際重導向目標 URL，確保為官方 HTTPS 端點且受白名單約束。"""
+    """驗證 HTTPX 解析後之實際重導向目標 URL，確保為受信任 HTTPS 端點且受白名單約束。"""
+    expected = httpx.URL(get_api_base_url())
     if target_url.scheme.lower() != "https":
         raise PermissionError("拒絕存取：禁止重導向至非 HTTPS 端點。")
     if target_url.userinfo:
         raise PermissionError("拒絕存取：禁止重導向至含使用者憑證資訊之端點。")
-    if target_url.host.lower() != "api.github.com":
+    if target_url.host.lower() != expected.host.lower():
         raise PermissionError(f"拒絕存取：禁止重導向至外部網域 {target_url.host!r}。")
-    if target_url.port not in (None, 443):
+    expected_port = expected.port if expected.port is not None else 443
+    target_port = target_url.port if target_url.port is not None else 443
+    if target_port != expected_port:
         raise PermissionError(f"拒絕存取：禁止重導向至非標準連接埠 {target_url.port}。")
 
     allowed_set = get_allowed_repos()
@@ -190,6 +244,15 @@ def validate_redirect_url(target_url: httpx.URL) -> None:
 
     raw_path = target_url.raw_path.decode("ascii", errors="replace").split("?", 1)[0]
     raw_parts = [p for p in raw_path.split("/") if p]
+    expected_prefix = [unquote(p).lower() for p in expected.path.split("/") if p]
+    if expected_prefix:
+        if len(raw_parts) < len(expected_prefix):
+            raise PermissionError("拒絕存取：重導向路徑不符合設定之 API 前綴。")
+        actual_prefix = [unquote(p).lower() for p in raw_parts[: len(expected_prefix)]]
+        if actual_prefix != expected_prefix:
+            raise PermissionError("拒絕存取：重導向路徑不符合設定之 API 前綴。")
+        raw_parts = raw_parts[len(expected_prefix) :]
+
     if not raw_parts:
         raise PermissionError("拒絕存取：啟用 GITHUB_ALLOWED_REPOS 時，禁止重導向至無法確認儲存庫歸屬的路徑。")
 
@@ -214,3 +277,68 @@ def validate_redirect_url(target_url: httpx.URL) -> None:
         return
 
     raise PermissionError("拒絕存取：啟用 GITHUB_ALLOWED_REPOS 時，禁止重導向至無法確認儲存庫歸屬的路徑。")
+
+
+def validate_update_state(state: str) -> str:
+    """驗證更新 PR 或 Issue 的目標狀態（僅允許 open 或 closed）。"""
+    norm_state = (state or "").strip().lower()
+    if norm_state not in _ALLOWED_UPDATE_STATES:
+        raise ValueError(f"無效的 state 參數：{state!r}（更新時僅允許 open 或 closed）。")
+    return norm_state
+
+
+def validate_state_reason(reason: str) -> str:
+    """驗證 Issue 關閉或重開原因（completed、not_planned 或 reopened）。"""
+    norm_reason = (reason or "").strip().lower()
+    if norm_reason not in _ALLOWED_STATE_REASONS:
+        raise ValueError(f"無效的 state_reason 參數：{reason!r}（僅允許 completed、not_planned 或 reopened）。")
+    return norm_reason
+
+
+def validate_choice(value: str, allowed: frozenset[str], field_name: str) -> str:
+    """驗證列舉字串參數（正規化為小寫）。"""
+    norm_val = (value or "").strip().lower()
+    if norm_val not in allowed:
+        opts = "、".join(sorted(allowed))
+        raise ValueError(f"無效的 {field_name} 參數：{value!r}（僅允許 {opts}）。")
+    return norm_val
+
+
+def validate_review_event(event: str) -> str:
+    """驗證 PR Review 提交事件類型；基於安全政策禁止代理直接核准 (APPROVE)。"""
+    norm_event = (event or "").strip().upper()
+    if norm_event == "APPROVE":
+        raise PermissionError(
+            "拒絕存取：基於安全政策禁止代理直接提交 APPROVE 審查，"
+            "請改用 COMMENT 或 REQUEST_CHANGES，並由人工於 GitHub 網站核准。"
+        )
+    if norm_event not in _ALLOWED_REVIEW_EVENTS:
+        raise ValueError(f"無效的 event 參數：{event!r}（僅允許 COMMENT 或 REQUEST_CHANGES）。")
+    return norm_event
+
+
+def validate_repo_file_path(path: str, *, allow_empty: bool = True) -> str:
+    """驗證儲存庫內的相對檔案或目錄路徑，防範路徑穿越與反斜線混淆。"""
+    raw = (path or "").strip()
+    if any(ch in raw for ch in ("\r", "\n", "\x00", "\\")):
+        raise ValueError(f"無效的檔案路徑：{path!r}（包含非法字元或反斜線）。")
+    cleaned = raw.strip("/")
+    if not cleaned:
+        if allow_empty:
+            return ""
+        raise ValueError("檔案路徑 (path) 不可為空白。")
+    segments = cleaned.split("/")
+    for seg in segments:
+        if not seg or seg in (".", ".."):
+            raise ValueError(f"無效的檔案路徑：{path!r}（禁止空白區段、. 或 ..）。")
+    return "/".join(segments)
+
+
+def validate_filter_text(value: str, field_name: str, *, max_len: int = 100) -> str:
+    """驗證一般篩選文字參數，排除控制字元並限制長度。"""
+    cleaned = (value or "").strip()
+    if any(ch in cleaned for ch in ("\r", "\n", "\x00")):
+        raise ValueError(f"{field_name} 參數包含無效的控制字元。")
+    if len(cleaned) > max_len:
+        raise ValueError(f"{field_name} 參數過長（上限 {max_len} 字元）。")
+    return cleaned

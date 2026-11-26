@@ -24,7 +24,7 @@ _TOKEN_RE = re.compile(
 )
 _AUTH_BEARER_RE = re.compile(r"(?i)(\bauthorization\s*[:=]\s*(?:bearer|token)\s+)([^\s\"',;]+)")
 _SENSITIVE_KV_KEYS = (
-    r"(?:password|passwd|secret|github_token|(?:access|auth|refresh|bearer|session|api)[_-]token"
+    r"(?:password|passwd|secret(?:[_-]?key)?|github_token|(?:access|auth|refresh|bearer|session|api)[_-]token"
     r"|api[_-]?key|apikey|client_secret|passphrase|private_key|preshared_key|connectionstring)"
 )
 _KV_RE = re.compile(

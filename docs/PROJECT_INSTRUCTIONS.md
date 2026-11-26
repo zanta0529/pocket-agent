@@ -13,24 +13,24 @@
 
 ## 2. 目錄與責任邊界
 
-| 路徑 | 用途與修改原則 |
-| --- | --- |
-| `src/pocket_agent/main.py` | 啟動入口、`--internal-mcp-server` 轉發與 Click 命令；保留 Windows asyncio 相容處理。 |
-| `src/pocket_agent/core/` | 核心業務邏輯：Agent 主迴圈、工具派發註冊表（`tool_registry`）、上下文預算／壓縮／落盤、會話、取消橋接與子代理（`subagents`）。 |
-| `src/pocket_agent/engines/` | LLM 引擎轉接器與 `EngineFactory`；協定差異保留於對應子類別。 |
-| `src/pocket_agent/frontend/` | CLI 介面策略（`cli/` 渲染、輸入、確認、狀態與斜線指令）；僅負責互動與渲染，不放置業務規則。 |
-| `src/pocket_agent/system/` | 基礎設施：常數（`constants`）、多語系（`i18n`／`locales/`）、認證、供應商策略（`providers/`）、路徑、設定、權限、`housekeeping`、更新與系統指令。 |
-| `src/pocket_agent/extensions/` | 擴充功能：MCP 生命週期與參數注入（`mcp`）、漸進式技能（`skills`）、鉤子（`hooks`）與外掛（`plugins`）。 |
-| `src/pocket_agent/tools/` | 內建工具：`shell`、`fs`、統一工作區 FTS5 索引引擎（`search_index`，供 `fs` 與 `rag` 共用）、`web`、`image`、`doc`、`document`、`rag`、`repo_map`。 |
-| `mcp_servers/` | 本地 Stdio MCP 薄入口（`<name>_mcp.py`）、領域子套件與共用基礎設施（`_shared/`）；獨立啟動時須確保 `_shared` 在 `sys.path`。 |
-| `subagents/` | 隨附唯讀／專職子代理定義檔（`.md`，詳見 [routing-and-subagents.md](architecture/routing-and-subagents.md)）。 |
-| `build_scripts/`、`scripts/` | 可攜版打包腳本（`build_portable.py`）與依賴檢查工具（`check_imports.py`）。 |
+| 路徑                           | 用途與修改原則                                                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/pocket_agent/main.py`     | 啟動入口、`--internal-mcp-server` 轉發與 Click 命令；保留 Windows asyncio 相容處理。                                                               |
+| `src/pocket_agent/core/`       | 核心業務邏輯：Agent 主迴圈、工具派發註冊表（`tool_registry`）、上下文預算／壓縮／落盤、會話、取消橋接與子代理（`subagents`）。                     |
+| `src/pocket_agent/engines/`    | LLM 引擎轉接器與 `EngineFactory`；協定差異保留於對應子類別。                                                                                       |
+| `src/pocket_agent/frontend/`   | CLI 介面策略（`cli/` 渲染、輸入、確認、狀態與斜線指令）；僅負責互動與渲染，不放置業務規則。                                                        |
+| `src/pocket_agent/system/`     | 基礎設施：常數（`constants`）、多語系（`i18n`／`locales/`）、認證、供應商策略（`providers/`）、路徑、設定、權限、`housekeeping`、更新與系統指令。  |
+| `src/pocket_agent/extensions/` | 擴充功能：MCP 生命週期與參數注入（`mcp`）、漸進式技能（`skills`）、鉤子（`hooks`）與外掛（`plugins`）。                                            |
+| `src/pocket_agent/tools/`      | 內建工具：`shell`、`fs`、統一工作區 FTS5 索引引擎（`search_index`，供 `fs` 與 `rag` 共用）、`web`、`image`、`doc`、`document`、`rag`、`repo_map`。 |
+| `mcp_servers/`                 | 本地 Stdio MCP 薄入口（`<name>_mcp.py`）、領域子套件與共用基礎設施（`_shared/`）；獨立啟動時須確保 `_shared` 在 `sys.path`。                       |
+| `subagents/`                   | 隨附唯讀／專職子代理定義檔（`.md`，詳見 [routing-and-subagents.md](architecture/routing-and-subagents.md)）。                                      |
+| `build_scripts/`、`scripts/`   | 可攜版打包腳本（`build_portable.py`）與依賴檢查工具（`check_imports.py`）。                                                                        |
 
 _`.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，`docs/` 為規範與架構文件。_
 
 ### 2.1 架構設計原則：`minimal-change` 與 Adapter／Strategy／Factory／Command／Template Method
 
-> （最高優先）請務必遵循 minimal-change 的精神、本專案既有的 i18n 多語系設計以及 Adapter/Strategy/Factory/Command/Template Method.... 等可降低模組耦合度的 Design Patterns 進行規劃設計。
+> （**最高優先**）請務必遵循 minimal-change 的精神、本專案既有的 i18n 多語系設計，並且套用 Adapter/Strategy/Factory/Command/Template Method.... 等 Design Patterns 進行規劃設計，降低各模組之耦合度與複雜度。
 
 **後續開發必須遵循「依賴抽象、封裝差異、共用流程集中維護」風格**（新增 LLM Provider 完整檢查清單見 [llm-adapter-architecture.md](architecture/llm-adapter-architecture.md#新增-llm-provider-開發規範檢查清單)）：
 

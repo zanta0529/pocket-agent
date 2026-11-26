@@ -70,7 +70,7 @@ mcp_servers/
 ### 3. GitHub 整合（GitHub MCP）
 
 - **入口**：`github_mcp.py` → `mcp_servers/github/`
-- **用途**：檢索 Issue、PR、Diff、Review 與 CI 狀態，支援範本感知 PR 建立與留言；透過 `inject` 隱藏 `GITHUB_TOKEN`，不提供自動 Merge 工具。
+- **用途**：檢索與更新 Issue／PR、讀取與提交行內 Review 意見、診斷 CI Check Annotations 與 Actions Workflow Runs、唯讀探索儲存庫檔案與分支／Tag／Release，並支援 GHES 與範本感知 PR 建立；透過 `inject` 隱藏 `GITHUB_TOKEN`，不提供自動 Merge 與 `APPROVE` 工具。
 
 ### 4. 本機 SQLite 資料庫（SQLite MCP）
 
