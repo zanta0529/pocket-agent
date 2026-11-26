@@ -1,5 +1,10 @@
 """RHEL MCP 工具群組套件。"""
 
+from mcp_servers.rhel.tools.diagnostics import (
+    rhel_cert_expiry,
+    rhel_health_snapshot,
+    rhel_kernel_health,
+)
 from mcp_servers.rhel.tools.network import rhel_network_connections, rhel_network_status
 from mcp_servers.rhel.tools.security_ops import (
     rhel_list_directory,
@@ -22,9 +27,12 @@ from mcp_servers.rhel.tools.system import (
 )
 
 __all__ = [
+    "rhel_cert_expiry",
     "rhel_container_status",
     "rhel_cron_and_timers",
     "rhel_hardware_info",
+    "rhel_health_snapshot",
+    "rhel_kernel_health",
     "rhel_list_directory",
     "rhel_network_connections",
     "rhel_network_status",

@@ -102,6 +102,17 @@ NETDIAG_DNS_MAX_NAMESERVERS = 4  # netdiag_dns_compare 單次最多比對之額�
 NETDIAG_DNS_MAX_CNAME_HOPS = 10  # netdiag DNS CNAME 鏈追蹤最大跳數
 NETDIAG_DEFAULT_ALLOWED_PORTS: tuple[int, ...] = (80, 443, 8080, 8443)  # netdiag 預設允許探測之連接埠
 
+# 遠端 RHEL 維運巡檢 MCP (rhel_ops) 安全與逾時常數
+RHEL_CREDS_CACHE_TTL_SEC = 600.0  # 執行期記憶體憑證快取閒置 TTL 秒數 (10 分鐘)
+RHEL_DEFAULT_CONNECT_TIMEOUT_SEC = 10  # SSH 連線預設逾時秒數
+RHEL_MIN_CONNECT_TIMEOUT_SEC = 3  # SSH 連線最小逾時秒數
+RHEL_MAX_CONNECT_TIMEOUT_SEC = 60  # SSH 連線最大逾時秒數
+RHEL_CMD_EXTRA_TIMEOUT_SEC = 15  # 未設定 RHEL_CMD_TIMEOUT 時於連線逾時外附加的指令執行寬限秒數
+RHEL_MIN_CMD_TIMEOUT_SEC = 5  # 遠端診斷指令最小執行逾時秒數
+RHEL_MAX_CMD_TIMEOUT_SEC = 120  # 遠端診斷指令最大執行逾時秒數
+RHEL_MAX_BATCH_SERVICES = 10  # rhel_service_status 單次批次查詢服務數量上限
+RHEL_MAX_CERT_FILES = 30  # rhel_cert_expiry 單次憑證到期巡檢最多掃描檔案數
+
 
 # ==============================================================================
 # 5. 上下文預算與溢出管理常數 (Context Budget & Spillover Defaults)

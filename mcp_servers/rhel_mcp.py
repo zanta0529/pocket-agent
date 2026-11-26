@@ -10,9 +10,12 @@ if str(_REPO_ROOT) not in sys.path:
 from mcp_servers._shared import CONSTANTS  # noqa: E402
 from mcp_servers.rhel import (  # noqa: E402
     mcp,
+    rhel_cert_expiry,
     rhel_container_status,
     rhel_cron_and_timers,
     rhel_hardware_info,
+    rhel_health_snapshot,
+    rhel_kernel_health,
     rhel_list_directory,
     rhel_network_connections,
     rhel_network_status,
@@ -32,9 +35,12 @@ MAX_OUTPUT_CHARS = CONSTANTS.max_output_chars
 __all__ = [
     "MAX_OUTPUT_CHARS",
     "mcp",
+    "rhel_cert_expiry",
     "rhel_container_status",
     "rhel_cron_and_timers",
     "rhel_hardware_info",
+    "rhel_health_snapshot",
+    "rhel_kernel_health",
     "rhel_list_directory",
     "rhel_network_connections",
     "rhel_network_status",

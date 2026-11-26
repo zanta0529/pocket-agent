@@ -772,6 +772,19 @@
     "hint_proxy": "本機目前透過企業 Proxy（{proxy}）連線，直連 DNS／TCP 階段已略過；若僅透過 Proxy 異常，請一併提供代理設定資訊給網管核對。",
     "truncate_hint": "請縮減 max_stage 或減少採樣次數後重試。"
   },
+  "rhel_mcp": {
+    "prompt_host": "請輸入 RHEL 主機 IP 或位址 (RHEL_HOST): ",
+    "prompt_port": "請輸入 SSH 連接埠 (RHEL_SSH_PORT) [預設 22]: ",
+    "prompt_user": "請輸入 {host} 的 SSH 登入帳號 (RHEL_SSH_USER): ",
+    "prompt_password": "請輸入 {user}@{host} 的 SSH 登入密碼: ",
+    "prompt_key_passphrase": "請輸入加密私鑰 {key_name} 的解鎖通行碼 (Passphrase): ",
+    "missing_host": "未提供 RHEL 主機位址 (RHEL_HOST)。",
+    "missing_user": "未提供 SSH 登入帳號 (RHEL_SSH_USER)。",
+    "missing_password": "未提供 SSH 登入密碼 (RHEL_SSH_PASSWORD)；未指定私鑰時必須提供密碼驗證。",
+    "missing_key_passphrase": "加密 SSH 私鑰需要解鎖通行碼 (RHEL_SSH_KEY_PASSPHRASE)。",
+    "invalid_key_path": "指定的 SSH 私鑰檔案不存在或無法存取：{key_path}",
+    "output_truncated": "\n... (輸出過長已截斷，已達 {max_chars} 字元上限)\n[提示：若需檢視後續內容或縮小範圍，請指定更精確的查詢條件、縮短 since 時間範圍，或調整行數上限]"
+  },
   "arg_comp": {
     "jobs_sub_show": "檢視特定背景工作完整報告（可選 ID）",
     "jobs_sub_collect": "取回並注入主對話歷史（可選 ID 或 all）",

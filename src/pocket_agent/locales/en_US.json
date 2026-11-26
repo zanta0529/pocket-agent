@@ -772,6 +772,19 @@
     "hint_proxy": "Connected via corporate proxy ({proxy}); direct DNS/TCP stages were skipped. Include proxy details if issues only occur behind the proxy.",
     "truncate_hint": "Reduce max_stage or samples and retry."
   },
+  "rhel_mcp": {
+    "prompt_host": "Enter RHEL host IP or address (RHEL_HOST): ",
+    "prompt_port": "Enter SSH port (RHEL_SSH_PORT) [default 22]: ",
+    "prompt_user": "Enter SSH username for {host} (RHEL_SSH_USER): ",
+    "prompt_password": "Enter SSH password for {user}@{host}: ",
+    "prompt_key_passphrase": "Enter passphrase for encrypted key {key_name}: ",
+    "missing_host": "Missing RHEL host address (RHEL_HOST).",
+    "missing_user": "Missing SSH username (RHEL_SSH_USER).",
+    "missing_password": "Missing SSH password (RHEL_SSH_PASSWORD); required when no private key is configured.",
+    "missing_key_passphrase": "Passphrase is required for the encrypted SSH private key (RHEL_SSH_KEY_PASSPHRASE).",
+    "invalid_key_path": "Specified SSH private key does not exist or is unreadable: {key_path}",
+    "output_truncated": "\n... (Output truncated at {max_chars} character limit)\n[Hint: narrow query filters, shorten the since window, or reduce max_lines to inspect more]"
+  },
   "arg_comp": {
     "jobs_sub_show": "Inspect a background job report (optional ID)",
     "jobs_sub_collect": "Collect and inject into main history (ID or all)",

@@ -151,7 +151,7 @@ def test_real_path_guard_rejects_fifo_before_open(tmp_path: Path, monkeypatch) -
     ],
 )
 def test_journal_only_returns_counts(payload: str) -> None:
-    with patch.object(rhel_ssh, "run_remote", return_value=payload) as remote:
+    with patch.object(rhel_ssh, "run_remote_with_meta", return_value=(payload, False)) as remote:
         result = rhel_mcp.rhel_query_journal()
     assert "synthetic-value" not in result
     assert '"sample_count": 1' in result
@@ -160,7 +160,7 @@ def test_journal_only_returns_counts(payload: str) -> None:
 
 @pytest.mark.parametrize("payload", ["synthetic-value", "[]", '{"PRIORITY":[]}', "[ERROR] synthetic-value"])
 def test_journal_rejects_invalid_output_without_echo(payload: str) -> None:
-    with patch.object(rhel_ssh, "run_remote", return_value=payload):
+    with patch.object(rhel_ssh, "run_remote_with_meta", return_value=(payload, False)):
         result = rhel_mcp.rhel_query_journal()
     assert result.startswith("[ERROR]")
     assert "synthetic-value" not in result
@@ -201,7 +201,7 @@ def test_rpm_verification_never_executes_scripts_or_returns_paths() -> None:
 
 
 def test_empty_journal_has_zero_sample_count() -> None:
-    with patch.object(rhel_ssh, "run_remote", return_value="(沒有輸出)"):
+    with patch.object(rhel_ssh, "run_remote_with_meta", return_value=("(沒有輸出)", False)):
         result = rhel_mcp.rhel_query_journal()
     assert '"sample_count": 0' in result
 
@@ -213,10 +213,30 @@ def test_directory_listing_is_rejected_before_connection() -> None:
     remote.assert_not_called()
 
 
-def test_container_status_is_disabled_before_connection() -> None:
-    with patch.object(rhel_ssh, "run_remote") as remote:
+def test_container_status_safe_readonly_guards_and_fields() -> None:
+    with patch.object(rhel_ssh, "run_remote", return_value="OK") as remote:
         result = rhel_mcp.rhel_container_status()
-    assert result.startswith("[ERROR] [UNSUPPORTED]")
+    assert result == "OK"
+    command = remote.call_args.args[0]
+    assert "systemctl is-active --quiet docker.service" in command
+    assert "/run/podman/podman.sock" in command
+    assert "--format 'table {{.ID}}\\t{{.Image}}\\t{{.State}}\\t{{.Status}}\\t{{.Ports}}'" in command
+    assert "docker inspect" not in command
+    assert "podman inspect" not in command
+    assert "{{.Command}}" not in command
+
+
+def test_selinux_context_and_cert_expiry_security_guards() -> None:
+    with patch.object(rhel_ssh, "run_remote", return_value="OK") as remote:
+        rhel_mcp.rhel_selinux_context("/etc/selinux/config")
+    cmd = remote.call_args.args[0]
+    assert "realpath -e -- /etc/selinux/config" in cmd
+    assert 'ls -dZ -- "$real"' in cmd
+
+    with patch.object(rhel_ssh, "run_remote") as remote:
+        assert rhel_mcp.rhel_cert_expiry("/etc/pki/tls/private").startswith("[ERROR]")
+        assert rhel_mcp.rhel_cert_expiry("/etc/pki/tls/certs/../private").startswith("[ERROR]")
+        assert rhel_mcp.rhel_cert_expiry("/home/admin/certs").startswith("[ERROR]")
     remote.assert_not_called()
 
 

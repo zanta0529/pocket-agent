@@ -42,11 +42,16 @@ def rhel_storage_and_fs(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 儲存與檔案系統：掛載空間 (df -hT)、Inode、區塊裝置與掛載選項 (findmnt)"""
+    """探查 RHEL 儲存與檔案系統：掛載空間、Inode、區塊裝置、LVM／Thin Pool、RAID 與掛載選項"""
     cmd = (
         "echo '=== Filesystem Usage ===' && df -hT -x tmpfs -x devtmpfs; "
         "echo '=== Inode Usage ===' && df -i -x tmpfs -x devtmpfs; "
-        "echo '=== Block Devices ===' && lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,UUID; "
+        "echo '=== Block Devices ===' && lsblk -e 7 -o NAME,TYPE,FSTYPE,SIZE,ROTA,MOUNTPOINT,UUID; "
+        "echo '=== LVM Volume Groups & Logical Volumes ===' && "
+        "(vgs --noheadings -o vg_name,vg_size,vg_free 2>/dev/null || echo '無 LVM VG 或權限不足'); "
+        "(lvs --noheadings -o lv_name,vg_name,lv_attr,lv_size,data_percent,metadata_percent 2>/dev/null || true); "
+        "echo '=== Software RAID (/proc/mdstat) ===' && "
+        "([ -r /proc/mdstat ] && cat /proc/mdstat || echo '無 /proc/mdstat'); "
         "echo '=== Mount Options ===' && "
         "(findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS --list -t nodevtmpfs,nosquashfs 2>/dev/null "
         "| grep -E '^(/|/boot|/home|/tmp|/var|/dev/shm|/opt|/srv)([[:space:]]|/|$)' || true)"
@@ -57,47 +62,95 @@ def rhel_storage_and_fs(
 
 
 def rhel_package_info(
-    package_name: str,
+    package_name: str = "",
     verify_integrity: bool = False,
+    recent_count: int = 0,
+    search: str = "",
     ssh_host: str = "",
     ssh_port: str = "",
     ssh_user: str = "",
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """查詢已安裝之 RHEL RPM 套件資訊、Changelog 摘要與完整性驗證 (rpm -qi, rpm -V)"""
-    try:
-        safe_pkg = security.validate_identifier(package_name, "package_name")
-    except ValueError as exc:
-        ssh_client.AUDIT.log(
-            "rhel_package_info",
-            f"package_name={package_name!r}",
-            target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-            status="BLOCKED",
-            detail=str(exc),
-        )
-        return security.redact_and_truncate(f"[ERROR] {exc}")
+    """查詢本機 RPM 資料庫：單一套件資訊與完整性驗證、近期異動套件或關鍵字搜尋（零 DNF 副作用）"""
+    if package_name.strip():
+        try:
+            safe_pkg = security.validate_identifier(package_name, "package_name")
+        except ValueError as exc:
+            return ssh_client.audit_blocked(
+                "rhel_package_info",
+                f"package_name={package_name!r}",
+                str(exc),
+                ssh_host,
+                ssh_port,
+                ssh_user,
+                redact=True,
+            )
 
-    quoted = shlex.quote(safe_pkg)
-    if verify_integrity:
-        cmd = (
-            f"rpm -q {quoted} >/dev/null 2>&1 || "
-            "{ echo '[ERROR] 套件未安裝或資料庫查詢失敗'; exit 1; }; "
-            f"if rpm -V --noscripts {quoted} >/dev/null 2>&1; then rc=0; else rc=$?; fi; "
-            "case $rc in 0) echo 'verification=unchanged' ;; "
-            "1) echo 'verification=differences_or_verification_error' ;; "
-            "*) echo '[ERROR] RPM 驗證失敗'; exit 1 ;; esac"
+        quoted = shlex.quote(safe_pkg)
+        if verify_integrity:
+            cmd = (
+                f"rpm -q {quoted} >/dev/null 2>&1 || "
+                "{ echo '[ERROR] 套件未安裝或資料庫查詢失敗'; exit 1; }; "
+                f"if rpm -V --noscripts {quoted} >/dev/null 2>&1; then rc=0; else rc=$?; fi; "
+                "case $rc in 0) echo 'verification=unchanged' ;; "
+                "1) echo 'verification=differences_or_verification_error' ;; "
+                "*) echo '[ERROR] RPM 驗證失敗'; exit 1 ;; esac"
+            )
+        else:
+            cmd = (
+                f"echo '=== Package Info (rpm -qi) ===' && "
+                f"(rpm -qi {quoted} 2>/dev/null || "
+                "echo '[ERROR] 查無套件，不自動透過 DNF 查詢中繼資料'); "
+                "echo '=== Changelog Summary (recent) ===' && "
+                f"rpm -q --changelog {quoted} 2>/dev/null | sed -n '1,20p'"
+            )
+        return ssh_client.run_remote(
+            cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_package_info"
         )
-    else:
+
+    if recent_count and int(recent_count) > 0:
+        safe_n = max(1, min(int(recent_count), 50))
         cmd = (
-            f"echo '=== Package Info (rpm -qi) ===' && "
-            f"(rpm -qi {quoted} 2>/dev/null || "
-            "echo '[ERROR] 查無套件，不自動透過 DNF 查詢中繼資料'); "
-            "echo '=== Changelog Summary (recent) ===' && "
-            f"rpm -q --changelog {quoted} 2>/dev/null | sed -n '1,20p'"
+            f"echo '=== Recently Installed/Updated Packages (top {safe_n}) ===' && "
+            f"rpm -qa --last | sed -n '1,{safe_n}p'"
         )
-    return ssh_client.run_remote(
-        cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_package_info"
+        return ssh_client.run_remote(
+            cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_package_info"
+        )
+
+    if search.strip():
+        try:
+            safe_search = security.validate_identifier(search, "search")
+        except ValueError as exc:
+            return ssh_client.audit_blocked(
+                "rhel_package_info",
+                f"search={search!r}",
+                str(exc),
+                ssh_host,
+                ssh_port,
+                ssh_user,
+                redact=True,
+            )
+        quoted_search = shlex.quote(safe_search)
+        cmd = (
+            f"echo '=== Installed Packages matching {quoted_search} ===' && "
+            "rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\\n' | "
+            f"awk -v q={quoted_search} -v lim=50 "
+            "'index(tolower($0), tolower(q)) > 0 {if (n < lim) print; n++} "
+            'END {print "matching_packages=" n+0}\''
+        )
+        return ssh_client.run_remote(
+            cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_package_info"
+        )
+
+    return ssh_client.audit_blocked(
+        "rhel_package_info",
+        "empty_query",
+        "請至少指定 package_name、recent_count（>0）或 search 其中一項查詢條件。",
+        ssh_host,
+        ssh_port,
+        ssh_user,
     )
 
 
@@ -108,15 +161,31 @@ def rhel_container_status(
     ssh_password: str = "",
     ssh_key_path: str = "",
 ) -> str:
-    """探查 RHEL 容器執行環境；在未證明無副作用前暫停提供。"""
-    ssh_client.AUDIT.log(
-        "rhel_container_status",
-        "container_status",
-        target=ssh_client.format_audit_target(ssh_host, ssh_port, ssh_user),
-        status="BLOCKED",
-        detail="Container status disabled in safe summary mode",
+    """安全唯讀探查容器環境：systemd 服務與單元狀態，以及已啟動 daemon/socket 之最小容器清單。"""
+    cmd = (
+        "echo '=== Container Runtime Services ===' && "
+        "(systemctl show podman.socket podman.service docker.service containerd.service "
+        "--no-pager --property=Id,LoadState,ActiveState,SubState 2>/dev/null || true); "
+        "echo '=== Active Container Systemd Units ===' && "
+        "(systemctl list-units 'libpod-*' 'docker-*' --no-pager --no-legend --plain 2>/dev/null "
+        '| awk \'NR<=50 {u=$1; sub(/@[^.]+/, "@*", u); print u, $2, $3, $4} '
+        'END {print "container_units=" NR}\'); '
+        "echo '=== Docker Containers (only if active) ===' && "
+        "(if systemctl is-active --quiet docker.service 2>/dev/null && command -v docker >/dev/null 2>&1; then "
+        "docker ps -a --format 'table {{.ID}}\\t{{.Image}}\\t{{.State}}\\t{{.Status}}\\t{{.Ports}}' "
+        "2>/dev/null | sed -n '1,51p' || echo '無法查詢 docker（可能權限不足）'; "
+        "else echo 'docker.service 未啟用'; fi); "
+        "echo '=== Podman Containers (only if system socket active) ===' && "
+        "(if [ -S /run/podman/podman.sock ] && systemctl is-active --quiet podman.socket 2>/dev/null "
+        "&& command -v podman >/dev/null 2>&1; then "
+        "podman --url unix:///run/podman/podman.sock ps -a "
+        "--format 'table {{.ID}}\\t{{.Image}}\\t{{.State}}\\t{{.Status}}\\t{{.Ports}}' "
+        "2>/dev/null | sed -n '1,51p' || echo '無法查詢 podman socket（可能權限不足）'; "
+        "else echo 'podman.socket 未啟用（不自動啟動 rootless storage）'; fi)"
     )
-    return "[ERROR] [UNSUPPORTED] 安全摘要模式下暫停提供容器狀態探查（尚未證明命令無副作用）。"
+    return ssh_client.run_remote(
+        cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_container_status"
+    )
 
 
 def rhel_cron_and_timers(
@@ -135,9 +204,10 @@ def rhel_cron_and_timers(
         "systemctl list-unit-files --type=timer --no-pager --no-legend "
         '| awk \'NR <= 100 {gsub(/@[^.[:space:]]+/, "@*"); print} END {print "timer_unit_files=" NR}\'; '
         "echo '=== System Crontab Entry Count ===' && "
-        "awk '/^[[:space:]]*($|#)/ {next} "
+        "([ -r /etc/crontab ] && awk '/^[[:space:]]*($|#)/ {next} "
         "/^[[:space:]]*[A-Za-z_][A-Za-z_0-9]*[[:space:]]*=/ {next} "
-        '{n++} END {print "system_crontab_entries=" n+0}\' /etc/crontab'
+        '{n++} END {print "system_crontab_entries=" n+0}\' /etc/crontab '
+        "|| echo 'system_crontab_entries=0')"
     )
     return ssh_client.run_remote(
         cmd, ssh_host, ssh_port, ssh_user, ssh_password, ssh_key_path, tool_name="rhel_cron_and_timers"

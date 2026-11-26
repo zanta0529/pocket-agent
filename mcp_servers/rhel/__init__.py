@@ -2,9 +2,12 @@
 
 from mcp_servers.rhel.server import mcp
 from mcp_servers.rhel.tools import (
+    rhel_cert_expiry,
     rhel_container_status,
     rhel_cron_and_timers,
     rhel_hardware_info,
+    rhel_health_snapshot,
+    rhel_kernel_health,
     rhel_list_directory,
     rhel_network_connections,
     rhel_network_status,
@@ -21,9 +24,12 @@ from mcp_servers.rhel.tools import (
 
 __all__ = [
     "mcp",
+    "rhel_cert_expiry",
     "rhel_container_status",
     "rhel_cron_and_timers",
     "rhel_hardware_info",
+    "rhel_health_snapshot",
+    "rhel_kernel_health",
     "rhel_list_directory",
     "rhel_network_connections",
     "rhel_network_status",
