@@ -176,38 +176,27 @@ async def _handshake_once(
 
 
 async def probe_tls(connect_ip: str, port: int, sni_host: str, timeout_sec: float) -> TlsStageData:
-    """執行嚴格雙軌 CA（truststore vs certifi）握手；驗證失敗時補做純 TLS 憑證舉證。"""
+    """併發執行嚴格雙軌 CA（truststore vs certifi）握手；驗證失敗時補做純 TLS 憑證舉證。"""
     deadline = time.perf_counter() + timeout_sec
-    ts_budget = max(0.05, deadline - time.perf_counter())
-    ts_res = await _handshake_once(
-        connect_ip,
-        port,
-        sni_host,
-        _build_truststore_context(),
-        ts_budget,
-        verified_mode=True,
-    )
-
-    cf_budget = deadline - time.perf_counter()
-    if cf_budget > 0.05:
-        cf_res = await _handshake_once(
+    budget = max(0.05, deadline - time.perf_counter())
+    ts_res, cf_res = await asyncio.gather(
+        _handshake_once(
+            connect_ip,
+            port,
+            sni_host,
+            _build_truststore_context(),
+            budget,
+            verified_mode=True,
+        ),
+        _handshake_once(
             connect_ip,
             port,
             sni_host,
             _build_certifi_context(),
-            cf_budget,
+            budget,
             verified_mode=True,
-        )
-    else:
-        cf_res = {
-            "ok": False,
-            "tls_version": None,
-            "cipher_suite": None,
-            "alpn_protocol": None,
-            "cert_chain": (),
-            "latency_ms": 0.0,
-            "error": "TimeoutError: TLS stage budget exhausted",
-        }
+        ),
+    )
 
     ts_ok = bool(ts_res["ok"])
     cf_ok = bool(cf_res["ok"])

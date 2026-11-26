@@ -53,6 +53,9 @@ class DnsStageData:
 
     status: str  # ok / failed / skipped
     ips: tuple[str, ...] = ()
+    ipv4_ips: tuple[str, ...] = ()
+    ipv6_ips: tuple[str, ...] = ()
+    ip_family_requested: str = "auto"
     pinned_ip: str = ""
     cname_chain: tuple[str, ...] = ()
     ttl: int | None = None
@@ -134,6 +137,7 @@ class HttpStageData:
     final_status_code: int | None = None
     ttfb_ms: float | None = None
     total_ms: float | None = None
+    redirect_tls: TlsStageData | None = None
     redirect_blocked_reason: str = ""
     error: str = ""
 
@@ -166,6 +170,7 @@ class DiagnosticReport:
     proxy_info: ProxyInfo
     first_failure_stage: str
     runs: tuple[SampleRun, ...]
+    ip_family: str = "auto"
     signals: tuple[str, ...] = ()
     escalation_hint: str = ""
     preflight_error: str = ""

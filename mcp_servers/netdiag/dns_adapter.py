@@ -16,6 +16,11 @@ ALLOWED_DNS_RECORD_TYPES = frozenset({"A", "AAAA", "CNAME", "NS", "SOA", "MX", "
 class DnsResolverAdapter(ABC):
     """DNS 解析轉接器抽象介面。"""
 
+    @property
+    @abstractmethod
+    def is_fallback(self) -> bool:
+        """回傳此轉接器是否為標準庫 socket 降級實作。"""
+
     @abstractmethod
     async def resolve_host_ips(self, hostname: str, timeout_sec: float) -> DnsStageData:
         """解析主機名稱之 A／AAAA 位址與 CNAME 鏈。"""
@@ -33,6 +38,10 @@ class DnsResolverAdapter(ABC):
 
 class DnspythonResolverAdapter(DnsResolverAdapter):
     """使用 dnspython 進行完整紀錄、TTL、CNAME 鏈與自訂解析器查詢。"""
+
+    @property
+    def is_fallback(self) -> bool:
+        return False
 
     def __init__(self, dns_resolver_mod: Any, dns_exception_mod: Any) -> None:
         self._resolver_mod = dns_resolver_mod
@@ -108,6 +117,8 @@ class DnspythonResolverAdapter(DnsResolverAdapter):
         return DnsStageData(
             status="ok",
             ips=tuple(ips),
+            ipv4_ips=tuple(ip for ip in ips if ":" not in ip),
+            ipv6_ips=tuple(ip for ip in ips if ":" in ip),
             pinned_ip=ips[0],
             cname_chain=tuple(cname_chain),
             ttl=ttl_val,
@@ -192,6 +203,10 @@ class DnspythonResolverAdapter(DnsResolverAdapter):
 class SocketFallbackResolverAdapter(DnsResolverAdapter):
     """未安裝 dnspython 時之標準庫 socket 降級轉接器（僅支援系統 A／AAAA）。"""
 
+    @property
+    def is_fallback(self) -> bool:
+        return True
+
     async def resolve_host_ips(self, hostname: str, timeout_sec: float) -> DnsStageData:
         start = time.perf_counter()
         loop = asyncio.get_running_loop()
@@ -218,6 +233,8 @@ class SocketFallbackResolverAdapter(DnsResolverAdapter):
         return DnsStageData(
             status="ok",
             ips=tuple(ips),
+            ipv4_ips=tuple(ip for ip in ips if ":" not in ip),
+            ipv6_ips=tuple(ip for ip in ips if ":" in ip),
             pinned_ip=ips[0],
             latency_ms=elapsed_ms,
             fallback_used=True,

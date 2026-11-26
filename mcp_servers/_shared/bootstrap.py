@@ -48,6 +48,7 @@ class McpConstants:
     netdiag_dns_max_nameservers: int = 4
     netdiag_dns_max_cname_hops: int = 10
     netdiag_default_allowed_ports: tuple[int, ...] = (80, 443, 8080, 8443)
+    netdiag_cert_expiry_warn_days: int = 30
     rhel_creds_cache_ttl_sec: float = 600.0
     rhel_default_connect_timeout_sec: int = 10
     rhel_min_connect_timeout_sec: int = 3
@@ -84,6 +85,7 @@ def load_constants() -> McpConstants:
             netdiag_dns_max_nameservers=sys_const.NETDIAG_DNS_MAX_NAMESERVERS,
             netdiag_dns_max_cname_hops=sys_const.NETDIAG_DNS_MAX_CNAME_HOPS,
             netdiag_default_allowed_ports=sys_const.NETDIAG_DEFAULT_ALLOWED_PORTS,
+            netdiag_cert_expiry_warn_days=sys_const.NETDIAG_CERT_EXPIRY_WARN_DAYS,
             rhel_creds_cache_ttl_sec=sys_const.RHEL_CREDS_CACHE_TTL_SEC,
             rhel_default_connect_timeout_sec=sys_const.RHEL_DEFAULT_CONNECT_TIMEOUT_SEC,
             rhel_min_connect_timeout_sec=sys_const.RHEL_MIN_CONNECT_TIMEOUT_SEC,

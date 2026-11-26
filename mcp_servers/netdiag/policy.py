@@ -82,6 +82,7 @@ def _is_valid_hostname(hostname: str) -> bool:
 
 
 def _matches_domain_allowlist(hostname: str, allowlist: tuple[str, ...]) -> bool:
+    """精確比對主機名稱；僅 *.domain 規則才放行子網域。"""
     host = hostname.lower().rstrip(".")
     for entry in allowlist:
         pattern = entry.strip().lower().rstrip(".")
@@ -91,7 +92,7 @@ def _matches_domain_allowlist(hostname: str, allowlist: tuple[str, ...]) -> bool
             suffix = pattern[1:]  # ".example.com"
             if host.endswith(suffix) and len(host) > len(suffix):
                 return True
-        elif host == pattern or host.endswith(f".{pattern}"):
+        elif host == pattern:
             return True
     return False
 
@@ -266,9 +267,10 @@ class DefaultNetdiagPolicy(NetworkAccessPolicy):
     def detect_proxy(self, url: str) -> ProxyInfo:
         parts = urlsplit(url)
         scheme = parts.scheme.lower()
-        hostname = (parts.hostname or "").lower()
+        hostname = (parts.hostname or "").strip("[]").lower()
+        port = parts.port or (443 if scheme == "https" else 80)
         no_proxy = (os.getenv("NO_PROXY") or os.getenv("no_proxy") or "").strip()
-        if no_proxy and self._matches_no_proxy(hostname, no_proxy):
+        if no_proxy and self._matches_no_proxy(hostname, port, no_proxy):
             return ProxyInfo(used=False)
 
         candidates = (
@@ -296,12 +298,56 @@ class DefaultNetdiagPolicy(NetworkAccessPolicy):
         return ProxyInfo(used=True, display_proxy=f"{p_scheme}://{p_host}:{p_port}", raw_url=proxy_url)
 
     @staticmethod
-    def _matches_no_proxy(hostname: str, no_proxy: str) -> bool:
+    def _matches_no_proxy(hostname: str, port: int, no_proxy: str) -> bool:
+        """比對 NO_PROXY（支援網域後綴、IP、CIDR 與帶連接埠規則）。"""
+        target_ip: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
+        try:
+            target_ip = ipaddress.ip_address(hostname.strip("[]"))
+        except ValueError:
+            pass
+
         for entry in no_proxy.split(","):
-            rule = entry.strip().lower().lstrip(".")
-            if not rule:
+            raw_rule = entry.strip().lower()
+            if not raw_rule:
                 continue
-            if rule == "*" or hostname == rule or hostname.endswith(f".{rule}"):
+            if raw_rule == "*":
+                return True
+
+            rule_host = raw_rule
+            if raw_rule.startswith("[") and "]:" in raw_rule:
+                host_part, port_part = raw_rule.rsplit("]:", 1)
+                if port_part.isdigit():
+                    if int(port_part) != port:
+                        continue
+                    rule_host = host_part.lstrip("[")
+            elif "/" not in raw_rule and raw_rule.count(":") == 1:
+                host_part, port_part = raw_rule.split(":", 1)
+                if port_part.isdigit():
+                    if int(port_part) != port:
+                        continue
+                    rule_host = host_part
+
+            rule_host = rule_host.strip("[]")
+            if "/" in rule_host:
+                if target_ip is None:
+                    continue
+                try:
+                    net = ipaddress.ip_network(rule_host, strict=False)
+                except ValueError:
+                    continue
+                if target_ip.version == net.version and target_ip in net:
+                    return True
+                continue
+
+            if target_ip is not None:
+                try:
+                    if target_ip == ipaddress.ip_address(rule_host):
+                        return True
+                except ValueError:
+                    pass
+
+            clean_rule = rule_host.lstrip(".")
+            if clean_rule and (hostname == clean_rule or hostname.endswith(f".{clean_rule}")):
                 return True
         return False
 

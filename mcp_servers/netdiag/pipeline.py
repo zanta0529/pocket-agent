@@ -1,15 +1,14 @@
-"""網站與網路診斷編排管線（Stage 0→4 短路執行、採樣統計與稽核記錄）。"""
+"""網站與網路診斷編排管線（Stage 0→4 短路執行、雙棧 IP 過濾、採樣統計與稽核記錄）。"""
 
 import asyncio
 import time
 from datetime import datetime, timezone
 
 from mcp_servers._shared import CONSTANTS, AuditLogger, t
-from mcp_servers.netdiag.dns_adapter import ALLOWED_DNS_RECORD_TYPES, DnsResolverAdapter
+from mcp_servers.netdiag.dns_adapter import DnsResolverAdapter
 from mcp_servers.netdiag.http_probe import probe_http
 from mcp_servers.netdiag.models import (
     DiagnosticReport,
-    DnsCompareReport,
     DnsStageData,
     HttpStageData,
     ProxyInfo,
@@ -20,11 +19,13 @@ from mcp_servers.netdiag.models import (
 )
 from mcp_servers.netdiag.policy import NetworkAccessPolicy, PolicyError
 from mcp_servers.netdiag.redaction import NETDIAG_REDACTION, NetdiagRedactionPolicy
+from mcp_servers.netdiag.signals import derive_escalation_hint, derive_signals
 from mcp_servers.netdiag.tls_probe import probe_tls
 
 AUDIT = AuditLogger("netdiag", redaction_policy=NETDIAG_REDACTION)
 _VALID_STAGES = frozenset({"dns", "tcp", "tls", "http"})
 _VALID_METHODS = frozenset({"HEAD", "GET"})
+_VALID_IP_FAMILIES = frozenset({"auto", "ipv4", "ipv6"})
 
 
 def _utc_and_local_iso() -> tuple[str, str]:
@@ -78,51 +79,6 @@ async def _probe_tcp(connect_ip: str, port: int, timeout_sec: float) -> TcpStage
                 pass
 
 
-def _derive_signals(runs: tuple[SampleRun, ...], proxy_info: ProxyInfo) -> tuple[str, ...]:
-    signals: list[str] = []
-    if proxy_info.used:
-        signals.append(f"Traffic routed through configured proxy ({proxy_info.display_proxy}).")
-    for run in runs:
-        if run.tls.status == "ok":
-            if run.tls.truststore_verified and run.tls.certifi_verified is False:
-                signals.append(
-                    "Trusted by OS store (truststore) but rejected by public Mozilla CA (certifi): "
-                    "likely internal Enterprise CA or corporate SSL inspection."
-                )
-        for hop in run.http.hops:
-            hdrs = hop.headers
-            if "cf-ray" in hdrs or "cf-cache-status" in hdrs:
-                cf_status = hdrs.get("cf-cache-status", "n/a")
-                signals.append(f"Cloudflare edge headers observed (cf-cache-status={cf_status}).")
-            if "x-amz-cf-id" in hdrs or "x-amz-cf-pop" in hdrs:
-                signals.append(f"AWS CloudFront headers observed (pop={hdrs.get('x-amz-cf-pop', 'n/a')}).")
-            if "server" in hdrs:
-                signals.append(f"Response Server header observed: {hdrs['server']}.")
-            if "x-cache" in hdrs:
-                signals.append(f"Cache indicator observed: x-cache={hdrs['x-cache']}.")
-        if run.http.redirect_blocked_reason:
-            signals.append(f"Redirect target blocked by policy: {run.http.redirect_blocked_reason}.")
-    return tuple(dict.fromkeys(signals))
-
-
-def _derive_escalation_hint(first_failure: str, runs: tuple[SampleRun, ...], proxy_info: ProxyInfo) -> str:
-    if proxy_info.used and first_failure in ("tcp", "tls", "http"):
-        return t("netdiag_mcp.hint_proxy", proxy=proxy_info.display_proxy)
-    if first_failure == "dns":
-        return t("netdiag_mcp.hint_dns")
-    if first_failure == "tcp":
-        for run in runs:
-            if run.tcp.status == "failed":
-                if run.tcp.error_kind == "connection_refused":
-                    return t("netdiag_mcp.hint_tcp_refused")
-                return t("netdiag_mcp.hint_tcp_timeout", port=run.tcp.port)
-    if first_failure == "tls":
-        return t("netdiag_mcp.hint_tls")
-    if first_failure == "http":
-        return t("netdiag_mcp.hint_http")
-    return t("netdiag_mcp.hint_ok")
-
-
 class DiagnosticOrchestrator:
     """協調 Stage 0→4 診斷流水線並記錄稽核軌跡。"""
 
@@ -143,6 +99,7 @@ class DiagnosticOrchestrator:
         max_stage: str = "http",
         method: str = "HEAD",
         host_header: str = "",
+        ip_family: str = "auto",
         samples: int = 1,
         timeout_sec: float | None = None,
     ) -> DiagnosticReport:
@@ -152,10 +109,13 @@ class DiagnosticOrchestrator:
 
         stage_clean = (max_stage or "http").strip().lower()
         method_clean = (method or "HEAD").strip().upper()
+        family_clean = (ip_family or "auto").strip().lower()
         if stage_clean not in _VALID_STAGES:
             raise ValueError(t("netdiag_mcp.invalid_stage", max_stage=max_stage))
         if method_clean not in _VALID_METHODS:
             raise ValueError(t("netdiag_mcp.invalid_method", method=method))
+        if family_clean not in _VALID_IP_FAMILIES:
+            raise ValueError(t("netdiag_mcp.invalid_ip_family", ip_family=ip_family))
         if (
             isinstance(samples, bool)
             or not isinstance(samples, int)
@@ -198,6 +158,7 @@ class DiagnosticOrchestrator:
                 proxy_info=ProxyInfo(),
                 first_failure_stage="preflight",
                 runs=(),
+                ip_family=family_clean,
                 preflight_error=err_msg,
             )
 
@@ -209,6 +170,7 @@ class DiagnosticOrchestrator:
                 proxy_info,
                 stage_clean,
                 method_clean,
+                family_clean,
                 effective_timeout,
             )
             runs.append(run)
@@ -223,7 +185,7 @@ class DiagnosticOrchestrator:
         audit_status = "OK" if first_fail == "none" else "FAILED"
         AUDIT.log(
             "netdiag_diagnose",
-            f"stage={stage_clean} method={method_clean} samples={samples}",
+            f"stage={stage_clean} method={method_clean} family={family_clean} samples={samples}",
             target=safe_url,
             status=audit_status,
             detail=f"first_failure_stage={first_fail}",
@@ -240,8 +202,9 @@ class DiagnosticOrchestrator:
             proxy_info=proxy_info,
             first_failure_stage=first_fail,
             runs=runs_tuple,
-            signals=_derive_signals(runs_tuple, proxy_info),
-            escalation_hint=_derive_escalation_hint(first_fail, runs_tuple, proxy_info),
+            ip_family=family_clean,
+            signals=derive_signals(runs_tuple, proxy_info),
+            escalation_hint=derive_escalation_hint(first_fail, runs_tuple, proxy_info),
         )
 
     async def _execute_single_sample(
@@ -251,6 +214,7 @@ class DiagnosticOrchestrator:
         proxy_info: ProxyInfo,
         max_stage: str,
         method: str,
+        ip_family: str,
         timeout_sec: float,
     ) -> SampleRun:
         t0 = time.perf_counter()
@@ -261,15 +225,31 @@ class DiagnosticOrchestrator:
         # Stage 1: DNS
         pinned_ip: str | None = None
         if target.is_ip_literal:
+            is_v6 = ":" in target.hostname
+            v4 = () if is_v6 else (target.hostname,)
+            v6 = (target.hostname,) if is_v6 else ()
+            if (ip_family == "ipv4" and is_v6) or (ip_family == "ipv6" and not is_v6):
+                dns_data = DnsStageData(
+                    status="failed",
+                    ips=(target.hostname,),
+                    ipv4_ips=v4,
+                    ipv6_ips=v6,
+                    ip_family_requested=ip_family,
+                    error=t("netdiag_mcp.no_ip_for_family", ip_family=ip_family),
+                )
+                return SampleRun(sample_index, "dns", dns_data, not_exec_tcp, not_exec_tls, not_exec_http)
             pinned_ip = target.hostname
             dns_data = DnsStageData(
                 status="skipped",
                 ips=(target.hostname,),
+                ipv4_ips=v4,
+                ipv6_ips=v6,
+                ip_family_requested=ip_family,
                 pinned_ip=target.hostname,
                 error="ip_literal",
             )
         elif proxy_info.used:
-            dns_data = DnsStageData(status="skipped", error="via_proxy")
+            dns_data = DnsStageData(status="skipped", ip_family_requested=ip_family, error="via_proxy")
         else:
             dns_data = await self.dns_adapter.resolve_host_ips(target.hostname, timeout_sec)
             if dns_data.status != "ok" or not dns_data.ips:
@@ -280,6 +260,7 @@ class DiagnosticOrchestrator:
                 failed_dns = DnsStageData(
                     status="failed",
                     ips=dns_data.ips,
+                    ip_family_requested=ip_family,
                     cname_chain=dns_data.cname_chain,
                     ttl=dns_data.ttl,
                     latency_ms=dns_data.latency_ms,
@@ -287,10 +268,32 @@ class DiagnosticOrchestrator:
                     error=self.redaction.redact(str(exc)),
                 )
                 return SampleRun(sample_index, "dns", failed_dns, not_exec_tcp, not_exec_tls, not_exec_http)
-            pinned_ip = valid_ips[0]
+
+            v4 = tuple(ip for ip in valid_ips if ":" not in ip)
+            v6 = tuple(ip for ip in valid_ips if ":" in ip)
+            selected = v4 if ip_family == "ipv4" else v6 if ip_family == "ipv6" else valid_ips
+            if not selected:
+                no_family_dns = DnsStageData(
+                    status="failed",
+                    ips=valid_ips,
+                    ipv4_ips=v4,
+                    ipv6_ips=v6,
+                    ip_family_requested=ip_family,
+                    cname_chain=dns_data.cname_chain,
+                    ttl=dns_data.ttl,
+                    latency_ms=dns_data.latency_ms,
+                    fallback_used=dns_data.fallback_used,
+                    error=t("netdiag_mcp.no_ip_for_family", ip_family=ip_family),
+                )
+                return SampleRun(sample_index, "dns", no_family_dns, not_exec_tcp, not_exec_tls, not_exec_http)
+
+            pinned_ip = selected[0]
             dns_data = DnsStageData(
                 status="ok",
                 ips=valid_ips,
+                ipv4_ips=v4,
+                ipv6_ips=v6,
+                ip_family_requested=ip_family,
                 pinned_ip=pinned_ip,
                 cname_chain=dns_data.cname_chain,
                 ttl=dns_data.ttl,
@@ -344,6 +347,9 @@ class DiagnosticOrchestrator:
             timeout_sec,
         )
         first_fail = "http" if http_data.status != "ok" else "none"
+        if http_data.redirect_tls is not None and not http_data.redirect_tls.verified:
+            tls_data = http_data.redirect_tls
+            first_fail = "tls"
         return SampleRun(
             sample_index,
             first_fail,
@@ -352,118 +358,4 @@ class DiagnosticOrchestrator:
             tls_data,
             http_data,
             round((time.perf_counter() - t0) * 1000.0, 2),
-        )
-
-
-class DnsCompareOrchestrator:
-    """協調多解析器 DNS 比對與郵件安全／CAA 訊號分析。"""
-
-    def __init__(
-        self,
-        policy: NetworkAccessPolicy,
-        dns_adapter: DnsResolverAdapter,
-        redaction: NetdiagRedactionPolicy = NETDIAG_REDACTION,
-    ) -> None:
-        self.policy = policy
-        self.dns_adapter = dns_adapter
-        self.redaction = redaction
-
-    async def run(
-        self,
-        *,
-        domain: str,
-        record_types: str = "A,AAAA,CNAME",
-        nameservers: str = "",
-        timeout_sec: float | None = None,
-    ) -> DnsCompareReport:
-        local_ts, utc_ts = _utc_and_local_iso()
-        effective_timeout = self.policy.config.default_timeout_sec if timeout_sec is None else float(timeout_sec)
-        parsed_types = tuple(dict.fromkeys(rt.strip().upper() for rt in record_types.split(",") if rt.strip()))
-        if not parsed_types or any(rt not in ALLOWED_DNS_RECORD_TYPES for rt in parsed_types):
-            raise ValueError(t("netdiag_mcp.invalid_record_types", record_types=record_types))
-        if not (CONSTANTS.netdiag_min_timeout_sec <= effective_timeout <= CONSTANTS.netdiag_max_timeout_sec):
-            raise ValueError(
-                t(
-                    "netdiag_mcp.invalid_timeout",
-                    timeout=effective_timeout,
-                    min_sec=CONSTANTS.netdiag_min_timeout_sec,
-                    max_sec=CONSTANTS.netdiag_max_timeout_sec,
-                )
-            )
-
-        try:
-            clean_domain = self.policy.validate_domain_preflight(domain)
-            validated_ns = self.policy.validate_nameservers(nameservers)
-        except PolicyError as exc:
-            err_msg = self.redaction.redact(str(exc))
-            safe_domain = self.redaction.redact(domain.strip()) or "<invalid-domain>"
-            AUDIT.log(
-                "netdiag_dns_compare",
-                f"types={','.join(parsed_types)}",
-                target=safe_domain,
-                status="BLOCKED",
-                detail=err_msg,
-            )
-            return DnsCompareReport(
-                observed_at_local=local_ts,
-                observed_at_utc=utc_ts,
-                domain=safe_domain,
-                record_types=parsed_types,
-                fallback_used=False,
-                results=(),
-                discrepancy_summary="",
-                preflight_error=err_msg,
-            )
-
-        targets: list[str | None] = [None, *validated_ns]
-        coros = [self.dns_adapter.query_records(clean_domain, parsed_types, ns, effective_timeout) for ns in targets]
-        results = tuple(await asyncio.gather(*coros))
-        fallback_used = type(self.dns_adapter).__name__ == "SocketFallbackResolverAdapter"
-
-        answer_sets: dict[str, set[str]] = {}
-        mail_signals: list[str] = []
-        failed_resolvers: list[str] = []
-        for res in results:
-            if res.status != "ok":
-                failed_resolvers.append(f"{res.resolver_label}({res.status})")
-                continue
-            vals = {f"{rec.record_type}:{rec.value}" for rec in res.records}
-            answer_sets[res.resolver_label] = vals
-            for rec in res.records:
-                if rec.record_type == "TXT" and "v=spf1" in rec.value.lower():
-                    mail_signals.append(f"SPF record found on {res.resolver_label}")
-                if rec.record_type == "TXT" and "v=dmarc1" in rec.value.lower():
-                    mail_signals.append(f"DMARC record found on {res.resolver_label}")
-
-        unique_sets = {frozenset(v) for v in answer_sets.values()}
-        if len(answer_sets) < 2:
-            suffix = f" ({', '.join(failed_resolvers)})." if failed_resolvers else "."
-            discrepancy = f"Unable to compare resolvers: fewer than 2 resolvers returned complete 'ok' results{suffix}"
-        elif len(unique_sets) > 1:
-            discrepancy = "Discrepancy detected across resolvers (possible Split-Horizon DNS or propagation delay)."
-        else:
-            discrepancy = "All queried resolvers returned consistent answer sets."
-
-        if not answer_sets:
-            audit_status = "FAILED"
-        elif failed_resolvers:
-            audit_status = "PARTIAL"
-        else:
-            audit_status = "OK"
-
-        AUDIT.log(
-            "netdiag_dns_compare",
-            f"types={','.join(parsed_types)} ns={len(targets)}",
-            target=clean_domain,
-            status=audit_status,
-        )
-        return DnsCompareReport(
-            observed_at_local=local_ts,
-            observed_at_utc=utc_ts,
-            domain=clean_domain,
-            record_types=parsed_types,
-            fallback_used=fallback_used,
-            results=results,
-            discrepancy_summary=discrepancy,
-            mail_security_signals=tuple(dict.fromkeys(mail_signals)),
         )
