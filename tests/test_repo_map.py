@@ -131,9 +131,10 @@ def test_rag_indexed_search_skips_sensitive_clamps_top_k_and_i18n(tmp_path, monk
     from pocket_agent.system.constants import MAX_RAG_TOP_K
     from pocket_agent.system.i18n import set_locale
     from pocket_agent.tools import rag
+    from pocket_agent.tools.search_index import WorkspaceSearchIndex
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(rag, "_last_sync_state", None)
+    monkeypatch.setattr(rag, "default_search_index", WorkspaceSearchIndex(db_path=tmp_path / "db" / "rag_test.db"))
 
     (tmp_path / "auth_service.py").write_text(
         "def verify_jwt_token(token: str) -> bool:\n    return True\n",

@@ -170,6 +170,7 @@ Pocket Agent 的解決方案：
 
 - **強制純帳號密碼驗證與零憑證殘留**：動態產生的 `.rdp` 設定檔強制設定 `redirectsmartcards:i:0`、`redirectwebauthn:i:0`、`redirectdrives:i:0` 與 `prompt for credentials:i:0`，徹底關閉智慧卡、Windows Hello 與本機磁碟掛載後門。啟動 `mstsc.exe` 時透過 Win32 `CredWriteW` 寫入僅存活於當次登入記憶體（`CRED_PERSIST_SESSION`）的暫存憑證，並於視窗握手完成後（`finally` 區塊）**立即呼叫 `CredDeleteW` 將憑證刪除**，確保 `cmdkey /list` 不殘留任何免密登入憑證。
 - **視窗座標沙盒與前景焦點保護**：`win_rdp_mouse_action` 嚴格驗證 `(x, y)` 必須位於 `mstsc.exe` 客戶區範圍內，拒絕點擊視窗外之本機桌面；`win_rdp_keyboard_action` 強制驗證前景視窗（`GetForegroundWindow`）確為遠端桌面視窗後才發送按鍵，並封鎖 `Ctrl+Alt+Del`、`Win+L`、`Alt+Tab` 等系統熱鍵。
+- **可信程序／視窗綁定與截圖失焦中止**：嚴格綁定本工具啟動之系統可信 `mstsc.exe` PID、映像路徑與 `TscShellContainerClass` 視窗類別；`win_rdp_screenshot` 強制使用 `ImageGrab.grab(window=hwnd)` 並於視窗失焦時立即中止。
 - **設定檔白名單與機密遮罩**：`win_read_config` 僅允許讀取 `C:\Windows\System32\drivers\etc\`、`C:\Windows\win.ini`、`C:\Windows\system.ini`、`C:\inetpub\wwwroot\`、`C:\ProgramData\`，並攔截包含 `SAM`、`SECURITY`、`ntds.dit`、`web.config`、`.pfx`、`.key`、`.env` 等敏感路徑，回傳文字亦自動遮罩密碼與 ConnectionString。
 
 ### 3. 環境變數與配置參數表 (`servers.win_rdp.env`)
@@ -249,7 +250,7 @@ Pocket Agent 的解決方案：
 ### 2. 安全防禦邊界
 
 - **連線與交易層級強制唯讀**：`mysql_mcp.py` 連線後立即執行 `SET SESSION TRANSACTION READ ONLY` 與 `START TRANSACTION READ ONLY`；`mssql_mcp.py` 啟用 `ApplicationIntent=ReadOnly` 與 `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED`，且兩者皆設為 `autocommit=False`，並於 `finally` 區塊強制 `rollback()` 與 `close()`。
-- **單一查詢與危險關鍵字封鎖**：清除開頭註解（含 `--`、`/* */` 及 MySQL `#`）後僅允許 `SELECT` 或 `WITH`（MySQL 亦支援 `EXPLAIN`）開頭，嚴格禁止多重語句（分號注入）以及 `INTO`、`FOR UPDATE`、`EXEC`、`EXECUTE`、`xp_cmdshell`、`OPENROWSET`、`BULK` 等具寫入或系統副作用之語法。
+- **單一查詢、引號感知註解正規化與串流熔斷**：清除開頭註解（含 `--`、`/* */` 及 MySQL `#`）後僅允許 `SELECT` 或 `WITH`（MySQL 亦支援 `EXPLAIN`）開頭，嚴格禁止多重語句（分號注入）以及 `INTO`、`FOR UPDATE`、`EXEC`、`EXECUTE`、`xp_cmdshell`、`OPENROWSET`、`BULK` 等具寫入或系統副作用之語法。`mysql_mcp.py` 採用引號感知之註解正規化（拒絕 `/*!` 可執行註解與引號內反斜線跳脫）與串流游標（`SSCursor`／`buffered=False`，截斷時直接中斷連線不排空剩餘資料）；`*_inspect_health` 採零鎖定詮釋資料／DMV／受限 `PRAGMA` 巡檢，`mysql_check_table` 限定單表 `QUICK`／`FAST` 模式與 `2 GB` 容量熔斷。
 - **彈性憑證配置與機密遮罩**：`MYSQL_HOST`／`MYSQL_PORT`／`MYSQL_USER`／`MYSQL_PASSWORD`／`MYSQL_DATABASE` 與 `MSSQL_HOST`／`MSSQL_PORT`／`MSSQL_USER`／`MSSQL_PASSWORD`／`MSSQL_DATABASE` 皆支援設定檔預填（含 IPv6 位址正規化比對）、留空或省略並於執行期互動詢問（快取於記憶體，認證失敗自動清除）；查詢結果自動針對敏感欄位名稱、機密鍵值、連線 URI 內嵌帳密與 PEM 私鑰遮罩為 `[REDACTED]`。
 
 ---

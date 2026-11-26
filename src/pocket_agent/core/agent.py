@@ -67,6 +67,7 @@ from pocket_agent.tools.fs import (  # noqa: F401
     SCRATCH_TOOLS,
     _validate_safe_path,
     call_fs_tool,
+    resolve_workspace_roots,
 )
 from pocket_agent.tools.image import image_tool, save_image_b64
 from pocket_agent.tools.shell import SHELL_TOOLS, call_shell_tool, is_shell_tool  # noqa: F401
@@ -919,6 +920,8 @@ class Agent:
             ),
         ]
 
+        allow_web = self.allowed_tools is None or "search_web" in self.allowed_tools
+        allow_write_file = self.allowed_tools is None or "write_to_file" in self.allowed_tools
         use_scratch_note_only = (
             self.allowed_tools is not None
             and "write_scratch_note" in self.allowed_tools
@@ -929,28 +932,36 @@ class Agent:
                 suggested_note = self.scratch_note_filename or "research_notes.md"
                 note_dest = scratch_dir() / "notes" / suggested_note
                 scratch_guidance = (
-                    "\n2. 若檢索與分析過程冗長，請務必善用 `write_scratch_note` 工具"
+                    "\n- 若檢索與分析過程冗長，請務必善用 `write_scratch_note` 工具"
                     f"（建議檔名 `{suggested_note}`，對應沙盒路徑 `{note_dest}`），"
                     "將已確認的重點、來源 URL 與待查項目增量寫入全域沙盒暫存區，"
                     "確保資訊不受 Context Overflow 截斷或中斷影響，且絕不污染專案工作區。"
                 )
-            else:
+            elif allow_write_file:
                 notes_path = scratch_dir() / "notes.md"
                 scratch_guidance = (
-                    "\n2. 若檢索與分析過程冗長，請務必善用 `write_to_file` 工具，"
+                    "\n- 若檢索與分析過程冗長，請務必善用 `write_to_file` 工具，"
                     "將關鍵資訊、變數名稱與待辦事項 (TODO) "
                     f"整理並寫入 `{notes_path}` 等全域沙盒暫存檔中（建立外部草稿區/Scratchpad）。"
                     "這樣能確保重要資訊不受 Context Overflow 截斷影響，且不污染專案工作區。"
                 )
+            else:
+                scratch_guidance = ""
 
-        static_parts.append(
-            "[資源管理] 在處理需閱讀大量原始碼或進行深度網路研究的大型任務時："
-            "\n1. 請優先使用 `search_web` 取得真實存在的網址後再呼叫 `read_url_content`，"
-            "切勿憑記憶猜測深層文件 URL 以免頻繁觸發 HTTP 404。"
-            "\n1. 請優先使用 `search_files` 或帶有 `start_line`/`end_line` 的 `read_file` "
+        resource_lines: list[str] = []
+        if allow_web:
+            resource_lines.append(
+                "\n- 請優先使用 `search_web` 取得真實存在的網址後再呼叫 `read_url_content`，"
+                "切勿憑記憶猜測深層文件 URL 以免頻繁觸發 HTTP 404。"
+            )
+        resource_lines.append(
+            "\n- 請優先使用 `search_files` 或帶有 `start_line`/`end_line` 的 `read_file` "
             "進行精準檢索，避免一次性讀取過大檔案或目錄。"
-            f"{scratch_guidance}"
         )
+        if scratch_guidance:
+            resource_lines.append(scratch_guidance)
+
+        static_parts.append("[資源管理] 在處理需閱讀大量原始碼或進行深度研究的大型任務時：" + "".join(resource_lines))
 
         if self.system_prompt:
             static_parts.append(self.system_prompt)
@@ -980,7 +991,7 @@ class Agent:
         if repo_map_str is None:
             from pocket_agent.tools.repo_map import default_repo_map
 
-            search_roots = self.workspace_dirs if self.workspace_dirs else [Path.cwd()]
+            search_roots = resolve_workspace_roots(self.workspace_dirs)
             max_repo_budget = min(1200, int(self._budget.effective_input_budget * 0.05))
             repo_map_str = default_repo_map.build_repo_map(search_roots, budget_tokens=max_repo_budget)
         if repo_map_str:
@@ -1451,7 +1462,7 @@ class Agent:
         def _compute_static_context() -> tuple[str, str]:
             from pocket_agent.tools.repo_map import default_repo_map
 
-            search_roots = self.workspace_dirs if self.workspace_dirs else [Path.cwd()]
+            search_roots = resolve_workspace_roots(self.workspace_dirs)
             max_repo_budget = min(1200, int(self._budget.effective_input_budget * 0.05))
             rm_str = default_repo_map.build_repo_map(search_roots, budget_tokens=max_repo_budget)
             sk_str = skills_index_prompt(self.workspace_dirs, initial_query)
