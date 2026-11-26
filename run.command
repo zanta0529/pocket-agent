@@ -21,7 +21,7 @@ else
         SYS_PY="python"
     else
         echo "[ERROR] Neither 'python3' nor 'python' was found in your PATH."
-        echo "Please install Python 3.11+ via Homebrew (brew install python3)."
+        echo "Please install Python 3.14+ via Homebrew (brew install python@3.14)."
         echo "============================================================"
         exit 1
     fi

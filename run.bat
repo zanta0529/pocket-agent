@@ -27,7 +27,7 @@ if not errorlevel 1 (
 )
 
 echo [ERROR] Neither 'python' nor 'py' was found in your PATH.
-echo Please install Python 3.11+ and ensure it is added to your PATH.
+echo Please install Python 3.14+ and ensure it is added to your PATH.
 echo ============================================================
 pause
 exit /b 1

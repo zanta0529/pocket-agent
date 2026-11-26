@@ -19,6 +19,7 @@ Its key advantage is **OAuth PKCE authentication directly integrated with the Ch
 ### 📑 Table of Contents
 
 - [🚀 Installation & First Run](#-installation--first-run)
+  - [One-Line Install [Fastest]](#one-line-install-fastest)
   - [Option A: Windows Modern Portable [Recommended for General Users]](#option-a-windows-modern-portable-recommended-for-general-users)
   - [Option B: Cross-Platform One-Click Launchers [Recommended for Quick Tryout]](#option-b-cross-platform-one-click-launchers-recommended-for-quick-tryout)
   - [Option C: Manual Developer Installation [Recommended for Development]](#option-c-manual-developer-installation-recommended-for-development)
@@ -47,8 +48,34 @@ Its key advantage is **OAuth PKCE authentication directly integrated with the Ch
 
 ### System Requirements
 
-- **Python 3.14 or higher** (not required on the host if using Option A: Modern Portable).
+- **Python 3.14 or higher** (not required on Windows when using One-Line Install or Option A: Modern Portable; on Linux/macOS, `uv` will also fetch Python 3.14 automatically if installed).
 - Supported OS: Windows 10/11, macOS (Apple Silicon / Intel), Linux (Ubuntu, Debian, RHEL, etc.).
+
+---
+
+### One-Line Install [Fastest]
+
+The installer automatically downloads the release, verifies SHA-256 checksums (when `SHA256SUMS.txt` is published), sets up an isolated runtime, and registers the `pocket-agent` command:
+
+- **🪟 Windows (PowerShell)**:
+
+  ```powershell
+  irm https://raw.githubusercontent.com/zanta0529/pocket-agent/main/build_scripts/install.ps1 | iex
+  ```
+
+- **🏢 Windows Enterprise CMD (No PowerShell Required)**:
+
+  ```cmd
+  curl -fsSLO https://raw.githubusercontent.com/zanta0529/pocket-agent/main/build_scripts/install.cmd && install.cmd
+  ```
+
+- **🐧 Linux / 🍎 macOS**:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/zanta0529/pocket-agent/main/build_scripts/install.sh | sh
+  ```
+
+> 💡 **Security & Uninstall**: Windows installs into `%LOCALAPPDATA%\PocketAgent` (preserving the Modern Portable layout and `/update` support); Linux/macOS installs into `~/.local/share/pocket-agent` with a launcher at `~/.local/bin/pocket-agent`. Set `POCKET_AGENT_VERSION` to pin a release or `POCKET_AGENT_REQUIRE_CHECKSUM=1` to require checksum verification. To uninstall while preserving `~/.pocket-agent`, pass `-Uninstall` (`install.ps1`) or `--uninstall` (`install.cmd` / `install.sh`).
 
 ---
 

@@ -21,7 +21,7 @@ else
         SYS_PY="python"
     else
         echo "[ERROR] Neither 'python3' nor 'python' was found in your PATH."
-        echo "Please install Python 3.11+ (e.g., dnf install python3.11 on RHEL)."
+        echo "Please install Python 3.14+ (e.g., dnf install python3.14 on RHEL)."
         echo "============================================================"
         exit 1
     fi
