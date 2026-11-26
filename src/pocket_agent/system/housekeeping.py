@@ -522,13 +522,24 @@ class Housekeeper:
         max_size_mb: int | None = None,
         db_path: Path | None = None,
     ) -> tuple[int, int]:
-        """清理工作區 FTS5 Trigram 檢索索引中的孤兒紀錄、過期列與超額資料庫。"""
-        from pocket_agent.tools.search_index import WorkspaceSearchIndex, default_search_index
+        """清理工作區 FTS5 Trigram 檢索索引中的孤兒紀錄、過期列、超額資料庫及舊版 codebase_index.db。"""
+        from pocket_agent.tools.search_index import (
+            WorkspaceSearchIndex,
+            _unlink_db_with_sidecars,
+            default_search_index,
+        )
 
         eff_ttl = ttl_days if ttl_days is not None else self.ttl_days
         eff_max_mb = max_size_mb if max_size_mb is not None else SEARCH_FTS_MAX_DB_SIZE_MB
         target_index = WorkspaceSearchIndex(db_path=db_path) if db_path is not None else default_search_index
-        return target_index.prune_stale_entries(ttl_days=eff_ttl, max_size_mb=eff_max_mb)
+        cleaned, freed = target_index.prune_stale_entries(ttl_days=eff_ttl, max_size_mb=eff_max_mb)
+        if db_path is None:
+            legacy_db = user_dir() / "db" / "codebase_index.db"
+            legacy_freed = _unlink_db_with_sidecars(legacy_db)
+            if legacy_freed > 0:
+                cleaned += 1
+                freed += legacy_freed
+        return (cleaned, freed)
 
     def _clean_scratch_bundle(
         self,
@@ -734,14 +745,15 @@ class Housekeeper:
         if not self._is_custom_scratch:
             db_dir = user_dir() / "db"
             if db_dir.is_dir():
-                for suffix in ("", "-wal", "-shm"):
-                    idx_file = db_dir / f"workspace_search_index.db{suffix}"
-                    if idx_file.is_file():
-                        try:
-                            total_bytes += idx_file.stat().st_size
-                            file_count += 1
-                        except OSError:
-                            continue
+                for db_name in ("workspace_search_index.db", "codebase_index.db"):
+                    for suffix in ("", "-wal", "-shm"):
+                        idx_file = db_dir / f"{db_name}{suffix}"
+                        if idx_file.is_file():
+                            try:
+                                total_bytes += idx_file.stat().st_size
+                                file_count += 1
+                            except OSError:
+                                continue
 
         return (file_count, total_bytes)
 

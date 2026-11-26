@@ -453,7 +453,11 @@ class IndexedSearchToolHandler(ToolHandler):
 
     async def execute(self, name: str, args: dict, call_id: str, agent: Any) -> ToolExecutionResult:
         fn = _resolve_callable("call_indexed_search", call_indexed_search)
-        result = await run_sync(fn, args, agent.workspace_dirs)
+        is_sensitive = getattr(agent, "is_sensitive_session", False) is True
+        extra_kwargs: dict[str, Any] = {}
+        if is_sensitive and _callable_accepts_kwarg(fn, "allow_disk_index"):
+            extra_kwargs["allow_disk_index"] = False
+        result = await run_sync(fn, args, agent.workspace_dirs, **extra_kwargs)
         return ToolExecutionResult(output=result)
 
 

@@ -369,10 +369,8 @@ def test_multi_workspace_rag_repo_map_and_skills_include_cwd(tmp_path: Path, mon
     (cwd_dir / "cwd_mod.py").write_text("def cwd_unique_func() -> None:\n    pass\n", encoding="utf-8")
     (ext_dir / "ext_mod.py").write_text("def ext_unique_func() -> None:\n    pass\n", encoding="utf-8")
 
-    fake_user = tmp_path / "user"
     monkeypatch.chdir(cwd_dir)
-    monkeypatch.setattr("pocket_agent.tools.rag.user_dir", lambda: fake_user)
-    monkeypatch.setattr(rag, "_last_sync_state", None)
+    monkeypatch.setattr(rag, "default_search_index", WorkspaceSearchIndex(db_path=tmp_path / "db" / "multi_ws.db"))
 
     # 1. rag.call_indexed_search 同時命中 CWD 與 /add-dir
     rag_cwd = rag.call_indexed_search({"query": "cwd_unique_func"}, workspace_dirs=[str(ext_dir)])

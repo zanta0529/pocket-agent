@@ -53,6 +53,14 @@ class SearchCandidateIndex(Protocol):
         read_text_fn: Callable[[Path], tuple[str | None, str | None]],
     ) -> list[ScannedFile] | None: ...
 
+    def sync_and_query_terms(
+        self,
+        scanned_files: list[ScannedFile],
+        roots: list[Path],
+        terms: list[str],
+        read_text_fn: Callable[[Path], tuple[str | None, str | None]],
+    ) -> list[ScannedFile] | None: ...
+
 
 def _unlink_db_with_sidecars(db_path: Path) -> int:
     """刪除 SQLite 主檔與 -wal/-shm 側車檔，回傳釋放位元組數。"""
@@ -136,23 +144,131 @@ class WorkspaceSearchIndex:
         conn.executemany("DELETE FROM file_content_fts WHERE path = ?", paths_to_del)
         conn.executemany("DELETE FROM file_meta WHERE path = ?", paths_to_del)
 
-    def sync_and_query_candidates(
+    def _sync_files_in_conn(
+        self,
+        conn: sqlite3.Connection,
+        scanned_files: list[ScannedFile],
+        root_strs: list[str],
+        read_text_fn: Callable[[Path], tuple[str | None, str | None]],
+        *,
+        max_file_bytes: int,
+        max_indexed_files: int,
+        sync_budget_sec: float,
+    ) -> None:
+        """在既有 SQLite 連線交易內執行單次增量索引同步。"""
+        placeholders = ",".join("?" for _ in root_strs)
+        existing_rows = conn.execute(
+            f"SELECT path, mtime, size, is_text, indexed_complete FROM file_meta WHERE root IN ({placeholders})",
+            root_strs,
+        ).fetchall()
+        existing_map = {r[0]: (float(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in existing_rows}
+
+        scanned_map: dict[str, ScannedFile] = {str(sf.path): sf for sf in scanned_files}
+        stale_paths = [(p,) for p in existing_map if p not in scanned_map]
+        self._delete_paths(conn, stale_paths)
+
+        total_indexed = conn.execute(
+            "SELECT COUNT(*) FROM file_meta WHERE is_text = 1 AND indexed_complete = 1"
+        ).fetchone()[0]
+        now_ts = time.time()
+        deadline = time.monotonic() + max(0.1, float(sync_budget_sec))
+        seen_to_touch: list[tuple[float, str]] = []
+
+        for str_path, sf in scanned_map.items():
+            check_cancelled()
+            prev = existing_map.get(str_path)
+            if (
+                prev is not None
+                and abs(prev[0] - sf.mtime) < 0.001
+                and prev[1] == sf.size
+                and (prev[3] == 1 or sf.size > max_file_bytes)
+            ):
+                seen_to_touch.append((now_ts, str_path))
+                continue
+
+            was_counted = prev is not None and prev[2] == 1 and prev[3] == 1
+            over_limit = (
+                sf.size > max_file_bytes
+                or time.monotonic() > deadline
+                or (total_indexed >= max_indexed_files and not was_counted)
+            )
+            conn.execute("DELETE FROM file_content_fts WHERE path = ?", (str_path,))
+            if over_limit:
+                conn.execute(
+                    _META_UPSERT_SQL,
+                    (
+                        str_path,
+                        str(sf.root),
+                        sf.display_path,
+                        sf.path.name,
+                        sf.mtime,
+                        sf.size,
+                        1,
+                        "",
+                        0,
+                        now_ts,
+                    ),
+                )
+                if was_counted:
+                    total_indexed = max(0, total_indexed - 1)
+                continue
+
+            text, enc = read_text_fn(sf.path)
+            if text is None:
+                conn.execute(
+                    _META_UPSERT_SQL,
+                    (
+                        str_path,
+                        str(sf.root),
+                        sf.display_path,
+                        sf.path.name,
+                        sf.mtime,
+                        sf.size,
+                        0,
+                        "",
+                        1,
+                        now_ts,
+                    ),
+                )
+                if was_counted:
+                    total_indexed = max(0, total_indexed - 1)
+                continue
+
+            conn.execute("INSERT INTO file_content_fts (path, content) VALUES (?, ?)", (str_path, text))
+            conn.execute(
+                _META_UPSERT_SQL,
+                (
+                    str_path,
+                    str(sf.root),
+                    sf.display_path,
+                    sf.path.name,
+                    sf.mtime,
+                    sf.size,
+                    1,
+                    enc or "utf-8",
+                    1,
+                    now_ts,
+                ),
+            )
+            if not was_counted:
+                total_indexed += 1
+
+        if seen_to_touch:
+            conn.executemany("UPDATE file_meta SET last_seen = ? WHERE path = ?", seen_to_touch)
+
+    def _sync_and_match_fts(
         self,
         scanned_files: list[ScannedFile],
         roots: list[Path],
-        query: str,
+        fts_match_expr: str,
         read_text_fn: Callable[[Path], tuple[str | None, str | None]],
         *,
-        max_file_bytes: int = SEARCH_FTS_MAX_FILE_BYTES,
-        max_indexed_files: int = SEARCH_FTS_MAX_INDEXED_FILES,
-        max_db_size_mb: int = SEARCH_FTS_MAX_DB_SIZE_MB,
-        sync_budget_sec: float = SEARCH_FTS_SYNC_BUDGET_SEC,
+        max_file_bytes: int,
+        max_indexed_files: int,
+        max_db_size_mb: int,
+        sync_budget_sec: float,
     ) -> list[ScannedFile] | None:
-        """增量同步並以 Trigram 預篩候選檔案；不適用或異常時回傳 None 降級 Stage 2。"""
-        stripped = query.strip()
-        if len(stripped) < 3 or self._trigram_unavailable or not roots:
-            return None
-
+        """同步索引並執行 FTS5 MATCH 預篩（含未完整索引之補掃聯集）。"""
         root_strs = [str(r) for r in roots]
         max_db_bytes = max(1, int(max_db_size_mb)) * 1024 * 1024
         with self._lock:
@@ -166,111 +282,19 @@ class WorkspaceSearchIndex:
                 target_db.parent.mkdir(parents=True, exist_ok=True)
                 with self._connect(target_db) as conn:
                     self._ensure_schema(conn)
-                    placeholders = ",".join("?" for _ in root_strs)
-                    existing_rows = conn.execute(
-                        "SELECT path, mtime, size, is_text, indexed_complete "
-                        f"FROM file_meta WHERE root IN ({placeholders})",
+                    self._sync_files_in_conn(
+                        conn,
+                        scanned_files,
                         root_strs,
-                    ).fetchall()
-                    existing_map = {r[0]: (float(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in existing_rows}
-
-                    scanned_map: dict[str, ScannedFile] = {str(sf.path): sf for sf in scanned_files}
-                    stale_paths = [(p,) for p in existing_map if p not in scanned_map]
-                    self._delete_paths(conn, stale_paths)
-
-                    total_indexed = conn.execute(
-                        "SELECT COUNT(*) FROM file_meta WHERE is_text = 1 AND indexed_complete = 1"
-                    ).fetchone()[0]
-                    now_ts = time.time()
-                    deadline = time.monotonic() + max(0.1, float(sync_budget_sec))
-                    seen_to_touch: list[tuple[float, str]] = []
-
-                    for str_path, sf in scanned_map.items():
-                        check_cancelled()
-                        prev = existing_map.get(str_path)
-                        if (
-                            prev is not None
-                            and abs(prev[0] - sf.mtime) < 0.001
-                            and prev[1] == sf.size
-                            and (prev[3] == 1 or sf.size > max_file_bytes)
-                        ):
-                            seen_to_touch.append((now_ts, str_path))
-                            continue
-
-                        was_counted = prev is not None and prev[2] == 1 and prev[3] == 1
-                        over_limit = (
-                            sf.size > max_file_bytes
-                            or time.monotonic() > deadline
-                            or (total_indexed >= max_indexed_files and not was_counted)
-                        )
-                        conn.execute("DELETE FROM file_content_fts WHERE path = ?", (str_path,))
-                        if over_limit:
-                            conn.execute(
-                                _META_UPSERT_SQL,
-                                (
-                                    str_path,
-                                    str(sf.root),
-                                    sf.display_path,
-                                    sf.path.name,
-                                    sf.mtime,
-                                    sf.size,
-                                    1,
-                                    "",
-                                    0,
-                                    now_ts,
-                                ),
-                            )
-                            if was_counted:
-                                total_indexed = max(0, total_indexed - 1)
-                            continue
-
-                        text, enc = read_text_fn(sf.path)
-                        if text is None:
-                            conn.execute(
-                                _META_UPSERT_SQL,
-                                (
-                                    str_path,
-                                    str(sf.root),
-                                    sf.display_path,
-                                    sf.path.name,
-                                    sf.mtime,
-                                    sf.size,
-                                    0,
-                                    "",
-                                    1,
-                                    now_ts,
-                                ),
-                            )
-                            if was_counted:
-                                total_indexed = max(0, total_indexed - 1)
-                            continue
-
-                        conn.execute("INSERT INTO file_content_fts (path, content) VALUES (?, ?)", (str_path, text))
-                        conn.execute(
-                            _META_UPSERT_SQL,
-                            (
-                                str_path,
-                                str(sf.root),
-                                sf.display_path,
-                                sf.path.name,
-                                sf.mtime,
-                                sf.size,
-                                1,
-                                enc or "utf-8",
-                                1,
-                                now_ts,
-                            ),
-                        )
-                        if not was_counted:
-                            total_indexed += 1
-
-                    if seen_to_touch:
-                        conn.executemany("UPDATE file_meta SET last_seen = ? WHERE path = ?", seen_to_touch)
-
-                    fts_phrase = '"' + stripped.replace('"', '""') + '"'
+                        read_text_fn,
+                        max_file_bytes=max_file_bytes,
+                        max_indexed_files=max_indexed_files,
+                        sync_budget_sec=sync_budget_sec,
+                    )
+                    placeholders = ",".join("?" for _ in root_strs)
                     fts_rows = conn.execute(
                         "SELECT path FROM file_content_fts WHERE file_content_fts MATCH ?",
-                        (fts_phrase,),
+                        (fts_match_expr,),
                     ).fetchall()
                     incomplete_rows = conn.execute(
                         f"SELECT path FROM file_meta "
@@ -292,6 +316,101 @@ class WorkspaceSearchIndex:
             except sqlite3.Error as exc:
                 log.warning("工作區 FTS5 索引異常，降級為直接掃描: %s", exc)
                 return None
+
+    def sync_and_query_candidates(
+        self,
+        scanned_files: list[ScannedFile],
+        roots: list[Path],
+        query: str,
+        read_text_fn: Callable[[Path], tuple[str | None, str | None]],
+        *,
+        max_file_bytes: int = SEARCH_FTS_MAX_FILE_BYTES,
+        max_indexed_files: int = SEARCH_FTS_MAX_INDEXED_FILES,
+        max_db_size_mb: int = SEARCH_FTS_MAX_DB_SIZE_MB,
+        sync_budget_sec: float = SEARCH_FTS_SYNC_BUDGET_SEC,
+    ) -> list[ScannedFile] | None:
+        """增量同步並以 Trigram 預篩候選檔案；不適用或異常時回傳 None 降級 Stage 2。"""
+        stripped = query.strip()
+        if len(stripped) < 3 or self._trigram_unavailable or not roots:
+            return None
+        fts_phrase = '"' + stripped.replace('"', '""') + '"'
+        return self._sync_and_match_fts(
+            scanned_files,
+            roots,
+            fts_phrase,
+            read_text_fn,
+            max_file_bytes=max_file_bytes,
+            max_indexed_files=max_indexed_files,
+            max_db_size_mb=max_db_size_mb,
+            sync_budget_sec=sync_budget_sec,
+        )
+
+    def sync_and_query_terms(
+        self,
+        scanned_files: list[ScannedFile],
+        roots: list[Path],
+        terms: list[str],
+        read_text_fn: Callable[[Path], tuple[str | None, str | None]],
+        *,
+        max_file_bytes: int = SEARCH_FTS_MAX_FILE_BYTES,
+        max_indexed_files: int = SEARCH_FTS_MAX_INDEXED_FILES,
+        max_db_size_mb: int = SEARCH_FTS_MAX_DB_SIZE_MB,
+        sync_budget_sec: float = SEARCH_FTS_SYNC_BUDGET_SEC,
+    ) -> list[ScannedFile] | None:
+        """增量同步並以多關鍵字 OR 預篩候選檔案；任一詞小於 3 字元或異常時回傳 None 降級。"""
+        clean_terms = [term.strip() for term in terms if term and term.strip()]
+        if not clean_terms or any(len(term) < 3 for term in clean_terms) or self._trigram_unavailable or not roots:
+            return None
+        fts_expr = " OR ".join('"' + term.replace('"', '""') + '"' for term in clean_terms)
+        return self._sync_and_match_fts(
+            scanned_files,
+            roots,
+            fts_expr,
+            read_text_fn,
+            max_file_bytes=max_file_bytes,
+            max_indexed_files=max_indexed_files,
+            max_db_size_mb=max_db_size_mb,
+            sync_budget_sec=sync_budget_sec,
+        )
+
+    def sync_workspace(
+        self,
+        scanned_files: list[ScannedFile],
+        roots: list[Path],
+        read_text_fn: Callable[[Path], tuple[str | None, str | None]],
+        *,
+        max_file_bytes: int = SEARCH_FTS_MAX_FILE_BYTES,
+        max_indexed_files: int = SEARCH_FTS_MAX_INDEXED_FILES,
+        max_db_size_mb: int = SEARCH_FTS_MAX_DB_SIZE_MB,
+        sync_budget_sec: float = SEARCH_FTS_SYNC_BUDGET_SEC,
+    ) -> int:
+        """僅同步工作區檔案至統一索引庫（供顯式同步介面使用），回傳掃描檔案數。"""
+        if not roots:
+            return 0
+        root_strs = [str(r) for r in roots]
+        max_db_bytes = max(1, int(max_db_size_mb)) * 1024 * 1024
+        with self._lock:
+            target_db = self.db_path
+            if target_db.is_file() and self._db_total_bytes(target_db) > max_db_bytes:
+                self.prune_stale_entries(max_size_mb=max_db_size_mb, vacuum=True)
+            try:
+                target_db.parent.mkdir(parents=True, exist_ok=True)
+                with self._connect(target_db) as conn:
+                    self._ensure_schema(conn)
+                    self._sync_files_in_conn(
+                        conn,
+                        scanned_files,
+                        root_strs,
+                        read_text_fn,
+                        max_file_bytes=max_file_bytes,
+                        max_indexed_files=max_indexed_files,
+                        sync_budget_sec=sync_budget_sec,
+                    )
+                    conn.commit()
+                return len(scanned_files)
+            except sqlite3.Error as exc:
+                log.warning("同步工作區索引失敗: %s", exc)
+                return 0
 
     def prune_stale_rows(self) -> int:
         """清除磁碟已不存在之孤兒路徑列，回傳刪除列數。"""

@@ -616,8 +616,18 @@ class CodeSearchCommand(CliCommand):
         ctx.renderer.message(t("misc_cmd.codesearch_searching", query=query), "yellow")
 
         from pocket_agent.core.cancellation import run_sync
+        from pocket_agent.core.tool_registry import _callable_accepts_kwarg
 
-        result = await run_sync(call_indexed_search, {"query": query, "top_k": 5}, ctx.agent.workspace_dirs)
+        is_sensitive = getattr(ctx.agent, "is_sensitive_session", False) is True
+        extra_kwargs: dict[str, object] = {}
+        if is_sensitive and _callable_accepts_kwarg(call_indexed_search, "allow_disk_index"):
+            extra_kwargs["allow_disk_index"] = False
+        result = await run_sync(
+            call_indexed_search,
+            {"query": query, "top_k": 5},
+            ctx.agent.workspace_dirs,
+            **extra_kwargs,
+        )
 
         clean_result = result
         if clean_result.startswith("<external_content>"):

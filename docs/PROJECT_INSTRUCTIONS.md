@@ -1,136 +1,86 @@
 # PocketAgent 專案特定開發指南
 
-本文件依目前版本庫的 README、原始碼、依賴、測試及 GitHub Workflow 設定整理。變更技術棧前重新確認現況。以下架構描述為已觀察現況，開發要求則為後續修改應遵循的準則，並非完整安全稽核結論。
+本文件依版本庫現況整理開發與驗證準則，非完整安全稽核結論；變更技術棧前須重新確認。
 
 ## 1. 專案定位與技術棧
 
-- PocketAgent 是本機 Python AI 代理應用，提供 CLI 模式，支援 Windows、macOS、Linux。
-- 最低版本為 Python 3.14；Windows 可攜版發布流程（`.github/workflows/release.yml`）亦使用 Python 3.14。
-- 入口為 `src/pocket_agent/main.py`，使用 Click；CLI 使用 Rich／prompt_toolkit。
-- 引擎透過統一轉接架構支援多元模型供應商：`OpenAIResponsesEngine`（ChatGPT OAuth `openai` 與官方 `openai-api`）、`OpenRouterEngine`（`openrouter`）、`OllamaChatEngine`（本機 `ollama` 與雲端 `ollamacloud`）、`CerebrasEngine`（`cerebras`）、`GroqEngine`（`groq`）、`AzureEngine`（`azure`）、`MistralEngine`（`mistral`）、`SambaNovaEngine`（`sambanova`）、`StandardChatCompletionsEngine`（`gemini`、`gemini_oauth`、`openai-compatible`）；非同步流程使用 asyncio。
-- 認證包含 OpenAI OAuth PKCE 與 Google Gemini OAuth 雙軌，敏感憑證優先透過作業系統原生 `keyring` 儲存，不支援原生憑證庫時以主密碼保護之 JWE 加密庫（`encrypted_provider`）儲存（拒絕明碼降級）；核心依賴包含 OpenAI SDK、httpx、keyring、mcp、curl_cffi、cryptography、truststore、pathspec、Pillow、pywin32（Windows），另 `requirements.in` 尚留有歷史保留依賴 FastAPI／uvicorn。
-- MCP 提供外部工具整合：`browser_mcp.py` 為瀏覽器自動化入口（依賴 Playwright，沿用系統 Edge／Chrome），`github_mcp.py` 為 GitHub PR／Issue／Diff／Review／CI 檢索、範本感知 PR 建立與留言入口，`sqlite_mcp.py` 為本機 SQLite 資料庫結構探查與唯讀檢索入口，`mysql_mcp.py` 為遠端 MySQL／MariaDB 資料庫唯讀檢索入口，`mssql_mcp.py` 為遠端 Microsoft SQL Server 資料庫唯讀檢索入口，`memory_mcp.py` 為本機 JSON 跨對話長期記憶檢索入口，`rhel_mcp.py` 為遠端 RHEL 主機結構化唯讀巡檢入口（透過系統 OpenSSH 支援指定私鑰與加固帳密雙軌驗證），`win_rdp_mcp.py` 為遠端 Windows 主機 RDP（Port 3389）視覺控制與結構化唯讀巡檢入口，`netdiag_mcp.py` 為網站與網路跨單位舉證診斷入口（預設停用、強制逐次人工確認，支援階段式 DNS／TCP／TLS／HTTP 探測與多解析器 DNS 比對）。
-- 文件產出（`doc.py`）支援 python-docx、python-pptx、ReportLab；二進位文件讀取（`document.py` 的 `read_document`）支援 `.pdf`、`.docx`、`.pptx`，其中 PDF 讀取優先使用 `pymupdf4llm`（純 `pymupdf`），失敗時降級至 `pypdf`。
-- 會話持久化使用 JSON（`~/.pocket-agent/sessions/*.json`，附帶 HMAC-SHA256 數位簽章防竄改），全域系統設定使用 `~/.pocket-agent/config.json`（JSON）與環境變數（`.env`），外部 MCP 伺服器掛載設定使用 YAML（`mcp_config.yaml`）。
-- 核心代理之本機索引與快取（RAG FTS5、Skill 檢索、Repo Map AST 快取）一律使用標準庫 `sqlite3`，禁止在核心引入第三方資料庫或 ORM；`pymysql` 與 `pymssql` 僅供 `mcp_servers/` 下之遠端唯讀資料庫 MCP 伺服器使用，`dnspython`（`dns`）僅供 `mcp_servers/netdiag/` 使用。
+- PocketAgent 是本機 Python 3.14 AI 代理 CLI 應用（Click ＋ Rich／prompt_toolkit ＋ asyncio），支援 Windows、macOS、Linux。
+- 模型供應商透過 `EngineFactory` 與統一轉接介面支援多軌 LLM（詳見 [llm-adapter-architecture.md](architecture/llm-adapter-architecture.md)）。
+- 認證採 OpenAI／Google Gemini OAuth PKCE 雙軌，敏感憑證優先存於 OS `keyring`，不支援時改用主密碼保護之 JWE 加密庫（`encrypted_provider`），**嚴禁明碼降級**。
+- MCP 工具整合詳見 [mcp-architecture.md](architecture/mcp-architecture.md)；文件產出（`doc.py`）使用 python-docx／python-pptx／ReportLab，二進位讀取（`document.py`）支援 `.pdf`（`pymupdf4llm` 優先、失敗降級 `pypdf`）、`.docx`、`.pptx`。
+- 會話以 HMAC-SHA256 簽章 JSON 存於 `~/.pocket-agent/sessions/*.json`，系統設定為 `config.json`／`.env`，外部 MCP 設定為 `mcp_config.yaml`。
+- 核心本機索引與快取（統一工作區 FTS5 Trigram 索引、Skill 檢索、Repo Map AST 快取）一律使用標準庫 `sqlite3`，禁止在核心引入第三方資料庫或 ORM（`pymysql`／`pymssql` 限 `mcp_servers/` 資料庫伺服器、`dnspython` 限 `mcp_servers/netdiag/`）。
 
 ## 2. 目錄與責任邊界
 
-| 路徑                           | 用途與修改原則                                                                                                                                                                                                                |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/pocket_agent/main.py`     | 啟動、模式選擇、內建 MCP 轉發（`--internal-mcp-server`）與 Click 命令（`setup`、`logout`、`update`、`image`）；保留 Windows asyncio 相容處理。                                                                                |
-| `src/pocket_agent/core/`       | 核心業務邏輯：Agent 主迴圈（`agent`）、工具派發註冊表（`tool_registry`）、上下文縮減管線（`context_pipeline`）、啟動規範載入（`instructions`）、會話紀錄（`sessions`）、活動追蹤（`activity`）、非同步取消與同步橋接（`cancellation`）、附件上傳（`files`）、動態預算（`context_budget`）、歷史摘要壓縮（`compaction`）、巨量輸出落盤（`spillover`）、知識萃取（`auto_learn`）與子代理（`subagents`）。 |
-| `src/pocket_agent/engines/`    | LLM 引擎實作：`BaseEngine`（`base`）、`OpenAIResponsesEngine` 與配額策略（`openai_engine`）、`OpenRouterEngine`（`openrouter_engine`）、`OllamaChatEngine`（`ollama_engine`）、`CerebrasEngine`（`cerebras_engine`）、`GroqEngine`（`groq_engine`）、`AzureEngine`（`azure_engine`）、`MistralEngine`（`mistral_engine`）、`SambaNovaEngine`（`sambanova_engine`）、`StandardChatCompletionsEngine`（`chat_engine`）與 `EngineFactory`（`factory`）。 |
-| `src/pocket_agent/frontend/`   | 使用者介面策略：實作 `cli/`（包含 `main`、`input`、`render`、`state`、`confirmation`、`interrupts`、`clipboard`、`commands/` 等模組）。 |
-| `src/pocket_agent/system/`     | 系統基礎設施：全域常數（`constants`）、多語系（`i18n` 與 `locales/`）、認證（`auth`）、供應商策略（`providers/`）、路徑解析（`paths`）、設定（`config`）、指令白名單（`permissions`）、Markdown 註冊表（`registry`）、巨集與系統指令（`commands`、`sys_commands`）、設定精靈（`wizard`）、自動清理（`housekeeping`）、相容處理（`compat`）與線上更新（`updater`）。 |
-| `src/pocket_agent/extensions/` | 擴充功能：MCP 伺服器生命週期、白名單授權與動態連線參數注入管理（`mcp`）、漸進式技能載入與遮蔽（`skills`）、生命週期事件鉤子（`hooks`）與外掛封裝管理（`plugins`）。                                                                                      |
-| `src/pocket_agent/tools/`      | 內建工具實作：Shell 執行（`shell`）、原生檔案操作（`fs`）、門檻式工作區 FTS5 Trigram 全文索引（`search_index`）、網路請求（`web`）、圖片生成（`image`）、文件產出（`doc`）、文件讀取（`document`）、FTS5 檢索（`rag`）與 AST 結構圖（`repo_map`）。 |
-| `mcp_servers/`                 | 隨附之本地 Stdio MCP 伺服器薄入口（`sqlite_mcp.py`、`mysql_mcp.py`、`mssql_mcp.py`、`github_mcp.py`、`rhel_mcp.py`、`win_rdp_mcp.py`、`netdiag_mcp.py`）、對應領域子套件（`sqlite/`、`mysql/`、`mssql/`、`github/`、`rhel/`、`win_rdp/`、`netdiag/`）、輕量單檔伺服器（`browser_mcp.py`、`memory_mcp.py`）與共用基礎設施（`_shared/`，以 `--internal-mcp-server` 獨立啟動時須確保目錄在 `sys.path`）。 |
-| `subagents/`                   | 隨附之內建子代理人設定義檔（`.md`，目前包含 `researcher.md` 與唯讀檢索專家 `finder.md`）。                                                                                                                                    |
-| `build_scripts/`、`scripts/`   | 可攜版打包腳本（`build_scripts/build_portable.py`）與依賴完整性檢查工具（`scripts/check_imports.py`）。                                                                                                                       |
+| 路徑 | 用途與修改原則 |
+| --- | --- |
+| `src/pocket_agent/main.py` | 啟動入口、`--internal-mcp-server` 轉發與 Click 命令；保留 Windows asyncio 相容處理。 |
+| `src/pocket_agent/core/` | 核心業務邏輯：Agent 主迴圈、工具派發註冊表（`tool_registry`）、上下文預算／壓縮／落盤、會話、取消橋接與子代理（`subagents`）。 |
+| `src/pocket_agent/engines/` | LLM 引擎轉接器與 `EngineFactory`；協定差異保留於對應子類別。 |
+| `src/pocket_agent/frontend/` | CLI 介面策略（`cli/` 渲染、輸入、確認、狀態與斜線指令）；僅負責互動與渲染，不放置業務規則。 |
+| `src/pocket_agent/system/` | 基礎設施：常數（`constants`）、多語系（`i18n`／`locales/`）、認證、供應商策略（`providers/`）、路徑、設定、權限、`housekeeping`、更新與系統指令。 |
+| `src/pocket_agent/extensions/` | 擴充功能：MCP 生命週期與參數注入（`mcp`）、漸進式技能（`skills`）、鉤子（`hooks`）與外掛（`plugins`）。 |
+| `src/pocket_agent/tools/` | 內建工具：`shell`、`fs`、統一工作區 FTS5 索引引擎（`search_index`，供 `fs` 與 `rag` 共用）、`web`、`image`、`doc`、`document`、`rag`、`repo_map`。 |
+| `mcp_servers/` | 本地 Stdio MCP 薄入口（`<name>_mcp.py`）、領域子套件與共用基礎設施（`_shared/`）；獨立啟動時須確保 `_shared` 在 `sys.path`。 |
+| `subagents/` | 隨附唯讀／專職子代理定義檔（`.md`，詳見 [routing-and-subagents.md](architecture/routing-and-subagents.md)）。 |
+| `build_scripts/`、`scripts/` | 可攜版打包腳本（`build_portable.py`）與依賴檢查工具（`check_imports.py`）。 |
 
-_其餘如 `.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，`docs/` 為工程規範與架構文件。_
+_`.agents/skills/` 為開發代理技能，`tests/` 為回歸測試，`docs/` 為規範與架構文件。_
 
-### 2.1 架構設計原則：Adapter／Strategy／Factory／Command
+### 2.1 架構設計原則：`minimal-change` 與 Adapter／Strategy／Factory／Command／Template Method
 
-設計目標是讓模型供應商、前端介面與工具執行可替換，避免為每一種組合維護獨立流程。**後續開發必須遵循「依賴抽象、封裝差異、共用流程集中維護」的設計風格。**
+> （最高優先）請務必遵循 minimal-change 的精神、本專案既有的 i18n 多語系設計以及 Adapter/Strategy/Factory/Command/Template Method.... 等可降低模組耦合度的 Design Patterns 進行規劃設計。
 
-- **Adapter（轉接器）**：
-  - 引擎層：`OpenAIResponsesEngine`、`OpenRouterEngine`、`OllamaChatEngine`、`StandardChatCompletionsEngine`，將各家 SDK 與串流格式轉換為統一的 `stream_chat` 契約；特定 API 協定輔助方法（如 `format_chat_tools`、`format_chat_messages`）應保留於對應協定基底類別（`StandardChatCompletionsEngine`），不得污染通用 `BaseEngine`。
-  - 工具層：核心工具派發統一透過 `core/tool_registry.py`（`ToolHandler` 與 `ToolRegistry`）擴充，工具取消收尾（`on_cancel`）、敏感工具判定（`is_sensitive`）與調研上限（`WebResearchGuard`）亦集中於此；禁止在 `Agent._run_loop` 或 `_is_parallel_safe_tool` 散落 `is_web_tool`、`is_shell_tool` 或硬編碼工具分類 `if/elif` 分支。
-- **Strategy（策略）**：
-  - 供應商層：新增 OpenAI 相容供應商時應優先繼承 `system/providers/base.py` 的 `OpenAICompatibleProvider` 樣板類別，避免重複實作 `get_client` 與 `fetch_models`；OAuth 名稱正規化統一使用 `system/constants.py` 之 `PROVIDER_*` 常數。
-  - `CliFrontend` 僅封裝前端的啟動與互動渲染；共同業務流程（包含全域 `instructions.md`／工作區 `AGENTS.md` 載入與連結展開、`<external_content>` 防禦聲明、錯誤格式化與子代理彙整）必須集中於核心層處理；MCP 動態連線參數與提示元資料集中註冊於 `extensions/mcp.py` 的 `CONN_PARAM_SPECS`，禁止在 CLI 啟動流程硬編碼提示字典。
-  - 前端判斷功能支援度（如 `/image`）應查詢 `Agent`／引擎能力旗標（例如 `supports_image_generation`），禁止硬編碼 `provider == "openai"`。
-  - 前端指令不得繞過 `Agent` 公開介面直接讀寫 `agent.history`、操作私有 `_bg_tasks`（應透過 `Agent.spawn_background_task()`）、呼叫私有方法（如 `_run_subagent`）或重複實作連線／限流錯誤提示。
-- **Factory（工廠）**：`EngineFactory` 集中選擇及建立引擎；呼叫端應顯式傳入 `provider`，避免依賴 `resolve_provider` 的 URL 推論後備。
-- **Command（指令）**：前端斜線指令應透過 `CliCommandRegistry` 註冊各自獨立的 `CliCommand` 實作，禁止以單一巨型 `if/elif` 狀態路由器集中處理多個互動指令。
-- **狀態同步**：當指令變更了 Agent 存取權限或全域狀態時，應透過 `Agent._instructions()` 動態注入狀態摘要；業務規則必須統一實作於共用層，前端僅負責接收狀態並渲染。
-- **MCP 伺服器模組化規範（`mcp_servers/`）**：
-  - 複雜領域 MCP 伺服器採「共用基礎設施（`mcp_servers/_shared/`）＋ 領域子套件（`<domain>/`）＋ 頂層薄入口（`<name>_mcp.py`）」分層，由 `create_mcp_server(name, registrars)`（Factory）組裝各 `tools/*.py` 的 `register(mcp)`（Command／Registrar），並將連線與協定差異封裝於獨立轉接層（Adapter）、安全與 SQL 驗證集中於 `security.py`／`sql_guard.py`（Strategy）。
-  - 新增或擴充 MCP 伺服器時，應優先複用 `mcp_servers._shared` 既有之 `CONSTANTS`、`CredentialCache`、`tty_prompt`、遮罩與稽核元件，禁止在各伺服器重複實作共用設施或重新堆積巨型單檔。
-- **MCP 工具命名空間與顯示規範**：
-  - **強制前綴隔離**：所有透過 `MCPManager` 註冊的 MCP 工具，一律冠上 `mcp__{normalized_server}__{tool}` 命名空間，以隔離內建工具並避免跨伺服器撞名；命名正規化與解析統一由 `extensions/mcp.py` 的 `normalize_mcp_server_name`、`format_mcp_tool_name` 與 `parse_mcp_tool_name` 集中維護，禁止在各模組重複實作字串切割邏輯。`server_name` 須正規化為 `[a-zA-Z0-9_-]`，並留意模型 API 常見的 64 字元工具名稱上限。
-  - **嚴格權限比對**：`Agent._build_tools` 中的 `allowed_tools` 對 MCP 工具採嚴格比對（須使用完整 `mcp__{server}__{tool}` 名稱），不提供未加前綴的向下相容。
-  - **精簡顯示與前綴剝除**：前端 `/mcp` 指令清單僅顯示精簡工具原名（不含 `mcp__` 前綴），並須依實際最長工具名稱與終端機寬度動態計算欄數與欄寬，避免排版錯位；`CliRenderer._extract_tool_target` 等依工具名稱判定行為之邏輯，須先透過 `parse_mcp_tool_name` 剝除前綴，避免 `server_name` 含關鍵字而誤判。
+**後續開發必須遵循「依賴抽象、封裝差異、共用流程集中維護」風格**（新增 LLM Provider 完整檢查清單見 [llm-adapter-architecture.md](architecture/llm-adapter-architecture.md#新增-llm-provider-開發規範檢查清單)）：
 
-### 2.2 新增 LLM Provider 開發規範（檢查清單）
+- **Adapter（轉接器）**：引擎層統一為 `stream_chat` 契約（API 協定輔助方法保留於對應基底，不污染 `BaseEngine`）；核心工具派發、取消收尾（`on_cancel`）、敏感判定與調研上限集中於 `core/tool_registry.py`，禁止在 `Agent._run_loop` 散落硬編碼工具分類 `if/elif`。
+- **Strategy（策略）**：供應商優先繼承 `OpenAICompatibleProvider` 並使用 `PROVIDER_*` 常數；`CliFrontend` 僅處理渲染，共同業務流程集中於核心層，MCP 動態參數註冊於 `CONN_PARAM_SPECS`；前端僅查詢能力旗標（如 `supports_image_generation`），不得硬編碼 provider 或繞過 `Agent` 公開介面（應透過 `Agent.spawn_background_task()` 等）。
+- **Factory（工廠）**：`EngineFactory` 顯式依 `provider` 建置引擎，避免依賴 URL 推論後備。
+- **Command（指令）**：斜線指令透過 `CliCommandRegistry` 註冊獨立 `CliCommand`，禁止單一巨型路由器。
+- **Template Method（樣板方法）**：當多個實作共用同一套固定流程骨架、僅少數步驟或宣告屬性不同時使用——將主流程與防禦邏輯集中於基底，子類別只覆寫必要鉤子或屬性（如 `MarkdownRegistry` 的 `get_glob_pattern`／`parse_item`、`OpenAICompatibleProvider`、`StandardChatCompletionsEngine`），禁止複製貼上共用流程；若無共用骨架、僅需動態替換演算法或策略，優先採 **Strategy**（組合優於繼承）。
+- **狀態同步**：權限或狀態異動透過 `Agent._instructions()` 動態注入；業務規則留於共用層。
+- **MCP 模組化與命名空間**：複雜 MCP 伺服器採「`_shared/` ＋ `<domain>/` ＋ `<name>_mcp.py`」搭配 `create_mcp_server`；所有 MCP 工具強制冠上 `mcp__{normalized_server}__{tool}`（由 `extensions/mcp.py` 統一正規化與剝除），`allowed_tools` 採嚴格完整名稱比對，`/mcp` 顯示精簡原名並依終端寬度動態排欄。
 
-後續新增模型供應商時，必須依循以下低耦合分層與共用上提原則，不得在共用基底、CLI 或 Agent 主迴圈散落供應商條件分支：
+## 3. 編碼、上下文與多語系規範
 
-1. **常數與設定隔離**：
-   - 於 `system/constants.py` 新增 `PROVIDER_<NAME>` 常數；若使用環境變數金鑰，必須將其環境變數名稱加入 `SENSITIVE_ENV_EXACT_KEYS` 以防子行程洩漏。
-   - 於 `system/config.py` 之 `DEFAULT_CONFIG["providers"]` 與 `EnvConfigProvider.ENV_MAP` 補齊預設設定與環境變數映射；金鑰鍵名須包含 `api_key` 或 `token`，以自動套用 OS Keyring／JWE 加密庫保護與 `/config` 遮罩。
-2. **Provider 策略層（Strategy／Template Method）**：
-   - 優先繼承 `system/providers/base.py` 的 `OpenAICompatibleProvider` 並覆寫宣告式屬性（`display_name`、`config_key`、`base_url`、`base_url_config_key`、`base_url_prompt_i18n_key`、`missing_key_i18n_key`、`fallback_models`、`fail_on_auth_error` 等），複用 `prompt_base_url`、`prompt_api_key`、`get_client` 與 `fetch_models`。
-   - 於 `system/providers/__init__.py` 註冊至 `PROVIDER_STRATEGIES`；禁止在 `wizard.py` 或 `/model` 指令硬編碼供應商清單。
-3. **Engine 轉接器分層與共用上提（Adapter／Factory）**：
-   - **何時獨立建立 `<name>_engine.py`**：當供應商具備任一專屬協定行為（如 `supports_stream_usage` 差異、`reasoning_effort`／`reasoning_format` 轉換、`/models` 視窗探測、`get_quota` 或專屬錯誤解析）時，應建立繼承 `StandardChatCompletionsEngine` 的薄子類別（若協定完全非 Chat Completions 則繼承 `BaseEngine`）；僅當完全符合預設 Chat Completions 行為且無專屬參數時，方直接共用 `StandardChatCompletionsEngine`。
-   - **共用能力優先複用基底**：串流推理欄位（`delta.reasoning_content` 與 `delta.reasoning`）、`<think>` 狀態機、`finish_reason == "tool_calls"` 工具派發邊界、HTTP 429 標頭解析（`BaseEngine.parse_rate_limit_headers()`）與 `/models` 視窗探測（`StandardChatCompletionsEngine._fetch_context_window_from_models()`）一律集中於基底維護；若供應商透過 `x-ratelimit-*` 回應標頭回報即時限流額度，僅需在薄引擎子類別宣告 `supports_header_quota = True`，即自動複用 `engines/rate_limits.py` 與 `StandardChatCompletionsEngine` 的標頭快照及 `/usage` 呈現。禁止在基底寫 `if provider == ...` 分支，也禁止在各子類別複製貼上 HTTP 請求、快取、429 或標頭額度解析樣板。
-   - **推理強度安全預設**：`format_reasoning_param()` 遇到 `"auto"` 或未設定時不得送出供應商推理參數，以免非推理模型回傳 HTTP 400。
-   - **工廠與能力旗標**：於 `engines/factory.py` 的 `ENGINE_MAP` 註冊引擎，並於 `resolve_provider()` 使用 `_matches_host()` 嚴格網域比對（禁止子字串比對）；前端功能判斷僅能查詢引擎／Agent 能力旗標（如 `supports_image_generation`）。
-4. **多語系（i18n）同步**：
-   - 缺金鑰提示、精靈提示與錯誤訊息一律於執行期透過 `t(key, **kwargs)` 解析，並同步更新 `src/pocket_agent/locales/*.json` 所有語系檔且維持佔位符一致。
-5. **離線測試與文件同步**：
-   - 新增 `tests/test_<name>_provider.py`（完全離線、隔離網路與憑證、測試後清理 `_context_window_cache`），同步更新 `tests/test_system_constants.py`，並更新 `docs/PROJECT_INSTRUCTIONS.md`、`docs/architecture/llm-adapter-architecture.md`、`docs/guides/configuration-specification.md`、`README.md` 與 `README.zh-TW.md`；修改完成後將 Ruff、依賴掃描與 pytest 驗證指令交付使用者手動執行。
-
-## 3. 編碼與相容性要求
-
-- Python 使用 4 空白縮排、UTF-8、LF 與檔尾換行；行長嚴格限制為 120 字元以內。
-- **Ruff E501 警告防範**：若字串或程式碼超過 120 字元，務必利用 Python 隱式字串拼接（Implicit string concatenation）拆分為多行。若行內包含全形中文字元（CJK），因部分工具與編輯器以雙倍視覺欄寬計算，單行含中文之 docstring、註解與長字串應預留安全餘裕並提早折行。
-- **常數集中管理**：凡涉及工具字元上限、子行程緩衝區、逾時秒數與 Context 預算水位之數值常數，必須統一維護於 `src/pocket_agent/system/constants.py`，禁止在個別模組散落硬編碼魔術數字。
-- 格式以 `pyproject.toml` 的 Ruff 設定為準：雙引號、E／F／I 規則。
-- 新增程式以 Python 3.14 相容為基準。新增／修改介面補型別與必要的錯誤處理。
-- 保留取消、失敗提示、附件狀態、連線關閉與 MCP 清理行為，禁止在失敗後偷偷自動重送操作。
-- **上下文與草稿區（Context & Scratchpad）**：
-  - 專案採用 `ContextBudget` 動態預算管理，計算有效輸入預算（`有效視窗 − 預留輸出 − 安全餘裕`）。
-  - 送出前採用統一流程：優先清除舊工具輸出（至目標水位 60%）→ 嘗試 `HistoryCompactor` 歷史摘要壓縮（串流結束後須再次驗證 `cancel_check`，禁止於使用者取消後提交半截摘要）→ 安全滑動視窗降級 → 不可縮減超限強制停止。
-  - 使用者可透過 `system.context_window`、`system.context_reserve_output`、`system.context_safety_margin` 與 `system.context_compact_target_ratio` 微調設定。
-  - `read_file` 具備 500 行與 12,000 字元雙重限制，並支援 `char_offset` 單行行內字元游標續讀；讀取大型檔案應優先使用 `search_files` 或搭配精準範圍閱讀。
-  - 遇到大型 codebase 任務或搜尋結果過長導致截斷時，**必須主動將關鍵發現、變數與 TODO 寫入集中式暫存區**（PocketAgent 執行期沙盒 `~/.pocket-agent/scratch/<session_id>/notes.md` 或外部開發代理專屬暫存區 `<artifact_dir>`）以建立外部長期記憶；**嚴禁在工作目錄建立 `.agents/scratch`** 避免污染版本庫。詳見 [context-management-architecture.md](architecture/context-management-architecture.md) 與 [configuration-specification.md](guides/configuration-specification.md)。
+- **格式與相容**：Python 3.14、4 空白縮排、UTF-8、LF、檔尾換行，行長嚴格 `<= 120` 字元；含中文字串／註解應預留雙倍寬度餘裕並以隱式字串拼接提早折行（Ruff 雙引號、`E/F/I`）。數值上限／逾時／水位常數統一維護於 `src/pocket_agent/system/constants.py`，新增介面補齊型別與錯誤處理，禁止失敗後偷自動重送。
+- **上下文與草稿區**：送出前流程與 `ContextBudget`／`read_file` 雙重上限詳見 [context-management-architecture.md](architecture/context-management-architecture.md) 與 [configuration-specification.md](guides/configuration-specification.md)。關鍵紅線：`HistoryCompactor` 串流結束後須再次驗證 `cancel_check`（嚴禁取消後提交半截摘要）；外部筆記一律寫入集中沙盒 `~/.pocket-agent/scratch/<session_id>/notes.md` 或外部 `<artifact_dir>`，**嚴禁在工作目錄建立 `.agents/scratch`**。
 
 ### 3.1 多語系（i18n）開發規範
 
-- **語系檔維護**：所有使用者可見之顯示文字（CLI 提示、選單、設定精靈、錯誤訊息、狀態與額度顯示）必須維護於 `src/pocket_agent/locales/*.json`（目前包含 `zh_TW.json` 與 `en_US.json`），透過 `pocket_agent.system.i18n.t(key, **kwargs)` 讀取，**嚴禁在程式碼中寫死顯示文字**或傳入冗餘的 `default` 硬編碼文案；新增或調整任何顯示文字時，**務必搜尋 `src/pocket_agent/locales/*.json` 下所有支援語系檔並同步新增／更新對應鍵值**。當語系檔與預設基準 `zh_TW` 皆查無鍵值時，直接回傳該 `key` 名稱以利開發與測試人員辨識遺漏。
-- **語系解析順序**：執行期由 `get_locale()` 依序解析：`set_locale()` 顯式設定 ＞ 環境變數 `POCKET_AGENT_LANG` ＞ `config.json` 之 `locale` ＞ 預設 `zh_TW`（`setup` 精靈啟動時若 `config.json` 未明確設定 `locale` 則預設使用 `en_US`）。
-- **不可翻譯之邊界不變量**：內部工具名稱（`read_file`、`mcp__<server>__<tool>`）、送往 LLM 的 System Prompt／Instructions、內部前綴比對邏輯（如 `ConfirmationBridge._is_fs_edit`、安全標記 `[CONN_AUTH]` / `[ERROR]`）及後台 `logging` 訊息不得納入 UI 多語系替換。
-- **獨立模組與 MCP 伺服器相容性**：`mcp_servers/` 腳本須保留獨立執行的能力，應優先直接匯入 `mcp_servers._shared.t`（已統一封裝 `pocket_agent.system.i18n.t` 與 `ImportError` 純鍵值降級），禁止在各 MCP 模組重複撰寫降級樣板；既有獨立 MCP 伺服器若尚未全面多語系化，新增或修改工具時應優先遵循本規範。
-- **測試語系隔離**：`tests/conftest.py` 透過 `autouse=True` fixture 固定測試執行期語系為 `zh_TW` 並清除 `POCKET_AGENT_LANG`，防止本機 `~/.pocket-agent/config.json` 設定干擾自動化測試。
+- **語系檔維護**：所有使用者可見文字一律維護於 `src/pocket_agent/locales/*.json`（`zh_TW.json`、`en_US.json`），透過 `pocket_agent.system.i18n.t(key, **kwargs)` 讀取，**嚴禁寫死顯示文字或冗餘 `default` 文案**；異動時須同步更新所有語系檔並維持佔位符一致（查無鍵值時直接回傳 `key`）。
+- **解析順序**：`set_locale()` ＞ `POCKET_AGENT_LANG` ＞ `config.json` `locale` ＞ `zh_TW`（`setup` 精靈未設定時預設 `en_US`）。
+- **不可翻譯邊界**：內部工具名稱、送往 LLM 的 System Prompt／Instructions、內部狀態前綴（如 `[CONN_AUTH]`、`[ERROR]`、`ConfirmationBridge._is_fs_edit`）及後台 `logging` 訊息不得納入 UI 多語系替換。
+- **獨立模組與測試隔離**：`mcp_servers/` 優先匯入 `mcp_servers._shared.t`；`tests/conftest.py` 透過 `autouse=True` 固定測試語系為 `zh_TW`。
 
-## 4. 資料、擴充與安全邊界
+## 4. 資料、安全邊界與環境限制
 
-- **資源存取**：隨附資源透過 `bundle_dir()` 取得。PocketAgent 執行期之使用者資料與動態暫存一律集中於 `user_dir()`（`~/.pocket-agent/`，其中系統日誌集中於 `~/.pocket-agent/logs/`，筆記與動態暫存依會話 ID 隔離存放於 `~/.pocket-agent/scratch/<session_id>/`）。專案目錄內僅存放受版本控制之靜態規範（如 `AGENTS.md`、`.agents/skills/`），嚴禁在工作目錄隨意建立 `.agents/logs` 或 `.agents/scratch` 污染版本庫。不得將可寫資料塞入唯讀 bundle。
-- **既有資料防護**：對話保存在 `sessions/*.json`（含 HMAC-SHA256 簽章），修改格式須考慮向下相容。禁止讀取、列印或提交真實 `.env`、token、私人 session 或 `agent.log`。
+- **資料與秘密隔離**：隨附資源經 `bundle_dir()` 存取，執行期資料集中於 `user_dir()`（`~/.pocket-agent/`），嚴禁在專案工作目錄建立 `.agents/logs` 或 `.agents/scratch`；`sessions/*.json`（HMAC-SHA256 簽章）須維持向下相容，禁止讀取、列印或提交真實 `.env`、token、私人 session 或 `agent.log`。
 - **關鍵安全不變量**：
-  - **確認回呼契約（`on_confirm`）**：檔案寫入工具（`fs.py`）與敏感操作僅在 `decision is True` 時放行；若回傳非空字串（使用者自訂指示）或 `(False, str)` 等任何非 `True` 值，一律視為拒絕且不得執行寫入或建立備份。CLI 端透過 `ConfirmationBridge` 統一橋接同步／非同步確認流程，啟用 `Accept-edits` 時須同步套用至主代理與所有 `active_subagents`；`github_create_pr` 強制於確認面板列出預計動作、分支方向、標題與完整內文預覽（不受自動放行豁免），且不提供自動 Merge 工具。
-  - **指令白名單邊界（`permissions.py`）**：自訂命令白名單必須完整保留外層 `strip()` 後之參數與引號邊界（大小寫敏感），且 `shlex` 分詞失敗（如未閉合引號）時強制 fail-closed 拒絕。
-  - **唯讀資料庫與 RDP 隔離**：資料庫 MCP 強制單一唯讀查詢與受控健康診斷（`*_inspect_health` 採零鎖定詮釋資料／DMV／受限 `PRAGMA` 巡檢；`mysql_check_table` 限定單表 `QUICK`／`FAST` 模式與 `2 GB` 容量熔斷；`sqlite_inspect_health` 之 `PRAGMA quick_check` 具 `500 MB` 檔案大小熔斷）；`mysql_mcp.py` 採用引號感知之註解正規化（拒絕 `/*!` 可執行註解與引號內反斜線跳脫）與串流游標（`SSCursor`／`buffered=False`，截斷時直接中斷連線不排空剩餘資料）；`win_rdp_mcp.py` 嚴格綁定本工具啟動之系統可信 `mstsc.exe` PID、映像路徑與 `TscShellContainerClass` 視窗類別，截圖強制使用 `ImageGrab.grab(window=hwnd)` 且失焦時立即中止。
-  - **引擎工具集邊界**：Chat Completions 串流僅在 `finish_reason == "tool_calls"` 時派發工具呼叫；OpenAI 引擎對 `image_generation` 的參數回退重試僅限移除當輪 `tools` 副本中的 `model` 欄位，嚴禁在 `tools=[]`（如最後一輪禁用工具）時透過回呼重新注入工具。
-- **原生工具優先**：進行檔案讀寫或搜尋時，必須優先使用內建原生工具（如 `search_files`、`read_file`）。**嚴禁**使用 shell 指令包裝 `echo`、`sed`、`grep`、`Get-ChildItem` 或 `python -c` 處理檔案讀寫與搜尋操作。
-- **環境限制與隔離**：
-  - 本專案開發環境預設為 Windows，僅能執行 `cmd.exe`，`PowerShell` 受群組原則封鎖，禁止試圖繞過。
-  - 對中文文件明確使用 UTF-8，覆寫檔案前需透過原生工具確認。
-- **操作審查**：Agent 不得自動執行測試、Lint、建置、自動安裝依賴、啟動服務或 Git 提交。所有修改狀態或驗證指令必須明確提供給使用者，由使用者手動執行（除非使用者於當次對話明確授權特定指令範圍並經平台審查）。
+  - **確認回呼契約（`on_confirm`）**：檔案寫入與敏感操作僅在 `decision is True` 時放行，任何非 `True` 回傳均視為拒絕；`Accept-edits` 須同步套用至 `active_subagents`；`github_create_pr` 強制完整預覽確認且不提供自動 Merge。
+  - **指令白名單邊界（`permissions.py`）**：保留外層 `strip()` 後之參數與引號邊界（大小寫敏感），`shlex` 失敗時 fail-closed 拒絕。
+  - **唯讀資料庫／RDP／引擎邊界**：資料庫 MCP 強制單一唯讀查詢、引號感知檢查與容量熔斷，RDP MCP 強制綁定可信視窗且失焦中止（細節見 [mcp-architecture.md](architecture/mcp-architecture.md)）；Chat Completions 僅於 `finish_reason == "tool_calls"` 派發工具，且嚴禁於 `tools=[]` 時重新注入工具。
+- **環境與操作審查**：開發環境預設為 Windows，**僅能執行 `cmd.exe`**（`PowerShell` 受群組原則封鎖，禁止繞過）；中文文件使用 UTF-8。Agent 不得自動執行測試、Lint、建置、安裝依賴、啟動服務或 Git 提交，驗證指令一律交付使用者手動執行。
 
-## 5. 終端機渲染限制（Terminal UI & Rendering）
+## 5. 終端機渲染限制（`render.py`）
 
-- **統一色彩語意（`render.py`）**：
-  - **動作分類**：`Read`、`Write`、`Action` 等行為字眼一律維持黃色（`bold yellow`）。
-  - **工具名稱**：內建工具為綠色（`bold green`）；非內建工具（MCP）為藍青色（`bold cyan`）。
-  - **狀態小圓點**：本機唯讀操作為綠色（`bold green`）；寫入或潛在風險操作為紅色（`bold red`）。
-  - **安全警告**：「【安全警告】」前綴應單獨使用紅色（`bold red`）。
-- **非同步 Spinner 衝突**：在使用 `rich.status`（如「思考中...」動畫）時，**嚴禁**在未停止動畫（`status.stop()`）的狀態下直接呼叫 `input()` 或同步阻塞的標準輸入，以免造成多執行緒渲染衝突導致畫面假死。
+- **色彩語意**：`Read`／`Write`／`Action` 為 `bold yellow`；內建工具 `bold green`、MCP 工具 `bold cyan`；唯讀狀態圓點 `bold green`、寫入或風險操作 `bold red`；「【安全警告】」前綴 `bold red`。
+- **Spinner 防假死**：呼叫 `input()` 或阻塞標準輸入前，**嚴禁**在未 `status.stop()` 的狀態下進行。
 
 ## 6. 依賴與發布維護
 
-- `requirements.in`（正式執行期依賴）與 `requirements-dev.in`（開發與測試依賴）為直接依賴來源，`requirements.txt` 與 `requirements-dev.txt` 為 `pip-compile` 產出之鎖定檔；禁止手動修改 `.txt` 鎖定檔。
-- 發布 workflow（`.github/workflows/release.yml`）在 Windows／Python 3.14 執行 `build_scripts/build_portable.py`，推送 `v*` tag 會觸發建立 `dist/PocketAgent-portable.zip` Release。修改打包路徑時須同時考慮原始碼、Modern Portable 與 PyInstaller 模式。
+- `requirements.in` 與 `requirements-dev.in` 為直接依賴來源，禁止手動修改 `pip-compile` 產出之 `.txt` 鎖定檔。
+- `.github/workflows/release.yml` 於 Windows／Python 3.14 執行 `build_scripts/build_portable.py`；修改打包路徑時須同時兼顧原始碼、Modern Portable 與 PyInstaller 三種模式。
 
 ## 7. 驗證方式與手動命令
 
-提交與發布前應通過 Ruff 排版與語法檢查、第三方套件依賴完整性掃描（`scripts/check_imports.py`）以及 pytest 自動化測試。新增測試沿用 pytest 既有模式，確保隔離網路、OAuth 與使用者資料；重構核心工具派發路徑時，須留意既有韌性測試（如 `test_agent_resilience.py`、`test_web_resilience.py`）對 `pocket_agent.core.agent.call_*` 之 monkeypatch 相容性，並維持 `Agent._execute_core_tool`（供 `test_sensitive_session.py` 呼叫）與 `session.py` 對 `Mock()` Agent（供 `test_cli_commands.py` 使用）之向下相容。
+提交與發布前應通過 Ruff、依賴掃描（`scripts/check_imports.py`）與 pytest 測試（隔離網路、OAuth 與使用者資料）：
 
-以下命令僅供使用者手動執行（前提為 `venv` 已建立並安裝 `requirements-dev.txt`）：
+- **測試配合主程式重構原則（不為測試保留內部死碼）**：重構主程式之內部實作、私有函式／屬性（`_` 前綴）或模組依賴邊界時，**不得為了迎合既有白箱測試（如過時的 `monkeypatch` 目標、私有方法呼叫或舊版別名）而在主程式保留無作用的相容層或死碼**，應於計畫中一併同步更新受影響的測試程式以對齊新架構。
+- **不可放寬的邊界**：此原則僅適用於「消除測試對內部實作細節的耦合」；**嚴禁**藉由刪除或弱化行為／安全斷言來強迫測試通過，且第 4 節所列使用者持久化資料與設定格式（`sessions/*.json`、`config.json`、`mcp_config.yaml` 等）仍須維持向下相容。
+
+以下命令僅供使用者於 `cmd.exe` 手動執行（前提為 `venv` 已安裝 `requirements-dev.txt`）：
 
 ```cmd
 venv\Scripts\python.exe -m ruff format --check .
