@@ -73,6 +73,14 @@ ALLOWED_RESPONSE_HEADERS = frozenset(
         "x-request-id",
         "x-correlation-id",
         "x-powered-by",
+        "x-akamai-transformed",
+        "akamai-grn",
+        "x-fastly-request-id",
+        "fastly-restarts",
+        "x-msedge-ref",
+        "x-fd-healthprobe",
+        "x-envoy-upstream-service-time",
+        "x-aspnet-version",
     }
 )
 

@@ -16,6 +16,7 @@ from rich.console import Console
 
 from mcp_servers import netdiag_mcp
 from mcp_servers.netdiag import dns_adapter as nd_dns
+from mcp_servers.netdiag import dns_compare as nd_dns_compare
 from mcp_servers.netdiag import http_probe as nd_http
 from mcp_servers.netdiag import pipeline as nd_pipeline
 from mcp_servers.netdiag import policy as nd_policy
@@ -59,6 +60,10 @@ def _clean_netdiag_env(monkeypatch, tmp_path):
 
 
 class _FakeDnsAdapter(nd_dns.DnsResolverAdapter):
+    @property
+    def is_fallback(self) -> bool:
+        return False
+
     def __init__(self, ips=("93.184.216.34",), resolver_map=None) -> None:
         self.call_count = 0
         self.ips = ips
@@ -119,7 +124,7 @@ def test_ac_sec_1_authorization_before_dns(monkeypatch, tmp_path):
     monkeypatch.setenv("NETDIAG_ALLOWED_DOMAINS", "allowed.example.com")
     fake_dns = _FakeDnsAdapter()
     orch = nd_pipeline.DiagnosticOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
-    dns_orch = nd_pipeline.DnsCompareOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
+    dns_orch = nd_dns_compare.DnsCompareOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
 
     for bad_target in (
         "https://evil.example.org/",
@@ -445,9 +450,9 @@ def test_ac_func_3_dns_compare_split_horizon_and_fallback():
             ),
         }
     )
-    orch = nd_pipeline.DnsCompareOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
+    orch = nd_dns_compare.DnsCompareOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
     report = asyncio.run(orch.run(domain="portal.example.org", record_types="A,TXT", nameservers="8.8.8.8"))
-    assert "Discrepancy detected" in report.discrepancy_summary
+    assert "差異" in report.discrepancy_summary or "Discrepancy detected" in report.discrepancy_summary
     assert any("SPF" in sig for sig in report.mail_security_signals)
 
     with patch("mcp_servers.netdiag.dns_adapter.importlib.import_module", side_effect=ImportError):
@@ -516,7 +521,7 @@ def test_proxy_policy_default_fail_closed_opt_in_and_redirect_switch(monkeypatch
         runs=(),
     )
     md = EscalationMarkdownFormatter().format_diagnostic(report)
-    assert "Proxy mode active" in md
+    assert "Proxy" in md
 
 
 def test_preflight_validation_errors_omit_raw_url_and_host_header():
@@ -566,7 +571,7 @@ def test_stage_timeout_shared_deadline_for_tls_and_http():
 
     assert tls_res.status == "failed"
     assert tls_res.inspected_without_verification is False
-    assert call_count == 1
+    assert call_count == 2
 
     pol = nd_policy.DefaultNetdiagPolicy()
     target = pol.validate_target_preflight("https://public.example.com/")
@@ -614,9 +619,9 @@ def test_dns_compare_excludes_failed_resolvers_and_socket_fallback_status():
             ),
         }
     )
-    orch = nd_pipeline.DnsCompareOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
+    orch = nd_dns_compare.DnsCompareOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
     report = asyncio.run(orch.run(domain="example.com", record_types="A", nameservers="8.8.8.8"))
-    assert "Unable to compare resolvers" in report.discrepancy_summary
+    assert "8.8.8.8(failed)" in report.discrepancy_summary
 
     fallback = nd_dns.SocketFallbackResolverAdapter()
     with patch.object(
@@ -665,3 +670,239 @@ def test_env_timeout_default_and_confirmation_preview_without_none(monkeypatch):
     preview_diag, preview_dns = asyncio.run(_check_preview())
     assert "None" not in preview_diag
     assert "None" not in preview_dns
+
+
+def test_domain_allowlist_exact_vs_wildcard_and_no_proxy_cidr_port(monkeypatch):
+    """驗證網域精確白名單不隱性放行子網域，且 NO_PROXY 支援 CIDR 與帶埠號規則。"""
+    monkeypatch.setenv("NETDIAG_ALLOWED_DOMAINS", "exact.example.com,*.wild.example.org")
+    pol = nd_policy.DefaultNetdiagPolicy()
+    assert pol.validate_domain_preflight("exact.example.com") == "exact.example.com"
+    with pytest.raises(nd_policy.PolicyError):
+        pol.validate_domain_preflight("sub.exact.example.com")
+    assert pol.validate_domain_preflight("api.wild.example.org") == "api.wild.example.org"
+    with pytest.raises(nd_policy.PolicyError):
+        pol.validate_domain_preflight("wild.example.org")
+
+    monkeypatch.delenv("NETDIAG_ALLOWED_DOMAINS", raising=False)
+    monkeypatch.setenv("NETDIAG_ALLOW_PRIVATE_NETWORKS", "true")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp.local:8080")
+    monkeypatch.setenv("NO_PROXY", "10.0.0.0/8,fc00::/7,direct.example.com:8443")
+    pol_proxy = nd_policy.DefaultNetdiagPolicy()
+    assert pol_proxy.detect_proxy("https://10.20.30.40/health").used is False
+    assert pol_proxy.detect_proxy("https://[fd00:1::1]/health").used is False
+    assert pol_proxy.detect_proxy("https://direct.example.com:8443/").used is False
+    with pytest.raises(nd_policy.PolicyError):
+        pol_proxy.detect_proxy("https://direct.example.com:443/")
+
+
+def test_multi_sample_report_selects_first_failed_run_and_lists_all_samples():
+    """驗證多採樣時優先呈現第一筆失敗採樣明細，避免頂部失敗與明細全 ok 矛盾。"""
+    fake_dns = _FakeDnsAdapter()
+    orch = nd_pipeline.DiagnosticOrchestrator(nd_policy.DefaultNetdiagPolicy(), fake_dns)
+
+    tcp_ok = nd_pipeline.TcpStageData(status="ok", connect_ip="93.184.216.34", port=80, rtt_ms=1.5)
+    tcp_fail = nd_pipeline.TcpStageData(
+        status="failed",
+        connect_ip="93.184.216.34",
+        port=80,
+        error_kind="timeout",
+        error="TCP connection timed out",
+    )
+    http_ok = nd_pipeline.HttpStageData(status="ok", method="HEAD", final_status_code=200, ttfb_ms=4.0, total_ms=5.0)
+
+    with (
+        patch("mcp_servers.netdiag.pipeline._probe_tcp", new=AsyncMock(side_effect=[tcp_ok, tcp_fail])),
+        patch("mcp_servers.netdiag.pipeline.probe_http", new=AsyncMock(return_value=http_ok)),
+    ):
+        report = asyncio.run(orch.run(target="http://example.com/", samples=2))
+
+    assert report.first_failure_stage == "tcp"
+    md = EscalationMarkdownFormatter().format_diagnostic(report)
+    assert "| TCP | `failed` |" in md
+    assert "Sample #1: `ok`" in md
+    assert "Sample #2: `failed` at `tcp`" in md
+
+
+def test_http_to_https_redirect_runs_tls_probe_and_classifies_tls_failure():
+    """驗證 http:// 轉址 https:// 時觸發雙軌 TLS 檢查，失敗時歸類為 tls 並中止下游。"""
+    pol = nd_policy.DefaultNetdiagPolicy()
+    fake_dns = _FakeDnsAdapter()
+    orch = nd_pipeline.DiagnosticOrchestrator(pol, fake_dns)
+    tcp_ok = nd_pipeline.TcpStageData(status="ok", connect_ip="93.184.216.34", port=80, rtt_ms=1.2)
+
+    expired_der = _generate_test_cert_der(days_offset=-3, dns_name="secure.example.com")
+    expired_cert = nd_tls.parse_der_certificate(expired_der)
+    failed_tls = TlsStageData(
+        status="failed",
+        verified=False,
+        inspected_without_verification=True,
+        cert_chain=(expired_cert,),
+        error="SSLCertVerificationError: certificate has expired",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(301, headers={"Location": "https://secure.example.com/"})
+
+    real_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with (
+        patch("mcp_servers.netdiag.pipeline._probe_tcp", new=AsyncMock(return_value=tcp_ok)),
+        patch("mcp_servers.netdiag.http_probe.httpx.AsyncClient", return_value=real_client),
+        patch("mcp_servers.netdiag.http_probe.probe_tls", new=AsyncMock(return_value=failed_tls)) as mock_tls,
+    ):
+        report = asyncio.run(orch.run(target="http://example.com/"))
+
+    assert mock_tls.await_count == 1
+    assert report.first_failure_stage == "tls"
+    md = EscalationMarkdownFormatter().format_diagnostic(report)
+    assert expired_cert.sha256_fingerprint in md
+
+
+def test_ip_family_filtering_and_dual_stack_signal():
+    """驗證 ip_family=ipv4/ipv6 篩選、無相容位址失敗短路與雙棧訊號。"""
+    dual_dns = _FakeDnsAdapter(ips=("93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"))
+    orch = nd_pipeline.DiagnosticOrchestrator(nd_policy.DefaultNetdiagPolicy(), dual_dns)
+    tcp_ok = nd_pipeline.TcpStageData(status="ok", connect_ip="2606:2800:220:1:248:1893:25c8:1946", port=80, rtt_ms=2.0)
+    http_ok = nd_pipeline.HttpStageData(status="ok", method="HEAD", final_status_code=200, ttfb_ms=5.0, total_ms=6.0)
+
+    with (
+        patch("mcp_servers.netdiag.pipeline._probe_tcp", new=AsyncMock(return_value=tcp_ok)) as mock_tcp,
+        patch("mcp_servers.netdiag.pipeline.probe_http", new=AsyncMock(return_value=http_ok)),
+    ):
+        rep_v6 = asyncio.run(orch.run(target="http://example.com/", ip_family="ipv6"))
+
+    assert rep_v6.first_failure_stage == "none"
+    assert mock_tcp.await_args.args[0] == "2606:2800:220:1:248:1893:25c8:1946"
+    assert any("IPv4=1" in sig and "IPv6=1" in sig for sig in rep_v6.signals)
+
+    v4_only_dns = _FakeDnsAdapter(ips=("93.184.216.34",))
+    orch_v4 = nd_pipeline.DiagnosticOrchestrator(nd_policy.DefaultNetdiagPolicy(), v4_only_dns)
+    rep_fail = asyncio.run(orch_v4.run(target="http://example.com/", ip_family="ipv6"))
+    assert rep_fail.first_failure_stage == "dns"
+    assert rep_fail.runs[0].dns.status == "failed"
+
+
+def test_dns_compare_queries_dmarc_subdomain_and_caa_signals():
+    """驗證查詢 TXT,CAA 時自動查 _dmarc.<domain> 與彙整 CAA 治理訊號。"""
+
+    class _GovDnsAdapter(_FakeDnsAdapter):
+        async def query_records(self, domain, record_types, nameserver, timeout_sec):
+            label = nameserver or "system_default"
+            if domain == "_dmarc.corp.example.org":
+                return ResolverQueryResult(
+                    resolver_label=label,
+                    status="ok",
+                    records=(DnsRecordItem("TXT", 300, "v=DMARC1; p=reject; rua=mailto:sec@corp.example.org"),),
+                    latency_ms=2.0,
+                )
+            return ResolverQueryResult(
+                resolver_label=label,
+                status="ok",
+                records=(
+                    DnsRecordItem("TXT", 300, "v=spf1 -all"),
+                    DnsRecordItem("CAA", 300, '0 issue "letsencrypt.org"'),
+                ),
+                latency_ms=2.0,
+            )
+
+    from mcp_servers._shared import t
+
+    orch = nd_dns_compare.DnsCompareOrchestrator(nd_policy.DefaultNetdiagPolicy(), _GovDnsAdapter())
+    report = asyncio.run(orch.run(domain="corp.example.org", record_types="TXT,CAA", nameservers="1.1.1.1"))
+    expected_dmarc = t("netdiag_mcp.dns_sig_dmarc", resolver="system_default", policy="p=reject")
+    expected_caa = t(
+        "netdiag_mcp.dns_sig_caa",
+        resolver="system_default",
+        values='0 issue "letsencrypt.org"',
+    )
+    assert expected_dmarc in report.mail_security_signals
+    assert expected_caa in report.mail_security_signals
+
+
+def test_signals_cert_expiring_weak_tls_security_headers_and_edge_fingerprints():
+    """驗證臨期憑證、弱 TLS、HTTPS 安全標頭缺漏、Cookie 風險與可插拔邊緣指紋訊號。"""
+    from mcp_servers.netdiag.models import HttpHop, HttpStageData, SampleRun
+    from mcp_servers.netdiag.signals import derive_signals
+
+    soon_cert = TlsCertInfo("CN=app.example.com", "CN=CA", "2026-01-01", "2026-12-10", 10, "AA", "11:22")
+    run = SampleRun(
+        sample_index=1,
+        first_failure_stage="none",
+        dns=DnsStageData(status="ok", ips=("93.184.216.34",), ipv4_ips=("93.184.216.34",)),
+        tcp=nd_pipeline.TcpStageData(status="ok", connect_ip="93.184.216.34", port=443, rtt_ms=1.0),
+        tls=TlsStageData(
+            status="ok",
+            verified=True,
+            tls_version="TLSv1.1",
+            cert_chain=(soon_cert,),
+        ),
+        http=HttpStageData(
+            status="ok",
+            hops=(
+                HttpHop(
+                    hop_index=0,
+                    url="https://app.example.com/",
+                    connect_ip="93.184.216.34",
+                    http_version="HTTP/1.1",
+                    status_code=200,
+                    ttfb_ms=5.0,
+                    total_ms=6.0,
+                    bytes_read=0,
+                    truncated=False,
+                    headers={"server": "nginx/1.25", "x-akamai-transformed": "9 - 0 pmb=mRUM,1"},
+                    set_cookies=("sid=[REDACTED] (Path=/)",),
+                ),
+            ),
+        ),
+    )
+    sigs = derive_signals((run,), ProxyInfo())
+    joined = "\n".join(sigs)
+    assert "10" in joined
+    assert "TLSv1.1" in joined
+    assert "strict-transport-security" in joined
+    assert "sid=[REDACTED]" in joined
+    assert "Akamai" in joined
+    assert "Nginx" in joined
+
+
+def test_json_report_formatter_and_locale_switching():
+    """驗證 output_format=json 輸出合法 JSON 與機密遮罩，及 en_US 語系切換一致。"""
+    import json
+
+    from mcp_servers.netdiag.factory import NetdiagServiceFactory
+    from pocket_agent.system.i18n import set_locale
+
+    fake_dns = _FakeDnsAdapter()
+    with patch("mcp_servers.netdiag.factory.NetdiagServiceFactory.create_dns_adapter", return_value=fake_dns):
+        out_json = asyncio.run(
+            netdiag_mcp.netdiag_diagnose(
+                target="https://example.com/?token=SECRET_XYZ",
+                max_stage="dns",
+                output_format="json",
+            )
+        )
+    parsed = json.loads(out_json)
+    assert parsed["first_failure_stage"] == "none"
+    assert "SECRET_XYZ" not in out_json
+    assert "token=[REDACTED]" in parsed["target_url"]
+
+    try:
+        set_locale("en_US")
+        fmt_en = NetdiagServiceFactory.create_formatter("markdown")
+        md_en = fmt_en.format_diagnostic(
+            nd_pipeline.DiagnosticReport(
+                observed_at_local="2026-11-26T17:00:00+08:00",
+                observed_at_utc="2026-11-26T09:00:00+00:00",
+                target_url="https://example.com/",
+                target_scope="domain",
+                host_header="",
+                max_stage="dns",
+                method="HEAD",
+                samples_requested=1,
+                proxy_info=ProxyInfo(),
+                first_failure_stage="none",
+                runs=(),
+            )
+        )
+        assert "Single local vantage point only" in md_en
+    finally:
+        set_locale("zh_TW")

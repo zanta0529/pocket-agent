@@ -321,14 +321,14 @@ Pocket Agent 的解決方案：
 
 | 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
 | :--- | :--- | :--- | :--- |
-| `netdiag_diagnose` | **否（強制逐次確認）** | 單一分階段有界交易診斷，標註 `first_failure_stage`、雙軌 CA 對照（`truststore` vs `certifi`）、過期憑證公開欄位與白名單標頭 | `target`、`max_stage`（`dns`/`tcp`/`tls`/`http`）、`method`（`HEAD`/`GET`）、`host_header`、`samples`（`1`~`3`）、`timeout_sec`（`3.0`~`15.0`） |
-| `netdiag_dns_compare` | **否（強制逐次確認）** | 基於 `dnspython` 比對系統預設 DNS 與指定解析器之紀錄差異、TTL、CNAME 鏈與 SPF／DMARC／CAA 訊號（缺套件時降級 `socket`） | `domain`、`record_types`、`nameservers`（最多 4 個 IP）、`timeout_sec` |
+| `netdiag_diagnose` | **否（強制逐次確認）** | 單一分階段有界交易診斷，標註 `first_failure_stage`、雙軌併發 CA 對照（`truststore` vs `certifi`）、過期／臨期憑證、安全標頭／邊緣指紋、`http->https` 轉址 TLS 檢核、多採樣優先呈現失敗明細，並支援 Markdown／JSON 輸出 | `target`、`max_stage`（`dns`/`tcp`/`tls`/`http`）、`method`（`HEAD`/`GET`）、`host_header`、`ip_family`（`auto`/`ipv4`/`ipv6`）、`samples`（`1`~`3`）、`timeout_sec`（`3.0`~`15.0`）、`output_format`（`markdown`/`json`） |
+| `netdiag_dns_compare` | **否（強制逐次確認）** | 基於 `dnspython` 比對系統預設 DNS 與指定解析器之紀錄差異、TTL、CNAME 鏈、`_dmarc.<domain>`、SPF 與 CAA 訊號（缺套件時降級 `socket`），支援 Markdown／JSON 輸出 | `domain`、`record_types`、`nameservers`（最多 4 個 IP）、`timeout_sec`、`output_format`（`markdown`/`json`） |
 
 ### 2. 安全防禦邊界
 
-- **授權先於 DNS 與永久硬封鎖**：在任何 DNS 解析前先行驗證協定、URL 內嵌帳密、連接埠（預設 `80,443,8080,8443`）與 `NETDIAG_ALLOWED_DOMAINS`；永久封鎖 Link-Local／雲端 Metadata（`169.254.0.0/16`、`fe80::/10`、`fd00:ec2::254`）、Multicast 與未指定位址。
-- **公私網分層治理與防 DNS Rebinding**：預設封鎖 RFC 1918／ULA 私有 IP 與 `localhost`；開啟 `NETDIAG_ALLOW_PRIVATE_NETWORKS=true` 後允許所有 RFC 1918／ULA（若設定 `NETDIAG_ALLOWED_CIDRS` 則進一步限縮）。採 Pinned IP 連線並於每跳 HTTP 轉址重審授權與網段。
-- **企業 Proxy Fail-Closed 與 TLS 不降級**：遵循環境 Proxy 設定並在代理失敗時立即中止（絕不靜默降級直連）；TLS 驗證失敗時中止 HTTP 階段，僅以零應用層資料之純 TLS 握手擷取公開憑證欄位供舉證。
+- **授權先於 DNS 與永久硬封鎖**：在任何 DNS 解析前先行驗證協定、URL 內嵌帳密、連接埠（預設 `80,443,8080,8443`）與 `NETDIAG_ALLOWED_DOMAINS`（區分精確主機與 `*.domain` 子網域規則）；永久封鎖 Link-Local／雲端 Metadata（`169.254.0.0/16`、`fe80::/10`、`fd00:ec2::254`）、Multicast 與未指定位址。
+- **公私網分層治理與防 DNS Rebinding**：預設封鎖 RFC 1918／ULA 私有 IP 與 `localhost`；開啟 `NETDIAG_ALLOW_PRIVATE_NETWORKS=true` 後允許所有 RFC 1918／ULA（若設定 `NETDIAG_ALLOWED_CIDRS` 則進一步限縮）。採 Pinned IP 連線並於每跳 HTTP 轉址重審授權與網段（含 `http -> https` 升級轉址之 TLS 憑證檢核）。
+- **企業 Proxy Fail-Closed 與 TLS 不降級**：遵循環境 Proxy 設定（`NO_PROXY` 支援 CIDR 與帶埠規則）並在代理失敗時立即中止（絕不靜默降級直連）；TLS 驗證失敗時中止 HTTP 階段，僅以零應用層資料之純 TLS 握手擷取公開憑證欄位供舉證。
 - **CLI 結構化確認與防永久白名單**：`ConfirmationBridge` 渲染目標網段、埠口、SNI／Host 與階段預覽，強制逐次確認且禁止 `a`／`A` 寫入會話或永久白名單。
 
 ### 3. 環境變數與配置參數表 (`servers.netdiag.env`)

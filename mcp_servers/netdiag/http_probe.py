@@ -10,9 +10,10 @@ import httpx
 
 from mcp_servers._shared import CONSTANTS, t
 from mcp_servers.netdiag.dns_adapter import DnsResolverAdapter
-from mcp_servers.netdiag.models import HttpHop, HttpStageData, ProxyInfo, ValidatedTarget
+from mcp_servers.netdiag.models import HttpHop, HttpStageData, ProxyInfo, TlsStageData, ValidatedTarget
 from mcp_servers.netdiag.policy import NetworkAccessPolicy, PolicyError
 from mcp_servers.netdiag.redaction import NetdiagRedactionPolicy
+from mcp_servers.netdiag.tls_probe import probe_tls
 
 _REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 _USER_AGENT = "PocketAgent-NetDiag-MCP/1.0"
@@ -85,26 +86,32 @@ async def probe_http(
     timeout_sec: float,
 ) -> HttpStageData:
     """以唯讀 HEAD/GET 發送請求，手動逐跳驗證轉址目標與網段安全。"""
-    verify_ctx = _build_httpx_ssl_context(verify_source)
+    current_verify_source = verify_source
+    verify_ctx = _build_httpx_ssl_context(current_verify_source)
     hops: list[HttpHop] = []
     current_url = target.url
     current_target = target
     current_ip = pinned_ip or target.hostname
     current_proxy = proxy_info
     host_override = target.host_header
+    redirect_tls: TlsStageData | None = None
+    deadline = time.perf_counter() + timeout_sec
 
-    client_kwargs: dict = {
-        "timeout": httpx.Timeout(timeout_sec),
-        "follow_redirects": False,
-        "trust_env": False,
-        "verify": verify_ctx,
-    }
-    if current_proxy.used and current_proxy.raw_url:
-        client_kwargs["proxy"] = current_proxy.raw_url
+    def _build_client_kwargs(ssl_ctx: ssl.SSLContext | str) -> dict:
+        kwargs: dict = {
+            "timeout": httpx.Timeout(timeout_sec),
+            "follow_redirects": False,
+            "trust_env": False,
+            "verify": ssl_ctx,
+        }
+        if current_proxy.used and current_proxy.raw_url:
+            kwargs["proxy"] = current_proxy.raw_url
+        return kwargs
 
     try:
         async with asyncio.timeout(timeout_sec):
-            async with httpx.AsyncClient(**client_kwargs) as client:
+            client = httpx.AsyncClient(**_build_client_kwargs(verify_ctx))
+            try:
                 for hop_idx in range(CONSTANTS.max_redirects + 1):
                     if current_proxy.used:
                         req_url = current_url
@@ -174,6 +181,7 @@ async def probe_http(
                                 final_status_code=resp.status_code,
                                 ttfb_ms=ttfb_ms,
                                 total_ms=total_ms,
+                                redirect_tls=redirect_tls,
                                 error="" if resp.status_code < 400 else f"HTTP {resp.status_code}",
                             )
 
@@ -186,8 +194,13 @@ async def probe_http(
                                 final_status_code=resp.status_code,
                                 ttfb_ms=ttfb_ms,
                                 total_ms=total_ms,
+                                redirect_tls=redirect_tls,
                                 error=msg,
                             )
+
+                        remaining = deadline - time.perf_counter()
+                        if remaining <= 0.05:
+                            raise TimeoutError
 
                         next_url = urljoin(current_url, raw_location)
                         try:
@@ -200,7 +213,7 @@ async def probe_http(
                             next_ip = (
                                 next_target.hostname
                                 if next_proxy.used
-                                else await _resolve_hop_ip(next_target, policy, dns_adapter, timeout_sec)
+                                else await _resolve_hop_ip(next_target, policy, dns_adapter, remaining)
                             )
                         except PolicyError as exc:
                             reason = redaction.redact(str(exc))
@@ -212,14 +225,45 @@ async def probe_http(
                                 final_status_code=resp.status_code,
                                 ttfb_ms=ttfb_ms,
                                 total_ms=total_ms,
+                                redirect_tls=redirect_tls,
                                 redirect_blocked_reason=reason,
                                 error=msg,
                             )
+
+                        if (
+                            not next_proxy.used
+                            and current_target.scheme == "http"
+                            and next_target.scheme == "https"
+                            and redirect_tls is None
+                        ):
+                            tls_remaining = max(0.05, deadline - time.perf_counter())
+                            sni = "" if next_target.is_ip_literal else next_target.hostname
+                            upgrade_tls = await probe_tls(next_ip, next_target.port, sni, tls_remaining)
+                            redirect_tls = upgrade_tls
+                            if not upgrade_tls.verified:
+                                return HttpStageData(
+                                    status="failed",
+                                    method=method,
+                                    hops=tuple(hops),
+                                    final_status_code=resp.status_code,
+                                    ttfb_ms=ttfb_ms,
+                                    total_ms=total_ms,
+                                    redirect_tls=redirect_tls,
+                                    error=upgrade_tls.error,
+                                )
+                            if upgrade_tls.preferred_verify_source != current_verify_source:
+                                current_verify_source = upgrade_tls.preferred_verify_source
+                                await client.aclose()
+                                client = httpx.AsyncClient(
+                                    **_build_client_kwargs(_build_httpx_ssl_context(current_verify_source))
+                                )
 
                         current_url = next_url
                         current_target = next_target
                         current_ip = next_ip
                         host_override = ""
+            finally:
+                await client.aclose()
 
     except asyncio.CancelledError:
         raise
@@ -228,6 +272,7 @@ async def probe_http(
             status="failed",
             method=method,
             hops=tuple(hops),
+            redirect_tls=redirect_tls,
             error=t("netdiag_mcp.stage_timeout", timeout=round(timeout_sec, 2)),
         )
     except (httpx.HTTPError, OSError, ssl.SSLError) as exc:
@@ -238,7 +283,14 @@ async def probe_http(
             status="failed",
             method=method,
             hops=tuple(hops),
+            redirect_tls=redirect_tls,
             error=redaction.redact(err_prefix),
         )
 
-    return HttpStageData(status="failed", method=method, hops=tuple(hops), error="Unexpected redirect loop exit")
+    return HttpStageData(
+        status="failed",
+        method=method,
+        hops=tuple(hops),
+        redirect_tls=redirect_tls,
+        error="Unexpected redirect loop exit",
+    )

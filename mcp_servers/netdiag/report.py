@@ -1,10 +1,12 @@
 """跨單位舉證報告格式化器（Strategy Pattern）。"""
 
+import json
 import statistics
 from abc import ABC, abstractmethod
+from dataclasses import asdict
 
 from mcp_servers._shared import CONSTANTS, t
-from mcp_servers.netdiag.models import DiagnosticReport, DnsCompareReport, SampleRun
+from mcp_servers.netdiag.models import DiagnosticReport, DnsCompareReport, SampleRun, TlsCertInfo
 from mcp_servers.netdiag.redaction import NETDIAG_REDACTION, NetdiagRedactionPolicy
 
 
@@ -30,6 +32,11 @@ class EscalationMarkdownFormatter(ReportFormatter):
         if report.preflight_error:
             return self.redaction.redact(f"[ERROR] {report.preflight_error}")
 
+        options_line = f"- **Options**: `max_stage={report.max_stage}`, `method={report.method}`, "
+        if report.ip_family != "auto":
+            options_line += f"`ip_family={report.ip_family}`, "
+        options_line += f"`samples={report.samples_requested}`"
+
         lines: list[str] = [
             "# NetDiag Escalation Report",
             "",
@@ -37,8 +44,7 @@ class EscalationMarkdownFormatter(ReportFormatter):
             f"- **Observed At (Local)**: {report.observed_at_local}",
             f"- **Observed At (UTC)**: {report.observed_at_utc}",
             f"- **Target**: {report.target_url} (`scope={report.target_scope}`)",
-            f"- **Options**: `max_stage={report.max_stage}`, "
-            f"`method={report.method}`, `samples={report.samples_requested}`",
+            options_line,
         ]
         if report.host_header:
             lines.append(f"- **Host / SNI Override**: `{report.host_header}`")
@@ -51,7 +57,8 @@ class EscalationMarkdownFormatter(ReportFormatter):
         lines.extend(["", f"## First Failure Stage: `{report.first_failure_stage}`", ""])
 
         if report.runs:
-            lines.extend(self._format_run_details(report.runs[0]))
+            primary_run = self._select_primary_run(report.runs)
+            lines.extend(self._format_run_details(primary_run))
             if len(report.runs) > 1:
                 lines.extend(self._format_sample_stats(report.runs))
 
@@ -63,15 +70,13 @@ class EscalationMarkdownFormatter(ReportFormatter):
             [
                 "",
                 "## Limitations",
-                "- Single local vantage point only; OS trust store may differ from end-user browsers.",
-                "- `HEAD` responses may differ from full `GET` application rendering; TTFB is not a backend breakdown.",
-                "- No access to internal firewall rules, load-balancer pools, or remote server configs.",
+                f"- {t('netdiag_mcp.limit_vantage')}",
+                f"- {t('netdiag_mcp.limit_head_vs_get')}",
+                f"- {t('netdiag_mcp.limit_no_internal_access')}",
             ]
         )
         if report.proxy_info.used:
-            lines.append(
-                "- Proxy mode active: DNS resolution and target IP egress enforcement depend on the corporate proxy."
-            )
+            lines.append(f"- {t('netdiag_mcp.limit_proxy_mode')}")
         if report.escalation_hint:
             lines.extend(["", "## Escalation Hints", f"- {report.escalation_hint}"])
 
@@ -82,6 +87,26 @@ class EscalationMarkdownFormatter(ReportFormatter):
             hint=t("netdiag_mcp.truncate_hint"),
         )
         return clipped
+
+    @staticmethod
+    def _select_primary_run(runs: tuple[SampleRun, ...]) -> SampleRun:
+        """優先挑選第一筆失敗採樣作為主明細，避免多採樣時頂部失敗與明細矛盾。"""
+        for run in runs:
+            if run.first_failure_stage != "none":
+                return run
+        return runs[0]
+
+    @staticmethod
+    def _append_cert_chain(lines: list[str], title: str, cert_chain: tuple[TlsCertInfo, ...]) -> None:
+        lines.append(title)
+        for idx, cert in enumerate(cert_chain):
+            lines.append(
+                f"- **[{idx}]** Subject: `{cert.subject}` | Issuer: `{cert.issuer}` | "
+                f"Valid: `{cert.not_before}` .. `{cert.not_after}` (`days_remaining={cert.days_remaining}`) | "
+                f"Serial: `{cert.serial_number}` | SHA-256: `{cert.sha256_fingerprint}`"
+            )
+            if cert.san:
+                lines.append(f"  - SAN: {', '.join(cert.san)}")
 
     def _format_run_details(self, run: SampleRun) -> list[str]:
         lines = [
@@ -95,15 +120,13 @@ class EscalationMarkdownFormatter(ReportFormatter):
             "## Observed Facts",
         ]
         if run.tls.cert_chain:
-            lines.append("### TLS Certificate Chain")
-            for idx, cert in enumerate(run.tls.cert_chain):
-                lines.append(
-                    f"- **[{idx}]** Subject: `{cert.subject}` | Issuer: `{cert.issuer}` | "
-                    f"Valid: `{cert.not_before}` .. `{cert.not_after}` (`days_remaining={cert.days_remaining}`) | "
-                    f"Serial: `{cert.serial_number}` | SHA-256: `{cert.sha256_fingerprint}`"
-                )
-                if cert.san:
-                    lines.append(f"  - SAN: {', '.join(cert.san)}")
+            self._append_cert_chain(lines, "### TLS Certificate Chain", run.tls.cert_chain)
+        elif run.http.redirect_tls is not None and run.http.redirect_tls.cert_chain:
+            self._append_cert_chain(
+                lines,
+                "### Redirect-Upgraded HTTPS Certificate Chain",
+                run.http.redirect_tls.cert_chain,
+            )
 
         if run.http.hops:
             lines.append("### HTTP Hops & Filtered Headers")
@@ -129,6 +152,11 @@ class EscalationMarkdownFormatter(ReportFormatter):
             "### Multi-Sample Summary",
             f"- **Success Rate**: {ok_count}/{len(runs)}",
         ]
+        for run in runs:
+            if run.first_failure_stage == "none":
+                lines.append(f"  - Sample #{run.sample_index}: `ok` (total=`{run.total_ms}ms`)")
+            else:
+                lines.append(f"  - Sample #{run.sample_index}: `failed` at `{run.first_failure_stage}`")
         if totals:
             lines.append(
                 f"- **Total Time (ms)**: min={min(totals):.2f}, "
@@ -215,3 +243,25 @@ class EscalationMarkdownFormatter(ReportFormatter):
             hint=t("netdiag_mcp.truncate_hint"),
         )
         return clipped
+
+
+class JsonReportFormatter(ReportFormatter):
+    """產出結構化 JSON 格式診斷報告（便於自動化比對與多端點彙整）。"""
+
+    def __init__(self, redaction: NetdiagRedactionPolicy = NETDIAG_REDACTION) -> None:
+        self.redaction = redaction
+
+    def _serialize(self, payload: dict) -> str:
+        raw_out = self.redaction.redact(json.dumps(payload, ensure_ascii=False, indent=2))
+        clipped, _ = self.redaction.truncate_output(
+            raw_out,
+            max_chars=CONSTANTS.max_output_chars,
+            hint=t("netdiag_mcp.truncate_hint"),
+        )
+        return clipped
+
+    def format_diagnostic(self, report: DiagnosticReport) -> str:
+        return self._serialize(asdict(report))
+
+    def format_dns_compare(self, report: DnsCompareReport) -> str:
+        return self._serialize(asdict(report))

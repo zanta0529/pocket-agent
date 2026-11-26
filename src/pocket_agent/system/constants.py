@@ -101,6 +101,7 @@ NETDIAG_MAX_HEADER_VALUE_CHARS = 512  # netdiag 單一回應標頭值顯示上�
 NETDIAG_DNS_MAX_NAMESERVERS = 4  # netdiag_dns_compare 單次最多比對之額外解析器數量
 NETDIAG_DNS_MAX_CNAME_HOPS = 10  # netdiag DNS CNAME 鏈追蹤最大跳數
 NETDIAG_DEFAULT_ALLOWED_PORTS: tuple[int, ...] = (80, 443, 8080, 8443)  # netdiag 預設允許探測之連接埠
+NETDIAG_CERT_EXPIRY_WARN_DAYS = 30  # netdiag TLS 憑證即將過期預警門檻天數
 
 # 遠端 RHEL 維運巡檢 MCP (rhel_ops) 安全與逾時常數
 RHEL_CREDS_CACHE_TTL_SEC = 600.0  # 執行期記憶體憑證快取閒置 TTL 秒數 (10 分鐘)

@@ -203,6 +203,9 @@ def _format_netdiag_diagnose(tool_name: str, payload: dict[str, Any]) -> str:
     host_header = str(payload.get("host_header") or "").strip()
     if host_header:
         lines.append(t("confirmation.netdiag_host_header", host_header=host_header))
+    ip_family = str(payload.get("ip_family") or "auto").strip().lower()
+    if ip_family and ip_family != "auto":
+        lines.append(t("confirmation.netdiag_ip_family", ip_family=ip_family))
     lines.extend(
         [
             t("confirmation.netdiag_stage", max_stage=payload.get("max_stage") or "http"),
