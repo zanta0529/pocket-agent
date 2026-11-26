@@ -69,7 +69,7 @@ servers:
   #      BROWSER_CDP_URL: 'http://localhost:9222'  # 告訴 MCP 直接連接已經在背景跑著的瀏覽器
   #      BROWSER_HEADLESS: "0"                     # 1：強制無頭模式
 
-  # GitHub 整合（提供 PR/Issue 檢索、Diff/Review/CI 檢視與 Issue/留言新增；GITHUB_TOKEN 留空時於執行期隱藏詢問）
+  # GitHub 整合（提供 PR/Issue 檢索更新、行內審查、Actions CI 診斷與儲存庫唯讀探索；GITHUB_TOKEN 留空時於執行期隱藏詢問）
   # github:
   #   transport: stdio
   #   command: python
@@ -77,17 +77,30 @@ servers:
   #   # is_sensitive: true                  # 選填：存取機密私有儲存庫時可設為 true，強制對話紀錄零落盤
   #   safe_read_tools:
   #     - github_list_prs
+  #     - github_get_pr
+  #     - github_get_pr_files
+  #     - github_get_pr_reviews
+  #     - github_get_pr_review_comments
+  #     - github_prepare_pr_context
+  #     - github_get_pr_checks
+  #     - github_get_check_annotations
+  #     - github_list_workflow_runs
+  #     - github_get_workflow_run_jobs
   #     - github_read_issue
   #     - github_read_comments
-  #     - github_get_pr_files
   #     - github_list_issues
   #     - github_search_issues
-  #     - github_get_pr_reviews
-  #     - github_get_pr_checks
-  #     - github_prepare_pr_context
+  #     - github_get_repo
+  #     - github_list_branches
+  #     - github_list_tags
+  #     - github_list_commits
+  #     - github_get_file_content
+  #     - github_list_releases
+  #     - github_list_labels
   #   env:
   #     GITHUB_TOKEN: ""                    # 選填：Personal Access Token（留空將於執行時安全輸入，並可選擇保存至 Keyring／JWE 改寫為 "USE_KEYRING"／"USE_ENCRYPTED"；清空佔位符號將於下次執行重新詢問）
   #     GITHUB_ALLOWED_REPOS: ""            # 選填：允許存取之 owner/repo 白名單（逗號分隔，如 "org/repo1,org/repo2"）
+  #     GITHUB_API_BASE_URL: ""             # 選填：企業自架 GitHub Enterprise Server (GHES) API 基底網址（須為 HTTPS，如 "https://github.corp.com/api/v3"）
 
   # 本機 SQLite 資料庫檢索 (唯讀 SELECT 查詢)
   # 對話中可請 AI 切換資料庫，或輸入 /mcp sqlite <路徑> 直接切換

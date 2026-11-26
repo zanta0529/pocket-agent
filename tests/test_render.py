@@ -218,3 +218,19 @@ def test_cli_renderer_security_warning_dynamic_width():
     lines_narrow = [line.strip() for line in out_narrow.getvalue().splitlines() if line.strip()]
     assert any("Action" in line and "run_command" in line for line in lines_narrow)
     assert any("└─" in line and "【安全警告】" in line and "rm -rf /" in line for line in lines_narrow)
+
+
+def test_renderer_unknown_event_noop_and_target_precedence():
+    output = StringIO()
+    renderer = CliRenderer(Console(file=output, force_terminal=False, width=100))
+
+    renderer.event("unknown_custom_event", {"anything": 1})
+    assert output.getvalue() == ""
+
+    gh_file_args = json.dumps({"owner": "octocat", "repo": "hello", "path": "src/app.py", "ref": "main"})
+    assert renderer._extract_tool_target("mcp__github__github_get_file_content", gh_file_args) == (
+        "octocat/hello:src/app.py@main"
+    )
+    assert renderer._extract_tool_target("run_subagents_parallel", json.dumps({"tasks": [{"task": "audit"}]})) == (
+        "audit"
+    )

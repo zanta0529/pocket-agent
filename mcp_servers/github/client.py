@@ -21,7 +21,14 @@ from mcp_servers._shared import (
 )
 from mcp_servers.github import security
 
-GITHUB_API_BASE = "https://api.github.com"
+GITHUB_API_BASE = security.DEFAULT_API_BASE
+
+
+def get_api_base() -> str:
+    """取得目前生效之 GitHub REST API 基底網址（預設官方端點，支援 GHES）。"""
+    return security.get_api_base_url()
+
+
 NETWORK_TIMEOUT_SEC = CONSTANTS.network_timeout_sec
 MAX_REDIRECTS = CONSTANTS.max_redirects
 _MAX_ERROR_DETAIL_CHARS = 800

@@ -49,17 +49,137 @@ def _format_github_create_pr(tool_name: str, payload: dict[str, Any]) -> str:
     title = payload.get("title", "")
     body = payload.get("body", "")
     draft_label = t("confirmation.pr_mode_draft") if payload.get("draft") else t("confirmation.pr_mode_ready")
-    return "\n".join(
+    lines = [
+        t("confirmation.pr_action"),
+        t("confirmation.pr_tool", tool_name=tool_name),
+        t("confirmation.pr_repo", owner=owner, repo=repo),
+        t("confirmation.pr_branch", head=head, base=base),
+        t("confirmation.pr_mode", mode=draft_label),
+        t("confirmation.pr_title", title=title),
+    ]
+    labels = payload.get("labels")
+    if isinstance(labels, list) and labels:
+        lines.append(t("confirmation.pr_labels", labels=", ".join(str(x) for x in labels)))
+    reviewers = payload.get("reviewers")
+    if isinstance(reviewers, list) and reviewers:
+        lines.append(t("confirmation.pr_reviewers", reviewers=", ".join(str(x) for x in reviewers)))
+    lines.extend(
         [
-            t("confirmation.pr_action"),
-            t("confirmation.pr_tool", tool_name=tool_name),
-            t("confirmation.pr_repo", owner=owner, repo=repo),
-            t("confirmation.pr_branch", head=head, base=base),
-            t("confirmation.pr_mode", mode=draft_label),
-            t("confirmation.pr_title", title=title),
             t("confirmation.pr_body_preview"),
             "─" * 40,
             str(body),
+            "─" * 40,
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _format_github_update_pr(tool_name: str, payload: dict[str, Any]) -> str:
+    lines = [
+        t("confirmation.pr_update_action"),
+        t("confirmation.pr_tool", tool_name=tool_name),
+        t("confirmation.pr_repo", owner=payload.get("owner", ""), repo=payload.get("repo", "")),
+        t("confirmation.pr_update_number", pull_number=payload.get("pull_number", "?")),
+    ]
+    if payload.get("title") is not None:
+        lines.append(t("confirmation.pr_title", title=payload.get("title", "")))
+    if payload.get("state") is not None:
+        lines.append(t("confirmation.pr_update_state", state=payload.get("state", "")))
+    if payload.get("base") is not None:
+        lines.append(t("confirmation.pr_update_base", base=payload.get("base", "")))
+    if payload.get("body") is not None:
+        lines.extend(
+            [
+                t("confirmation.pr_body_preview"),
+                "─" * 40,
+                str(payload.get("body", "")),
+                "─" * 40,
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _format_github_create_pr_review(tool_name: str, payload: dict[str, Any]) -> str:
+    comments = payload.get("comments")
+    inline_count = len(comments) if isinstance(comments, list) else 0
+    lines = [
+        t("confirmation.pr_review_action"),
+        t("confirmation.pr_tool", tool_name=tool_name),
+        t("confirmation.pr_repo", owner=payload.get("owner", ""), repo=payload.get("repo", "")),
+        t("confirmation.pr_update_number", pull_number=payload.get("pull_number", "?")),
+        t("confirmation.pr_review_event", event=payload.get("event", "COMMENT")),
+        t("confirmation.pr_review_inline_count", count=inline_count),
+    ]
+    body = payload.get("body") or ""
+    if body:
+        lines.extend(
+            [
+                t("confirmation.pr_review_body_preview"),
+                "─" * 40,
+                str(body),
+                "─" * 40,
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _format_github_issue_fields(lines: list[str], payload: dict[str, Any]) -> None:
+    if payload.get("title") is not None:
+        lines.append(t("confirmation.issue_title", title=payload.get("title", "")))
+    if payload.get("state") is not None:
+        lines.append(t("confirmation.issue_state", state=payload.get("state", "")))
+    if payload.get("state_reason") is not None:
+        lines.append(t("confirmation.issue_state_reason", state_reason=payload.get("state_reason", "")))
+    labels = payload.get("labels")
+    if isinstance(labels, list):
+        lines.append(t("confirmation.issue_labels", labels=", ".join(str(x) for x in labels) or "（清空）"))
+    assignees = payload.get("assignees")
+    if isinstance(assignees, list):
+        lines.append(t("confirmation.issue_assignees", assignees=", ".join(str(x) for x in assignees) or "（清空）"))
+    if payload.get("milestone") is not None:
+        lines.append(t("confirmation.issue_milestone", milestone=payload.get("milestone")))
+    if payload.get("body") is not None and payload.get("body") != "":
+        lines.extend(
+            [
+                t("confirmation.issue_body_preview"),
+                "─" * 40,
+                str(payload.get("body", "")),
+                "─" * 40,
+            ]
+        )
+
+
+def _format_github_create_issue(tool_name: str, payload: dict[str, Any]) -> str:
+    lines = [
+        t("confirmation.issue_create_action"),
+        t("confirmation.pr_tool", tool_name=tool_name),
+        t("confirmation.pr_repo", owner=payload.get("owner", ""), repo=payload.get("repo", "")),
+    ]
+    _format_github_issue_fields(lines, payload)
+    return "\n".join(lines)
+
+
+def _format_github_update_issue(tool_name: str, payload: dict[str, Any]) -> str:
+    lines = [
+        t("confirmation.issue_update_action"),
+        t("confirmation.pr_tool", tool_name=tool_name),
+        t("confirmation.pr_repo", owner=payload.get("owner", ""), repo=payload.get("repo", "")),
+        t("confirmation.issue_number", issue_number=payload.get("issue_number", "?")),
+    ]
+    _format_github_issue_fields(lines, payload)
+    return "\n".join(lines)
+
+
+def _format_github_create_comment(tool_name: str, payload: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            t("confirmation.comment_create_action"),
+            t("confirmation.pr_tool", tool_name=tool_name),
+            t("confirmation.pr_repo", owner=payload.get("owner", ""), repo=payload.get("repo", "")),
+            t("confirmation.issue_number", issue_number=payload.get("issue_number", "?")),
+            t("confirmation.comment_body_preview"),
+            "─" * 40,
+            str(payload.get("body", "")),
             "─" * 40,
         ]
     )
@@ -110,6 +230,11 @@ def _format_netdiag_dns_compare(tool_name: str, payload: dict[str, Any]) -> str:
 
 _MCP_CONFIRM_FORMATTERS: dict[str, Callable[[str, dict[str, Any]], str]] = {
     "github_create_pr": _format_github_create_pr,
+    "github_update_pr": _format_github_update_pr,
+    "github_create_pr_review": _format_github_create_pr_review,
+    "github_create_issue": _format_github_create_issue,
+    "github_update_issue": _format_github_update_issue,
+    "github_create_comment": _format_github_create_comment,
     "netdiag_diagnose": _format_netdiag_diagnose,
     "netdiag_dns_compare": _format_netdiag_dns_compare,
 }
@@ -182,7 +307,16 @@ class ConfirmationBridge:
         )
 
     def _is_auto_allowed(self, command: str, is_fs_edit: bool) -> bool:
-        if command.startswith(("動作：建立 GitHub Pull Request", t("confirmation.pr_action"))):
+        if command.startswith(
+            (
+                "動作：建立 GitHub Pull Request",
+                "動作：更新 GitHub Pull Request",
+                "動作：提交 GitHub Pull Request 審查意見",
+                t("confirmation.pr_action"),
+                t("confirmation.pr_update_action"),
+                t("confirmation.pr_review_action"),
+            )
+        ):
             return False
         if self._is_netdiag_command(command):
             return False

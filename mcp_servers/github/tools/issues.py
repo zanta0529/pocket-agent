@@ -1,31 +1,10 @@
 """GitHub Issue 與留言工具群組（Command / Registrar Pattern）。"""
 
 from typing import Any
-from urllib.parse import quote
 
 from mcp_servers._shared import validate_positive_int
 from mcp_servers.github import client as gh_client
-from mcp_servers.github import security
-
-
-def _extract_login(item: dict[str, Any]) -> str:
-    user_obj = item.get("user")
-    if isinstance(user_obj, dict) and user_obj.get("login"):
-        return str(user_obj["login"])
-    return "ghost"
-
-
-def _extract_label_names(item: dict[str, Any]) -> list[str]:
-    raw_labels = item.get("labels")
-    if not isinstance(raw_labels, list):
-        return []
-    names: list[str] = []
-    for lb in raw_labels:
-        if isinstance(lb, dict) and lb.get("name"):
-            names.append(str(lb["name"]))
-        elif isinstance(lb, str) and lb.strip():
-            names.append(lb.strip())
-    return names
+from mcp_servers.github import helpers, security
 
 
 async def github_read_issue(
@@ -45,8 +24,7 @@ async def github_read_issue(
 
         headers = gh_client.get_headers(github_token)
         active_token = headers["Authorization"].removeprefix("Bearer ")
-        safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
-        url = f"{gh_client.GITHUB_API_BASE}/repos/{safe_path}/issues/{clean_num}"
+        url = helpers.build_repo_url(clean_owner, clean_repo, f"/issues/{clean_num}")
 
         async with gh_client.create_http_client() as client:
             data = await gh_client.request_json(client, "GET", url, headers=headers)
@@ -56,16 +34,24 @@ async def github_read_issue(
 
         title = data.get("title") or ""
         issue_state = data.get("state") or ""
-        author = _extract_login(data)
+        author = helpers.extract_login(data)
         issue_body = data.get("body") or ""
         header_lines = [
             f"標題：{title}",
             f"作者：{author}",
             f"狀態：{issue_state}",
         ]
-        label_names = _extract_label_names(data)
+        if "pull_request" in data:
+            header_lines.append("類型：Pull Request")
+        label_names = helpers.extract_label_names(data)
         if label_names:
             header_lines.append(f"標籤：{', '.join(label_names)}")
+        assignees = helpers.extract_user_logins(data.get("assignees"))
+        if assignees:
+            header_lines.append(f"指派人：{', '.join(assignees)}")
+        milestone_obj = data.get("milestone")
+        if isinstance(milestone_obj, dict) and milestone_obj.get("title"):
+            header_lines.append(f"里程碑：{milestone_obj['title']}")
         comments_count = data.get("comments")
         if isinstance(comments_count, int) and not isinstance(comments_count, bool):
             header_lines.append(f"留言數：{comments_count}")
@@ -115,8 +101,7 @@ async def github_read_comments(
 
         headers = gh_client.get_headers(github_token)
         active_token = headers["Authorization"].removeprefix("Bearer ")
-        safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
-        url = f"{gh_client.GITHUB_API_BASE}/repos/{safe_path}/issues/{clean_num}/comments"
+        url = helpers.build_repo_url(clean_owner, clean_repo, f"/issues/{clean_num}/comments")
 
         async with gh_client.create_http_client() as client:
             comments = await gh_client.request_json(
@@ -135,7 +120,7 @@ async def github_read_comments(
         for idx, comment in enumerate(comments, start=(clean_page - 1) * clean_per_page + 1):
             if not isinstance(comment, dict):
                 continue
-            author = _extract_login(comment)
+            author = helpers.extract_login(comment)
             created_at = comment.get("created_at") or ""
             body = (comment.get("body") or "").strip()
             blocks.append(f"--- 留言 #{idx} | 作者：{author} | 時間：{created_at} ---\n{body}")
@@ -169,12 +154,17 @@ async def github_list_issues(
     repo: str,
     state: str = "open",
     labels: str = "",
+    assignee: str = "",
+    creator: str = "",
+    milestone: str = "",
+    sort: str = "",
+    direction: str = "",
     per_page: int = 30,
     page: int = 1,
     include_prs: bool = False,
     github_token: str = "",
 ) -> str:
-    """列出指定儲存庫的 Issues（支援 state、labels 篩選與分頁，預設排除 Pull Requests）。"""
+    """列出指定儲存庫的 Issues（支援 state、labels、assignee、creator、milestone 與排序篩選，預設排除 PR）。"""
     active_token = ""
     target = f"{owner}/{repo}"
     cmd_desc = f"GET issues state={state} per_page={per_page} page={page}"
@@ -185,15 +175,7 @@ async def github_list_issues(
         clean_per_page = validate_positive_int(per_page, "per_page", max_val=100)
         clean_page = validate_positive_int(page, "page")
 
-        clean_labels = (labels or "").strip()
-        if any(ch in clean_labels for ch in ("\r", "\n", "\x00")):
-            raise ValueError("labels 參數包含無效的控制字元。")
-
-        headers = gh_client.get_headers(github_token)
-        active_token = headers["Authorization"].removeprefix("Bearer ")
-        safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
-        url = f"{gh_client.GITHUB_API_BASE}/repos/{safe_path}/issues"
-
+        clean_labels = security.validate_filter_text(labels, "labels", max_len=200)
         params: dict[str, str | int] = {
             "state": norm_state,
             "per_page": clean_per_page,
@@ -201,6 +183,20 @@ async def github_list_issues(
         }
         if clean_labels:
             params["labels"] = clean_labels
+        if assignee and assignee.strip():
+            params["assignee"] = security.validate_filter_text(assignee, "assignee")
+        if creator and creator.strip():
+            params["creator"] = security.validate_filter_text(creator, "creator")
+        if milestone and milestone.strip():
+            params["milestone"] = security.validate_filter_text(milestone, "milestone")
+        if sort and sort.strip():
+            params["sort"] = security.validate_choice(sort, security.ALLOWED_ISSUE_SORTS, "sort")
+        if direction and direction.strip():
+            params["direction"] = security.validate_choice(direction, security.ALLOWED_DIRECTIONS, "direction")
+
+        headers = gh_client.get_headers(github_token)
+        active_token = headers["Authorization"].removeprefix("Bearer ")
+        url = helpers.build_repo_url(clean_owner, clean_repo, "/issues")
 
         async with gh_client.create_http_client() as client:
             items = await gh_client.request_json(client, "GET", url, headers=headers, params=params)
@@ -217,9 +213,9 @@ async def github_list_issues(
             num = item.get("number", "?")
             title = (item.get("title") or "").strip()
             item_state = item.get("state") or norm_state
-            label_names = _extract_label_names(item)
+            label_names = helpers.extract_label_names(item)
             label_str = f" [{', '.join(label_names)}]" if label_names else ""
-            lines.append(f"#{num} [{item_state}] {title} ({_extract_login(item)}){label_str}")
+            lines.append(f"#{num} [{item_state}] {title} ({helpers.extract_login(item)}){label_str}")
 
         if not lines:
             gh_client.AUDIT.log("github_list_issues", cmd_desc, target=target, status="OK")
@@ -276,7 +272,7 @@ async def github_search_issues(
 
         headers = gh_client.get_headers(github_token)
         active_token = headers["Authorization"].removeprefix("Bearer ")
-        url = f"{gh_client.GITHUB_API_BASE}/search/issues"
+        url = f"{gh_client.get_api_base()}/search/issues"
 
         async with gh_client.create_http_client() as client:
             data = await gh_client.request_json(
@@ -304,7 +300,7 @@ async def github_search_issues(
             title = (item.get("title") or "").strip()
             item_state = item.get("state") or "?"
             kind = "PR" if "pull_request" in item else "Issue"
-            lines.append(f"#{num} [{kind}:{item_state}] {title} ({_extract_login(item)})")
+            lines.append(f"#{num} [{kind}:{item_state}] {title} ({helpers.extract_login(item)})")
 
         output, was_truncated = security.GITHUB_REDACTION.sanitize_and_truncate(
             "\n".join(lines),
@@ -336,9 +332,11 @@ async def github_create_issue(
     title: str,
     body: str = "",
     labels: list[str] | None = None,
+    assignees: list[str] | None = None,
+    milestone: int | None = None,
     github_token: str = "",
 ) -> str:
-    """在指定儲存庫建立新的 Issue（自動掃描標題與內文以防機密外洩）。"""
+    """在指定儲存庫建立新的 Issue（可選設定標籤、指派人與里程碑，並自動掃描機密）。"""
     active_token = ""
     target = f"{owner}/{repo}"
     cmd_desc = "POST issues"
@@ -346,29 +344,21 @@ async def github_create_issue(
         clean_owner, clean_repo = security.check_repo_allowed(owner, repo)
         target = f"{clean_owner}/{clean_repo}"
 
-        if not isinstance(title, str) or not title.strip():
-            raise ValueError("Issue 標題 (title) 不可為空白。")
-        clean_title = title.strip()
-        if any(ch in clean_title for ch in ("\r", "\n", "\x00")):
-            raise ValueError("Issue 標題 (title) 包含無效的換行或控制字元。")
-
+        clean_title = helpers.validate_single_line(
+            title,
+            "Issue 標題 (title)",
+            empty_msg="Issue 標題 (title) 不可為空白。",
+            invalid_msg="Issue 標題 (title) 包含無效的換行或控制字元。",
+        )
         clean_body = body if isinstance(body, str) else ""
-        clean_labels: list[str] = []
-        if labels is not None:
-            if not isinstance(labels, list):
-                raise ValueError("labels 參數必須為字串陣列。")
-            for lb in labels:
-                if not isinstance(lb, str) or not lb.strip():
-                    continue
-                lb_clean = lb.strip()
-                if any(ch in lb_clean for ch in ("\r", "\n", "\x00")):
-                    raise ValueError("labels 包含無效的控制字元。")
-                clean_labels.append(lb_clean)
+        clean_labels = helpers.clean_string_list(labels, "labels")
+        clean_assignees = helpers.clean_string_list(assignees, "assignees")
+        clean_milestone = validate_positive_int(milestone, "milestone") if milestone is not None else None
 
         headers = gh_client.get_headers(github_token)
         active_token = headers["Authorization"].removeprefix("Bearer ")
 
-        combined_outbound = f"{clean_title}\n{clean_body}\n{' '.join(clean_labels)}"
+        combined_outbound = "\n".join([clean_title, clean_body, " ".join(clean_labels), " ".join(clean_assignees)])
         block_reason = security.GITHUB_REDACTION.check_outbound_content(combined_outbound, active_token)
         if block_reason:
             gh_client.AUDIT.log(
@@ -380,11 +370,14 @@ async def github_create_issue(
             )
             return f"[ERROR] 安全攔截：Issue 內容疑似包含機密（{block_reason}），已阻斷外發以防外洩。"
 
-        safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
-        url = f"{gh_client.GITHUB_API_BASE}/repos/{safe_path}/issues"
+        url = helpers.build_repo_url(clean_owner, clean_repo, "/issues")
         payload: dict[str, Any] = {"title": clean_title, "body": clean_body}
         if clean_labels:
             payload["labels"] = clean_labels
+        if clean_assignees:
+            payload["assignees"] = clean_assignees
+        if clean_milestone is not None:
+            payload["milestone"] = clean_milestone
 
         async with gh_client.create_http_client() as client:
             created = await gh_client.request_json(client, "POST", url, headers=headers, json_body=payload)
@@ -405,6 +398,105 @@ async def github_create_issue(
             target,
             exc,
             "無法建立 Issue",
+            active_token=active_token,
+        )
+
+
+async def github_update_issue(
+    owner: str,
+    repo: str,
+    issue_number: int,
+    title: str | None = None,
+    body: str | None = None,
+    state: str | None = None,
+    state_reason: str | None = None,
+    labels: list[str] | None = None,
+    assignees: list[str] | None = None,
+    milestone: int | None = None,
+    github_token: str = "",
+) -> str:
+    """更新既有 Issue 的標題、內文、狀態、關閉原因、標籤、指派人或里程碑。"""
+    active_token = ""
+    target = f"{owner}/{repo}#{issue_number}"
+    cmd_desc = f"PATCH issues/{issue_number}"
+    try:
+        clean_owner, clean_repo = security.check_repo_allowed(owner, repo)
+        clean_num = validate_positive_int(issue_number, "issue_number")
+        target = f"{clean_owner}/{clean_repo}#{clean_num}"
+
+        payload: dict[str, Any] = {}
+        outbound_parts: list[str] = []
+        if title is not None:
+            clean_title = helpers.validate_single_line(
+                title,
+                "Issue 標題 (title)",
+                empty_msg="Issue 標題 (title) 不可為空白。",
+                invalid_msg="Issue 標題 (title) 包含無效的換行或控制字元。",
+            )
+            payload["title"] = clean_title
+            outbound_parts.append(clean_title)
+        if body is not None:
+            if not isinstance(body, str):
+                raise ValueError("Issue 內文 (body) 必須為字串。")
+            payload["body"] = body
+            outbound_parts.append(body)
+        if state is not None:
+            payload["state"] = security.validate_update_state(state)
+        if state_reason is not None:
+            payload["state_reason"] = security.validate_state_reason(state_reason)
+        if labels is not None:
+            clean_labels = helpers.clean_string_list(labels, "labels")
+            payload["labels"] = clean_labels
+            outbound_parts.extend(clean_labels)
+        if assignees is not None:
+            clean_assignees = helpers.clean_string_list(assignees, "assignees")
+            payload["assignees"] = clean_assignees
+            outbound_parts.extend(clean_assignees)
+        if milestone is not None:
+            payload["milestone"] = validate_positive_int(milestone, "milestone")
+
+        if not payload:
+            raise ValueError(
+                "至少須指定一項要更新的欄位（title、body、state、state_reason、labels、assignees 或 milestone）。"
+            )
+
+        headers = gh_client.get_headers(github_token)
+        active_token = headers["Authorization"].removeprefix("Bearer ")
+
+        if outbound_parts:
+            block_reason = security.GITHUB_REDACTION.check_outbound_content("\n".join(outbound_parts), active_token)
+            if block_reason:
+                gh_client.AUDIT.log(
+                    "github_update_issue",
+                    cmd_desc,
+                    target=target,
+                    status="BLOCKED",
+                    detail="outbound_policy_blocked",
+                )
+                return f"[ERROR] 安全攔截：Issue 更新內容疑似包含機密（{block_reason}），已阻斷外發以防外洩。"
+
+        url = helpers.build_repo_url(clean_owner, clean_repo, f"/issues/{clean_num}")
+        async with gh_client.create_http_client() as client:
+            updated = await gh_client.request_json(client, "PATCH", url, headers=headers, json_body=payload)
+
+        html_url = updated.get("html_url", "") if isinstance(updated, dict) else ""
+        url_line = f"\nIssue 網址：{html_url}" if html_url else ""
+        fields_str = "、".join(payload.keys())
+        gh_client.AUDIT.log(
+            "github_update_issue",
+            cmd_desc,
+            target=target,
+            status="OK",
+            detail=f"fields={','.join(payload.keys())}",
+        )
+        return f"成功更新 {target}（欄位：{fields_str}）。{url_line}"
+    except Exception as exc:
+        return gh_client.handle_tool_error(
+            "github_update_issue",
+            cmd_desc,
+            target,
+            exc,
+            "無法更新 Issue",
             active_token=active_token,
         )
 
@@ -442,8 +534,7 @@ async def github_create_comment(
             )
             return f"[ERROR] 安全攔截：留言內容疑似包含機密（{block_reason}），已阻斷外發以防外洩。"
 
-        safe_path = f"{quote(clean_owner, safe='')}/{quote(clean_repo, safe='')}"
-        url = f"{gh_client.GITHUB_API_BASE}/repos/{safe_path}/issues/{clean_num}/comments"
+        url = helpers.build_repo_url(clean_owner, clean_repo, f"/issues/{clean_num}/comments")
         async with gh_client.create_http_client() as client:
             await gh_client.request_json(client, "POST", url, headers=headers, json_body={"body": body})
 
@@ -474,6 +565,7 @@ def register(mcp: Any) -> None:
         github_list_issues,
         github_search_issues,
         github_create_issue,
+        github_update_issue,
         github_create_comment,
     ):
         mcp.tool()(fn)

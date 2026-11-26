@@ -23,6 +23,7 @@ def _clean_github_env_and_cache(monkeypatch, tmp_path):
     monkeypatch.setenv("POCKET_AGENT_LOG_FILE", str(tmp_path / "agent.log"))
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_ALLOWED_REPOS", raising=False)
+    monkeypatch.delenv("GITHUB_API_BASE_URL", raising=False)
 
 
 def _mock_http_client(
@@ -456,7 +457,9 @@ def test_github_prepare_pr_context_with_local_and_fallback_template(monkeypatch,
         request=req,
     )
 
-    cm, _ = _mock_http_client(responses=[resp_repo, resp_404, resp_compare])
+    cm, _ = _mock_http_client(
+        responses=[resp_repo, resp_404, resp_404, resp_404, resp_404, resp_404, resp_404, resp_compare],
+    )
 
     with patch("mcp_servers.github.client.create_http_client", return_value=cm):
         out_fallback = asyncio.run(
@@ -752,7 +755,7 @@ def test_cr002_diff_redacts_secrets_before_truncation_in_pr_files_and_context(mo
 
     def ctx_handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        if path.endswith("/contents/.github/pull_request_template.md"):
+        if "/contents/" in path:
             return httpx.Response(404, json={"message": "Not Found"})
         if "/compare/" in path:
             return httpx.Response(
@@ -1043,3 +1046,500 @@ def test_github_resolve_token_rejects_and_resolves_placeholders(monkeypatch):
     with patch("mcp_servers.github.client._try_load_standalone_keyring_token", return_value="standalone_pat_123"):
         assert gh_client.resolve_token() == "standalone_pat_123"
         assert gh_client.CREDS_CACHE.get_secret("GITHUB_TOKEN") == "standalone_pat_123"
+
+
+def test_github_get_pr_and_review_comments(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+    cm_pr, _ = _mock_http_client(
+        json_data={
+            "title": "feat: add oauth",
+            "state": "open",
+            "merged": False,
+            "draft": True,
+            "user": {"login": "alice"},
+            "head": {"label": "alice:feat/oauth", "ref": "feat/oauth", "sha": "abc1234deadbeef"},
+            "base": {"label": "octocat:main", "ref": "main"},
+            "mergeable": True,
+            "mergeable_state": "clean",
+            "labels": [{"name": "enhancement"}],
+            "assignees": [{"login": "bob"}],
+            "requested_reviewers": [{"login": "carol"}],
+            "commits": 3,
+            "changed_files": 4,
+            "additions": 120,
+            "deletions": 15,
+            "comments": 2,
+            "review_comments": 5,
+            "html_url": "https://github.com/octocat/hello/pull/18",
+            "body": "PR description with api_key=SuperSecretValue12345",
+        },
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_pr):
+        out_pr = asyncio.run(github_mcp.github_get_pr("octocat", "hello", 18))
+
+    assert "標題：feat: add oauth (#18)" in out_pr
+    assert "狀態：open [Draft]" in out_pr
+    assert "Head SHA：abc1234deadbeef" in out_pr
+    assert "待審查者：carol" in out_pr
+    assert "變更統計：3 commits、4 檔案 (+120 / -15)" in out_pr
+    assert "SuperSecretValue12345" not in out_pr
+
+    cm_inline, _ = _mock_http_client(
+        json_data=[
+            {
+                "id": 701,
+                "path": "src/auth.py",
+                "line": 42,
+                "user": {"login": "carol"},
+                "created_at": "2026-11-26T10:00:00Z",
+                "in_reply_to_id": 700,
+                "diff_hunk": "@@ -40,3 +40,4 @@\n+token=SecretInlineToken999",
+                "body": "Please guard None here.",
+            },
+        ],
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_inline):
+        out_inline = asyncio.run(github_mcp.github_get_pr_review_comments("octocat", "hello", 18))
+
+    assert "行內留言 #1 (id=701) | 檔案：src/auth.py:42" in out_inline
+    assert "回覆 #700" in out_inline
+    assert "Please guard None here." in out_inline
+    assert "SecretInlineToken999" not in out_inline
+
+
+def test_github_update_pr_and_create_pr_review_security(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
+        empty_upd = asyncio.run(github_mcp.github_update_pr("octocat", "hello", 18))
+    assert empty_upd.startswith("[ERROR]")
+    mock_factory.assert_not_called()
+
+    cm_upd, recorded_upd = _mock_http_client(
+        json_data={"html_url": "https://github.com/octocat/hello/pull/18"},
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_upd):
+        out_upd = asyncio.run(
+            github_mcp.github_update_pr("octocat", "hello", 18, title="fix: updated title", state="closed"),
+        )
+    assert "成功更新 octocat/hello#18" in out_upd
+    assert recorded_upd[0].method == "PATCH"
+    assert json.loads(recorded_upd[0].content) == {"title": "fix: updated title", "state": "closed"}
+
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
+        blocked_approve = asyncio.run(
+            github_mcp.github_create_pr_review("octocat", "hello", 18, event="APPROVE", body="LGTM"),
+        )
+    assert blocked_approve.startswith("[ERROR] 拒絕存取")
+    mock_factory.assert_not_called()
+
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
+        blocked_inline_secret = asyncio.run(
+            github_mcp.github_create_pr_review(
+                "octocat",
+                "hello",
+                18,
+                event="COMMENT",
+                comments=[{"path": "a.py", "line": 10, "body": "ghp_1234567890abcdefghijklmnop"}],
+            ),
+        )
+    assert blocked_inline_secret.startswith("[ERROR] 安全攔截")
+    mock_factory.assert_not_called()
+
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
+        bad_path = asyncio.run(
+            github_mcp.github_create_pr_review(
+                "octocat",
+                "hello",
+                18,
+                event="COMMENT",
+                comments=[{"path": "../secret.py", "line": 10, "body": "check"}],
+            ),
+        )
+    assert bad_path.startswith("[ERROR]")
+    mock_factory.assert_not_called()
+
+    cm_rev, recorded_rev = _mock_http_client(json_data={"id": 888}, status_code=200)
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_rev):
+        out_rev = asyncio.run(
+            github_mcp.github_create_pr_review(
+                "octocat",
+                "hello",
+                18,
+                event="REQUEST_CHANGES",
+                body="Please address comments.",
+                comments=[{"path": "src/app.py", "line": 12, "body": "Avoid bare except."}],
+            ),
+        )
+    assert "PR Review #888" in out_rev
+    assert "REQUEST_CHANGES" in out_rev
+    rev_payload = json.loads(recorded_rev[0].content)
+    assert rev_payload["event"] == "REQUEST_CHANGES"
+    assert rev_payload["comments"][0]["side"] == "RIGHT"
+
+
+def test_github_ci_annotations_and_workflow_runs_and_jobs(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+
+    cm_checks, _ = _mock_http_client(
+        json_data={
+            "total_count": 1,
+            "check_runs": [
+                {
+                    "id": 5001,
+                    "name": "ruff",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "output": {"title": "1 error", "summary": "Line too long in main.py"},
+                },
+            ],
+        },
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_checks):
+        out_checks = asyncio.run(github_mcp.github_get_pr_checks("octocat", "hello", "main"))
+    assert "(id=5001)" in out_checks
+    assert "摘要：Line too long in main.py" in out_checks
+
+    cm_ann, _ = _mock_http_client(
+        json_data=[
+            {
+                "annotation_level": "failure",
+                "path": "src/main.py",
+                "start_line": 10,
+                "end_line": 12,
+                "title": "E501",
+                "message": "Line exceeds 120 chars",
+            },
+        ],
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_ann):
+        out_ann = asyncio.run(github_mcp.github_get_check_annotations("octocat", "hello", 5001))
+    assert "- [failure] src/main.py:10-12 — E501" in out_ann
+    assert "Line exceeds 120 chars" in out_ann
+
+    cm_runs, recorded_runs = _mock_http_client(
+        json_data={
+            "total_count": 1,
+            "workflow_runs": [
+                {
+                    "id": 9001,
+                    "run_number": 45,
+                    "display_title": "CI",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "head_branch": "main",
+                    "head_sha": "1234567890abcdef",
+                    "event": "push",
+                    "created_at": "2026-11-26T09:00:00Z",
+                },
+            ],
+        },
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_runs):
+        out_runs = asyncio.run(
+            github_mcp.github_list_workflow_runs("octocat", "hello", branch="main", status="failure"),
+        )
+    assert "#45 [completed/failure] CI (id=9001)" in out_runs
+    assert dict(recorded_runs[0].url.params) == {
+        "per_page": "20",
+        "page": "1",
+        "branch": "main",
+        "status": "failure",
+    }
+
+    cm_jobs, _ = _mock_http_client(
+        json_data={
+            "total_count": 1,
+            "jobs": [
+                {
+                    "id": 3001,
+                    "name": "test",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "steps": [
+                        {"number": 1, "name": "Checkout", "status": "completed", "conclusion": "success"},
+                        {"number": 2, "name": "Pytest", "status": "completed", "conclusion": "failure"},
+                    ],
+                },
+            ],
+        },
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_jobs):
+        out_jobs = asyncio.run(github_mcp.github_get_workflow_run_jobs("octocat", "hello", 9001))
+    assert "Job: test [completed/failure] (id=3001)" in out_jobs
+    assert "2. Pytest [completed/failure]" in out_jobs
+
+
+def test_github_update_issue_and_enhanced_filters_and_pr_labels(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+
+    cm_upd_issue, recorded_issue = _mock_http_client(
+        json_data={"html_url": "https://github.com/octocat/hello/issues/7"},
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_upd_issue):
+        out_upd = asyncio.run(
+            github_mcp.github_update_issue(
+                "octocat",
+                "hello",
+                7,
+                state="closed",
+                state_reason="completed",
+                labels=["bug", "fixed"],
+            ),
+        )
+    assert "成功更新 octocat/hello#7" in out_upd
+    assert recorded_issue[0].method == "PATCH"
+    assert json.loads(recorded_issue[0].content) == {
+        "state": "closed",
+        "state_reason": "completed",
+        "labels": ["bug", "fixed"],
+    }
+
+    cm_prs, recorded_prs = _mock_http_client(json_data=[])
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_prs):
+        asyncio.run(
+            github_mcp.github_list_prs("octocat", "hello", head="octocat:feat", base="main", sort="updated"),
+        )
+    assert dict(recorded_prs[0].url.params) == {
+        "state": "open",
+        "per_page": "30",
+        "page": "1",
+        "head": "octocat:feat",
+        "base": "main",
+        "sort": "updated",
+    }
+
+    cm_issues, recorded_issues = _mock_http_client(json_data=[])
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_issues):
+        asyncio.run(
+            github_mcp.github_list_issues(
+                "octocat",
+                "hello",
+                assignee="alice",
+                creator="bob",
+                milestone="1",
+                sort="comments",
+                direction="desc",
+            ),
+        )
+    assert dict(recorded_issues[0].url.params) == {
+        "state": "open",
+        "per_page": "30",
+        "page": "1",
+        "assignee": "alice",
+        "creator": "bob",
+        "milestone": "1",
+        "sort": "comments",
+        "direction": "desc",
+    }
+
+    req = httpx.Request("POST", "https://api.github.com/repos/octocat/hello/pulls")
+    responses = [
+        httpx.Response(201, json={"number": 202, "html_url": "https://github.com/octocat/hello/pull/202"}, request=req),
+        httpx.Response(200, json=[], request=req),
+        httpx.Response(422, json={"message": "Reviewer not found"}, request=req),
+    ]
+    cm_pr_create, recorded_pr_create = _mock_http_client(responses=responses)
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_pr_create):
+        out_pr_create = asyncio.run(
+            github_mcp.github_create_pr(
+                "octocat",
+                "hello",
+                title="feat: test",
+                head="feat/x",
+                base="main",
+                labels=["enhancement"],
+                reviewers=["nonexistent"],
+            ),
+        )
+    assert "Pull Request #202" in out_pr_create
+    assert "審查者指派失敗" in out_pr_create
+    assert len(recorded_pr_create) == 3
+
+
+def test_github_repository_tools_and_remote_uppercase_template(monkeypatch, tmp_path):
+    import base64
+
+    monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+    monkeypatch.chdir(tmp_path)
+
+    cm_repo, _ = _mock_http_client(
+        json_data={
+            "full_name": "octocat/hello",
+            "visibility": "public",
+            "default_branch": "main",
+            "language": "Python",
+            "archived": False,
+            "open_issues_count": 5,
+            "stargazers_count": 100,
+            "forks_count": 10,
+            "topics": ["mcp", "ai"],
+            "description": "Demo repo",
+            "html_url": "https://github.com/octocat/hello",
+        },
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_repo):
+        out_repo = asyncio.run(github_mcp.github_get_repo("octocat", "hello"))
+    assert "儲存庫：octocat/hello [public]" in out_repo
+    assert "Topics：mcp, ai" in out_repo
+
+    cm_br, _ = _mock_http_client(
+        json_data=[{"name": "main", "commit": {"sha": "abcdef123456"}, "protected": True}],
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_br):
+        out_br = asyncio.run(github_mcp.github_list_branches("octocat", "hello", protected_only=True))
+    assert "- main (abcdef1) [protected]" in out_br
+
+    cm_tags, _ = _mock_http_client(json_data=[{"name": "v1.0.0", "commit": {"sha": "1122334455"}}])
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_tags):
+        out_tags = asyncio.run(github_mcp.github_list_tags("octocat", "hello"))
+    assert "- v1.0.0 (1122334)" in out_tags
+
+    cm_commits, _ = _mock_http_client(
+        json_data=[
+            {
+                "sha": "9988776655",
+                "commit": {"message": "feat: init", "author": {"name": "Alice", "date": "2026-11-26T00:00:00Z"}},
+            },
+        ],
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_commits):
+        out_commits = asyncio.run(github_mcp.github_list_commits("octocat", "hello", sha="main"))
+    assert "- 9988776 feat: init (Alice, 2026-11-26T00:00:00Z)" in out_commits
+
+    encoded_text = base64.b64encode(b"SECRET_KEY=TopSecret12345\nprint('ok')\n").decode("ascii")
+    cm_file, _ = _mock_http_client(
+        json_data={"type": "file", "size": 38, "sha": "abc", "content": encoded_text},
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_file):
+        out_file = asyncio.run(github_mcp.github_get_file_content("octocat", "hello", path="app.py", ref="main"))
+    assert "檔案：app.py (ref=main, 38 bytes)" in out_file
+    assert "TopSecret12345" not in out_file
+    assert "[REDACTED]" in out_file
+
+    cm_dir, _ = _mock_http_client(
+        json_data=[
+            {"type": "file", "name": "README.md", "size": 120},
+            {"type": "dir", "name": "src", "size": 0},
+        ],
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_dir):
+        out_dir = asyncio.run(github_mcp.github_get_file_content("octocat", "hello"))
+    assert "- [dir] src/" in out_dir
+    assert "- [file] README.md (120 bytes)" in out_dir
+
+    encoded_bin = base64.b64encode(b"\x89PNG\r\n\x1a\n\x00\x00").decode("ascii")
+    cm_bin, _ = _mock_http_client(json_data={"type": "file", "size": 10, "sha": "bin1", "content": encoded_bin})
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_bin):
+        out_bin = asyncio.run(github_mcp.github_get_file_content("octocat", "hello", path="logo.png"))
+    assert "二進位檔案" in out_bin
+
+    with patch("mcp_servers.github.client.create_http_client") as mock_factory:
+        bad_file = asyncio.run(github_mcp.github_get_file_content("octocat", "hello", path="../.env"))
+    assert bad_file.startswith("[ERROR]")
+    mock_factory.assert_not_called()
+
+    cm_rel, _ = _mock_http_client(
+        json_data=[{"tag_name": "v1.0.0", "name": "Release 1.0", "published_at": "2026-11-20", "body": "Notes"}],
+    )
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_rel):
+        out_rel = asyncio.run(github_mcp.github_list_releases("octocat", "hello"))
+    assert "Release 1.0 (v1.0.0)" in out_rel
+
+    cm_lbl, _ = _mock_http_client(json_data=[{"name": "bug", "color": "d73a4a", "description": "Broken"}])
+    with patch("mcp_servers.github.client.create_http_client", return_value=cm_lbl):
+        out_lbl = asyncio.run(github_mcp.github_list_labels("octocat", "hello"))
+    assert "- bug (#d73a4a) — Broken" in out_lbl
+
+    tpl_b64 = base64.b64encode(b"## Uppercase Template").decode("ascii")
+
+    def upper_tpl_handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/contents/.github/PULL_REQUEST_TEMPLATE.md"):
+            return httpx.Response(200, json={"content": tpl_b64})
+        if "/contents/" in path:
+            return httpx.Response(404, json={"message": "Not Found"})
+        if "/compare/" in path:
+            return httpx.Response(200, json={"commits": [], "files": []})
+        return httpx.Response(200, json={"default_branch": "main"})
+
+    with patch("mcp_servers.github.client.create_http_client", lambda: _transport_client_cm(upper_tpl_handler)):
+        out_tpl = asyncio.run(github_mcp.github_prepare_pr_context("octocat", "hello", head="feat/a"))
+    assert "遠端儲存庫範本 (.github/PULL_REQUEST_TEMPLATE.md)" in out_tpl
+    assert "## Uppercase Template" in out_tpl
+
+
+def test_github_ghes_api_base_url_and_redirect_validation(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test_pat_value_999")
+    monkeypatch.setenv("GITHUB_ALLOWED_REPOS", "myorg/allowed-repo")
+    monkeypatch.setenv("GITHUB_API_BASE_URL", "https://github.corp.com/api/v3/")
+
+    assert gh_security.get_api_base_url() == "https://github.corp.com/api/v3"
+    gh_security.validate_redirect_url(
+        httpx.URL("https://github.corp.com/api/v3/repos/myorg/allowed-repo/pulls?page=2"),
+    )
+    with pytest.raises(PermissionError, match="API 前綴"):
+        gh_security.validate_redirect_url(httpx.URL("https://github.corp.com/repos/myorg/allowed-repo/pulls"))
+    with pytest.raises(PermissionError, match="外部網域"):
+        gh_security.validate_redirect_url(httpx.URL("https://api.github.com/repos/myorg/allowed-repo/pulls"))
+
+    monkeypatch.setenv("GITHUB_API_BASE_URL", "http://github.corp.com/api/v3")
+    with pytest.raises(ValueError, match="HTTPS"):
+        gh_security.get_api_base_url()
+
+
+def test_confirmation_previews_and_renderer_summaries_for_new_github_tools():
+    from pocket_agent.frontend.cli.confirmation import ConfirmationBridge
+
+    upd_pr_fmt = ConfirmationBridge._format_command(
+        ("mcp__github__github_update_pr", {"owner": "octocat", "repo": "hello", "pull_number": 9, "state": "closed"}),
+    )
+    assert "動作：更新 GitHub Pull Request" in upd_pr_fmt
+    assert "PR 編號：#9" in upd_pr_fmt
+
+    rev_fmt = ConfirmationBridge._format_command(
+        (
+            "mcp__github__github_create_pr_review",
+            {
+                "owner": "octocat",
+                "repo": "hello",
+                "pull_number": 9,
+                "event": "REQUEST_CHANGES",
+                "body": "Fix lint",
+                "comments": [{"path": "a.py", "line": 1, "body": "x"}],
+            },
+        ),
+    )
+    assert "動作：提交 GitHub Pull Request 審查意見" in rev_fmt
+    assert "行內審查留言數：1 筆" in rev_fmt
+
+    dummy_bridge = SimpleNamespace(
+        state=SimpleNamespace(accept_edits=True, session_approved_commands={upd_pr_fmt.strip(), rev_fmt.strip()}),
+    )
+    assert ConfirmationBridge._is_auto_allowed(dummy_bridge, upd_pr_fmt, True) is False
+    assert ConfirmationBridge._is_auto_allowed(dummy_bridge, rev_fmt, True) is False
+
+    issue_fmt = ConfirmationBridge._format_command(
+        ("mcp__github__github_create_issue", {"owner": "octocat", "repo": "hello", "title": "Bug", "body": "Detail"}),
+    )
+    assert "動作：建立 GitHub Issue" in issue_fmt
+
+    renderer = CliRenderer(Console())
+    assert (
+        renderer._summarise_args(
+            "github_get_check_annotations",
+            '{"owner": "octocat", "repo": "hello", "check_run_id": 55}',
+        )
+        == "octocat/hello check#55"
+    )
+    assert (
+        renderer._summarise_args("github_get_workflow_run_jobs", '{"owner": "octocat", "repo": "hello", "run_id": 77}')
+        == "octocat/hello run#77"
+    )
+    assert (
+        renderer._summarise_args(
+            "github_get_file_content",
+            '{"owner": "octocat", "repo": "hello", "path": "src/main.py", "ref": "dev"}',
+        )
+        == "octocat/hello:src/main.py@dev"
+    )

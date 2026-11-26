@@ -8,7 +8,7 @@ import httpx
 from mcp_servers.github import client as gh_client
 from mcp_servers.github import security
 
-_LOCAL_PR_TEMPLATE_PATHS: tuple[str, ...] = (
+_PR_TEMPLATE_PATHS: tuple[str, ...] = (
     ".github/pull_request_template.md",
     ".github/PULL_REQUEST_TEMPLATE.md",
     "docs/pull_request_template.md",
@@ -16,6 +16,7 @@ _LOCAL_PR_TEMPLATE_PATHS: tuple[str, ...] = (
     "pull_request_template.md",
     "PULL_REQUEST_TEMPLATE.md",
 )
+_LOCAL_PR_TEMPLATE_PATHS = _PR_TEMPLATE_PATHS
 
 _DEFAULT_PR_TEMPLATE = (
     "## Summary\n"
@@ -43,7 +44,7 @@ async def resolve_base_branch(
     cleaned = (base or "").strip()
     if cleaned:
         return security.validate_git_ref(cleaned)
-    repo_url = f"{gh_client.GITHUB_API_BASE}/repos/{safe_path}"
+    repo_url = f"{gh_client.get_api_base()}/repos/{safe_path}"
     repo_data = await gh_client.request_json(client, "GET", repo_url, headers=headers)
     default_branch = "main"
     if isinstance(repo_data, dict) and isinstance(repo_data.get("default_branch"), str):
@@ -61,7 +62,7 @@ async def load_pr_template(
     """依「本機工作區 → 遠端儲存庫 API → 內建業界標準慣例範本」三階段取得 PR 範本。"""
     cwd = Path.cwd()
     max_bytes = security.MAX_RESPONSE_BYTES
-    for rel_path in _LOCAL_PR_TEMPLATE_PATHS:
+    for rel_path in _PR_TEMPLATE_PATHS:
         candidate = cwd / rel_path
         try:
             if candidate.is_file() and candidate.stat().st_size <= max_bytes:
@@ -83,16 +84,18 @@ async def load_pr_template(
     except OSError:
         pass
 
-    remote_url = f"{gh_client.GITHUB_API_BASE}/repos/{safe_path}/contents/.github/pull_request_template.md"
-    try:
-        data = await gh_client.request_json(client, "GET", remote_url, headers=headers, allow_not_found=True)
-        if isinstance(data, dict) and isinstance(data.get("content"), str):
-            decoded = base64.b64decode(data["content"]).decode("utf-8", errors="replace").strip()
-            if decoded:
-                return decoded, "遠端儲存庫範本 (.github/pull_request_template.md)"
-    except PermissionError:
-        raise
-    except Exception:
-        pass
+    api_base = gh_client.get_api_base()
+    for rel_path in _PR_TEMPLATE_PATHS:
+        remote_url = f"{api_base}/repos/{safe_path}/contents/{rel_path}"
+        try:
+            data = await gh_client.request_json(client, "GET", remote_url, headers=headers, allow_not_found=True)
+            if isinstance(data, dict) and isinstance(data.get("content"), str):
+                decoded = base64.b64decode(data["content"]).decode("utf-8", errors="replace").strip()
+                if decoded:
+                    return decoded, f"遠端儲存庫範本 ({rel_path})"
+        except PermissionError:
+            raise
+        except Exception:
+            continue
 
     return _DEFAULT_PR_TEMPLATE, "預設業界標準範本 (Conventional PR Template)"
