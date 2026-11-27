@@ -86,7 +86,7 @@ mcp_servers/
 ### 6. 遠端 Microsoft SQL Server 資料庫（MSSQL MCP）
 
 - **入口**：`mssql_mcp.py` → `mcp_servers/mssql/`
-- **用途**：透過 `pymssql` 提供 T-SQL 唯讀結構探查、單一 `SELECT`／`WITH` 查詢與零鎖定 DMV 健康診斷。
+- **用途**：透過 `pymssql`／`pyodbc`（含 `conn.timeout` 與 `SET LOCK_TIMEOUT`）提供結構探查與 `sys.sql_modules` 物件定義、雙軌字面值遮罩防注入之 `SELECT`／`WITH` 與 `SHOWPLAN_TEXT` 計畫分析、零鎖定 DMV 健康／缺索引巡檢，以及伺服器狀態、阻塞請求鏈與備份／Always On AG 診斷。
 
 ### 7. 遠端 RHEL 主機維運巡檢（RHEL MCP）
 

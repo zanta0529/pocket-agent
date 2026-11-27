@@ -156,7 +156,8 @@ servers:
   #     MYSQL_SSL_CA: ""            # 選填：TLS CA 憑證檔案路徑
   #     MYSQL_CHARSET: "utf8mb4"    # 選填：連線字元集，預設 utf8mb4
 
-  # 遠端 Microsoft SQL Server (MSSQL) 資料庫唯讀檢索（需安裝 pymssql 或 pyodbc；未設定項將於執行時動態詢問）
+  # 遠端 Microsoft SQL Server (MSSQL) 資料庫唯讀檢索與 DMV 診斷（需安裝 pymssql 或 pyodbc；未設定項將於執行時動態詢問）
+  # （註：mssql_inspect_active_requests 可能包含執行中 SQL 片段，預設不列入 safe_read_tools 以保留使用者互動確認）
   # mssql:
   #   transport: stdio
   #   command: python
@@ -165,15 +166,25 @@ servers:
   #     - mssql_list_databases
   #     - mssql_list_tables
   #     - mssql_describe_schema
-  #     - mssql_inspect_health
+  #     - mssql_get_object_definition
   #     - mssql_run_select_query
+  #     - mssql_explain_query
+  #     - mssql_inspect_health
+  #     - mssql_inspect_missing_indexes
+  #     - mssql_server_status
+  #     - mssql_backup_and_ag_status
   #   env:
-  #     MSSQL_HOST: ""            # 選填：SQL Server 主機 IP 或位址（留空、null 或省略時將於執行時詢問）
-  #     MSSQL_PORT: "1433"        # 選填：連接埠，預設 1433（留空、null 或省略時將於執行時詢問）
-  #     MSSQL_USER: ""            # 選填：登入帳號（留空、null 或省略時將於執行時詢問）
-  #     MSSQL_PASSWORD: ""        # 選填：登入密碼（建議留空或省略，於執行時安全輸入）
-  #     MSSQL_DATABASE: ""        # 選填：預設資料庫名稱（留空時預設連線登入帳號之預設資料庫並支援列出所有資料庫）
-  #     MSSQL_CONNECT_TIMEOUT: "10"
+  #     MSSQL_HOST: ""                        # 選填：SQL Server 主機 IP 或位址（留空、null 或省略時將於執行時詢問）
+  #     MSSQL_PORT: "1433"                    # 選填：連接埠，預設 1433（留空、null 或省略時將於執行時詢問）
+  #     MSSQL_USER: ""                        # 選填：登入帳號（留空、null 或省略時將於執行時詢問）
+  #     MSSQL_PASSWORD: ""                    # 選填：登入密碼（建議留空或省略，於執行時安全輸入）
+  #     MSSQL_DATABASE: ""                    # 選填：預設資料庫名稱（留空時預設連線登入帳號之預設資料庫並支援列出所有資料庫）
+  #     MSSQL_CONNECT_TIMEOUT: "10"           # 選填：登入連線逾時秒數（3 ~ 60）
+  #     MSSQL_QUERY_TIMEOUT_SEC: "15"         # 選填：單次查詢執行逾時秒數（3 ~ 120）
+  #     MSSQL_LOCK_TIMEOUT_MS: "5000"         # 選填：鎖等待逾時毫秒數（1000 ~ 30000）
+  #     MSSQL_DRIVER: ""                      # 選填：指定 pyodbc 使用之 ODBC 驅動名稱
+  #     MSSQL_ENCRYPT: "yes"                  # 選填：pyodbc TLS 加密（yes / no）
+  #     MSSQL_TRUST_SERVER_CERTIFICATE: "yes" # 選填：正式環境建議設為 no 以驗證伺服器憑證
 
   # 長期記憶與上下文管理 (預設存於 ~/.pocket-agent/memory.json)
   # memory:

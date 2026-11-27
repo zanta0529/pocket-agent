@@ -138,6 +138,23 @@ MYSQL_MAX_QUERY_TIMEOUT_MS = 60_000  # MySQL 查詢逾時最大允許毫秒數
 MYSQL_PROCESSLIST_MAX_ROWS = 50  # mysql_inspect_processlist 單次最多回傳之連線工作列數
 MYSQL_PROCESSLIST_INFO_MAX_CHARS = 200  # mysql_inspect_processlist 單筆 SQL INFO 摘要最大字元數
 
+# 遠端 Microsoft SQL Server 唯讀檢索 MCP (mssql) 連線、逾時與維運診斷常數
+MSSQL_CREDS_CACHE_TTL_SEC = 600.0  # 執行期記憶體憑證快取閒置 TTL 秒數 (10 分鐘)
+MSSQL_DEFAULT_CONNECT_TIMEOUT_SEC = 10  # MSSQL 登入連線預設逾時秒數
+MSSQL_MIN_CONNECT_TIMEOUT_SEC = 3  # MSSQL 登入連線最小逾時秒數
+MSSQL_MAX_CONNECT_TIMEOUT_SEC = 60  # MSSQL 登入連線最大逾時秒數
+MSSQL_DEFAULT_QUERY_TIMEOUT_SEC = 15  # MSSQL 單次查詢執行預設逾時秒數
+MSSQL_MIN_QUERY_TIMEOUT_SEC = 3  # MSSQL 單次查詢執行最小逾時秒數
+MSSQL_MAX_QUERY_TIMEOUT_SEC = 120  # MSSQL 單次查詢執行最大逾時秒數
+MSSQL_DEFAULT_LOCK_TIMEOUT_MS = 5_000  # MSSQL 預設鎖等待逾時毫秒數 (SET LOCK_TIMEOUT)
+MSSQL_MIN_LOCK_TIMEOUT_MS = 1_000  # MSSQL 鎖等待最小逾時毫秒數
+MSSQL_MAX_LOCK_TIMEOUT_MS = 30_000  # MSSQL 鎖等待最大逾時毫秒數
+MSSQL_ACTIVE_REQUESTS_MAX_ROWS = 50  # mssql_inspect_active_requests 單次最多回傳筆數
+MSSQL_ACTIVE_REQUESTS_INFO_MAX_CHARS = 200  # mssql_inspect_active_requests 單筆 SQL 摘要最大字元數
+MSSQL_MISSING_INDEX_DEFAULT_TOP = 20  # mssql_inspect_missing_indexes 預設回傳缺索引筆數
+MSSQL_MISSING_INDEX_MAX_TOP = 50  # mssql_inspect_missing_indexes 最大回傳缺索引筆數
+MSSQL_BACKUP_WARN_DAYS = 7  # mssql_backup_and_ag_status 完整備份超過天數之預警門檻
+
 
 # ==============================================================================
 # 5. 上下文預算與溢出管理常數 (Context Budget & Spillover Defaults)

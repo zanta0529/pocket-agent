@@ -78,6 +78,21 @@ class McpConstants:
     mysql_max_query_timeout_ms: int = 60_000
     mysql_processlist_max_rows: int = 50
     mysql_processlist_info_max_chars: int = 200
+    mssql_creds_cache_ttl_sec: float = 600.0
+    mssql_default_connect_timeout_sec: int = 10
+    mssql_min_connect_timeout_sec: int = 3
+    mssql_max_connect_timeout_sec: int = 60
+    mssql_default_query_timeout_sec: int = 15
+    mssql_min_query_timeout_sec: int = 3
+    mssql_max_query_timeout_sec: int = 120
+    mssql_default_lock_timeout_ms: int = 5_000
+    mssql_min_lock_timeout_ms: int = 1_000
+    mssql_max_lock_timeout_ms: int = 30_000
+    mssql_active_requests_max_rows: int = 50
+    mssql_active_requests_info_max_chars: int = 200
+    mssql_missing_index_default_top: int = 20
+    mssql_missing_index_max_top: int = 50
+    mssql_backup_warn_days: int = 7
 
 
 def load_constants() -> McpConstants:
@@ -135,6 +150,21 @@ def load_constants() -> McpConstants:
             mysql_max_query_timeout_ms=sys_const.MYSQL_MAX_QUERY_TIMEOUT_MS,
             mysql_processlist_max_rows=sys_const.MYSQL_PROCESSLIST_MAX_ROWS,
             mysql_processlist_info_max_chars=sys_const.MYSQL_PROCESSLIST_INFO_MAX_CHARS,
+            mssql_creds_cache_ttl_sec=sys_const.MSSQL_CREDS_CACHE_TTL_SEC,
+            mssql_default_connect_timeout_sec=sys_const.MSSQL_DEFAULT_CONNECT_TIMEOUT_SEC,
+            mssql_min_connect_timeout_sec=sys_const.MSSQL_MIN_CONNECT_TIMEOUT_SEC,
+            mssql_max_connect_timeout_sec=sys_const.MSSQL_MAX_CONNECT_TIMEOUT_SEC,
+            mssql_default_query_timeout_sec=sys_const.MSSQL_DEFAULT_QUERY_TIMEOUT_SEC,
+            mssql_min_query_timeout_sec=sys_const.MSSQL_MIN_QUERY_TIMEOUT_SEC,
+            mssql_max_query_timeout_sec=sys_const.MSSQL_MAX_QUERY_TIMEOUT_SEC,
+            mssql_default_lock_timeout_ms=sys_const.MSSQL_DEFAULT_LOCK_TIMEOUT_MS,
+            mssql_min_lock_timeout_ms=sys_const.MSSQL_MIN_LOCK_TIMEOUT_MS,
+            mssql_max_lock_timeout_ms=sys_const.MSSQL_MAX_LOCK_TIMEOUT_MS,
+            mssql_active_requests_max_rows=sys_const.MSSQL_ACTIVE_REQUESTS_MAX_ROWS,
+            mssql_active_requests_info_max_chars=sys_const.MSSQL_ACTIVE_REQUESTS_INFO_MAX_CHARS,
+            mssql_missing_index_default_top=sys_const.MSSQL_MISSING_INDEX_DEFAULT_TOP,
+            mssql_missing_index_max_top=sys_const.MSSQL_MISSING_INDEX_MAX_TOP,
+            mssql_backup_warn_days=sys_const.MSSQL_BACKUP_WARN_DAYS,
         )
     except ImportError:
         return McpConstants()
