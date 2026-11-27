@@ -1,63 +1,113 @@
-"""Microsoft SQL Server (MSSQL) 零鎖定 DMV 結構與索引健康檢查工具群組（Command / Registrar Pattern）。"""
+"""Microsoft SQL Server (MSSQL) 零鎖定 DMV 結構健康檢查與缺索引建議工具群組（Command / Registrar Pattern）。"""
 
-import os
 from typing import Any
 
 from mcp_servers._shared import (
     CONSTANTS,
-    ConnAuthError,
     clean_param,
     find_redundant_prefix_indexes,
     format_bytes,
+    t,
     truncate_health_report,
     validate_identifier,
+    validate_positive_int,
 )
 from mcp_servers.mssql.adapter import MSSQL_ADAPTER, adapt_placeholders
+from mcp_servers.mssql.tools._common import (
+    format_mssql_error,
+    is_permission_error,
+    parse_mssql_target,
+    run_readonly_tool,
+    truncate_text,
+)
 
 DB_HEALTH_MAX_TABLES = CONSTANTS.db_health_max_tables
 DB_FRAGMENTATION_WARN_RATIO = CONSTANTS.db_fragmentation_warn_ratio
 DB_FRAGMENTATION_MIN_FREE_BYTES = CONSTANTS.db_fragmentation_min_free_bytes
 DB_AUTOINC_WARN_RATIO = CONSTANTS.db_autoinc_warn_ratio
+_METADATA_BATCH_SIZE = 100
 
 
 def _mssql_int_type_max(type_name: str) -> int | None:
-    t = (type_name or "").strip().lower()
-    if t == "tinyint":
+    col_t = (type_name or "").strip().lower()
+    if col_t == "tinyint":
         return 255
-    if t == "smallint":
+    if col_t == "smallint":
         return 32767
-    if t in ("int", "integer"):
+    if col_t in ("int", "integer"):
         return 2147483647
-    if t == "bigint":
+    if col_t == "bigint":
         return 9223372036854775807
     return None
 
 
-def _parse_mssql_target(table_name: str, database: str) -> tuple[str, str, str]:
-    explicit_db = clean_param(database)
-    if explicit_db:
-        explicit_db = validate_identifier(explicit_db, "database")
+def _fetch_health_metadata_batches(
+    cursor: Any,
+    conn: Any,
+    db_prefix: str,
+    table_pairs: list[tuple[str, str]],
+) -> tuple[list[Any], list[Any], list[Any]]:
+    idx_rows: list[Any] = []
+    constraint_rows: list[Any] = []
+    identity_rows: list[Any] = []
 
-    clean_tbl = (table_name or "").strip().strip("'\"`[]")
-    if not clean_tbl:
-        return explicit_db, "", ""
+    for start in range(0, len(table_pairs), _METADATA_BATCH_SIZE):
+        batch = table_pairs[start : start + _METADATA_BATCH_SIZE]
+        pair_clause = " OR ".join("(s.name = %s AND t.name = %s)" for _ in batch)
+        flat_params = tuple(item for pair in batch for item in pair)
 
-    parts = [p.strip("[]'\"") for p in clean_tbl.split(".")]
-    if len(parts) == 3:
-        return (
-            validate_identifier(parts[0], "database"),
-            validate_identifier(parts[1], "schema_name"),
-            validate_identifier(parts[2], "table_name"),
-        )
-    if len(parts) == 2:
-        return (
-            explicit_db,
-            validate_identifier(parts[0], "schema_name"),
-            validate_identifier(parts[1], "table_name"),
-        )
-    if len(parts) == 1:
-        return explicit_db, "", validate_identifier(parts[0], "table_name")
-    raise ValueError(f"非法的 table_name 格式：{table_name!r}")
+        try:
+            idx_raw = (
+                "SELECT s.name, t.name, i.name, i.is_unique, i.is_disabled, col.name, i.type, i.has_filter "
+                f"FROM {db_prefix}sys.indexes i "
+                f"JOIN {db_prefix}sys.tables t ON i.object_id = t.object_id "
+                f"JOIN {db_prefix}sys.schemas s ON t.schema_id = s.schema_id "
+                f"LEFT JOIN {db_prefix}sys.index_columns ic "
+                "  ON i.object_id = ic.object_id AND i.index_id = ic.index_id AND ic.is_included_column = 0 "
+                f"LEFT JOIN {db_prefix}sys.columns col "
+                "  ON ic.object_id = col.object_id AND ic.column_id = col.column_id "
+                f"WHERE ({pair_clause}) AND i.name IS NOT NULL "
+                "ORDER BY s.name, t.name, i.name, ic.key_ordinal;"
+            )
+            cursor.execute(adapt_placeholders(idx_raw, conn), flat_params)
+            idx_rows.extend(cursor.fetchall() or [])
+        except Exception:
+            pass
+
+        try:
+            cons_raw = (
+                "SELECT s.name, t.name, fk.name, 'FOREIGN KEY', fk.is_disabled, fk.is_not_trusted "
+                f"FROM {db_prefix}sys.foreign_keys fk "
+                f"JOIN {db_prefix}sys.tables t ON fk.parent_object_id = t.object_id "
+                f"JOIN {db_prefix}sys.schemas s ON t.schema_id = s.schema_id "
+                f"WHERE ({pair_clause}) AND (fk.is_disabled = 1 OR fk.is_not_trusted = 1) "
+                "UNION ALL "
+                "SELECT s.name, t.name, cc.name, 'CHECK', cc.is_disabled, cc.is_not_trusted "
+                f"FROM {db_prefix}sys.check_constraints cc "
+                f"JOIN {db_prefix}sys.tables t ON cc.parent_object_id = t.object_id "
+                f"JOIN {db_prefix}sys.schemas s ON t.schema_id = s.schema_id "
+                f"WHERE ({pair_clause}) AND (cc.is_disabled = 1 OR cc.is_not_trusted = 1);"
+            )
+            cursor.execute(adapt_placeholders(cons_raw, conn), flat_params * 2)
+            constraint_rows.extend(cursor.fetchall() or [])
+        except Exception:
+            pass
+
+        try:
+            ident_raw = (
+                "SELECT s.name, t.name, ic.name, tp.name, ic.last_value "
+                f"FROM {db_prefix}sys.identity_columns ic "
+                f"JOIN {db_prefix}sys.tables t ON ic.object_id = t.object_id "
+                f"JOIN {db_prefix}sys.schemas s ON t.schema_id = s.schema_id "
+                f"JOIN {db_prefix}sys.types tp ON ic.system_type_id = tp.user_type_id "
+                f"WHERE ({pair_clause}) AND ic.last_value IS NOT NULL;"
+            )
+            cursor.execute(adapt_placeholders(ident_raw, conn), flat_params)
+            identity_rows.extend(cursor.fetchall() or [])
+        except Exception:
+            pass
+
+    return idx_rows, constraint_rows, identity_rows
 
 
 def mssql_inspect_health(
@@ -70,33 +120,19 @@ def mssql_inspect_health(
     mssql_database: str = "",
 ) -> str:
     """檢視遠端 SQL Server 資料庫或資料表的結構、空間、索引與約束健康狀態（零鎖定 DMV 巡檢）"""
-    conn = None
-    sql_executed = "SELECT ... FROM sys.tables"
     try:
-        try:
-            explicit_db, target_schema, target_table = _parse_mssql_target(table_name, database)
-        except ValueError as exc:
-            MSSQL_ADAPTER.audit.log(
-                "mssql_inspect_health",
-                f"database={database!r} table_name={table_name!r}",
-                target=MSSQL_ADAPTER.format_audit_target(
-                    mssql_host, mssql_port, mssql_user, database or mssql_database
-                ),
-                status="BLOCKED",
-                detail=str(exc),
-            )
-            return f"[ERROR] {exc}"
-
-        conn = MSSQL_ADAPTER.connect(mssql_host, mssql_port, mssql_user, mssql_password, mssql_database)
-        target_db = (
-            explicit_db
-            or clean_param(mssql_database)
-            or MSSQL_ADAPTER.cache.get("MSSQL_DATABASE")
-            or clean_param(os.getenv("MSSQL_DATABASE"))
+        explicit_db, target_schema, target_table = parse_mssql_target(table_name, database)
+    except ValueError as exc:
+        return format_mssql_error(
+            "mssql_inspect_health",
+            exc,
+            sql=f"database={database!r} table_name={table_name!r}",
+            target=MSSQL_ADAPTER.format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
+            status="BLOCKED",
         )
-        target = MSSQL_ADAPTER.format_audit_target(mssql_host, mssql_port, mssql_user, target_db)
-        db_prefix = f"[{explicit_db}]." if explicit_db else ""
 
+    def _run(conn: Any, target_db: str, target: str) -> str:
+        db_prefix = f"[{explicit_db}]." if explicit_db else ""
         where_parts = ["t.is_ms_shipped = 0"]
         params: list[Any] = []
         if target_schema:
@@ -161,70 +197,23 @@ def mssql_inspect_health(
             try:
                 sql_executed = adapt_placeholders(dmv_sql_raw, conn)
                 cursor.execute(sql_executed, tuple(params))
-                tables = cursor.fetchall()
-            except Exception:
+                tables = list(cursor.fetchall() or [])
+            except Exception as dmv_exc:
+                if not is_permission_error(dmv_exc):
+                    raise
                 dmv_degraded = True
                 sql_executed = adapt_placeholders(fallback_sql_raw, conn)
                 cursor.execute(sql_executed, tuple(params))
-                tables = cursor.fetchall()
+                tables = list(cursor.fetchall() or [])
 
             if tables:
-                try:
-                    idx_raw = (
-                        "SELECT s.name, t.name, i.name, i.is_unique, i.is_disabled, col.name "
-                        f"FROM {db_prefix}sys.indexes i "
-                        f"JOIN {db_prefix}sys.tables t ON i.object_id = t.object_id "
-                        f"JOIN {db_prefix}sys.schemas s ON t.schema_id = s.schema_id "
-                        f"LEFT JOIN {db_prefix}sys.index_columns ic "
-                        "  ON i.object_id = ic.object_id AND i.index_id = ic.index_id AND ic.is_included_column = 0 "
-                        f"LEFT JOIN {db_prefix}sys.columns col "
-                        "  ON ic.object_id = col.object_id AND ic.column_id = col.column_id "
-                        f"WHERE {where_sql} AND i.name IS NOT NULL "
-                        "ORDER BY s.name, t.name, i.name, ic.key_ordinal;"
-                    )
-                    cursor.execute(adapt_placeholders(idx_raw, conn), tuple(params))
-                    fetched_idx = cursor.fetchall()
-                    if fetched_idx and fetched_idx != tables:
-                        idx_rows = list(fetched_idx)
-                except Exception:
-                    pass
-
-                try:
-                    cons_raw = (
-                        "SELECT s.name, t.name, fk.name, 'FOREIGN KEY', fk.is_disabled, fk.is_not_trusted "
-                        f"FROM {db_prefix}sys.foreign_keys fk "
-                        f"JOIN {db_prefix}sys.tables t ON fk.parent_object_id = t.object_id "
-                        f"JOIN {db_prefix}sys.schemas s ON t.schema_id = s.schema_id "
-                        f"WHERE {where_sql} AND (fk.is_disabled = 1 OR fk.is_not_trusted = 1) "
-                        "UNION ALL "
-                        "SELECT s.name, t.name, cc.name, 'CHECK', cc.is_disabled, cc.is_not_trusted "
-                        f"FROM {db_prefix}sys.check_constraints cc "
-                        f"JOIN {db_prefix}sys.tables t ON cc.parent_object_id = t.object_id "
-                        f"JOIN {db_prefix}sys.schemas s ON t.schema_id = s.schema_id "
-                        f"WHERE {where_sql} AND (cc.is_disabled = 1 OR cc.is_not_trusted = 1);"
-                    )
-                    cursor.execute(adapt_placeholders(cons_raw, conn), tuple(params) * 2)
-                    fetched_cons = cursor.fetchall()
-                    if fetched_cons and fetched_cons != tables:
-                        constraint_rows = list(fetched_cons)
-                except Exception:
-                    pass
-
-                try:
-                    ident_raw = (
-                        "SELECT s.name, t.name, ic.name, tp.name, ic.last_value "
-                        f"FROM {db_prefix}sys.identity_columns ic "
-                        f"JOIN {db_prefix}sys.tables t ON ic.object_id = t.object_id "
-                        f"JOIN {db_prefix}sys.schemas s ON t.schema_id = s.schema_id "
-                        f"JOIN {db_prefix}sys.types tp ON ic.system_type_id = tp.user_type_id "
-                        f"WHERE {where_sql} AND ic.last_value IS NOT NULL;"
-                    )
-                    cursor.execute(adapt_placeholders(ident_raw, conn), tuple(params))
-                    fetched_ident = cursor.fetchall()
-                    if fetched_ident and fetched_ident != tables:
-                        identity_rows = list(fetched_ident)
-                except Exception:
-                    pass
+                table_pairs = [(str(tbl[0]), str(tbl[1])) for tbl in tables]
+                idx_rows, constraint_rows, identity_rows = _fetch_health_metadata_batches(
+                    cursor,
+                    conn,
+                    db_prefix,
+                    table_pairs,
+                )
         finally:
             cursor.close()
 
@@ -234,9 +223,9 @@ def mssql_inspect_health(
                 sql_executed,
                 target=target,
                 status="NOT_FOUND",
-                detail="查無符合條件的資料表",
+                detail="no matching tables",
             )
-            return "查無符合條件的資料表。"
+            return t("mssql_mcp.health_no_tables")
 
         MSSQL_ADAPTER.audit.log(
             "mssql_inspect_health",
@@ -250,18 +239,24 @@ def mssql_inspect_health(
         disabled_indexes: list[tuple[str, str, str]] = []
         seen_disabled: set[tuple[str, str, str]] = set()
         for row in idx_rows:
-            if len(row) >= 6:
-                key_pair = (str(row[0]), str(row[1]))
-                iname = str(row[2])
-                is_uniq, is_dis, cname = bool(row[3]), bool(row[4]), row[5]
-                if is_dis and (key_pair[0], key_pair[1], iname) not in seen_disabled:
-                    seen_disabled.add((key_pair[0], key_pair[1], iname))
-                    disabled_indexes.append((key_pair[0], key_pair[1], iname))
-                if cname is not None:
-                    t_map = table_idx_map.setdefault(key_pair, {})
-                    if iname not in t_map:
-                        t_map[iname] = (is_uniq, [])
-                    t_map[iname][1].append(str(cname))
+            if len(row) < 6:
+                continue
+            key_pair = (str(row[0]), str(row[1]))
+            iname = str(row[2])
+            is_uniq, is_dis, cname = bool(row[3]), bool(row[4]), row[5]
+            itype = int(row[6]) if len(row) > 6 and row[6] is not None else 2
+            has_filter = bool(row[7]) if len(row) > 7 else False
+
+            if is_dis and (key_pair[0], key_pair[1], iname) not in seen_disabled:
+                seen_disabled.add((key_pair[0], key_pair[1], iname))
+                disabled_indexes.append((key_pair[0], key_pair[1], iname))
+
+            # 僅針對非篩選的 Clustered / Nonclustered B-Tree 索引檢查冗餘前導欄位
+            if cname is not None and itype in (1, 2) and not has_filter:
+                t_map = table_idx_map.setdefault(key_pair, {})
+                if iname not in t_map:
+                    t_map[iname] = (is_uniq, [])
+                t_map[iname][1].append(str(cname))
 
         total_reserved_bytes = 0
         total_used_bytes = 0
@@ -294,33 +289,40 @@ def mssql_inspect_health(
                 )
 
             if not has_pk:
-                warnings_list.append(f"[Missing PK] {display_name} 缺少主鍵 (Primary Key)")
+                warnings_list.append(t("mssql_mcp.health_warn_missing_pk", table=display_name))
             if is_heap:
-                warnings_list.append(
-                    f"[Heap Table] {display_name} 為堆積表 (Heap，無叢集索引)，"
-                    "頻繁更新易產生轉發紀錄 (Forwarded Records) 與空間碎片"
-                )
+                warnings_list.append(t("mssql_mcp.health_warn_heap", table=display_name))
             if not dmv_degraded and res_bytes > 0 and unused_bytes >= DB_FRAGMENTATION_MIN_FREE_BYTES:
                 unused_ratio = unused_bytes / res_bytes
                 if unused_ratio >= DB_FRAGMENTATION_WARN_RATIO:
                     warnings_list.append(
-                        f"[Unused Space] {display_name} 未用保留空間達 {format_bytes(unused_bytes)} "
-                        f"({unused_ratio * 100:.1f}%)，建議評估索引重組或空間回收"
+                        t(
+                            "mssql_mcp.health_warn_unused_space",
+                            table=display_name,
+                            unused=format_bytes(unused_bytes),
+                            ratio=unused_ratio * 100,
+                        )
                     )
             if key_pair in table_idx_map:
                 for red_msg in find_redundant_prefix_indexes(table_idx_map[key_pair]):
-                    warnings_list.append(f"[Redundant Index] {display_name}: {red_msg}")
+                    warnings_list.append(t("mssql_mcp.health_warn_redundant_idx", table=display_name, detail=red_msg))
 
         for s_name, t_name, iname in disabled_indexes:
             disp = t_name if s_name.lower() == "dbo" else f"{s_name}.{t_name}"
-            warnings_list.append(f"[Disabled Index] {disp}.{iname} 處於停用狀態 (is_disabled=1)")
+            warnings_list.append(t("mssql_mcp.health_warn_disabled_idx", table=disp, index=iname))
 
         for c_row in constraint_rows:
             if len(c_row) >= 6:
                 s_name, t_name, cname, ctype = str(c_row[0]), str(c_row[1]), str(c_row[2]), str(c_row[3])
                 disp = t_name if s_name.lower() == "dbo" else f"{s_name}.{t_name}"
-                state_desc = "已停用 (Disabled)" if bool(c_row[4]) else "未受信任 (Untrusted / WITH NOCHECK)"
-                warnings_list.append(f"[Constraint] {disp} 的 {ctype} 約束 {cname} 處於 {state_desc} 狀態")
+                state_desc = (
+                    t("mssql_mcp.health_constraint_disabled")
+                    if bool(c_row[4])
+                    else t("mssql_mcp.health_constraint_untrusted")
+                )
+                warnings_list.append(
+                    t("mssql_mcp.health_warn_constraint", table=disp, ctype=ctype, cname=cname, state=state_desc)
+                )
 
         for id_row in identity_rows:
             if len(id_row) >= 5:
@@ -341,59 +343,175 @@ def mssql_inspect_health(
                     if ratio >= DB_AUTOINC_WARN_RATIO:
                         disp = t_name if s_name.lower() == "dbo" else f"{s_name}.{t_name}"
                         warnings_list.append(
-                            f"[Identity] {disp}.{col_name} ({tp_name.upper()}) "
-                            f"水位已達 {ratio * 100:.1f}% ({cur_val}/{max_val})，有溢位風險"
+                            t(
+                                "mssql_mcp.health_warn_identity",
+                                table=disp,
+                                col=col_name,
+                                col_type=tp_name.upper(),
+                                ratio=ratio * 100,
+                                current=cur_val,
+                                max_val=max_val,
+                            )
                         )
 
-        scope_label = target_db or "預設連線資料庫"
+        scope_label = target_db or t("mssql_mcp.health_default_db")
         if target_schema or target_table:
             tbl_filter = f"{target_schema}.{target_table}" if target_schema else target_table
-            scope_label += f" / 資料表: {tbl_filter}"
+            scope_label += t("mssql_mcp.health_table_suffix", table=tbl_filter)
 
         report: list[str] = [
             "[MSSQL Health Summary]",
-            f"巡檢範圍: {scope_label}",
-            f"資料表數: {len(tables)} 張使用者資料表",
+            t("mssql_mcp.health_summary_scope", scope=scope_label),
+            t("mssql_mcp.health_summary_counts", count=len(tables)),
         ]
         if dmv_degraded:
-            report.append("空間統計: ℹ️ 目前帳號無 VIEW DATABASE STATE 權限，已自動降級略過 DMV 分區空間與列數統計")
+            report.append(t("mssql_mcp.health_dmv_degraded"))
         else:
             total_unused = max(0, total_reserved_bytes - total_used_bytes)
-            report.append(f"總保留空間 (Reserved): {format_bytes(total_reserved_bytes)}")
-            report.append(f"總已用空間 (Used): {format_bytes(total_used_bytes)}")
-            report.append(f"總未用保留空間 (Unused): {format_bytes(total_unused)}")
+            report.append(t("mssql_mcp.health_summary_reserved", size=format_bytes(total_reserved_bytes)))
+            report.append(t("mssql_mcp.health_summary_used", size=format_bytes(total_used_bytes)))
+            report.append(t("mssql_mcp.health_summary_unused", size=format_bytes(total_unused)))
 
         report.extend(["", "[Health Warnings]"])
         if warnings_list:
             report.extend(f"⚠️ {w}" for w in warnings_list)
         else:
-            report.append("✓ 未發現明顯結構、主鍵、Heap、停用索引或未受信任約束風險。")
+            report.append(t("mssql_mcp.health_no_warnings"))
 
         report.extend(["", "[Table Overview]"])
         report.extend(overview_lines)
         return truncate_health_report(report, max_chars=CONSTANTS.max_output_chars)
-    except ConnAuthError as exc:
-        MSSQL_ADAPTER.audit.log(
-            "mssql_inspect_health",
-            sql_executed,
+
+    return run_readonly_tool(
+        "mssql_inspect_health",
+        _run,
+        sql_hint="SELECT ... FROM sys.tables",
+        mssql_host=mssql_host,
+        mssql_port=mssql_port,
+        mssql_user=mssql_user,
+        mssql_password=mssql_password,
+        mssql_database=mssql_database,
+        explicit_db=explicit_db,
+        error_key="mssql_mcp.health_failed",
+    )
+
+
+def mssql_inspect_missing_indexes(
+    database: str = "",
+    top_n: int = CONSTANTS.mssql_missing_index_default_top,
+    mssql_host: str = "",
+    mssql_port: str = "",
+    mssql_user: str = "",
+    mssql_password: str = "",
+    mssql_database: str = "",
+) -> str:
+    """查詢 SQL Server 缺索引 DMV 建議清單（依預估影響分數排序，零鎖定唯讀）"""
+    try:
+        valid_top = validate_positive_int(top_n, "top_n", max_val=CONSTANTS.mssql_missing_index_max_top)
+    except ValueError:
+        return format_mssql_error(
+            "mssql_inspect_missing_indexes",
+            ValueError(
+                t(
+                    "mssql_mcp.missing_idx_invalid_top",
+                    value=repr(top_n),
+                    max_val=CONSTANTS.mssql_missing_index_max_top,
+                )
+            ),
+            sql=f"top_n={top_n!r}",
             target=MSSQL_ADAPTER.format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
-            status="AUTH_FAIL",
-            detail=str(exc),
+            status="BLOCKED",
         )
-        return f"[ERROR] {exc}"
-    except Exception as exc:
+
+    explicit_db = clean_param(database)
+    if explicit_db:
+        try:
+            explicit_db = validate_identifier(explicit_db, "database")
+        except ValueError as exc:
+            return format_mssql_error(
+                "mssql_inspect_missing_indexes",
+                exc,
+                sql=f"database={database!r}",
+                target=MSSQL_ADAPTER.format_audit_target(mssql_host, mssql_port, mssql_user, database),
+                status="BLOCKED",
+            )
+
+    def _run(conn: Any, target_db: str, target: str) -> str:
+        db_filter = explicit_db or target_db
+        where_sql = "WHERE d.database_id = DB_ID(%s) " if db_filter else ""
+        sql = adapt_placeholders(
+            f"SELECT TOP {valid_top} "
+            "DB_NAME(d.database_id) AS db_name, "
+            "d.statement, "
+            "d.equality_columns, d.inequality_columns, d.included_columns, "
+            "gs.user_seeks, gs.user_scans, gs.avg_total_user_cost, gs.avg_user_impact, "
+            "ROUND(gs.avg_total_user_cost * gs.avg_user_impact * (gs.user_seeks + gs.user_scans), 2) AS score "
+            "FROM sys.dm_db_missing_index_details d "
+            "JOIN sys.dm_db_missing_index_groups g ON d.index_handle = g.index_handle "
+            "JOIN sys.dm_db_missing_index_group_stats gs ON g.index_group_handle = gs.group_handle "
+            f"{where_sql}"
+            "ORDER BY score DESC;",
+            conn,
+        )
+        cursor = conn.cursor()
+        try:
+            try:
+                if db_filter:
+                    cursor.execute(sql, (db_filter,))
+                else:
+                    cursor.execute(sql)
+                rows = list(cursor.fetchall() or [])
+            except Exception as exc:
+                if is_permission_error(exc):
+                    MSSQL_ADAPTER.audit.log(
+                        "mssql_inspect_missing_indexes",
+                        sql,
+                        target=target,
+                        status="BLOCKED",
+                        detail="permission denied",
+                    )
+                    return f"[ERROR] {t('mssql_mcp.missing_idx_permission_denied')}"
+                raise
+        finally:
+            cursor.close()
+
         MSSQL_ADAPTER.audit.log(
-            "mssql_inspect_health",
-            sql_executed,
-            target=MSSQL_ADAPTER.format_audit_target(mssql_host, mssql_port, mssql_user, database or mssql_database),
-            status="ERROR",
-            detail=str(exc),
+            "mssql_inspect_missing_indexes",
+            sql,
+            target=target,
+            status="OK",
+            detail=f"suggestions={len(rows)}",
         )
-        return f"[ERROR] 健康檢查失敗: {exc}"
-    finally:
-        MSSQL_ADAPTER.close_safely(conn)
+        if not rows:
+            return t("mssql_mcp.missing_idx_empty")
+
+        lines = [t("mssql_mcp.missing_idx_header", count=len(rows))]
+        for idx, row in enumerate(rows, start=1):
+            db_n, stmt, eq_c, ineq_c, inc_c, seeks, scans, _cost, impact, score = (list(row) + [None] * 10)[:10]
+            lines.append(f"{idx}. [{db_n}] {stmt} | score={score} impact={impact}% seeks={seeks} scans={scans}")
+            if eq_c:
+                lines.append(f"   equality: {eq_c}")
+            if ineq_c:
+                lines.append(f"   inequality: {ineq_c}")
+            if inc_c:
+                lines.append(f"   include: {inc_c}")
+        return truncate_text("\n".join(lines), max_chars=CONSTANTS.max_output_chars)
+
+    return run_readonly_tool(
+        "mssql_inspect_missing_indexes",
+        _run,
+        sql_hint="SELECT ... FROM sys.dm_db_missing_index_details",
+        mssql_host=mssql_host,
+        mssql_port=mssql_port,
+        mssql_user=mssql_user,
+        mssql_password=mssql_password,
+        mssql_database=mssql_database,
+        explicit_db=explicit_db,
+        error_key="mssql_mcp.missing_idx_failed",
+    )
 
 
 def register(mcp: Any) -> None:
-    """註冊 MSSQL 健康檢查工具至 MCPServer。"""
-    mcp.tool()(mssql_inspect_health)
+    """註冊 MSSQL 健康檢查與缺索引建議工具至 MCPServer。"""
+    for fn in (mssql_inspect_health, mssql_inspect_missing_indexes):
+        mcp.tool()(fn)

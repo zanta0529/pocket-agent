@@ -251,16 +251,22 @@ Pocket Agent 的解決方案：
 | `mysql` | `mysql_server_status` | 是 | 查詢 MySQL／MariaDB 版本、Uptime、`read_only` 狀態、連線數水位與 InnoDB Buffer Pool 命中率（限白名單變數） | 無 |
 | `mysql` | `mysql_inspect_processlist` | **否（含執行中 SQL 片段）** | 查詢 `INFORMATION_SCHEMA.PROCESSLIST` 長時間查詢與鎖等待（限前 50 筆，`INFO` 遮罩並限長 200 字元） | `only_active`（預設 `True`）、`min_time_sec`（預設 `0`） |
 | `mysql` | `mysql_replication_status` | 是 | 查詢 `SHOW REPLICA STATUS`／`SHOW SLAVE STATUS`（僅採白名單回傳 IO／SQL 執行緒、延遲與 GTID，嚴格排除帳密欄位） | 無 |
-| `mssql` | `mssql_list_databases` | 是 | 列出遠端 SQL Server 主機上所有線上（ONLINE）資料庫清單 | 無 |
+| `mssql` | `mssql_list_databases` | 是 | 列出遠端 SQL Server 主機上所有線上（ONLINE）資料庫清單（12,000 字元安全截斷） | 無 |
 | `mssql` | `mssql_list_tables` | 是 | 列出目標 SQL Server 資料庫中的所有基底資料表與檢視表（`VIEW`） | `database`（選填） |
-| `mssql` | `mssql_describe_schema` | 是 | 透過參數化查詢顯示欄位、完整型別（含長度與精度）、主鍵、`NOT NULL`、`DEFAULT` 預設值、索引與外鍵 | `table_name`（必填，支援 `table` 或 `schema.table`）、`database`（選填） |
-| `mssql` | `mssql_inspect_health` | 是 | 透過零鎖定 DMV 檢視資料表空間、檔案容量、缺索引建議與近期備份健康狀態 | `database`（選填） |
-| `mssql` | `mssql_run_select_query` | 是 | 執行唯讀的單一 `SELECT` 或 `WITH` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填） |
+| `mssql` | `mssql_describe_schema` | 是 | 透過參數化查詢顯示欄位、完整型別精度、主鍵、`DEFAULT`（遮罩）、`IDENTITY`／`COMPUTED`、`MS_Description`、`INCLUDE`／`WHERE` 索引與跨 Schema 外鍵 | `table_name`（必填，支援 `table`、`schema.table` 或 `db.schema.table`）、`database`（選填） |
+| `mssql` | `mssql_get_object_definition` | 是 | 取得 View／Stored Procedure／Function／Trigger 的 T-SQL 定義（`sys.sql_modules`）或資料表完整結構摘要（經遮罩與截斷） | `object_name`（必填）、`database`（選填） |
+| `mssql` | `mssql_inspect_health` | 是 | 透過零鎖定 DMV 分批限縮檢視空間、Heap 表、缺少主鍵、停用索引、未受信任約束、Identity 水位與非篩選 B-Tree 冗餘索引（無權限自動降級） | `database`（選填）、`table_name`（選填） |
+| `mssql` | `mssql_inspect_missing_indexes` | 是 | 查詢 `sys.dm_db_missing_index_*` DMV，依預估影響分數排序列出缺索引建議 | `database`（選填）、`top_n`（`1`~`50`，預設 `20`） |
+| `mssql` | `mssql_run_select_query` | 是 | 執行唯讀的單一 `SELECT` 或 `WITH` 查詢（具備串流防爆、截斷即取消與機密欄位遮罩） | `query`（必填） |
+| `mssql` | `mssql_explain_query` | 是 | 透過 `SET SHOWPLAN_TEXT ON` 取得純編譯期預估計畫（絕不實際執行查詢），並標記 `Table Scan`、`Key Lookup` 與 `Sort` 警訊 | `query`（必填） |
+| `mssql` | `mssql_server_status` | 是 | 查詢 `@@VERSION`、`SERVERPROPERTY`、HADR 狀態、啟動時間、CPU／記憶體與工作階段數（無 DMV 權限自動降級） | 無 |
+| `mssql` | `mssql_inspect_active_requests` | **否（含執行中 SQL 片段）** | 查詢活動中 SQL Server 請求、等待類型與阻塞鏈（`blocking_session_id`，`TOP 50`，SQL 遮罩並限長 200 字元） | `min_elapsed_ms`（預設 `0`）、`blocking_only`（預設 `False`） |
+| `mssql` | `mssql_backup_and_ag_status` | 是 | 檢查線上資料庫最近 `FULL`／`DIFF`／`LOG` 備份（逾 7 天或無完整備份警示）及 Always On AG 同步／佇列狀態 | `database`（選填） |
 
 ### 2. 安全防禦邊界
 
-- **連線與交易層級強制唯讀、查詢逾時與 TLS**：`mysql_mcp.py` 連線後立即執行 `SET SESSION TRANSACTION READ ONLY`、`SET SESSION MAX_EXECUTION_TIME`（MariaDB 降級 `max_statement_time`）與 `START TRANSACTION READ ONLY`，並支援 `MYSQL_SSL_MODE`／`MYSQL_SSL_CA` TLS 加密連線；`mssql_mcp.py` 啟用 `ApplicationIntent=ReadOnly` 與 `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED`，且兩者皆設為 `autocommit=False`，於 `finally` 區塊強制 `rollback()` 與 `close()`。
-- **單一查詢、字面值感知註解正規化與串流熔斷**：清除開頭註解（含 `--`、`/* */` 及 MySQL `#`）後僅允許 `SELECT` 或 `WITH`（MySQL 亦支援 `EXPLAIN`）開頭，嚴格禁止多重語句（分號注入）以及 `INTO`、`FOR UPDATE`／`FOR SHARE`、`LOAD_FILE()`、`WAIT_FOR_EXECUTED_GTID_SET()`、`EXEC`、`EXECUTE`、`xp_cmdshell`、`OPENROWSET`、`BULK` 等具寫入、鎖定或系統副作用之語法。`mysql_mcp.py` 採用引號狀態機之註解正規化與字面值遮蔽骨架（拒絕 `/*!` 可執行註解與引號內反斜線跳脫，同時避免誤殺字串內的 `;` 或關鍵字）與串流游標（`SSCursor`／`buffered=False`，截斷時直接中斷連線不排空剩餘資料）；`*_inspect_health` 採零鎖定詮釋資料／DMV／受限 `PRAGMA` 巡檢（MySQL 分批限縮於前 500 張表且僅統計 `BTREE` 索引），`mysql_check_table` 限定單表 `QUICK`／`FAST` 模式與 `2 GB` 容量熔斷，`mysql_replication_status` 嚴格以白名單排除來源帳號／主機／憑證欄位。
+- **連線與交易層級強制唯讀、查詢逾時與 TLS**：`mysql_mcp.py` 連線後立即執行 `SET SESSION TRANSACTION READ ONLY`、`SET SESSION MAX_EXECUTION_TIME`（MariaDB 降級 `max_statement_time`）與 `START TRANSACTION READ ONLY`，並支援 `MYSQL_SSL_MODE`／`MYSQL_SSL_CA` TLS 加密連線；`mssql_mcp.py` 啟用 `ApplicationIntent=ReadOnly`、`pyodbc conn.timeout`、`SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED` 與 `SET LOCK_TIMEOUT`，且兩者皆設為 `autocommit=False`，於 `finally` 區塊強制 `rollback()` 與 `close()`（截斷大查詢時改以 `cursor.cancel()`／強制關閉連線避免排空）。
+- **單一查詢、字面值感知註解正規化與串流熔斷**：清除開頭註解（含 `--`、`/* */` 及 MySQL `#`）後僅允許 `SELECT` 或 `WITH`（MySQL 亦支援 `EXPLAIN`）開頭，嚴格禁止多重語句（分號注入）以及 `INTO`、`FOR UPDATE`／`FOR SHARE`、`LOAD_FILE()`、`WAIT_FOR_EXECUTED_GTID_SET()`、`UPDLOCK`／`TABLOCKX`、`DM_OS_ENUMERATE_FILESYSTEM`、`FN_GET_AUDIT_FILE`、`EXEC`、`EXECUTE`、`xp_cmdshell`、`OPENROWSET`、`BULK` 等具寫入、鎖定或系統副作用之語法。`mysql_mcp.py` 與 `mssql_mcp.py` 皆採用引號狀態機之註解正規化與字面值遮蔽骨架（同時避免誤殺字串內的 `;` 或關鍵字），`mysql_mcp.py` 採 `SSCursor`／`buffered=False` 串流游標；`*_inspect_health` 採零鎖定詮釋資料／DMV／受限 `PRAGMA` 巡檢（分批限縮於前 500 張表並排除 Filtered Index 誤報），`mysql_check_table` 限定單表 `QUICK`／`FAST` 模式與 `2 GB` 容量熔斷，`mysql_replication_status` 與 `mssql_backup_and_ag_status` 嚴格以白名單排除帳號／主機／憑證欄位。
 - **彈性憑證配置與機密遮罩**：`MYSQL_HOST`／`MYSQL_PORT`／`MYSQL_USER`／`MYSQL_PASSWORD`／`MYSQL_DATABASE` 與 `MSSQL_HOST`／`MSSQL_PORT`／`MSSQL_USER`／`MSSQL_PASSWORD`／`MSSQL_DATABASE` 皆支援設定檔預填（含 IPv6 位址正規化比對）、留空或省略並於執行期互動詢問（快取於記憶體，認證失敗自動清除）；查詢結果自動針對敏感欄位名稱、機密鍵值、連線 URI 內嵌帳密與 PEM 私鑰遮罩為 `[REDACTED]`。
 
 ---

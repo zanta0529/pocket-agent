@@ -104,7 +104,8 @@ def test_mssql_describe_schema(monkeypatch):
         ("order_no", "nvarchar", "NO", None, 0),
         ("remark", "nvarchar", "YES", None, 0),
     ]
-    conn, cursor = _make_fake_conn(rows=schema_rows)
+    conn, cursor = _make_fake_conn()
+    cursor.fetchall.side_effect = [schema_rows, [], []]
     fake_driver = SimpleNamespace(connect=MagicMock(return_value=conn))
 
     with patch("mcp_servers.mssql.adapter.load_mssql_driver", return_value=("pymssql", fake_driver)):
@@ -113,8 +114,9 @@ def test_mssql_describe_schema(monkeypatch):
     assert "id (INT [PK] NOT NULL)" in out
     assert "order_no (NVARCHAR NOT NULL)" in out
     assert "remark (NVARCHAR)" in out
-    last_call = cursor.execute.call_args_list[-1]
-    assert last_call.args[1] == ("sales", "invoices")
+    col_calls = [c for c in cursor.execute.call_args_list if "INFORMATION_SCHEMA.COLUMNS" in c.args[0]]
+    assert len(col_calls) == 1
+    assert col_calls[0].args[1] == ("sales", "invoices")
 
     # 測試查無資料表
     conn_empty, _ = _make_fake_conn(rows=[])
@@ -259,7 +261,8 @@ def test_mssql_pyodbc_fallback_and_placeholder_adaptation(monkeypatch):
         def cursor(self):
             return self._cursor
 
-    _, cursor = _make_fake_conn(rows=[("id", "int", "NO", None, 1)])
+    _, cursor = _make_fake_conn()
+    cursor.fetchall.side_effect = [[("id", "int", "NO", None, 1)], [], []]
     pyodbc_conn = FakePyodbcConn(cursor)
     fake_pyodbc = SimpleNamespace(
         drivers=MagicMock(return_value=["ODBC Driver 18 for SQL Server"]),
@@ -281,7 +284,9 @@ def test_mssql_pyodbc_fallback_and_placeholder_adaptation(monkeypatch):
     assert "ApplicationIntent=ReadOnly;" in conn_str
     assert "DRIVER={ODBC Driver 18 for SQL Server};" in conn_str
     # 驗證 pyodbc 連線下將 %s 轉為 ?
-    schema_sql = cursor.execute.call_args_list[-1].args[0]
+    col_calls = [c for c in cursor.execute.call_args_list if "INFORMATION_SCHEMA.COLUMNS" in c.args[0]]
+    assert len(col_calls) == 1
+    schema_sql = col_calls[0].args[0]
     assert "WHERE c.TABLE_SCHEMA = ? AND c.TABLE_NAME = ?" in schema_sql
     assert "%s" not in schema_sql
 
@@ -533,3 +538,291 @@ def test_mssql_inspect_health_dmv_permission_degradation_and_identifier_guard(mo
 
     assert "VIEW DATABASE STATE 權限，已自動降級" in out
     assert "- Customers: Structure=Clustered, PK=Yes" in out
+
+
+# ── 安全加固回歸測試 (CR-001 ~ CR-005) ──────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "bad_query",
+    [
+        "SELECT * FROM Orders WITH (UPDLOCK)",
+        "SELECT * FROM Orders WITH (TABLOCKX)",
+        "SELECT * FROM Orders WITH (HOLDLOCK)",
+        "SELECT * FROM sys.dm_os_enumerate_filesystem('C:\\')",
+        "SELECT * FROM sys.fn_get_audit_file('C:\\audit\\*', DEFAULT, DEFAULT)",
+        "SELECT /* unclosed comment FROM Orders",
+        "SELECT [unclosed_bracket FROM Orders",
+        'SELECT "unclosed_ident FROM Orders',
+    ],
+)
+def test_mssql_blocks_lock_hints_filesystem_tvfs_and_unclosed_tokens(monkeypatch, bad_query):
+    _set_full_mssql_env(monkeypatch)
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect") as mock_conn:
+        out = mssql_mcp.mssql_run_select_query(bad_query)
+        assert out.startswith("[ERROR]")
+        mock_conn.assert_not_called()
+
+
+def test_mssql_sql_guard_allows_literals_double_quotes_and_escaped_brackets():
+    from mcp_servers.mssql import sql_guard as mssql_sql_guard
+
+    q = (
+        "SELECT STRING_AGG([col]]name], ';') AS [out], \"user'col\" "
+        "FROM [dbo].[audit_logs] WHERE msg = N'DROP TABLE /* keep */';"
+    )
+    cleaned = mssql_sql_guard.MSSQL_SQL_GUARD.validate_select(q)
+    assert "STRING_AGG([col]]name], ';')" in cleaned
+    assert "N'DROP TABLE /* keep */'" in cleaned
+
+
+def test_mssql_adapt_placeholders_preserves_string_literals():
+    class _FakePyodbcConn:
+        __module__ = "pyodbc"
+
+    sql = "SELECT * FROM t WHERE a LIKE '%s%%' AND b = %s AND c = %s;"
+    adapted = mssql_adapter.adapt_placeholders(sql, _FakePyodbcConn())
+    assert adapted == "SELECT * FROM t WHERE a LIKE '%s%%' AND b = ? AND c = ?;"
+
+
+def test_mssql_pyodbc_timeout_lock_timeout_and_abort_on_truncation(monkeypatch):
+    _set_full_mssql_env(monkeypatch)
+    monkeypatch.setenv("MSSQL_QUERY_TIMEOUT_SEC", "22")
+    monkeypatch.setenv("MSSQL_LOCK_TIMEOUT_MS", "4500")
+
+    class _FakePyodbcConn:
+        __module__ = "pyodbc"
+
+        def __init__(self, cur):
+            self._cur = cur
+            self.timeout = 0
+            self.rollback = MagicMock()
+            self.close = MagicMock()
+
+        def cursor(self):
+            return self._cur
+
+    huge_rows = [(i, "x" * 300) for i in range(200)]
+    _, cursor = _make_fake_conn(rows=huge_rows, description=[("id",), ("payload",)])
+    cursor.cancel = MagicMock()
+    pyodbc_conn = _FakePyodbcConn(cursor)
+    fake_pyodbc = SimpleNamespace(
+        drivers=MagicMock(return_value=["ODBC Driver 18 for SQL Server"]),
+        connect=MagicMock(return_value=pyodbc_conn),
+    )
+
+    def _fake_import(name):
+        if name == "pymssql":
+            raise ImportError("missing")
+        if name == "pyodbc":
+            return fake_pyodbc
+        raise ImportError(name)
+
+    with patch("importlib.import_module", side_effect=_fake_import):
+        out = mssql_mcp.mssql_run_select_query("SELECT id, payload FROM big_table")
+
+    assert pyodbc_conn.timeout == 22
+    executed = [c.args[0] for c in cursor.execute.call_args_list]
+    assert "SET LOCK_TIMEOUT 4500;" in executed
+    assert "查詢結果已截斷" in out
+    cursor.cancel.assert_called_once()
+    pyodbc_conn.rollback.assert_not_called()
+    pyodbc_conn.close.assert_called_once()
+
+
+def test_mssql_describe_schema_include_filter_identity_and_redaction(monkeypatch):
+    _set_full_mssql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    col_rows = [
+        ("id", "bigint", "NO", None, 1, None, 19, 0, 1, 0, "流水號"),
+        ("api_key", "nvarchar", "NO", "('sk-1234567890abcdef1234567890')", 0, 100, None, None, 0, 0, "金鑰"),
+        ("full_name", "nvarchar", "YES", None, 0, 200, None, None, 0, 1, None),
+    ]
+    idx_rows = [
+        ("IX_Orders_Active", 0, "status", 0, "([is_deleted]=(0))"),
+        ("IX_Orders_Active", 0, "total", 1, "([is_deleted]=(0))"),
+    ]
+    fk_rows = [
+        ("org_id", "core", "Orgs", "id"),
+    ]
+    cursor.fetchall.side_effect = [col_rows, idx_rows, fk_rows]
+
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
+        out = mssql_mcp.mssql_describe_schema("dbo.Orders")
+
+    assert "id (BIGINT [PK] NOT NULL) [IDENTITY] -- 流水號" in out
+    assert "sk-1234567890abcdef1234567890" not in out
+    assert "[REDACTED_TOKEN]" in out
+    assert "full_name (NVARCHAR(200)) [COMPUTED]" in out
+    assert "- IX_Orders_Active: (status) INCLUDE (total) WHERE ([is_deleted]=(0))" in out
+    assert "- org_id -> core.Orgs.id" in out
+
+
+def test_mssql_inspect_health_skips_filtered_indexes_and_does_not_swallow_non_perm_error(monkeypatch):
+    _set_full_mssql_env(monkeypatch)
+
+    # 1. 非權限錯誤不應被誤降級，應直接回報錯誤
+    conn_err, cursor_err = _make_fake_conn()
+    cursor_err.execute.side_effect = RuntimeError("Database 'missing_db' does not exist")
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn_err):
+        err_out = mssql_mcp.mssql_inspect_health(database="missing_db")
+    assert err_out.startswith("[ERROR]")
+    assert "missing_db" in err_out
+
+    # 2. Filtered Index (has_filter=1) 不應觸發冗餘索引警告
+    conn_ok, cursor_ok = _make_fake_conn()
+    table_rows = [("dbo", "Orders", 1, 0, 100, 1024 * 1024, 1024 * 1024)]
+    idx_rows = [
+        ("dbo", "Orders", "IX_Orders_Active", 0, 0, "CustomerId", 2, 1),
+        ("dbo", "Orders", "IX_Orders_Cust_Date", 0, 0, "CustomerId", 2, 0),
+        ("dbo", "Orders", "IX_Orders_Cust_Date", 0, 0, "OrderDate", 2, 0),
+    ]
+    cursor_ok.fetchall.side_effect = [table_rows, idx_rows, [], []]
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn_ok):
+        out_ok = mssql_mcp.mssql_inspect_health()
+    assert "[Redundant Index]" not in out_ok
+
+
+# ── P0 & P1 擴充工具測試 ────────────────────────────────────────────────
+
+
+def test_mssql_get_object_definition_proc_and_redaction(monkeypatch):
+    _set_full_mssql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    cursor.fetchone.return_value = (
+        "P",
+        "SQL_STORED_PROCEDURE",
+        "CREATE PROCEDURE dbo.usp_Sync AS SELECT password='MySecretPassword123';",
+    )
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
+        out = mssql_mcp.mssql_get_object_definition("dbo.usp_Sync")
+
+    assert "[SQL_STORED_PROCEDURE: dbo.usp_Sync]" in out
+    assert "MySecretPassword123" not in out
+    assert "[REDACTED]" in out
+
+
+def test_mssql_explain_query_showplan_warnings_and_cleanup(monkeypatch):
+    _set_full_mssql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    cursor.fetchall.return_value = [
+        ("  |--Key Lookup(OBJECT:([erp_db].[dbo].[Orders]))",),
+        ("       |--Table Scan(OBJECT:([erp_db].[dbo].[Staging]))",),
+        ("  |--Sort(ORDER BY:([created_at] DESC))",),
+    ]
+    cursor.nextset.return_value = False
+
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
+        out = mssql_mcp.mssql_explain_query("SELECT * FROM Orders ORDER BY created_at")
+
+    executed = [c.args[0] for c in cursor.execute.call_args_list]
+    assert "SET SHOWPLAN_TEXT ON;" in executed
+    assert "SET SHOWPLAN_TEXT OFF;" in executed
+    assert "[Execution Plan Warnings]" in out
+    assert "Table Scan" in out
+    assert "Key Lookup" in out
+    assert "Sort" in out
+
+
+def test_mssql_server_status_and_dmv_degradation(monkeypatch):
+    _set_full_mssql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    cursor.fetchone.side_effect = [
+        (
+            "Microsoft SQL Server 2022",
+            "16.0.4115.5",
+            "CU12",
+            "Enterprise Edition",
+            "SQL_Latin1_General_CP1_CI_AS",
+            1,
+            0,
+        ),
+        RuntimeError("VIEW SERVER STATE permission was denied"),
+        (16384,),
+    ]
+
+    def _exec(sql, params=()):
+        if "dm_os_sys_info" in sql:
+            raise RuntimeError("VIEW SERVER STATE permission was denied")
+
+    cursor.execute.side_effect = _exec
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
+        out = mssql_mcp.mssql_server_status()
+
+    assert "16.0.4115.5" in out
+    assert "Enterprise Edition" in out
+    assert "VIEW SERVER STATE" in out
+
+
+def test_mssql_inspect_active_requests_and_missing_indexes(monkeypatch):
+    _set_full_mssql_env(monkeypatch)
+    assert mssql_mcp.mssql_inspect_active_requests(min_elapsed_ms=-1).startswith("[ERROR]")
+    assert mssql_mcp.mssql_inspect_missing_indexes(top_n=0).startswith("[ERROR]")
+
+    conn_req, _ = _make_fake_conn(
+        rows=[
+            (
+                77,
+                "app_user",
+                "erp_db",
+                "suspended",
+                "SELECT",
+                55,
+                "LCK_M_S",
+                4200,
+                8500,
+                120,
+                "SELECT * FROM Orders WHERE token='sk-1234567890abcdef1234567890' AND x='" + ("z" * 300) + "'",
+            )
+        ]
+    )
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn_req):
+        req_out = mssql_mcp.mssql_inspect_active_requests(blocking_only=True)
+    assert "BLOCKED_BY=55" in req_out
+    assert "sk-1234567890" not in req_out
+    assert "[REDACTED]" in req_out
+    assert "z" * 250 not in req_out
+
+    conn_idx, _ = _make_fake_conn(
+        rows=[
+            (
+                "erp_db",
+                "[erp_db].[dbo].[Orders]",
+                "[CustomerId]",
+                "[OrderDate]",
+                "[Total]",
+                500,
+                10,
+                40.0,
+                85.0,
+                1734000.0,
+            )
+        ]
+    )
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn_idx):
+        idx_out = mssql_mcp.mssql_inspect_missing_indexes(top_n=5)
+    assert "[MSSQL Missing Index Suggestions]" in idx_out
+    assert "score=1734000.0" in idx_out
+    assert "include: [Total]" in idx_out
+
+
+def test_mssql_backup_and_ag_status(monkeypatch):
+    _set_full_mssql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    cursor.fetchall.side_effect = [
+        [
+            ("erp_db", "2026-11-10 02:00:00", None, "2026-11-27 12:00:00", 17),
+            ("new_db", None, None, None, None),
+        ],
+        [
+            ("AG_PROD", "erp_db", 1, "SYNCHRONIZED", "HEALTHY", 0, 0),
+        ],
+    ]
+    cursor.fetchone.return_value = (1,)
+    with patch.object(mssql_adapter.MSSQL_ADAPTER, "connect", return_value=conn):
+        out = mssql_mcp.mssql_backup_and_ag_status()
+
+    assert "17 天" in out
+    assert "new_db" in out
+    assert "[Always On Availability Groups]" in out
+    assert "AG_PROD / erp_db (PRIMARY): state=SYNCHRONIZED, health=HEALTHY" in out

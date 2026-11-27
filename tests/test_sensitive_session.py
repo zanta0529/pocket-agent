@@ -195,23 +195,23 @@ def test_mssql_forbidden_rejects_sequence():
     assert _validate_select_query("SELECT 1") == "SELECT 1"
 
     # 阻擋標準 NEXT VALUE FOR
-    with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
+    with pytest.raises(ValueError, match="禁止執行的寫入、鎖定、檔案系統函式、預存程序或系統變更關鍵字"):
         _validate_select_query("SELECT NEXT VALUE FOR dbo.seq_counter")
 
     # 阻擋註解混淆的 NEXT/**/VALUE/**/FOR 穿透
-    with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
+    with pytest.raises(ValueError, match="禁止執行的寫入、鎖定、檔案系統函式、預存程序或系統變更關鍵字"):
         _validate_select_query("SELECT NEXT/**/VALUE/**/FOR dbo.seq_counter")
 
     # 阻擋單行註解換行混淆
-    with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
+    with pytest.raises(ValueError, match="禁止執行的寫入、鎖定、檔案系統函式、預存程序或系統變更關鍵字"):
         _validate_select_query("SELECT NEXT -- comment\nVALUE FOR dbo.seq_counter")
 
     # 阻擋字串常值內含 '--' 混淆註解消除並執行 NEXT VALUE FOR 繞過
-    with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
+    with pytest.raises(ValueError, match="禁止執行的寫入、鎖定、檔案系統函式、預存程序或系統變更關鍵字"):
         _validate_select_query("SELECT '--' AS marker, NEXT VALUE FOR dbo.counter")
 
     # 阻擋字串常值內含 '/*' 混淆區塊註解並執行 NEXT VALUE FOR 繞過
-    with pytest.raises(ValueError, match="禁止執行的寫入、預存程序或系統變更關鍵字"):
+    with pytest.raises(ValueError, match="禁止執行的寫入、鎖定、檔案系統函式、預存程序或系統變更關鍵字"):
         _validate_select_query("SELECT '/* harmless */' AS marker, NEXT VALUE FOR dbo.counter")
 
     # 阻擋未閉合字串常值

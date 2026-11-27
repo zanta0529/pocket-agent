@@ -6,12 +6,15 @@ import re
 from typing import Any
 
 from mcp_servers._shared import (
+    CONSTANTS,
+    DEFAULT_REDACTION_POLICY,
     AuditLogger,
     ConnAuthError,
     CredentialCache,
     ReadOnlyDatabaseAdapter,
     clean_param,
     is_empty_or_null,
+    t,
     tty_prompt_secret,
     tty_prompt_text,
     validate_host,
@@ -31,14 +34,14 @@ def load_mssql_driver() -> tuple[str, Any]:
             return driver_type, mod
         except ImportError:
             continue
-    raise RuntimeError("尚未安裝 SQL Server 驅動套件。請在終端機執行：pip install pymssql（或 pip install pyodbc）")
+    raise RuntimeError(t("mssql_mcp.driver_missing"))
 
 
 def _resolve_odbc_driver(pyodbc_mod: Any) -> str:
     custom = clean_param(os.getenv("MSSQL_DRIVER"))
     if custom:
         if not _DRIVER_RE.match(custom):
-            raise ValueError("非法的 MSSQL_DRIVER 驅動名稱格式。")
+            raise ValueError(t("mssql_mcp.invalid_driver_name"))
         return custom
     preferred = (
         "ODBC Driver 18 for SQL Server",
@@ -61,16 +64,52 @@ def _escape_odbc_value(val: str) -> str:
     return "{" + val.replace("}", "}}") + "}"
 
 
+def _parse_int_env(name: str, default: int, min_val: int, max_val: int) -> int:
+    raw = clean_param(os.getenv(name))
+    if not raw:
+        return default
+    try:
+        return max(min_val, min(int(raw), max_val))
+    except ValueError:
+        return default
+
+
 def adapt_placeholders(sql: str, conn: Any) -> str:
-    """根據底層連線驅動轉換參數佔位符（pyodbc 使用 ?，pymssql 使用 %s）。"""
+    """根據底層連線驅動轉換參數佔位符（pyodbc 使用 ?，忽略單引號字串常值內之 %s）。"""
     mod_name = type(conn).__module__.lower()
-    if "pyodbc" in mod_name:
-        return sql.replace("%s", "?")
-    return sql
+    if "pyodbc" not in mod_name:
+        return sql
+
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        if sql[i] == "'":
+            out.append("'")
+            i += 1
+            while i < n:
+                out.append(sql[i])
+                if sql[i] == "'":
+                    if i + 1 < n and sql[i + 1] == "'":
+                        i += 1
+                        out.append(sql[i])
+                        i += 1
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        if sql[i : i + 2] == "%s":
+            out.append("?")
+            i += 2
+            continue
+        out.append(sql[i])
+        i += 1
+    return "".join(out)
 
 
 class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
-    """封裝 MSSQL 憑證快取、雙驅動（pymssql / pyodbc）唯讀隔離連線與參數佔位符轉換。"""
+    """封裝 MSSQL 憑證快取、雙驅動唯讀隔離、查詢與鎖等待逾時及快速中止。"""
 
     def __init__(
         self,
@@ -78,7 +117,7 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
         cache: CredentialCache | None = None,
         audit: AuditLogger | None = None,
     ) -> None:
-        self.cache = cache or CredentialCache(ttl_seconds=600.0)
+        self.cache = cache or CredentialCache(ttl_seconds=CONSTANTS.mssql_creds_cache_ttl_sec)
         self.audit = audit or AuditLogger("mssql")
 
     def clear_cache(self) -> None:
@@ -123,21 +162,16 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
             database = clean_param(mssql_database) or cached_db or env_db
 
             if not host:
-                host = clean_param(tty_prompt_text("請輸入 SQL Server 主機 IP 或位址 (MSSQL_HOST): ", hint="MSSQL_*"))
+                host = clean_param(tty_prompt_text(t("mssql_mcp.prompt_host"), hint="MSSQL_*"))
             if not port:
-                port = (
-                    clean_param(tty_prompt_text("請輸入 SQL Server 連接埠 (MSSQL_PORT) [預設 1433]: ", hint="MSSQL_*"))
-                    or "1433"
-                )
+                port = clean_param(tty_prompt_text(t("mssql_mcp.prompt_port"), hint="MSSQL_*")) or "1433"
             if not user:
-                user = clean_param(
-                    tty_prompt_text(f"請輸入 {host} 的 SQL Server 登入帳號 (MSSQL_USER): ", hint="MSSQL_*")
-                )
+                user = clean_param(tty_prompt_text(t("mssql_mcp.prompt_user", host=host), hint="MSSQL_*"))
 
             if not host:
-                raise ValueError("未提供 SQL Server 主機位址 (MSSQL_HOST)。")
+                raise ValueError(t("mssql_mcp.missing_host"))
             if not user:
-                raise ValueError("未提供 SQL Server 登入帳號 (MSSQL_USER)。")
+                raise ValueError(t("mssql_mcp.missing_user"))
 
             host = validate_host(host, "MSSQL_HOST", allow_backslash=True)
             port = validate_port(port, "MSSQL_PORT")
@@ -175,9 +209,9 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     password = str(env_pw)
 
             if not password:
-                password = tty_prompt_secret(f"請輸入 {user}@{host} 的 SQL Server 登入密碼: ")
+                password = tty_prompt_secret(t("mssql_mcp.prompt_password", user=user, host=host))
             if not password:
-                raise ValueError("未提供 SQL Server 登入密碼 (MSSQL_PASSWORD)。")
+                raise ValueError(t("mssql_mcp.missing_password"))
 
             self.cache.update(
                 {
@@ -190,6 +224,14 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
             self.cache.set_secret("MSSQL_PASSWORD", password)
             return host, port, user, password, database
 
+    @staticmethod
+    def _apply_session_guards(cursor: Any, lock_timeout_ms: int) -> None:
+        cursor.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;")
+        try:
+            cursor.execute(f"SET LOCK_TIMEOUT {lock_timeout_ms};")
+        except Exception:
+            pass
+
     def connect(
         self,
         mssql_host: str = "",
@@ -198,22 +240,34 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
         mssql_password: str = "",
         mssql_database: str = "",
     ) -> Any:
-        """建立遠端 SQL Server 連線並強制設定為唯讀交易隔離模式。"""
+        """建立遠端 SQL Server 連線並強制設定為唯讀交易隔離與鎖等待上限。"""
         try:
             host, port, user, password, database = self.resolve_connection_params(
                 mssql_host, mssql_port, mssql_user, mssql_password, mssql_database
             )
         except ValueError as exc:
             self.clear_cache()
-            raise ConnAuthError(f"[CONN_AUTH] {exc}") from exc
+            raise ConnAuthError(f"[CONN_AUTH] {DEFAULT_REDACTION_POLICY.redact(str(exc))}") from exc
 
         driver_type, driver_mod = load_mssql_driver()
-
-        try:
-            timeout = max(3, min(int(os.getenv("MSSQL_CONNECT_TIMEOUT") or "10"), 60))
-        except ValueError:
-            timeout = 10
-
+        connect_timeout = _parse_int_env(
+            "MSSQL_CONNECT_TIMEOUT",
+            CONSTANTS.mssql_default_connect_timeout_sec,
+            CONSTANTS.mssql_min_connect_timeout_sec,
+            CONSTANTS.mssql_max_connect_timeout_sec,
+        )
+        query_timeout = _parse_int_env(
+            "MSSQL_QUERY_TIMEOUT_SEC",
+            CONSTANTS.mssql_default_query_timeout_sec,
+            CONSTANTS.mssql_min_query_timeout_sec,
+            CONSTANTS.mssql_max_query_timeout_sec,
+        )
+        lock_timeout_ms = _parse_int_env(
+            "MSSQL_LOCK_TIMEOUT_MS",
+            CONSTANTS.mssql_default_lock_timeout_ms,
+            CONSTANTS.mssql_min_lock_timeout_ms,
+            CONSTANTS.mssql_max_lock_timeout_ms,
+        )
         db_kwarg = {"database": database} if database else {}
 
         conn = None
@@ -224,8 +278,8 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     port=int(port),
                     user=user,
                     password=password,
-                    login_timeout=timeout,
-                    timeout=timeout,
+                    login_timeout=connect_timeout,
+                    timeout=query_timeout,
                     autocommit=False,
                     **db_kwarg,
                 )
@@ -246,11 +300,12 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     f"Encrypt={encrypt_val};"
                     f"TrustServerCertificate={trust_val};"
                 )
-                conn = driver_mod.connect(conn_str, timeout=timeout, autocommit=False)
+                conn = driver_mod.connect(conn_str, timeout=connect_timeout, autocommit=False)
+                conn.timeout = query_timeout
 
             cursor = conn.cursor()
             try:
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;")
+                self._apply_session_guards(cursor, lock_timeout_ms)
             finally:
                 cursor.close()
             return conn
@@ -261,7 +316,27 @@ class MssqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                 except Exception:
                     pass
             self.clear_cache()
-            raise ConnAuthError(f"[CONN_AUTH] SQL Server 連線或認證失敗: {exc}") from exc
+            safe_err = DEFAULT_REDACTION_POLICY.redact(str(exc))
+            raise ConnAuthError(f"[CONN_AUTH] {t('mssql_mcp.conn_failed', error=safe_err)}") from exc
+
+    def abort_connection(self, conn: Any, cursor: Any = None) -> None:
+        """截斷大查詢或讀取異常時先嘗試取消游標並直接關閉連線，避免排空剩餘 TDS 封包。"""
+        if cursor is not None:
+            cancel_fn = getattr(cursor, "cancel", None)
+            if callable(cancel_fn):
+                try:
+                    cancel_fn()
+                except Exception:
+                    pass
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 MSSQL_ADAPTER = MssqlReadOnlyAdapter()
