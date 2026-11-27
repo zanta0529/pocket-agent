@@ -16,6 +16,10 @@ Its key advantage is **OAuth PKCE authentication directly integrated with the Ch
 
 > ⚠️ **Important Disclaimer**: This tool (including the core agent and all built-in/external MCP servers) can execute local shell commands, read/write files, and interact with remote hosts and browsers, while LLM outputs are non-deterministic. Users must review every operation and assume all risks; any unintended behavior or resulting damage has no relation to the original author(s). Please read the full [Disclaimer](#️-disclaimer) section before use.
 
+<p align="center">
+  <img src="docs/assets/02-main-1.png" alt="PocketAgent interactive CLI main screen with MCP servers loaded" width="760" />
+</p>
+
 ### 📑 Table of Contents
 
 - [🚀 Installation & First Run](#-installation--first-run)
@@ -118,11 +122,19 @@ The interactive wizard guides you through five steps (defaults to English if `lo
 5. **Launch Agent**:
    - Run `pocket` (or double-click `pocket.bat` for the portable ZIP) to start chatting!
 
+| Language Selection (`pocket setup`) | 13 Built-in Model Providers |
+| :---: | :---: |
+| ![Setup wizard language selection](docs/assets/01-setup-1.png) | ![Setup wizard service provider list](docs/assets/01-setup-2.png) |
+
 ---
 
 ## 💻 Quick Start & Usage
 
 Once started, the CLI displays an interactive conversation prompt with a live bottom toolbar showing the active model, reasoning effort, pending attachments, and cumulative token usage; when background subagents are running or ready to collect, a second highlighted status line automatically appears with live progress and collection hints.
+
+| Slash Commands & Skill Auto-Completion | Background Subagent (`/bg`) & Live Status Bar |
+| :---: | :---: |
+| ![Slash command and skill auto-completion](docs/assets/02-main-2.png) | ![Background read-only subagent with two-line live status bar](docs/assets/02-main-3.png) |
 
 ### Terminal Shortcuts
 

@@ -16,6 +16,10 @@
 
 > ⚠️ **重要免責提醒（Important Disclaimer）**：本工具（含核心代理與所有內建／外掛 MCP 伺服器）具備執行本機指令、讀寫檔案及操作遠端主機與瀏覽器之能力，且 AI 模型輸出具非確定性。使用者須自行審查操作並承擔一切風險，任何非預期行為或衍生損害皆與原作者無關。使用前請務必詳閱文末完整的「免責聲明（Disclaimer）」章節。
 
+<p align="center">
+  <img src="docs/assets/02-main-1.png" alt="PocketAgent 互動式終端機主畫面與 MCP 載入狀態" width="760" />
+</p>
+
 ### 📑 目錄 (Table of Contents)
 
 - [🚀 初次安裝與快速啟動 (Installation & First Run)](#-初次安裝與快速啟動-installation--first-run)
@@ -118,11 +122,19 @@ pocket setup
 5. **啟動代理**：
    - 完成設定後，直接執行 `pocket`（可攜版 ZIP 則雙擊 `pocket.bat`）即可開始對話！
 
+| 語系選擇（`pocket setup`） | 13 種內建模型供應商 |
+| :---: | :---: |
+| ![首次設定精靈語系選擇畫面](docs/assets/01-setup-1.png) | ![首次設定精靈服務供應商選單](docs/assets/01-setup-2.png) |
+
 ---
 
 ## 💻 快速上手與日常操作 (Quick Start & Usage)
 
 啟動後，終端機將呈現互動式對話面板。底端狀態列會即時顯示當前模型、推理強度、待送附件數與累計 Token 用量；當有背景子代理執行或待取回報告時，狀態列會自動展開第二行即時顯示進度與取回提示。
+
+| 斜線指令與 Skill 自動補全 | 背景子代理（`/bg`）與雙行即時狀態列 |
+| :---: | :---: |
+| ![斜線指令與 Skill 自動補全選單](docs/assets/02-main-2.png) | ![背景唯讀子代理與雙行即時狀態列](docs/assets/02-main-3.png) |
 
 ### 終端互動快捷鍵
 
