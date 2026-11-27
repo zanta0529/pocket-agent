@@ -66,13 +66,16 @@ case "$REPO" in
         ;;
 esac
 
+SHORT_LAUNCHER_PATH="$BIN_DIR/pocket"
 LAUNCHER_PATH="$BIN_DIR/pocket-agent"
 
 if [ "$UNINSTALL" = "1" ]; then
-    if [ -f "$LAUNCHER_PATH" ] && grep -q "POCKET_AGENT_INSTALLER_MANAGED" "$LAUNCHER_PATH" 2>/dev/null; then
-        rm -f "$LAUNCHER_PATH"
-        echo "[INFO] Removed launcher $LAUNCHER_PATH"
-    fi
+    for target_launcher in "$SHORT_LAUNCHER_PATH" "$LAUNCHER_PATH"; do
+        if [ -f "$target_launcher" ] && grep -q "POCKET_AGENT_INSTALLER_MANAGED" "$target_launcher" 2>/dev/null; then
+            rm -f "$target_launcher"
+            echo "[INFO] Removed launcher $target_launcher"
+        fi
+    done
     if [ -d "$INSTALL_DIR" ]; then
         if [ -f "$INSTALL_DIR/app/PORTABLE" ] || [ -d "$INSTALL_DIR/app/src/pocket_agent" ]; then
             rm -rf "$INSTALL_DIR"
@@ -218,7 +221,8 @@ if [ "$MOVED_BACKUP" = "1" ] && [ -d "$BACKUP_DIR" ]; then
     rm -rf "$BACKUP_DIR"
 fi
 
-cat > "$LAUNCHER_PATH" <<EOF
+write_launcher() {
+    cat > "$1" <<EOF
 #!/bin/sh
 # POCKET_AGENT_INSTALLER_MANAGED
 set -eu
@@ -226,23 +230,41 @@ export PYTHONNOUSERSITE=1
 export PYTHONPATH="$INSTALL_DIR/app/src"
 exec "$INSTALL_DIR/venv/bin/python" -m pocket_agent "\$@"
 EOF
-chmod +x "$LAUNCHER_PATH"
+    chmod +x "$1"
+}
+
+write_launcher "$LAUNCHER_PATH"
+
+PRIMARY_CMD="pocket"
+if [ -e "$SHORT_LAUNCHER_PATH" ] && { [ ! -f "$SHORT_LAUNCHER_PATH" ] || ! grep -q "POCKET_AGENT_INSTALLER_MANAGED" "$SHORT_LAUNCHER_PATH" 2>/dev/null; }; then
+    echo "[WARN] $SHORT_LAUNCHER_PATH already exists and is not managed by PocketAgent; skipping short alias."
+    PRIMARY_CMD="pocket-agent"
+else
+    write_launcher "$SHORT_LAUNCHER_PATH"
+fi
 
 echo ""
 echo "[OK] PocketAgent ($DISPLAY_VER) installed to $INSTALL_DIR"
-echo "Launcher: $LAUNCHER_PATH"
+if [ "$PRIMARY_CMD" = "pocket" ]; then
+    echo "Launchers: $SHORT_LAUNCHER_PATH (and $LAUNCHER_PATH)"
+else
+    echo "Launcher: $LAUNCHER_PATH"
+fi
 
 case ":${PATH:-}:" in
     *":$BIN_DIR:"*)
         echo "Next steps:"
-        echo "  1. pocket-agent setup"
-        echo "  2. pocket-agent"
+        echo "  1. $PRIMARY_CMD setup"
+        echo "  2. $PRIMARY_CMD"
+        if [ "$PRIMARY_CMD" = "pocket" ]; then
+            echo "  (Alias 'pocket-agent' is also available.)"
+        fi
         ;;
     *)
         echo ""
         echo "[WARN] $BIN_DIR is not currently in your PATH."
         echo "Add it to your shell profile (~/.zshrc or ~/.bashrc):"
         echo "  export PATH=\"$BIN_DIR:\$PATH\""
-        echo "Then run: pocket-agent setup"
+        echo "Then run: $PRIMARY_CMD setup"
         ;;
 esac

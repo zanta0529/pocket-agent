@@ -19,10 +19,7 @@ Its key advantage is **OAuth PKCE authentication directly integrated with the Ch
 ### 📑 Table of Contents
 
 - [🚀 Installation & First Run](#-installation--first-run)
-  - [One-Line Install [Fastest]](#one-line-install-fastest)
-  - [Option A: Windows Modern Portable [Recommended for General Users]](#option-a-windows-modern-portable-recommended-for-general-users)
-  - [Option B: Cross-Platform One-Click Launchers [Recommended for Quick Tryout]](#option-b-cross-platform-one-click-launchers-recommended-for-quick-tryout)
-  - [Option C: Manual Developer Installation [Recommended for Development]](#option-c-manual-developer-installation-recommended-for-development)
+  - [One-Line Install](#one-line-install)
   - [First-Time Setup](#first-time-setup)
 - [💻 Quick Start & Usage](#-quick-start--usage)
   - [Terminal Shortcuts](#terminal-shortcuts)
@@ -48,14 +45,14 @@ Its key advantage is **OAuth PKCE authentication directly integrated with the Ch
 
 ### System Requirements
 
-- **Python 3.14 or higher** (not required on Windows when using One-Line Install or Option A: Modern Portable; on Linux/macOS, `uv` will also fetch Python 3.14 automatically if installed).
+- **Python 3.14 or higher** (not required on Windows when using One-Line Install or the Portable ZIP; on Linux/macOS, `uv` will also fetch Python 3.14 automatically if installed).
 - Supported OS: Windows 10/11, macOS (Apple Silicon / Intel), Linux (Ubuntu, Debian, RHEL, etc.).
 
 ---
 
-### One-Line Install [Fastest]
+### One-Line Install
 
-The installer automatically downloads the release, verifies SHA-256 checksums (when `SHA256SUMS.txt` is published), sets up an isolated runtime, and registers the `pocket-agent` command:
+The installer automatically downloads the release, verifies SHA-256 checksums (when `SHA256SUMS.txt` is published), sets up an isolated runtime, and registers the `pocket` command (also aliased as `pocket-agent`):
 
 - **🪟 Windows (PowerShell)**:
 
@@ -75,81 +72,22 @@ The installer automatically downloads the release, verifies SHA-256 checksums (w
   curl -fsSL https://raw.githubusercontent.com/zanta0529/pocket-agent/main/build_scripts/install.sh | sh
   ```
 
-> 💡 **Security & Uninstall**: Windows installs into `%LOCALAPPDATA%\PocketAgent` (preserving the Modern Portable layout and `/update` support); Linux/macOS installs into `~/.local/share/pocket-agent` with a launcher at `~/.local/bin/pocket-agent`. Set `POCKET_AGENT_VERSION` to pin a release or `POCKET_AGENT_REQUIRE_CHECKSUM=1` to require checksum verification. To uninstall while preserving `~/.pocket-agent`, pass `-Uninstall` (`install.ps1`) or `--uninstall` (`install.cmd` / `install.sh`).
+> 💡 **Upgrade, Security & Uninstall**: Re-run the install command above anytime to upgrade in-place (Windows users can also run `/update` inside the CLI); `~/.pocket-agent` is always preserved. Windows installs into `%LOCALAPPDATA%\PocketAgent` (preserving the Modern Portable layout); Linux/macOS installs into `~/.local/share/pocket-agent` with launchers at `~/.local/bin/pocket` (and `pocket-agent`). Set `POCKET_AGENT_VERSION` to pin a release or `POCKET_AGENT_REQUIRE_CHECKSUM=1` to require checksum verification. To uninstall while preserving `~/.pocket-agent`, set `$env:POCKET_AGENT_UNINSTALL="1"` before running `irm ... | iex` (PowerShell) or pass `--uninstall` (`install.cmd` / `install.sh`).
 
----
+<details>
+<summary><strong>Offline / Manual Install (Windows Portable ZIP, No Script or PATH Changes)</strong></summary>
 
-### Option A: Windows Modern Portable [Recommended for General Users]
+Ideal for air-gapped or strictly managed Windows enterprise environments where running remote install scripts or modifying `PATH` is restricted:
 
-Ideal for Windows users or enterprise environments where global Python installation is restricted or strict antivirus policies are enforced:
-
-1. Download the latest [**`PocketAgent-portable.zip`**](https://github.com/zanta0529/pocket-agent/releases/latest/download/PocketAgent-portable.zip) directly (or visit [**GitHub Releases**](https://github.com/zanta0529/pocket-agent/releases)).
+1. Download the latest [**`PocketAgent-portable.zip`**](https://github.com/zanta0529/pocket-agent/releases/latest/download/PocketAgent-portable.zip) (or visit [**GitHub Releases**](https://github.com/zanta0529/pocket-agent/releases)).
 2. Extract it to any folder (e.g., `D:\PocketAgent`).
 3. Open the extracted folder and double-click **`pocket.bat`** to launch immediately!
 
 > 💡 **Portable Highlights**: Bundles an officially signed standalone Python runtime and all dependencies without polluting system Python or triggering false positives from unsigned `.exe` binaries. You can update in-place via `/update` inside the CLI.
 
----
+</details>
 
-### Option B: Cross-Platform One-Click Launchers [Recommended for Quick Tryout]
-
-The repository includes bootstrap launchers for each OS that automatically detect Python, create an isolated `venv`, install dependencies, and start the agent:
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/zanta0529/pocket-agent.git
-cd pocket-agent
-```
-
-Run the launcher for your OS:
-
-- **🪟 Windows (CMD)**:
-
-  ```cmd
-  run.bat
-  ```
-
-- **🐧 Linux (Terminal)**:
-
-  ```bash
-  chmod +x run.sh
-  ./run.sh
-  ```
-
-- **🍎 macOS (Terminal or Finder)**:
-
-  ```bash
-  chmod +x run.command
-  ./run.command
-  ```
-
----
-
-### Option C: Manual Developer Installation [Recommended for Development]
-
-If you prefer managing the virtual environment manually or registering `pocket-agent` globally:
-
-```bash
-# 1. Clone and enter the repository
-git clone https://github.com/zanta0529/pocket-agent.git
-cd pocket-agent
-
-# 2. Create and activate a Python 3.14+ virtual environment
-python -m venv venv
-# Linux / macOS:
-source venv/bin/activate
-# Windows (CMD):
-venv\Scripts\activate.bat
-
-# 3. Upgrade pip and install runtime dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# 4. Install in editable mode
-pip install -e .
-```
-
-Once installed, you can run `pocket-agent` directly from your terminal.
+> 🛠️ **Installing from source for development?** See [Development & Contributing](#️-development--contributing).
 
 ---
 
@@ -158,14 +96,10 @@ Once installed, you can run `pocket-agent` directly from your terminal.
 Regardless of installation method, **run the setup wizard on first use** to configure your language, model provider, and credentials (saved to `~/.pocket-agent/config.json`):
 
 ```bash
-# If using manual installation (Option C)
-pocket-agent setup
-
-# If using one-click launchers (Option B)
-run.bat setup       # Windows
-./run.sh setup      # Linux
-./run.command setup # macOS
+pocket setup
 ```
+
+> If you are using the manual Windows Portable ZIP without registering `PATH`, run `pocket.bat setup` in the extracted folder.
 
 The interactive wizard guides you through five steps (defaults to English if `locale` is not yet configured in `config.json`, or uses the configured locale):
 
@@ -182,7 +116,7 @@ The interactive wizard guides you through five steps (defaults to English if `lo
 4. **Optional External MCP Tools**:
    - Prompts whether to configure external Stdio / SSE / Streamable HTTP MCP servers (can be skipped and configured later).
 5. **Launch Agent**:
-   - Run `pocket-agent` (or `run.bat` / `./run.sh`) to start chatting!
+   - Run `pocket` (or double-click `pocket.bat` for the portable ZIP) to start chatting!
 
 ---
 
@@ -216,7 +150,7 @@ Type any of the following `/` commands at the prompt:
 - `/prune [<days> | --keep <count>]` (or `/session prune`): Clean up expired or excess session history (defaults to older than 30 days or keeping latest 20; protects active session and requires confirmation).
 - `/new`: Start a clean new conversation (auto-saves the previous session and resets context, attachments, and counters).
 - `/rename <new_title>`: Rename the current session title for easier identification in `/session`.
-- `/resume` (CLI flag): Run `pocket-agent --resume` to automatically resume the most recent session at startup.
+- `/resume` (CLI flag): Run `pocket --resume` to automatically resume the most recent session at startup.
 - `/compact`: Summarize and compact middle conversation history to reclaim context window space.
 - `/clear`: Clear in-memory conversation history while keeping pending attachments and Session ID.
 - `/usage` (or `/quota`): Display cumulative token usage, context window status, and provider quota (when supported).
@@ -245,7 +179,7 @@ Type any of the following `/` commands at the prompt:
 
 - `/config`: Launch the interactive global configuration editor (`locale` provides a live selector of available languages).
 - `/clean`: Manually trigger Housekeeping to clean expired logs, temporary screenshots, and spillover files.
-- `/update`: Check and apply the latest GitHub release update with auto-save and restart (Modern Portable only).
+- `/update`: Check and apply the latest GitHub commit update with auto-save and restart (Windows Modern Portable only).
 - `/logout`: Clear locally stored OAuth credentials.
 
 > 💡 For path resolution rules, image-generation details, and system boundaries, see: [CLI Usage & Limitations](docs/guides/cli-usage-limitations.md).
@@ -278,7 +212,7 @@ flowchart TB
     subgraph Tools["🧰 Tools & MCP Layer"]
         ToolRegistry["<b>ToolRegistry & MCPManager</b><br/>Unified Dispatch · Namespace · Secret Inject"]
         BuiltinTools["<b>Built-in Tools</b><br/>FS · Shell · Web · Image<br/>Doc/PDF/PPTX · RAG FTS5"]
-        MCPServers["<b>MCP Servers</b> (Stdio / SSE / HTTP)<br/>Browser · GitHub · SQLite/MySQL/MSSQL<br/>Memory · RHEL · Windows RDP"]
+        MCPServers["<b>MCP Servers</b> (Stdio / SSE / HTTP)<br/>Browser · GitHub · SQLite/MySQL/MSSQL<br/>Memory · RHEL · Windows RDP · NetDiag"]
         ToolRegistry --> BuiltinTools
         ToolRegistry --> MCPServers
     end
@@ -459,11 +393,29 @@ servers:
 
 Contributions are welcome! Before submitting a Pull Request, please follow these guidelines:
 
-### 1. Install Dev Dependencies
+### 1. Local Development Setup
 
 ```bash
-pip install -r requirements-dev.txt
+# 1. Clone and enter the repository
+git clone https://github.com/zanta0529/pocket-agent.git
+cd pocket-agent
+
+# 2. Create and activate a Python 3.14+ virtual environment
+python -m venv venv
+# Linux / macOS:
+source venv/bin/activate
+# Windows (CMD):
+venv\Scripts\activate.bat
+
+# 3. Upgrade pip and install runtime + dev dependencies
+pip install --upgrade pip
+pip install -r requirements.txt -r requirements-dev.txt
+
+# 4. Install in editable mode
+pip install -e .
 ```
+
+> 💡 For quick local launches without manual `venv` setup, you can also run `run.bat` (Windows), `./run.sh` (Linux), or `./run.command` (macOS).
 
 ### 2. Dependency Management
 
@@ -489,8 +441,8 @@ python -m ruff format --check .
 python -m ruff check .
 
 # Check import integrity against requirements.in
-python scripts/check_imports.py src scripts
-python scripts/check_imports.py tests --req requirements-dev.in
+python scripts/check_imports.py src scripts --req requirements.in --ignore tiktoken
+python scripts/check_imports.py tests --req requirements.in --req requirements-dev.in
 ```
 
 ### 4. Run Automated Tests
@@ -515,8 +467,8 @@ build.bat
 
 Select between:
 
-1. **Modern Portable [Recommended]**: Packages an official Python runtime and all dependencies into `dist/PocketAgent-portable.zip`, avoiding antivirus false positives and supporting in-place `/update`.
-2. **Legacy PyInstaller**: Compiles into a standalone executable (may trigger antivirus heuristics).
+1. **Legacy PyInstaller** (default): Compiles into a standalone executable (may trigger antivirus heuristics).
+2. **Modern Portable [Recommended]**: Packages an official Python runtime and all dependencies into `dist/PocketAgent-portable.zip`, avoiding antivirus false positives and supporting in-place `/update`.
 
 ---
 

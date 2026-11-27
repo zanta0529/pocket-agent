@@ -195,7 +195,8 @@ if not exist "%PA_BIN%" mkdir "%PA_BIN%" >nul 2>&1
     echo set "PA_NO_PAUSE=1"
     echo call "%%~dp0..\pocket.bat" %%*
     echo endlocal ^& exit /b %%ERRORLEVEL%%
-) > "%PA_BIN%\pocket-agent.cmd"
+) > "%PA_BIN%\pocket.cmd"
+copy /y "%PA_BIN%\pocket.cmd" "%PA_BIN%\pocket-agent.cmd" >nul
 
 call :ADD_USER_PATH "%PA_BIN%"
 
@@ -204,8 +205,9 @@ rmdir /s /q "%PA_TMP%" >nul 2>&1
 echo.
 echo [OK] PocketAgent installed to "%PA_HOME%".
 echo Next steps ^(ready immediately in this cmd.exe window^):
-echo   1. pocket-agent setup
-echo   2. pocket-agent
+echo   1. pocket setup
+echo   2. pocket
+echo   ^(Alias 'pocket-agent' is also available.^)
 echo Note: New terminals opened from Explorer may require signing out/in to reload User PATH.
 echo To uninstall later: install.cmd --uninstall
 set "_PROC_CHECK=;%PATH%;"

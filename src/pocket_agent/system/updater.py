@@ -185,13 +185,18 @@ set "PYTHONHOME="
 if errorlevel 1 goto ROLLBACK_DEPS
 
 :MAYBE_UPGRADE_LAUNCHER
-if not "%PA_UPGRADE_LAUNCHER%"=="1" goto CLEANUP
-if not exist "%PA_PAYLOAD%\pocket.bat" goto CLEANUP
-if not exist "%PA_ROOT%\pocket.bat" goto CLEANUP
+if not "%PA_UPGRADE_LAUNCHER%"=="1" goto ENSURE_SHORT_ALIAS
+if not exist "%PA_PAYLOAD%\pocket.bat" goto ENSURE_SHORT_ALIAS
+if not exist "%PA_ROOT%\pocket.bat" goto ENSURE_SHORT_ALIAS
 find /i "PA_IN_PLACE_LAUNCHER" "%PA_ROOT%\pocket.bat" >nul 2>&1
-if not errorlevel 1 goto CLEANUP
+if not errorlevel 1 goto ENSURE_SHORT_ALIAS
 ping -n 2 127.0.0.1 >nul
 copy /y "%PA_PAYLOAD%\pocket.bat" "%PA_ROOT%\pocket.bat" >nul 2>&1
+
+:ENSURE_SHORT_ALIAS
+if not exist "%PA_ROOT%\bin\pocket-agent.cmd" goto CLEANUP
+if exist "%PA_ROOT%\bin\pocket.cmd" goto CLEANUP
+copy /y "%PA_ROOT%\bin\pocket-agent.cmd" "%PA_ROOT%\bin\pocket.cmd" >nul 2>&1
 
 :CLEANUP
 if exist "%PA_ROOT%\app.bak" rmdir /s /q "%PA_ROOT%\app.bak" >nul 2>&1
@@ -372,6 +377,24 @@ class UpdateManager:
         self._in_place_handoff_path: Path | None = None
         self._launcher_cwd: Path | None = None
 
+    def ensure_short_cli_alias(self) -> bool:
+        """若為 Windows 可攜安裝版且缺少 bin\\pocket.cmd，從 pocket-agent.cmd 補齊。"""
+        if not self.is_supported():
+            return False
+        root = portable_root()
+        if root is None:
+            return False
+        full_cmd = root / "bin" / "pocket-agent.cmd"
+        short_cmd = root / "bin" / "pocket.cmd"
+        if not full_cmd.is_file() or short_cmd.exists():
+            return False
+        try:
+            shutil.copy2(full_cmd, short_cmd)
+            return True
+        except OSError as exc:
+            log.debug("補齊短指令啟動器失敗：%s", exc)
+            return False
+
     def consume_launcher_env(self) -> None:
         """擷取並自 os.environ 移除啟動器交接變數，避免洩漏給 MCP 或 Shell 子行程。"""
         flag = os.environ.pop(IN_PLACE_LAUNCHER_ENV, "").strip()
@@ -382,6 +405,7 @@ class UpdateManager:
         else:
             self._in_place_handoff_path = None
             self._launcher_cwd = None
+        self.ensure_short_cli_alias()
 
     def _resolve_handoff_path(self, root: Path, staged: StagedUpdate, cwd: Path | None) -> Path | None:
         raw_path = self._in_place_handoff_path
