@@ -193,18 +193,23 @@ Pocket Agent 的解決方案：
 
 ## 內建 SQLite 本機資料庫唯讀檢索伺服器 (`mcp_servers/sqlite_mcp.py`)
 
-`sqlite_mcp.py` 為隨附的本機 SQLite 資料庫結構探查與唯讀查詢伺服器。透過 SQLite Authorizer 與唯讀 URI 強制執行沙盒防護，杜絕寫入或破壞性異動。
+`sqlite_mcp.py` 為隨附的本機 SQLite 資料庫結構探查、DDL 定義、唯讀查詢、執行計畫分析與健康／空間診斷伺服器。透過 SQLite Authorizer、唯讀 URI 與 `progress_handler` 逾時強制執行沙盒防護，杜絕寫入或資源耗盡攻擊。
 
 ### 1. 提供的結構化工具清單
 
-所有工具均為唯讀操作，建議於 `mcp_config.yaml` 中加入 `safe_read_tools`：
+共提供 10 項唯讀工具（涉及較重磁碟 I/O 掃描之 `sqlite_check_integrity` 預設不建議列入 `safe_read_tools`）：
 
 | 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
 | :--- | :--- | :--- | :--- |
-| `sqlite_list_tables` | 是 | 列出資料庫中的所有非系統資料表與檢視表（`VIEW`）清單 | 無 |
-| `sqlite_describe_schema` | 是 | 顯示指定資料表或檢視表的 Schema（欄位、型別、主鍵、`NOT NULL`、`DEFAULT` 預設值、索引與外鍵） | `table_name`（必填） |
-| `sqlite_inspect_health` | 是 | 執行唯讀健康診斷（檔案大小、分頁／碎片率統計與受 500 MB 熔斷保護之 `PRAGMA quick_check`） | `run_quick_check`（選填，預設 `False`） |
-| `sqlite_run_select_query` | 是 | 執行唯讀的 `SELECT`、`WITH` 或 `EXPLAIN` 查詢（具備串流防爆與機密欄位遮罩） | `query`（必填，僅限 `SELECT`／`WITH`／`EXPLAIN SELECT` 語句） |
+| `sqlite_list_tables` | 是 | 列出資料庫非系統物件清單（預設表與檢視表，可篩選 `all`／`table`／`view`／`index`／`trigger` 與名稱關鍵字） | `object_type`（選填）、`name_pattern`（選填） |
+| `sqlite_describe_schema` | 是 | 顯示物件 Schema（含 `table_xinfo` 產生欄、遮罩 `DEFAULT`、複合主鍵順位、Partial／Expression 索引與外鍵動作） | `table_name`（必填） |
+| `sqlite_get_ddl` | 是 | 唯讀取得指定 Table（含附屬 Index 與 Trigger）、View、Index 或 Trigger 之原始 `CREATE` DDL 定義 | `object_name`（必填）、`object_type`（選填）、`include_related`（預設 `True`） |
+| `sqlite_run_select_query` | 是 | 執行單一唯讀 `SELECT`、`WITH` 或 `EXPLAIN` 查詢（具備串流防爆、截斷即中止、逾時熔斷與機密欄位遮罩） | `query`（必填） |
+| `sqlite_explain_query` | 是 | 執行 `EXPLAIN QUERY PLAN` 分析純 `SELECT`／`WITH` 查詢計畫，並自動標記 `SCAN`、`USE TEMP B-TREE` 與 `CORRELATED` 警訊 | `query`（必填） |
+| `sqlite_inspect_health` | 是 | 執行唯讀健康巡檢（主檔／WAL 大小、碎片率、無主鍵、非 Partial 冗餘索引、外鍵檢查與受 500 MB 熔斷保護之 `PRAGMA quick_check`） | `table_name`（選填）、`include_quick_check`（預設 `True`） |
+| `sqlite_check_integrity` | **否（較重磁碟 I/O）** | 執行 `PRAGMA quick_check`（`quick`）或 `PRAGMA integrity_check`（`full`），支援單表與外鍵驗證（受 500 MB 熔斷保護） | `table_name`（選填）、`check_mode`（`quick`/`full`）、`include_fk_check`（預設 `True`） |
+| `sqlite_database_info` | 是 | 查詢 SQLite 版本、編譯能力白名單（`FTS5`／`JSON1`／`RTREE`／`DBSTAT`）、主檔／WAL／SHM 大小、PRAGMA 設定與物件統計 | 無 |
+| `sqlite_table_stats` | 是 | 統計各表與索引實體頁數與容量佔比 Top N（優先使用 `dbstat`，不支援時優雅降級至 `sqlite_stat1`／結構摘要） | `top_n`（`1`~`50`，預設 `20`） |
 | `sqlite_switch_database` | 是（路徑動態授權） | 於對話中切換目前連線的 SQLite 資料庫檔案；以唯讀連線驗證為合法 SQLite 後才生效，失敗時保留原連線 | `target_db_path`（必填） |
 
 #### 切換資料庫的兩種方式
@@ -216,19 +221,21 @@ Pocket Agent 的解決方案：
 
 ### 2. 安全防禦邊界
 
-- **URI mode=ro 與 Authorizer 雙重唯讀防護**：連線以 `file:<path>?mode=ro` URI 開啟，並於連線底層掛載 `sqlite3.set_authorizer`，嚴格封鎖所有 INSERT、UPDATE、DELETE、DROP、ALTER 等異動指令，並封鎖未授權的 PRAGMA 操作（僅允許 `table_info`、`index_list`、`index_info`、`foreign_key_list` 等結構探查 PRAGMA）。
-- **SQL 語意前綴與單一語句檢查**：清除開頭註解後僅允許以 `SELECT`、`WITH`（CTE）或 `EXPLAIN SELECT` 開頭，嚴格阻絕多重語句（`;`）注入或寫入關鍵字。
-- **串流防爆與 OOM 防護**：採用 `fetchmany` 批次提取，單次輸出嚴格受 `MAX_OUTPUT_CHARS`（預設 12,000 字元）限制，超限時自動友善截斷並提示加上 `WHERE` 或 `LIMIT/OFFSET`。
-- **欄位與內容雙重機密遮罩**：查詢結果自動針對敏感欄位名稱（`_SENSITIVE_COL_RE`，如 `password_hash`、`api_token`、`secret`）整欄遮罩為 `[REDACTED]`，並針對一般欄位的敏感鍵值、連線 URI 內嵌帳密（`scheme://user:pass@host`）與 PEM 私鑰進行正規遮罩。
-- **連線保證釋放與彈性路徑快取**：查詢後立即在 `finally` 區塊關閉連線，杜絕 Windows 平台檔案佔用鎖死問題；`DB_PATH` 支援由 `MCPManager` 隱藏參數並在未設定時暫停 CLI 動畫互動詢問（記憶體快取具 10 分鐘閒置過期與失敗自動清除機制）。
-- **UNC 網路路徑封鎖**：任何檔案系統操作前，先拒絕以 `\\` 或 `//` 開頭的 UNC／網路路徑，避免 Windows 對外發起 SMB 連線而洩漏 NetNTLMv2 認證雜湊。
-- **切換工具的工作區動態授權**：唯讀不等於無風險。若 `sqlite_switch_database` 列入 `safe_read_tools` 卻不限制路徑，遭提示詞注入的模型可在無確認下切換至瀏覽器 `Cookies`、`Login Data` 等工作區外 SQLite 檔案並查詢。因此 `Agent` 會以 `_validate_safe_path` 檢查 `target_db_path`：位於工作區內（CWD、`/add-dir` 授權目錄）才免確認，並正規化為絕對路徑；工作區外或命中敏感黑名單（`.git`、`.env*`、`.pocket-agent` 設定）時仍彈出 `[y/N]` 確認，無確認機制時直接拒絕。`/mcp sqlite <路徑>` 亦比照 `/file` 指令，工作區外需確認。
+- **URI `mode=ro`、Authorizer 與 `progress_handler` 三重防護**：連線以 `file:<path>?mode=ro` URI 開啟，於底層掛載 `sqlite3.set_authorizer` 封鎖寫入、管理指令、帶值變更設定型 PRAGMA 以及 `load_extension`／`readfile`／`writefile`／`edit`／`fts3_tokenizer`／`zeroblob`／`randomblob` 等危險函式；執行期間透過 `set_progress_handler` 強制執行查詢逾時熔斷。
+- **雙軌引號狀態機守衛**：`SqliteSqlGuard` 具單／雙引號、反引號、方括號識別字與註解狀態機，避免字串內含 `;` 或關鍵字遭誤殺，同時嚴格阻絕多重語句、未閉合引號／註解與非唯讀指令。
+- **串流防爆與 OOM 防護**：採用 `fetchmany` 批次提取，單次輸出嚴格受 `MAX_OUTPUT_CHARS`（預設 12,000 字元）限制，截斷時顯式中止游標並提示加上 `WHERE` 或 `LIMIT/OFFSET`。
+- **欄位與內容雙重機密遮罩**：查詢結果自動針對敏感欄位名稱（`SENSITIVE_COL_RE`）整欄遮罩為 `[REDACTED]`，Schema `DEFAULT` 預設值、DDL、健康報告與錯誤訊息皆經 `DefaultRedactionPolicy` 清洗。
+- **連線保證釋放與單次查詢快取隔離**：查詢後解除 `progress_handler` 並立即於 `finally` 關閉連線；單次傳入 `db_path` 不會靜默覆寫全域快取或清空原正常連線。
+- **UNC／混合斜線／網路符號連結封鎖**：任何檔案系統操作前，先拒絕 `\\`、`//`、`/\`、`\/`、裝置路徑（`\\?\`、`\\.\`）、NUL 字元與指向網路位置之符號連結，避免 Windows 對外發起 SMB 連線而洩漏 NetNTLMv2 認證雜湊。
+- **切換工具的工作區動態授權**：`Agent` 會以 `_validate_safe_path` 檢查 `target_db_path`：位於工作區內（CWD、`/add-dir` 授權目錄）才免確認，並正規化為絕對路徑；工作區外或命中敏感黑名單（`.git`、`.env*`、`.pocket-agent` 設定）時仍彈出 `[y/N]` 確認，無確認機制時直接拒絕。`/mcp sqlite <路徑>` 亦比照 `/file` 指令，工作區外需確認。
 
 ### 3. 環境變數與配置參數表 (`servers.sqlite.env`)
 
 | 參數名稱 | 必填 / 選填 | 預設值 | 說明 |
 | :--- | :--- | :--- | :--- |
 | `DB_PATH` | 彈性 | `""` | 目標 SQLite 資料庫檔案的絕對或相對路徑（例如 `dev.db`）；留空或省略時於首次呼叫工具時互動詢問並快取於記憶體。 |
+| `SQLITE_QUERY_TIMEOUT_SEC` | 選填 | `"15"` | 單次查詢 `progress_handler` 逾時秒數（`1` ~ `120`）。 |
+| `SQLITE_BUSY_TIMEOUT_SEC` | 選填 | `"5"` | 開啟唯讀連線之鎖等待逾時秒數（`1` ~ `30`）。 |
 
 ---
 

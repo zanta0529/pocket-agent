@@ -251,7 +251,7 @@ def test_sqlite_get_db_path_blocks_unc_custom_path(monkeypatch):
     def _fail(*_args, **_kwargs):
         raise AssertionError("UNC 路徑不應觸發 resolve()")
 
-    monkeypatch.setattr(sqlite_adapter.Path, "resolve", _fail)
+    monkeypatch.setattr(sqlite_adapter, "Path", _fail)
     with pytest.raises(ValueError, match="UNC"):
         sqlite_adapter.SQLITE_ADAPTER.get_db_path("\\\\attacker\\share\\a.db")
 
@@ -436,3 +436,223 @@ def test_sqlite_inspect_health_size_guard_and_authorizer_isolation(tmp_path, mon
     # 4. 非法 table_name 參數攔截
     bad_out = sqlite_mcp.sqlite_inspect_health(table_name="users; DROP TABLE users", db_path=str(db_file))
     assert bad_out.startswith("[ERROR]")
+
+
+def test_sqlite_sql_guard_state_machine_allows_literals_and_blocks_bypasses():
+    from mcp_servers.sqlite.sql_guard import SQLITE_SQL_GUARD
+
+    ok_sql = "SELECT 'a;b' AS s, 'UPDATE' AS op, \"delete\" FROM [create] -- trailing\nWHERE 1=1"
+    assert SQLITE_SQL_GUARD.validate_select(ok_sql).startswith("SELECT 'a;b'")
+
+    ok_inline_comment = "SELECT /* note ; DROP */ id FROM users"
+    assert "id FROM users" in SQLITE_SQL_GUARD.validate_select(ok_inline_comment)
+
+    for bad_sql in (
+        "SELECT 'unclosed",
+        "SELECT /* unclosed",
+        "SELECT [unclosed FROM users",
+        "BEGIN TRANSACTION",
+        "ANALYZE users",
+        "SELECT zeroblob(1000)",
+        "SELECT randomblob(100)",
+        "SELECT load_extension('evil.dll')",
+    ):
+        with pytest.raises(ValueError):
+            SQLITE_SQL_GUARD.validate_select(bad_sql)
+
+    with pytest.raises(ValueError):
+        SQLITE_SQL_GUARD.validate_explainable_select("EXPLAIN SELECT 1")
+
+
+def test_sqlite_adapter_network_paths_cache_isolation_and_authorizer(tmp_path, monkeypatch):
+    for net_path in (
+        "/\\attacker\\share\\a.db",
+        "\\/attacker/share/a.db",
+        "\\\\?\\C:\\a.db",
+        "\\\\.\\pipe\\x",
+        "C:\\a.db\x00.txt",
+    ):
+        assert sqlite_adapter.is_network_path(net_path) is True
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("網路路徑不應觸發 Path.resolve()")
+
+    monkeypatch.setattr(sqlite_adapter, "Path", _fail)
+    with pytest.raises(ValueError, match="UNC"):
+        sqlite_adapter.SQLITE_ADAPTER.get_db_path("/\\attacker\\share\\a.db")
+    monkeypatch.undo()
+
+    first = _create_sample_db(tmp_path / "first.db")
+    second = _create_other_db(tmp_path / "second.db")
+    assert sqlite_mcp.sqlite_switch_database(str(first)).startswith("[SUCCESS]")
+
+    # 單次 db_path 查詢不應覆寫全域快取，無效 db_path 亦不應清空既有快取
+    assert "orders" in sqlite_mcp.sqlite_list_tables(db_path=str(second)).splitlines()
+    assert sqlite_adapter.SQLITE_ADAPTER.cache.get("DB_PATH") == str(first.resolve())
+    assert sqlite_mcp.sqlite_list_tables(db_path=str(tmp_path / "missing.db")).startswith("[ERROR]")
+    assert sqlite_adapter.SQLITE_ADAPTER.cache.get("DB_PATH") == str(first.resolve())
+
+    # Authorizer 封鎖 zeroblob/randomblob 與帶值變更型 PRAGMA
+    conn = sqlite_adapter.SQLITE_ADAPTER.connect(
+        "test",
+        "authorizer",
+        db_path=str(first),
+        allow_diagnostic_pragmas=True,
+    )
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            conn.execute("SELECT zeroblob(100);")
+        with pytest.raises(sqlite3.DatabaseError):
+            conn.execute("PRAGMA user_version = 99;")
+    finally:
+        sqlite_adapter.SQLITE_ADAPTER.close_safely(conn)
+
+
+def test_sqlite_query_timeout_interrupts_recursive_cte(tmp_path, monkeypatch):
+    from mcp_servers.sqlite.tools import query as sqlite_query_tools
+
+    db_file = _create_sample_db(tmp_path / "timeout.db")
+    monkeypatch.setattr(sqlite_query_tools, "get_query_timeout_sec", lambda: 0.01)
+    out = sqlite_mcp.sqlite_run_select_query(
+        "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r) SELECT count(*) FROM r;",
+        db_path=str(db_file),
+    )
+    assert out.startswith("[ERROR]")
+    assert "逾時" in out or "timeout" in out.lower() or "中斷" in out
+
+
+def test_sqlite_describe_schema_enhanced_and_list_filters(tmp_path):
+    db_file = tmp_path / "enhanced.db"
+    conn = sqlite3.connect(str(db_file))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE orgs (id INTEGER PRIMARY KEY);
+            CREATE TABLE items (
+                tenant_id INTEGER NOT NULL,
+                item_id INTEGER NOT NULL,
+                org_id INTEGER,
+                api_token TEXT DEFAULT 'sk-secret1234567890abcdef',
+                qty INTEGER DEFAULT 1,
+                price INTEGER DEFAULT 10,
+                total INTEGER GENERATED ALWAYS AS (qty * price) VIRTUAL,
+                PRIMARY KEY (tenant_id, item_id),
+                FOREIGN KEY (org_id) REFERENCES orgs(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_items_active ON items(qty) WHERE qty > 0;
+            CREATE TRIGGER trg_items_ins AFTER INSERT ON items BEGIN SELECT 1; END;
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    schema_out = sqlite_mcp.sqlite_describe_schema("items", db_path=str(db_file))
+    assert "[PK#1]" in schema_out
+    assert "[PK#2]" in schema_out
+    assert "[VIRTUAL GENERATED]" in schema_out
+    assert "sk-secret1234567890abcdef" not in schema_out
+    assert "DEFAULT [REDACTED]" in schema_out
+    assert "[PARTIAL]" in schema_out
+    assert "ON DELETE CASCADE" in schema_out
+
+    all_out = sqlite_mcp.sqlite_list_tables(object_type="all", db_path=str(db_file))
+    assert "idx_items_active (INDEX on items)" in all_out
+    assert "trg_items_ins (TRIGGER on items)" in all_out
+    assert "items" in sqlite_mcp.sqlite_list_tables(name_pattern="item", db_path=str(db_file))
+    assert sqlite_mcp.sqlite_list_tables(object_type="invalid", db_path=str(db_file)).startswith("[ERROR]")
+
+
+def test_sqlite_health_excludes_partial_expr_indexes_and_fts5(tmp_path, monkeypatch):
+    db_file = tmp_path / "fts_partial.db"
+    conn = sqlite3.connect(str(db_file))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE docs (
+                id INTEGER PRIMARY KEY,
+                title TEXT,
+                active INTEGER DEFAULT 1
+            );
+            CREATE INDEX idx_docs_title ON docs(title);
+            CREATE INDEX idx_docs_title_active ON docs(title) WHERE active = 1;
+            CREATE INDEX idx_docs_expr ON docs(title, lower(title));
+            """
+        )
+        try:
+            conn.execute("CREATE VIRTUAL TABLE docs_fts USING fts5(title);")
+        except sqlite3.OperationalError:
+            pass
+        conn.commit()
+    finally:
+        conn.close()
+
+    out = sqlite_mcp.sqlite_inspect_health(db_path=str(db_file))
+    assert "[Redundant Index]" not in out
+    assert "[Missing PK]" not in out
+
+    monkeypatch.setattr(sqlite_health_tools, "SQLITE_QUICK_CHECK_MAX_BYTES", 10)
+    skipped_out = sqlite_mcp.sqlite_inspect_health(db_path=str(db_file))
+    assert "外鍵完整性檢查: 已略過" in skipped_out
+    assert "靜態結構檢查未發現明顯異常" in skipped_out
+
+
+def test_sqlite_p0_and_p1_tools_and_registry(tmp_path, monkeypatch):
+    db_file = _create_sample_db(tmp_path / "full.db")
+
+    # P0: sqlite_get_ddl
+    ddl_out = sqlite_mcp.sqlite_get_ddl("users", db_path=str(db_file))
+    assert "CREATE TABLE users" in ddl_out
+    assert "CREATE INDEX idx_users_username" in ddl_out
+    assert sqlite_mcp.sqlite_get_ddl("missing_tbl", db_path=str(db_file))
+    assert sqlite_mcp.sqlite_get_ddl("users", object_type="invalid", db_path=str(db_file)).startswith("[ERROR]")
+
+    # P0: sqlite_explain_query
+    plan_out = sqlite_mcp.sqlite_explain_query(
+        "SELECT * FROM users WHERE dept_id = 1 ORDER BY username;",
+        db_path=str(db_file),
+    )
+    assert "[SQLite Execution Plan]" in plan_out
+    assert "SCAN" in plan_out
+    assert sqlite_mcp.sqlite_explain_query("EXPLAIN SELECT 1", db_path=str(db_file)).startswith("[ERROR]")
+
+    # P0: sqlite_database_info
+    info_out = sqlite_mcp.sqlite_database_info(db_path=str(db_file))
+    assert "[SQLite Database Info]" in info_out
+    assert "Tables=2" in info_out
+    assert "Views=1" in info_out
+
+    # P1: sqlite_table_stats (含正常路徑與參數檢核)
+    stats_out = sqlite_mcp.sqlite_table_stats(top_n=5, db_path=str(db_file))
+    assert "[SQLite Table & Index Storage Stats]" in stats_out
+    assert "users" in stats_out
+    assert sqlite_mcp.sqlite_table_stats(top_n=0, db_path=str(db_file)).startswith("[ERROR]")
+    assert sqlite_mcp.sqlite_table_stats(top_n=999, db_path=str(db_file)).startswith("[ERROR]")
+
+    # P1: sqlite_check_integrity
+    int_quick = sqlite_mcp.sqlite_check_integrity(check_mode="quick", db_path=str(db_file))
+    assert "[SQLite Integrity Check]" in int_quick
+    assert "ok" in int_quick.lower()
+    int_full = sqlite_mcp.sqlite_check_integrity(table_name="users", check_mode="full", db_path=str(db_file))
+    assert "[SQLite Integrity Check]" in int_full
+    assert sqlite_mcp.sqlite_check_integrity(check_mode="bad", db_path=str(db_file)).startswith("[ERROR]")
+
+    monkeypatch.setattr(sqlite_health_tools, "SQLITE_QUICK_CHECK_MAX_BYTES", 10)
+    int_skipped = sqlite_mcp.sqlite_check_integrity(db_path=str(db_file))
+    assert "超過安全門檻" in int_skipped
+
+    # 驗證 FastMCP / MCPServer 已掛載全部 10 項工具
+    registered = asyncio.run(sqlite_mcp.mcp.list_tools())
+    tool_names = {tool.name for tool in registered}
+    assert tool_names == {
+        "sqlite_list_tables",
+        "sqlite_describe_schema",
+        "sqlite_get_ddl",
+        "sqlite_run_select_query",
+        "sqlite_explain_query",
+        "sqlite_switch_database",
+        "sqlite_inspect_health",
+        "sqlite_check_integrity",
+        "sqlite_database_info",
+        "sqlite_table_stats",
+    }

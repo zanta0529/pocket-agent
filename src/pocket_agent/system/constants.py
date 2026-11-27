@@ -155,6 +155,19 @@ MSSQL_MISSING_INDEX_DEFAULT_TOP = 20  # mssql_inspect_missing_indexes 預設回�
 MSSQL_MISSING_INDEX_MAX_TOP = 50  # mssql_inspect_missing_indexes 最大回傳缺索引筆數
 MSSQL_BACKUP_WARN_DAYS = 7  # mssql_backup_and_ag_status 完整備份超過天數之預警門檻
 
+# 本機 SQLite 唯讀檢索與維運診斷 MCP (sqlite) 逾時、快取與統計常數
+SQLITE_CREDS_CACHE_TTL_SEC = 600.0  # 執行期記憶體 DB_PATH 快取閒置 TTL 秒數 (10 分鐘)
+SQLITE_DEFAULT_QUERY_TIMEOUT_SEC = 15  # SQLite progress_handler 單次查詢預設逾時秒數
+SQLITE_MIN_QUERY_TIMEOUT_SEC = 1  # SQLite 單次查詢最小允許逾時秒數
+SQLITE_MAX_QUERY_TIMEOUT_SEC = 120  # SQLite 單次查詢最大允許逾時秒數
+SQLITE_DEFAULT_BUSY_TIMEOUT_SEC = 5  # SQLite 唯讀連線預設 busy_timeout 秒數
+SQLITE_MIN_BUSY_TIMEOUT_SEC = 1  # SQLite 連線最小 busy_timeout 秒數
+SQLITE_MAX_BUSY_TIMEOUT_SEC = 30  # SQLite 連線最大 busy_timeout 秒數
+SQLITE_FK_CHECK_MAX_VIOLATIONS = 50  # PRAGMA foreign_key_check 單次最多回傳孤兒紀錄筆數
+SQLITE_QUICK_CHECK_MAX_ERRORS = 10  # PRAGMA quick_check / integrity_check 單次最多回傳錯誤項目數
+SQLITE_TABLE_STATS_DEFAULT_TOP = 20  # sqlite_table_stats 預設回傳空間統計前幾名筆數
+SQLITE_TABLE_STATS_MAX_TOP = 50  # sqlite_table_stats 最大回傳空間統計筆數
+
 
 # ==============================================================================
 # 5. 上下文預算與溢出管理常數 (Context Budget & Spillover Defaults)

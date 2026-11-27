@@ -93,6 +93,17 @@ class McpConstants:
     mssql_missing_index_default_top: int = 20
     mssql_missing_index_max_top: int = 50
     mssql_backup_warn_days: int = 7
+    sqlite_creds_cache_ttl_sec: float = 600.0
+    sqlite_default_query_timeout_sec: int = 15
+    sqlite_min_query_timeout_sec: int = 1
+    sqlite_max_query_timeout_sec: int = 120
+    sqlite_default_busy_timeout_sec: int = 5
+    sqlite_min_busy_timeout_sec: int = 1
+    sqlite_max_busy_timeout_sec: int = 30
+    sqlite_fk_check_max_violations: int = 50
+    sqlite_quick_check_max_errors: int = 10
+    sqlite_table_stats_default_top: int = 20
+    sqlite_table_stats_max_top: int = 50
 
 
 def load_constants() -> McpConstants:
@@ -165,6 +176,17 @@ def load_constants() -> McpConstants:
             mssql_missing_index_default_top=sys_const.MSSQL_MISSING_INDEX_DEFAULT_TOP,
             mssql_missing_index_max_top=sys_const.MSSQL_MISSING_INDEX_MAX_TOP,
             mssql_backup_warn_days=sys_const.MSSQL_BACKUP_WARN_DAYS,
+            sqlite_creds_cache_ttl_sec=sys_const.SQLITE_CREDS_CACHE_TTL_SEC,
+            sqlite_default_query_timeout_sec=sys_const.SQLITE_DEFAULT_QUERY_TIMEOUT_SEC,
+            sqlite_min_query_timeout_sec=sys_const.SQLITE_MIN_QUERY_TIMEOUT_SEC,
+            sqlite_max_query_timeout_sec=sys_const.SQLITE_MAX_QUERY_TIMEOUT_SEC,
+            sqlite_default_busy_timeout_sec=sys_const.SQLITE_DEFAULT_BUSY_TIMEOUT_SEC,
+            sqlite_min_busy_timeout_sec=sys_const.SQLITE_MIN_BUSY_TIMEOUT_SEC,
+            sqlite_max_busy_timeout_sec=sys_const.SQLITE_MAX_BUSY_TIMEOUT_SEC,
+            sqlite_fk_check_max_violations=sys_const.SQLITE_FK_CHECK_MAX_VIOLATIONS,
+            sqlite_quick_check_max_errors=sys_const.SQLITE_QUICK_CHECK_MAX_ERRORS,
+            sqlite_table_stats_default_top=sys_const.SQLITE_TABLE_STATS_DEFAULT_TOP,
+            sqlite_table_stats_max_top=sys_const.SQLITE_TABLE_STATS_MAX_TOP,
         )
     except ImportError:
         return McpConstants()
