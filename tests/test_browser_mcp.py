@@ -486,8 +486,10 @@ def test_p0_screenshot_select_wait_and_tabs(monkeypatch, tmp_path):
     # browser_wait 驗證
     assert "[ERROR]" in asyncio.run(browser_mcp.browser_wait())
     assert "[ERROR]" in asyncio.run(browser_mcp.browser_wait(state="invalid"))
-    wait_res = asyncio.run(browser_mcp.browser_wait(text="Ready", url_contains="example.com", timeout_sec=99))
-    assert "example.com" in wait_res
+    wait_res = asyncio.run(browser_mcp.browser_wait(text="Ready", url_contains="/form", timeout_sec=99))
+    assert ("wait_for_url", 30000) in page1.actions
+    url_lines = [line.split("URL：", 1)[1] for line in wait_res.splitlines() if line.startswith("URL：")]
+    assert url_lines == ["https://example.com/form"]
 
     # 分頁列表、切換與關閉
     tabs_res = asyncio.run(browser_mcp.browser_list_tabs())
