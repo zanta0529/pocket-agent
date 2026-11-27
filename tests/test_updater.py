@@ -385,3 +385,33 @@ def test_in_place_update_handoff_stays_in_current_console(tmp_path: Path, monkey
     cli_res_fallback = runner.invoke(cli_main, ["update"])
     assert cli_res_fallback.exit_code == 0
     assert len(popen_calls) == 1
+
+
+def test_update_backfills_short_cli_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert updater._APPLY_BAT_BODY.isascii()
+    assert ":ENSURE_SHORT_ALIAS" in updater._APPLY_BAT_BODY
+    assert 'if not "%PA_UPGRADE_LAUNCHER%"=="1" goto ENSURE_SHORT_ALIAS' in updater._APPLY_BAT_BODY
+
+    root = _setup_fake_portable(tmp_path, monkeypatch, commit=_OLD_SHA)
+    mgr = UpdateManager()
+
+    # 1. 手動解壓可攜版無 bin/pocket-agent.cmd 時，不應建立 bin/ 或 pocket.cmd
+    assert mgr.ensure_short_cli_alias() is False
+    assert not (root / "bin").exists()
+
+    # 2. 舊版一行安裝存在 bin/pocket-agent.cmd 時，啟動流程應自動補齊 bin/pocket.cmd
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    full_cmd = bin_dir / "pocket-agent.cmd"
+    short_cmd = bin_dir / "pocket.cmd"
+    launcher_body = b'@echo off\r\ncall "%~dp0..\\pocket.bat" %*\r\n'
+    full_cmd.write_bytes(launcher_body)
+
+    mgr.consume_launcher_env()
+    assert short_cmd.is_file()
+    assert short_cmd.read_bytes() == launcher_body
+
+    # 3. 若 bin/pocket.cmd 已存在，不應覆寫既有內容
+    short_cmd.write_bytes(b"@echo off\r\nrem custom\r\n")
+    assert mgr.ensure_short_cli_alias() is False
+    assert b"rem custom" in short_cmd.read_bytes()

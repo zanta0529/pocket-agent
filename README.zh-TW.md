@@ -19,10 +19,7 @@
 ### 📑 目錄 (Table of Contents)
 
 - [🚀 初次安裝與快速啟動 (Installation & First Run)](#-初次安裝與快速啟動-installation--first-run)
-  - [一鍵安裝 (One-Line Install) [最快速]](#一鍵安裝-one-line-install-最快速)
-  - [途徑 A：Windows 免安裝可攜版 (Modern Portable) [推薦一般使用者]](#途徑-awindows-免安裝可攜版-modern-portable-推薦一般使用者)
-  - [途徑 B：跨平台一鍵啟動腳本 [推薦快速體驗]](#途徑-b跨平台一鍵啟動腳本-推薦快速體驗)
-  - [途徑 C：開發者手動安裝 [推薦二次開發]](#途徑-c開發者手動安裝-推薦二次開發)
+  - [一鍵安裝 (One-Line Install)](#一鍵安裝-one-line-install)
   - [首次設定精靈 (First-Time Setup)](#首次設定精靈-first-time-setup)
 - [💻 快速上手與日常操作 (Quick Start & Usage)](#-快速上手與日常操作-quick-start--usage)
   - [終端互動快捷鍵](#終端互動快捷鍵)
@@ -48,14 +45,14 @@
 
 ### 系統環境需求
 
-- **Python 3.14 或以上版本**（若選擇「一鍵安裝」或「途徑 A：可攜版」，Windows 本機無需預裝 Python；Linux／macOS 若已安裝 `uv` 亦會自動取得 Python 3.14）。
+- **Python 3.14 或以上版本**（若選擇「一鍵安裝」或「Windows 可攜版 ZIP」，Windows 本機無需預裝 Python；Linux／macOS 若已安裝 `uv` 亦會自動取得 Python 3.14）。
 - 支援作業系統：Windows 10/11、macOS (Apple Silicon / Intel)、Linux (Ubuntu, Debian, RHEL 等)。
 
 ---
 
-### 一鍵安裝 (One-Line Install) [最快速]
+### 一鍵安裝 (One-Line Install)
 
-安裝腳本會自動完成下載、SHA-256 完整性驗證（若 Release 附帶 `SHA256SUMS.txt`）、隔離環境建置並註冊 `pocket-agent` 指令：
+安裝腳本會自動完成下載、SHA-256 完整性驗證（若 Release 附帶 `SHA256SUMS.txt`）、隔離環境建置並註冊 `pocket` 指令（同時保留 `pocket-agent` 別名）：
 
 - **🪟 Windows (PowerShell)**：
 
@@ -75,13 +72,12 @@
   curl -fsSL https://raw.githubusercontent.com/zanta0529/pocket-agent/main/build_scripts/install.sh | sh
   ```
 
-> 💡 **安全與解除安裝提示**：Windows 安裝於 `%LOCALAPPDATA%\PocketAgent`（完整保留 Modern Portable 架構與 `/update` 線上更新）；Linux／macOS 安裝於 `~/.local/share/pocket-agent` 並建立 `~/.local/bin/pocket-agent`。若需指定版本或強制校驗，可設定環境變數 `POCKET_AGENT_VERSION` 或 `POCKET_AGENT_REQUIRE_CHECKSUM=1`；解除安裝可使用 `install.ps1 -Uninstall`、`install.cmd --uninstall` 或 `install.sh --uninstall`（個人設定 `~/.pocket-agent` 將完整保留）。
+> 💡 **更新、安全與解除安裝提示**：重新執行上方安裝指令即可原地更新（Windows 亦可直接於 CLI 輸入 `/update`），個人設定 `~/.pocket-agent` 將完整保留。Windows 安裝於 `%LOCALAPPDATA%\PocketAgent`（完整保留 Modern Portable 架構）；Linux／macOS 安裝於 `~/.local/share/pocket-agent` 並建立 `~/.local/bin/pocket`（與 `pocket-agent`）啟動器。若需指定版本或強制校驗，可設定環境變數 `POCKET_AGENT_VERSION` 或 `POCKET_AGENT_REQUIRE_CHECKSUM=1`；解除安裝可在 PowerShell 先設定 `$env:POCKET_AGENT_UNINSTALL="1"` 後再執行 `irm ... | iex`，或傳入 `--uninstall`（`install.cmd`／`install.sh`）。
 
----
+<details>
+<summary><strong>離線／免腳本手動安裝（Windows 可攜版 ZIP，不修改 PATH）</strong></summary>
 
-### 途徑 A：Windows 免安裝可攜版 (Modern Portable) [推薦一般使用者]
-
-如果您是在 Windows 環境，或身處無法隨意安裝全域 Python／受嚴格防毒政策控管的企業環境：
+適合企業內網、離線環境，或資安政策禁止執行遠端安裝腳本與寫入 `PATH` 的 Windows 環境：
 
 1. 直接下載最新的 [**`PocketAgent-portable.zip`**](https://github.com/zanta0529/pocket-agent/releases/latest/download/PocketAgent-portable.zip)（或前往 [**GitHub Releases**](https://github.com/zanta0529/pocket-agent/releases) 頁面）。
 2. 解壓縮至任意資料夾（例如 `D:\PocketAgent`）。
@@ -89,67 +85,9 @@
 
 > 💡 **可攜版特色**：隨附官方簽章 Python 獨立環境與完整相依套件，不會污染您電腦既有的 Python 環境，且完美避開防毒軟體對自編譯 `.exe` 的誤判。後續可直接在 CLI 輸入 `/update` 線上追蹤最新更新。
 
----
+</details>
 
-### 途徑 B：跨平台一鍵啟動腳本 [推薦快速體驗]
-
-專案原始碼內建各作業系統的自動化引導腳本。腳本會自動偵測系統中的 Python 執行檔、建立獨立虛擬環境 (`venv`)、安裝相依套件並啟動代理：
-
-```bash
-# 1. 複製儲存庫
-git clone https://github.com/zanta0529/pocket-agent.git
-cd pocket-agent
-```
-
-依您的作業系統執行對應啟動腳本：
-
-- **🪟 Windows (命令提示字元 / CMD)**：
-
-  ```cmd
-  run.bat
-  ```
-
-- **🐧 Linux (終端機)**：
-
-  ```bash
-  chmod +x run.sh
-  ./run.sh
-  ```
-
-- **🍎 macOS (終端機或 Finder 雙擊)**：
-
-  ```bash
-  chmod +x run.command
-  ./run.command
-  ```
-
----
-
-### 途徑 C：開發者手動安裝 [推薦二次開發]
-
-若您希望手動掌控虛擬環境，或將 `pocket-agent` 註冊為終端機全域命令：
-
-```bash
-# 1. 複製儲存庫並進入目錄
-git clone https://github.com/zanta0529/pocket-agent.git
-cd pocket-agent
-
-# 2. 建立並啟用 Python 3.14+ 虛擬環境
-python -m venv venv
-# Linux / macOS:
-source venv/bin/activate
-# Windows (CMD):
-venv\Scripts\activate.bat
-
-# 3. 升級 pip 並安裝執行期相依套件
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# 4. 以可編輯模式 (Editable Mode) 安裝專案 CLI
-pip install -e .
-```
-
-安裝完成後，即可直接在終端機使用 `pocket-agent` 命令。
+> 🛠️ **想從原始碼進行二次開發或貢獻？** 請參閱 [開發與貢獻](#️-開發與貢獻-development--contributing)。
 
 ---
 
@@ -158,14 +96,10 @@ pip install -e .
 無論採用哪種安裝方式，**初次使用建議先執行設定精靈**以配置模型供應商與認證（設定將儲存於 `~/.pocket-agent/config.json`）：
 
 ```bash
-# 若使用手動安裝 (途徑 C)
-pocket-agent setup
-
-# 若使用一鍵腳本 (途徑 B)
-run.bat setup       # Windows
-./run.sh setup      # Linux
-./run.command setup # macOS
+pocket setup
 ```
+
+> 若使用手動下載的 Windows 可攜版 ZIP（未註冊 `PATH`），請於解壓縮目錄執行 `pocket.bat setup`。
 
 設定精靈將以互動式選單引導您完成設定步驟（若尚未設定 `locale` 則預設以英文顯示，若已設定則依 `config.json` 語系顯示）：
 
@@ -182,7 +116,7 @@ run.bat setup       # Windows
 4. **選配外部 MCP 工具**：
    - 詢問是否掛載額外的 Stdio / SSE / Streamable HTTP MCP 伺服器（可直接按 Enter 略過，日後透過設定檔擴充）。
 5. **啟動代理**：
-   - 完成設定後，直接執行 `pocket-agent`（或執行 `run.bat` / `./run.sh`）即可開始對話！
+   - 完成設定後，直接執行 `pocket`（可攜版 ZIP 則雙擊 `pocket.bat`）即可開始對話！
 
 ---
 
@@ -216,7 +150,7 @@ run.bat setup       # Windows
 - `/prune [<天數> | --keep <筆數>]` (或 `/session prune`)：手動清理過期或過多的歷史對話（預設清理超過 30 天或僅保留最近 20 筆，永遠保護進行中的對話並須二次確認）。
 - `/new`：結束當前會話並開啟全新乾淨對話（自動原子性保存舊紀錄，完整重設上下文記憶、待送附件與用量）。
 - `/rename <新標題>`：重新命名當前對話主題，便於日後在 `/session` 中識別。
-- `/resume`（啟動參數）：若想在啟動時直接接續上次未完成對話，可執行 `pocket-agent --resume`。
+- `/resume`（啟動參數）：若想在啟動時直接接續上次未完成對話，可執行 `pocket --resume`。
 - `/compact`：呼叫 AI 執行歷史對話摘要與修剪，快速回收 Context 視窗容量。
 - `/clear`：僅清空記憶體中的對話歷史，保留當前待送附件與 Session ID。
 - `/usage` (或 `/quota`)：顯示當前對話累計 Token 消耗量與上下文視窗水位。
@@ -245,7 +179,7 @@ run.bat setup       # Windows
 
 - `/config`：啟動全域設定檔互動式編輯器（`locale` 項目提供可用語系光棒選單）。
 - `/clean`：手動觸發自動管家 (Housekeeping)，批次清理過期日誌、臨時截圖與溢出暫存。
-- `/update`：檢查並立即套用 GitHub 最新 Commit 更新，自動儲存並重啟（僅限 Modern Portable 版）。
+- `/update`：檢查並立即套用 GitHub 最新 Commit 更新，自動儲存並重啟（僅限 Windows Modern Portable 版）。
 - `/logout`：清除本機儲存的 OAuth 憑證。
 
 > 💡 更多關於路徑解析、圖生圖細節及系統邊界行為，請詳閱：[CLI 操作與限制說明](docs/guides/cli-usage-limitations.md)。
@@ -278,7 +212,7 @@ flowchart TB
     subgraph Tools["🧰 工具與 MCP 擴充層"]
         ToolRegistry["<b>ToolRegistry 與 MCPManager</b><br/>統一派發 · 命名空間隔離 · 機密注入"]
         BuiltinTools["<b>內建工具</b><br/>檔案 · Shell · 網路 · 繪圖<br/>Doc/PDF/PPTX · RAG FTS5"]
-        MCPServers["<b>MCP 伺服器</b>（Stdio / SSE / HTTP）<br/>Browser · GitHub · SQLite/MySQL/MSSQL<br/>Memory · RHEL · Windows RDP"]
+        MCPServers["<b>MCP 伺服器</b>（Stdio / SSE / HTTP）<br/>Browser · GitHub · SQLite/MySQL/MSSQL<br/>Memory · RHEL · Windows RDP · NetDiag"]
         ToolRegistry --> BuiltinTools
         ToolRegistry --> MCPServers
     end
@@ -334,7 +268,7 @@ flowchart TB
 
 - **子代理與背景多工 (Subagents & Background Multitasking)**：支援在設定中定義多元人設（如研究員、架構師、稽核員），並提供**四種執行模式**——前景單一（`/<name>`、`run_subagent`）、前景平行（`/parallel`、`run_subagents_parallel`）、背景 LLM 自主派發（`start_background_subagent`／`check_background_subagent`）與背景 CLI 手動控制（`/bg`／`/jobs`）。背景模式採嚴格唯讀隔離且不阻塞前景對話，並具備「**先預覽再決定是否注入**」機制（`/jobs show` 僅供人眼預覽、不佔後續主對話每輪上下文 Token；需要主代理接手時再以 `/jobs collect` 匯入歷史），搭配終端機雙行即時狀態列、非侵入式完成通知與回覆頁尾徽章；完整模式比較請參閱 [三層式路由、分層配置與子代理機制](docs/architecture/routing-and-subagents.md)。
 - **事件鉤子 (Hooks)**：支援在 `before_send`, `after_response`, `before_tool`, `after_tool` 綁定本機 Python 腳本，實現自訂攔截邏輯。
-- **MCP (Model Context Protocol)**：完整支援 Stdio 與 SSE，可於 `mcp_config.yaml` 透過 `enabled: true/false` 彈性切換啟動時載入的伺服器（省略預設為啟用），輕鬆掛載本機檔案系統、資料庫或遠端工具。隨附提供：
+- **MCP (Model Context Protocol)**：完整支援 Stdio、SSE 與 Streamable HTTP，可於 `mcp_config.yaml` 透過 `enabled: true/false` 彈性切換啟動時載入的伺服器（省略預設為啟用），輕鬆掛載本機檔案系統、資料庫或遠端工具。隨附提供：
   - `browser_mcp.py`：純 Python 網頁自動化操作，直接沿用系統 Edge/Chrome，支援 CDP 連接與 Cookie 狀態繼承。
   - `github_mcp.py`：GitHub Issue / PR / Diff / Review / CI 檢索、範本感知 PR 建立與留言互動。
   - `sqlite_mcp.py` / `mysql_mcp.py` / `mssql_mcp.py`：本機與遠端資料庫結構探查與唯讀查詢。
@@ -459,14 +393,31 @@ servers:
 
 我們非常歡迎社群參與開發！在提交 Pull Request 前，請遵循以下開發規範：
 
-### 1. 安裝開發依賴
+### 1. 本機開發環境建置
 
 本專案將「正式環境」與「開發測試環境」相依套件明確分離：
 
 ```bash
-# 安裝開發與測試套件 (pytest, ruff 等)
-pip install -r requirements-dev.txt
+# 1. 複製儲存庫並進入目錄
+git clone https://github.com/zanta0529/pocket-agent.git
+cd pocket-agent
+
+# 2. 建立並啟用 Python 3.14+ 虛擬環境
+python -m venv venv
+# Linux / macOS:
+source venv/bin/activate
+# Windows (CMD):
+venv\Scripts\activate.bat
+
+# 3. 升級 pip 並安裝執行期與開發測試套件 (pytest, ruff 等)
+pip install --upgrade pip
+pip install -r requirements.txt -r requirements-dev.txt
+
+# 4. 以可編輯模式 (Editable Mode) 安裝專案 CLI
+pip install -e .
 ```
+
+> 💡 若想快速在本機啟動而不想手動建立 `venv`，亦可直接執行專案根目錄的 `run.bat`（Windows）、`./run.sh`（Linux）或 `./run.command`（macOS）。
 
 ### 2. 依賴套件維護規範
 
@@ -491,8 +442,8 @@ python -m ruff format --check .
 python -m ruff check .
 
 # 依賴完整性檢查 (掃描是否有未登記於 requirements.in 的 import)
-python scripts/check_imports.py src scripts
-python scripts/check_imports.py tests --req requirements-dev.in
+python scripts/check_imports.py src scripts --req requirements.in --ignore tiktoken
+python scripts/check_imports.py tests --req requirements.in --req requirements-dev.in
 ```
 
 ### 4. 執行自動化測試
@@ -517,14 +468,12 @@ build.bat
 
 執行後將顯示模式選擇：
 
-1. **新版 Portable (Modern) [推薦]**：免安裝的可攜式發佈包。將官方 Python 執行環境與相依套件完整打包至 `dist/PocketAgent-portable.zip`，避開防毒軟體誤判。使用者解壓後執行 `pocket.bat` 即可使用，且支援線上無縫自動更新。
-2. **舊版 PyInstaller (Legacy)**：將專案編譯為單一二進位執行檔（可能觸發防毒軟體信譽隔離警告）。
+1. **舊版 PyInstaller (Legacy)** *（預設）*：將專案編譯為單一二進位執行檔（可能觸發防毒軟體信譽隔離警告）。
+2. **新版 Portable (Modern) [推薦]**：免安裝的可攜式發佈包。將官方 Python 執行環境與相依套件完整打包至 `dist/PocketAgent-portable.zip`，避開防毒軟體誤判。使用者解壓後執行 `pocket.bat` 即可使用，且支援線上無縫自動更新。
 
 ---
 
 ## ⚠️ 免責聲明 (Disclaimer)
-
-### 繁體中文
 
 1. **按「現狀」提供且無任何擔保**：本專案及其隨附之所有元件（包含但不限於核心代理引擎、子代理、自動化腳本，以及所有內建與外掛之 MCP 伺服器，例如網頁自動化 `browser_mcp`、遠端 Linux 巡檢 `rhel_mcp`、遠端 Windows 桌面控制 `win_rdp_mcp`、資料庫工具與本機終端機執行工具）均依「現狀（AS IS）」提供，不附帶任何明示或默示之保證（包含但不限於適售性、特定用途適用性、正確性或無侵權保證）。
 2. **AI 非確定性與操作風險自負**：大型語言模型（LLM）本質上具有非確定性，可能產生幻覺（Hallucination）、誤判上下文或執行非預期之操作（包含但不限於修改或刪除本機／遠端檔案、變更系統組態、執行系統命令、操控遠端桌面或瀏覽器工作階段、讀寫資料庫，以及產生第三方 API 額度或費用消耗）。使用者應於受控環境中審慎使用、親自核對每一次權限確認提示，並完全自行承擔所有操作風險與資料備份責任。

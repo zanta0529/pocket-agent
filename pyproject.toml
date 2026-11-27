@@ -11,6 +11,7 @@ requires-python = ">=3.14"
 dynamic = ["dependencies"]
 
 [project.scripts]
+pocket = "pocket_agent.main:main"
 pocket-agent = "pocket_agent.main:main"
 
 [tool.setuptools.dynamic]

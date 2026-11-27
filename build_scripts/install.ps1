@@ -211,6 +211,7 @@ try {
 
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
     $LauncherCmd = "@echo off`r`nsetlocal`r`nset `"PA_NO_PAUSE=1`"`r`ncall `"%~dp0..\pocket.bat`" %*`r`nendlocal & exit /b %ERRORLEVEL%`r`n"
+    [System.IO.File]::WriteAllText((Join-Path $BinDir "pocket.cmd"), $LauncherCmd, [System.Text.Encoding]::ASCII)
     [System.IO.File]::WriteAllText((Join-Path $BinDir "pocket-agent.cmd"), $LauncherCmd, [System.Text.Encoding]::ASCII)
 
     Add-UserPathEntry $BinDir
@@ -218,8 +219,9 @@ try {
     Write-Host ""
     Write-Host "[OK] PocketAgent installed to '$InstallDir'."
     Write-Host "Next steps:"
-    Write-Host "  1. Run: pocket-agent setup"
-    Write-Host "  2. Run: pocket-agent"
+    Write-Host "  1. Run: pocket setup"
+    Write-Host "  2. Run: pocket"
+    Write-Host "  (Alias 'pocket-agent' is also available.)"
     Write-Host "To uninstall later: `$env:POCKET_AGENT_UNINSTALL=`"1`"; irm https://raw.githubusercontent.com/$Repo/main/build_scripts/install.ps1 | iex"
 } finally {
     $ProgressPreference = $PrevProgressPreference
