@@ -60,14 +60,24 @@ servers:
   #     - mcp__agensi__read_result
 
   # 瀏覽器操作（純 Python，用系統已裝的 Edge/Chrome，不需要 Node.js）
-  # 進階：設 BROWSER_CDP_URL 可連既有瀏覽器保留登入狀態，見 browser_mcp.py 註解
+  # 進階：設 BROWSER_CDP_URL 可連既有瀏覽器保留登入狀態（先以 --remote-debugging-port=9222 啟動瀏覽器）
   # browser:
   #   transport: stdio
   #   command: python
   #   args: ["mcp_servers/browser_mcp.py"]
-  #    env:
-  #      BROWSER_CDP_URL: 'http://localhost:9222'  # 告訴 MCP 直接連接已經在背景跑著的瀏覽器
-  #      BROWSER_HEADLESS: "0"                     # 1：強制無頭模式
+  #   safe_read_tools:
+  #     - browser_snapshot
+  #     - browser_get_text
+  #     - browser_screenshot
+  #     - browser_wait
+  #     - browser_list_tabs
+  #   env:
+  #     BROWSER_CDP_URL: ""                    # 選填：如 "http://localhost:9222"，連接既有瀏覽器（留空則自動啟動 Edge/Chrome）
+  #     BROWSER_HEADLESS: "0"                  # 設為 "1"／"true" 啟用無頭模式
+  #     BROWSER_ALLOWED_DOMAINS: ""            # 選填：允許存取之網域白名單（逗號分隔，如 "example.com,*.corp.local"）
+  #     BROWSER_ALLOW_PRIVATE_NETWORKS: "false" # 設為 "true" 允許存取 RFC1918 / ULA 內網私有 IP
+  #     BROWSER_ALLOW_LOOPBACK: "false"        # 設為 "true" 允許存取 localhost / 127.0.0.1 / ::1
+  #     BROWSER_TIMEOUT_MS: "15000"            # 單次頁面操作逾時毫秒數（3000 ~ 60000）
 
   # GitHub 整合（提供 PR/Issue 檢索更新、行內審查、Actions CI 診斷與儲存庫唯讀探索；GITHUB_TOKEN 留空時於執行期隱藏詢問）
   # github:

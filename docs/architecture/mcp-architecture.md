@@ -95,8 +95,8 @@ Pocket Agent 的解決方案：
 所有隨附之 Stdio MCP 伺服器採用「**共用基礎設施（`_shared/`）＋ 領域子套件（`<domain>/`）＋ 頂層薄入口（`<name>_mcp.py`）**」三層設計：
 
 - **`mcp_servers/_shared/`**：集中維護 `bootstrap`（路徑初始化、系統常數對齊 `CONSTANTS` 與純鍵值降級 `t()`）、`redaction`、`audit`、`tty`、`validation`、`credentials`、`registry`（Factory `create_mcp_server`）與 `db_base`（`SqlGuard` Strategy 與資料庫共用基底）。
-- **領域子套件（`sqlite/`、`mysql/`、`mssql/`、`github/`、`rhel/`、`win_rdp/`）**：內部按安全守門／連線轉接（Adapter）／工具群組（`tools/*.py` 的 `register(mcp)` Command-Registrar）／組裝器（`server.py`）切分職責。
-- **頂層薄入口（`*_mcp.py`）與輕量單檔（`browser_mcp.py`、`memory_mcp.py`）**：維持既有 `mcp_config.yaml` 與 `--internal-mcp-server`（`runpy.run_path`）之穩定啟動契約。
+- **領域子套件（`browser/`、`sqlite/`、`mysql/`、`mssql/`、`github/`、`rhel/`、`win_rdp/`、`netdiag/`）**：內部按安全守門／連線轉接（Adapter）／工具群組（`tools/*.py` 的 `register(mcp)` Command-Registrar）／組裝器（`server.py`）切分職責。
+- **頂層薄入口（`*_mcp.py`）與輕量單檔（`memory_mcp.py`）**：維持既有 `mcp_config.yaml` 與 `--internal-mcp-server`（`runpy.run_path`）之穩定啟動契約。
 
 ---
 
@@ -342,3 +342,47 @@ Pocket Agent 的解決方案：
 | `NETDIAG_ALLOW_LOOPBACK` | 選填 | `"false"` | 設為 `"true"` 才允許診斷 `localhost`／`127.0.0.1`／`::1`。 |
 | `NETDIAG_ALLOW_PROXY` | 選填 | `"false"` | 預設 fail-closed 拒用環境 Proxy；企業代理環境請顯式設為 `"true"`（代理側 DNS／IP 須由代理 ACL 把關）。 |
 | `NETDIAG_TIMEOUT` | 選填 | `"10"` | 單階段逾時秒數（範圍 `3` ~ `15` 秒）。 |
+
+---
+
+## 內建瀏覽器自動化伺服器 (`mcp_servers/browser_mcp.py`)
+
+`browser_mcp.py` 對應 `mcp_servers/browser/` 領域子套件，透過本機既有的 Microsoft Edge／Google Chrome（或既有 CDP 除錯實例）提供受安全邊界約束的瀏覽器自動化與人工協作能力，且不強依賴 `playwright install` 下載瀏覽器二進位檔。
+
+### 1. 提供的結構化工具清單
+
+| 工具名稱 | 建議列入 `safe_read_tools` | 用途說明 | 工具參數（供 LLM 呼叫） |
+| :--- | :--- | :--- | :--- |
+| `browser_navigate` | **否** | 正規化並驗證網址後開啟指定頁面（限 `http`/`https`） | `url`（必填） |
+| `browser_back` | **否** | 返回瀏覽器上一頁並驗證頁面網址 | 無 |
+| `browser_wait` | 是 | 等待頁面出現指定文字、網址片段或達到載入狀態（`load`/`domcontentloaded`/`networkidle`） | `text`、`url_contains`、`state`、`timeout_sec`（`1`~`30`） |
+| `browser_snapshot` | 是 | 清除舊標記並為可見互動元素編上 `[ref]` 編號（支援 CSS 區域聚焦、敏感欄位遮罩與狀態標記） | `selector`（選填） |
+| `browser_get_text` | 是 | 擷取頁面可見文字（經機密遮罩與安全邊界截斷至 12,000 字元） | 無 |
+| `browser_screenshot` | 是 | 擷取頁面截圖並儲存於 `~/.pocket-agent/artifacts/browser_shots/`（零工作區污染） | `full_page`（預設 `False`） |
+| `browser_click` | **否** | 點擊指定 `[ref]` 元素，並偵測是否開啟新分頁 | `ref`（必填正整數） |
+| `browser_fill` | **否** | 清空並填入指定 `[ref]` 輸入框（密碼與敏感欄位強制遮罩回顯與稽核） | `ref`（必填）、`text`（必填） |
+| `browser_select_option` | **否** | 於 `<select>` 下拉選單依 `value` 或 `label` 選取項目 | `ref`（必填）、`value`、`label` |
+| `browser_press` | **否** | 發送鍵盤按鍵（如 `Enter`、`Tab`、`Escape`） | `key`（必填） |
+| `browser_scroll` | **否** | 向上或向下捲動頁面（像素受 `100`~`3000` 有界限制） | `direction`（`up`/`down`）、`amount`（預設 `600`） |
+| `browser_wait_for_user` | **否** | 遇 CAPTCHA／登入／兩步驟驗證時暫停，跨平台提示使用者手動完成（Win32／macOS／TTY） | `message`（選填） |
+| `browser_list_tabs` | 是 | 列出目前所有開啟分頁之編號、遮罩標題與網址 | 無 |
+| `browser_switch_tab` | **否** | 切換至指定分頁編號（切換前先驗證目標網址政策） | `index`（必填 1-based 整數） |
+| `browser_close_tab` | **否** | 關閉指定分頁（`0` 代表目前分頁）並回傳接續頁面狀態 | `index`（預設 `0`） |
+| `browser_close` | **否** | 關閉瀏覽器實例與 Playwright driver 並重置工作階段 | 無 |
+
+### 2. 安全防禦邊界
+
+- **前置 URL 守衛與協定／SSRF 隔離（`BrowserUrlPolicy`）**：所有導覽與上下文子請求（`context.route`）皆強制限定 `http`／`https`，阻擋含 Userinfo（包含空帳密 `https://@host`）之混淆網址、永久封鎖雲端 Metadata／Link-Local 位址與使用中之 CDP 端點；預設封鎖 Loopback 與內網私有 IP（除非顯式啟用環境變數或列入 `BROWSER_ALLOWED_DOMAINS`），且所有讀寫工具於執行動作**前**先驗證當前頁面網址，違規時重置為 `about:blank`。
+- **機密遮罩與集中稽核**：`browser_snapshot` 與 `browser_fill` 自動偵測 `password`、`otp`/`totp`、`api_key` 等敏感欄位並遮罩；頁面文字、標題與網址皆經 `DefaultRedactionPolicy` 與 `safe_cut_index` 保護後回傳；所有操作與攔截事件均寫入 `agent.log` `[AUDIT] [MCP:browser]` 紀錄。
+- **連線鎖、生命週期與跨平台提示**：透過 `BrowserSessionAdapter` 依 Event Loop 管理非同步鎖、單一分頁關閉時重用既有瀏覽器、支援 `server_lifespan` 自動清理，並以 `UserPromptStrategy` 提供 Windows／macOS／Linux（TTY）跨平台人工確認。
+
+### 3. 環境變數與配置參數表 (`servers.browser.env`)
+
+| 參數名稱 | 必填 / 選填 | 預設值 | 說明 |
+| :--- | :--- | :--- | :--- |
+| `BROWSER_CDP_URL` | 選填 | `""` | 連接既有 Chromium CDP 遠端除錯位址（如 `http://localhost:9222`）；留空時自動啟動本機 Edge／Chrome。 |
+| `BROWSER_HEADLESS` | 選填 | `"0"` | 設為 `"1"`／`"true"`／`"yes"`／`"on"` 啟用無頭模式（無頭模式下拒絕 `browser_wait_for_user`）。 |
+| `BROWSER_ALLOWED_DOMAINS` | 選填 | `""` | 允許存取之網域白名單（逗號分隔，支援精確網域、`*.domain` 與子網域）。 |
+| `BROWSER_ALLOW_PRIVATE_NETWORKS` | 選填 | `"false"` | 設為 `"true"` 才允許存取 RFC 1918／ULA 私有 IP 站點。 |
+| `BROWSER_ALLOW_LOOPBACK` | 選填 | `"false"` | 設為 `"true"` 才允許存取 `localhost`／`127.0.0.1`／`::1`（仍禁止存取使用中之 CDP 除錯埠）。 |
+| `BROWSER_TIMEOUT_MS` | 選填 | `"15000"` | 單次頁面與定位器操作逾時毫秒數（範圍 `3000` ~ `60000`）。 |
