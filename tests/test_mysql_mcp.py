@@ -489,3 +489,275 @@ def test_mysql_check_table_quick_and_size_or_mode_guards(monkeypatch):
     assert "- [status] app_db.orders (check): OK" in out_ok
     executed_sqls = [c.args[0] for c in cursor_ok.execute.call_args_list]
     assert "CHECK TABLE `app_db`.`orders` FAST;" in executed_sqls
+
+
+# ── 安全加固回歸測試 (CR-001 ~ CR-003) ──────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "bad_query",
+    [
+        "SELECT LOAD_FILE('/etc/passwd')",
+        "SELECT * FROM orders FOR SHARE",
+        "SELECT WAIT_FOR_EXECUTED_GTID_SET('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1')",
+        "SELECT SOURCE_POS_WAIT('binlog.000001', 123)",
+        "SELECT MASTER_POS_WAIT('binlog.000001', 123)",
+        "SELECT IS_FREE_LOCK('my_lock')",
+    ],
+)
+def test_mysql_blocks_load_file_for_share_and_wait_functions(monkeypatch, bad_query):
+    _set_full_mysql_env(monkeypatch)
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect") as mock_conn:
+        out = mysql_mcp.mysql_run_select_query(bad_query)
+        assert out.startswith("[ERROR]")
+        mock_conn.assert_not_called()
+
+
+def test_mysql_sql_guard_allows_semicolon_and_keywords_inside_string_literals():
+    q = "SELECT GROUP_CONCAT(name SEPARATOR ';') AS names FROM audit_logs WHERE action = 'UPDATE' AND msg = 'DROP';"
+    cleaned = mysql_sql_guard.MYSQL_SQL_GUARD.validate_select(q)
+    assert "SEPARATOR ';'" in cleaned
+    assert "action = 'UPDATE'" in cleaned
+
+
+def test_mysql_connect_sets_max_execution_time_and_ssl_options(monkeypatch, tmp_path):
+    import ssl
+
+    _set_full_mysql_env(monkeypatch)
+    ca_file = tmp_path / "ca.pem"
+    ca_file.write_text("dummy-ca", encoding="utf-8")
+    monkeypatch.setenv("MYSQL_QUERY_TIMEOUT_MS", "5000")
+    monkeypatch.setenv("MYSQL_SSL_MODE", "verify_identity")
+    monkeypatch.setenv("MYSQL_SSL_CA", str(ca_file))
+
+    conn, cursor = _make_fake_conn()
+    fake_pymysql = SimpleNamespace(connect=MagicMock(return_value=conn))
+    with (
+        patch("mcp_servers.mysql.adapter.load_mysql_driver", return_value=("pymysql", fake_pymysql)),
+        patch("ssl.create_default_context", return_value=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)),
+    ):
+        mysql_adapter.MYSQL_ADAPTER.connect()
+
+    executed = [c.args[0] for c in cursor.execute.call_args_list]
+    assert "SET SESSION MAX_EXECUTION_TIME = 5000;" in executed
+    call_kwargs = fake_pymysql.connect.call_args.kwargs
+    assert isinstance(call_kwargs["ssl"], ssl.SSLContext)
+    assert call_kwargs["ssl"].verify_mode == ssl.CERT_REQUIRED
+    assert call_kwargs["ssl"].check_hostname is True
+
+
+def test_mysql_describe_schema_separates_cross_schema_tables_and_redacts_defaults(monkeypatch):
+    _set_full_mysql_env(monkeypatch)
+    monkeypatch.delenv("MYSQL_DATABASE", raising=False)
+    conn, cursor = _make_fake_conn()
+    col_rows = [
+        ("db_a", "id", "bigint", "NO", None, "PRI", "auto_increment", "主鍵"),
+        ("db_a", "api_token", "varchar(64)", "NO", "sk-1234567890abcdef1234567890", "", "", "金鑰"),
+        ("db_b", "id", "int", "NO", None, "PRI", "", ""),
+    ]
+    idx_rows = [
+        ("db_a", "PRIMARY", 0, "id", "BTREE"),
+        ("db_b", "PRIMARY", 0, "id", "BTREE"),
+    ]
+    fk_rows = [
+        ("db_a", "org_id", "shared_db", "orgs", "id"),
+    ]
+    cursor.fetchall.side_effect = [col_rows, idx_rows, fk_rows]
+
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
+        out = mysql_mcp.mysql_describe_schema("users")
+
+    assert "=== db_a.users ===" in out
+    assert "=== db_b.users ===" in out
+    assert "sk-1234567890abcdef1234567890" not in out
+    assert "[REDACTED_TOKEN]" in out
+    assert "[auto_increment]" in out
+    assert "-- 主鍵" in out
+    assert "org_id -> shared_db.orgs.id" in out
+
+
+def test_mysql_inspect_health_filters_btree_indexes_and_scopes_to_tables(monkeypatch):
+    _set_full_mysql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    mb = 1024 * 1024
+    table_rows = [
+        ("app_db", "articles", "BASE TABLE", "InnoDB", "Dynamic", 100, 1 * mb, 1 * mb, 0, None, "utf8mb4", None),
+    ]
+    col_rows = [("app_db", "articles", "id", "bigint", "PRI", "auto_increment")]
+    idx_rows = [("app_db", "articles", "PRIMARY", 0, "id")]
+    cursor.fetchall.side_effect = [table_rows, col_rows, idx_rows]
+
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
+        out = mysql_mcp.mysql_inspect_health()
+
+    assert "[MySQL Health Summary]" in out
+    executed_sqls = [c.args[0] for c in cursor.execute.call_args_list]
+    assert any("INDEX_TYPE = 'BTREE'" in sql for sql in executed_sqls)
+    assert any("(TABLE_SCHEMA, TABLE_NAME) IN ((%s, %s))" in sql for sql in executed_sqls)
+
+
+# ── P0 & P1 擴充工具測試 ────────────────────────────────────────────────
+
+
+def test_mysql_show_create_table_success_redaction_and_ambiguous(monkeypatch):
+    _set_full_mysql_env(monkeypatch)
+    monkeypatch.delenv("MYSQL_DATABASE", raising=False)
+
+    conn_ambig, cursor_ambig = _make_fake_conn()
+    cursor_ambig.fetchall.return_value = [("db_a",), ("db_b",)]
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn_ambig):
+        ambig_out = mysql_mcp.mysql_show_create_table("users")
+    assert ambig_out.startswith("[ERROR]")
+    assert "db_a, db_b" in ambig_out
+
+    conn_ok, cursor_ok = _make_fake_conn()
+    cursor_ok.fetchone.return_value = (
+        "orders",
+        "CREATE TABLE `orders` (`id` BIGINT PRIMARY KEY) COMMENT='token=sk-1234567890abcdef1234567890'",
+    )
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn_ok):
+        ddl_out = mysql_mcp.mysql_show_create_table("app_db.orders")
+    assert "CREATE TABLE `orders`" in ddl_out
+    assert "sk-1234567890" not in ddl_out
+
+
+def test_mysql_explain_query_formats_warnings_and_guards(monkeypatch):
+    _set_full_mysql_env(monkeypatch)
+
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect") as mock_conn:
+        assert mysql_mcp.mysql_explain_query("SELECT 1", explain_format="ANALYZE").startswith("[ERROR]")
+        assert mysql_mcp.mysql_explain_query("EXPLAIN SELECT 1").startswith("[ERROR]")
+        mock_conn.assert_not_called()
+
+    conn, cursor = _make_fake_conn(
+        rows=[
+            (
+                1,
+                "SIMPLE",
+                "orders",
+                None,
+                "ALL",
+                None,
+                None,
+                None,
+                None,
+                50000,
+                100.0,
+                "Using filesort; Using temporary",
+            )
+        ],
+        description=[
+            ("id",),
+            ("select_type",),
+            ("table",),
+            ("partitions",),
+            ("type",),
+            ("possible_keys",),
+            ("key",),
+            ("key_len",),
+            ("ref",),
+            ("rows",),
+            ("filtered",),
+            ("Extra",),
+        ],
+    )
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
+        out = mysql_mcp.mysql_explain_query("SELECT * FROM orders ORDER BY created_at")
+
+    assert "[Execution Plan Warnings]" in out
+    assert "type=ALL" in out
+    assert "Using filesort" in out
+    assert "Using temporary" in out
+    assert "key=NULL" in out
+
+
+def test_mysql_server_status_summary(monkeypatch):
+    _set_full_mysql_env(monkeypatch)
+    conn, cursor = _make_fake_conn()
+    cursor.fetchone.return_value = ("8.0.36",)
+    cursor.fetchall.side_effect = [
+        [
+            ("Uptime", "90061"),
+            ("Threads_connected", "25"),
+            ("Threads_running", "3"),
+            ("Slow_queries", "2"),
+            ("Questions", "10000"),
+            ("Innodb_buffer_pool_reads", "50"),
+            ("Innodb_buffer_pool_read_requests", "10000"),
+        ],
+        [
+            ("max_connections", "100"),
+            ("read_only", "ON"),
+            ("super_read_only", "OFF"),
+            ("innodb_buffer_pool_size", str(1024 * 1024 * 1024)),
+            ("sql_mode", "STRICT_TRANS_TABLES"),
+            ("character_set_server", "utf8mb4"),
+            ("transaction_isolation", "REPEATABLE-READ"),
+        ],
+    ]
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
+        out = mysql_mcp.mysql_server_status()
+
+    assert "Version: 8.0.36" in out
+    assert "Connections: 25 / 100 (25.0%)" in out
+    assert "99.50%" in out
+
+
+def test_mysql_inspect_processlist_clips_and_redacts_info(monkeypatch):
+    _set_full_mysql_env(monkeypatch)
+    assert mysql_mcp.mysql_inspect_processlist(min_time_sec=-1).startswith("[ERROR]")
+
+    conn, _ = _make_fake_conn(
+        rows=[
+            (
+                42,
+                "app",
+                "10.0.0.5:1234",
+                "app_db",
+                "Query",
+                18,
+                "Sending data",
+                "SELECT * FROM users WHERE token='sk-1234567890abcdef1234567890' AND note='" + ("z" * 300) + "'",
+            )
+        ]
+    )
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn):
+        out = mysql_mcp.mysql_inspect_processlist(only_active=True, min_time_sec=5)
+
+    assert "[MySQL Processlist]" in out
+    assert "sk-1234567890" not in out
+    assert "[REDACTED]" in out
+    assert "z" * 250 not in out
+
+
+def test_mysql_replication_status_allowlist_fallback_and_permission_denied(monkeypatch):
+    _set_full_mysql_env(monkeypatch)
+
+    # 1. 白名單應嚴格排除 Source_User / Master_User 等敏感欄位，並支援 SHOW SLAVE STATUS 降級
+    conn_ok, cursor_ok = _make_fake_conn(
+        rows=[("", "repl_secret_user", "10.0.0.2", "Yes", "Yes", 0, "")],
+        description=[
+            ("Channel_Name",),
+            ("Source_User",),
+            ("Source_Host",),
+            ("Replica_IO_Running",),
+            ("Replica_SQL_Running",),
+            ("Seconds_Behind_Source",),
+            ("Last_SQL_Error",),
+        ],
+    )
+    cursor_ok.execute.side_effect = [RuntimeError("Unknown command"), None]
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn_ok):
+        out_ok = mysql_mcp.mysql_replication_status()
+    assert "Replica_IO_Running: Yes" in out_ok
+    assert "Seconds_Behind_Source: 0" in out_ok
+    assert "repl_secret_user" not in out_ok
+    assert "Source_User" not in out_ok
+
+    # 2. 權限不足時回傳友善錯誤且不清除憑證快取
+    conn_perm, cursor_perm = _make_fake_conn()
+    cursor_perm.execute.side_effect = RuntimeError("1227 Access denied; you need REPLICATION CLIENT privilege")
+    with patch.object(mysql_adapter.MYSQL_ADAPTER, "connect", return_value=conn_perm):
+        out_perm = mysql_mcp.mysql_replication_status()
+    assert out_perm.startswith("[ERROR]")
+    assert "REPLICATION CLIENT" in out_perm

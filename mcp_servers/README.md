@@ -81,7 +81,7 @@ mcp_servers/
 ### 5. 遠端 MySQL／MariaDB 資料庫（MySQL MCP）
 
 - **入口**：`mysql_mcp.py` → `mcp_servers/mysql/`
-- **用途**：透過 `pymysql` 提供唯讀結構探查、引號感知註解正規化之單一 `SELECT` 串流查詢（`SSCursor`）、詮釋資料健康診斷與單表 `CHECK TABLE`（2 GB 熔斷）。
+- **用途**：透過 `pymysql`／`mysql-connector-python`（支援 TLS／SSL 與 `MAX_EXECUTION_TIME` 查詢逾時）提供跨庫不混疊結構探查與 `SHOW CREATE TABLE`、字面值感知防注入之串流 `SELECT` 與 `EXPLAIN` 計畫分析、零鎖表健康巡檢、單表 `CHECK TABLE`（2 GB 熔斷）及伺服器狀態／`PROCESSLIST`／白名單複寫狀態診斷。
 
 ### 6. 遠端 Microsoft SQL Server 資料庫（MSSQL MCP）
 

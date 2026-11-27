@@ -2,21 +2,28 @@
 
 import importlib
 import os
+import ssl
+from pathlib import Path
 from typing import Any
 
 from mcp_servers._shared import (
+    CONSTANTS,
+    DEFAULT_REDACTION_POLICY,
     AuditLogger,
     ConnAuthError,
     CredentialCache,
     ReadOnlyDatabaseAdapter,
     clean_param,
     is_empty_or_null,
+    t,
     tty_prompt_secret,
     tty_prompt_text,
     validate_host,
     validate_identifier,
     validate_port,
 )
+
+_VALID_SSL_MODES = frozenset({"disabled", "preferred", "required", "verify_ca", "verify_identity"})
 
 
 def load_mysql_driver() -> tuple[str, Any]:
@@ -27,13 +34,68 @@ def load_mysql_driver() -> tuple[str, Any]:
             return driver_type, mod
         except ImportError:
             continue
-    raise RuntimeError(
-        "尚未安裝 MySQL 驅動套件。請在終端機執行：pip install pymysql（或 pip install mysql-connector-python）"
-    )
+    raise RuntimeError(t("mysql_mcp.driver_missing"))
+
+
+def _parse_int_env(name: str, default: int, min_val: int, max_val: int) -> int:
+    raw = clean_param(os.getenv(name))
+    if not raw:
+        return default
+    try:
+        return max(min_val, min(int(raw), max_val))
+    except ValueError:
+        return default
+
+
+def _parse_ssl_config(driver_type: str) -> dict[str, Any]:
+    """依 MYSQL_SSL_MODE 與 MYSQL_SSL_CA 組裝對應驅動的 TLS/SSL 連線參數。"""
+    raw_mode = clean_param(os.getenv("MYSQL_SSL_MODE")).lower()
+    raw_ca = clean_param(os.getenv("MYSQL_SSL_CA"))
+
+    if not raw_mode and not raw_ca:
+        return {}
+
+    mode = raw_mode or ("verify_ca" if raw_ca else "preferred")
+    if mode not in _VALID_SSL_MODES:
+        raise ValueError(t("mysql_mcp.invalid_ssl_mode", mode=mode))
+
+    if raw_ca:
+        ca_path = Path(raw_ca).expanduser()
+        if not ca_path.is_file():
+            raise ValueError(t("mysql_mcp.ssl_ca_not_found", path=raw_ca))
+        ca_file = str(ca_path)
+    else:
+        ca_file = ""
+
+    if mode == "disabled":
+        return {"ssl_disabled": True} if driver_type == "mysql_connector" else {}
+
+    if driver_type == "mysql_connector":
+        kwargs: dict[str, Any] = {"ssl_disabled": False}
+        if ca_file:
+            kwargs["ssl_ca"] = ca_file
+        if mode in ("verify_ca", "verify_identity"):
+            kwargs["ssl_verify_cert"] = True
+            kwargs["ssl_verify_identity"] = mode == "verify_identity"
+        elif mode == "required":
+            kwargs["ssl_verify_cert"] = False
+        return kwargs
+
+    ctx = ssl.create_default_context(cafile=ca_file) if ca_file else ssl.create_default_context()
+    if mode in ("preferred", "required"):
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    elif mode == "verify_ca":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_REQUIRED
+    elif mode == "verify_identity":
+        ctx.check_hostname = True
+        ctx.verify_mode = ssl.CERT_REQUIRED
+    return {"ssl": ctx}
 
 
 class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
-    """封裝 MySQL 憑證快取、唯讀交易連線、SSCursor/unbuffered 串流與快速中止。"""
+    """封裝 MySQL 憑證快取、唯讀交易連線、伺服器端逾時、TLS 與串流快速中止。"""
 
     def __init__(
         self,
@@ -41,7 +103,7 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
         cache: CredentialCache | None = None,
         audit: AuditLogger | None = None,
     ) -> None:
-        self.cache = cache or CredentialCache(ttl_seconds=600.0)
+        self.cache = cache or CredentialCache(ttl_seconds=CONSTANTS.mysql_creds_cache_ttl_sec)
         self.audit = audit or AuditLogger("mysql")
 
     def clear_cache(self) -> None:
@@ -86,21 +148,16 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
             database = clean_param(mysql_database) or cached_db or env_db
 
             if not host:
-                host = clean_param(
-                    tty_prompt_text("請輸入 MySQL/MariaDB 主機 IP 或位址 (MYSQL_HOST): ", hint="MYSQL_*")
-                )
+                host = clean_param(tty_prompt_text(t("mysql_mcp.prompt_host"), hint="MYSQL_*"))
             if not port:
-                port = (
-                    clean_param(tty_prompt_text("請輸入 MySQL 連接埠 (MYSQL_PORT) [預設 3306]: ", hint="MYSQL_*"))
-                    or "3306"
-                )
+                port = clean_param(tty_prompt_text(t("mysql_mcp.prompt_port"), hint="MYSQL_*")) or "3306"
             if not user:
-                user = clean_param(tty_prompt_text(f"請輸入 {host} 的 MySQL 登入帳號 (MYSQL_USER): ", hint="MYSQL_*"))
+                user = clean_param(tty_prompt_text(t("mysql_mcp.prompt_user", host=host), hint="MYSQL_*"))
 
             if not host:
-                raise ValueError("未提供 MySQL 主機位址 (MYSQL_HOST)。")
+                raise ValueError(t("mysql_mcp.missing_host"))
             if not user:
-                raise ValueError("未提供 MySQL 登入帳號 (MYSQL_USER)。")
+                raise ValueError(t("mysql_mcp.missing_user"))
 
             host = validate_host(host, "MYSQL_HOST")
             port = validate_port(port, "MYSQL_PORT")
@@ -138,9 +195,9 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     password = str(env_pw)
 
             if not password:
-                password = tty_prompt_secret(f"請輸入 {user}@{host} 的 MySQL 登入密碼: ")
+                password = tty_prompt_secret(t("mysql_mcp.prompt_password", user=user, host=host))
             if not password:
-                raise ValueError("未提供 MySQL 登入密碼 (MYSQL_PASSWORD)。")
+                raise ValueError(t("mysql_mcp.missing_password"))
 
             self.cache.update(
                 {
@@ -153,6 +210,18 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
             self.cache.set_secret("MYSQL_PASSWORD", password)
             return host, port, user, password, database
 
+    @staticmethod
+    def _apply_session_guards(cursor: Any, query_timeout_ms: int) -> None:
+        cursor.execute("SET SESSION TRANSACTION READ ONLY;")
+        try:
+            cursor.execute(f"SET SESSION MAX_EXECUTION_TIME = {query_timeout_ms};")
+        except Exception:
+            try:
+                cursor.execute(f"SET SESSION max_statement_time = {query_timeout_ms / 1000:.3f};")
+            except Exception:
+                pass
+        cursor.execute("START TRANSACTION READ ONLY;")
+
     def connect(
         self,
         mysql_host: str = "",
@@ -161,21 +230,33 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
         mysql_password: str = "",
         mysql_database: str = "",
     ) -> Any:
-        """建立遠端 MySQL 連線並強制設定為 SESSION TRANSACTION READ ONLY 唯讀模式。"""
+        """建立遠端 MySQL 連線並強制設定為唯讀交易與伺服器端查詢逾時。"""
         try:
             host, port, user, password, database = self.resolve_connection_params(
                 mysql_host, mysql_port, mysql_user, mysql_password, mysql_database
             )
         except ValueError as exc:
             self.clear_cache()
-            raise ConnAuthError(f"[CONN_AUTH] {exc}") from exc
+            raise ConnAuthError(f"[CONN_AUTH] {DEFAULT_REDACTION_POLICY.redact(str(exc))}") from exc
 
         driver_type, driver_mod = load_mysql_driver()
+        timeout = _parse_int_env(
+            "MYSQL_CONNECT_TIMEOUT",
+            CONSTANTS.mysql_default_connect_timeout_sec,
+            CONSTANTS.mysql_min_connect_timeout_sec,
+            CONSTANTS.mysql_max_connect_timeout_sec,
+        )
+        query_timeout_ms = _parse_int_env(
+            "MYSQL_QUERY_TIMEOUT_MS",
+            CONSTANTS.mysql_default_query_timeout_ms,
+            CONSTANTS.mysql_min_query_timeout_ms,
+            CONSTANTS.mysql_max_query_timeout_ms,
+        )
 
         try:
-            timeout = max(3, min(int(os.getenv("MYSQL_CONNECT_TIMEOUT") or "10"), 60))
-        except ValueError:
-            timeout = 10
+            ssl_kwargs = _parse_ssl_config(driver_type)
+        except ValueError as exc:
+            raise ConnAuthError(f"[CONN_AUTH] {DEFAULT_REDACTION_POLICY.redact(str(exc))}") from exc
 
         charset = clean_param(os.getenv("MYSQL_CHARSET")) or "utf8mb4"
         db_kwarg = {"database": database} if database else {}
@@ -193,24 +274,33 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                     read_timeout=timeout,
                     write_timeout=timeout,
                     autocommit=False,
+                    **ssl_kwargs,
                     **db_kwarg,
                 )
             else:
-                conn = driver_mod.connect(
-                    host=host,
-                    port=int(port),
-                    user=user,
-                    password=password,
-                    charset=charset,
-                    connection_timeout=timeout,
-                    autocommit=False,
+                conn_kwargs = {
+                    "host": host,
+                    "port": int(port),
+                    "user": user,
+                    "password": password,
+                    "charset": charset,
+                    "connection_timeout": timeout,
+                    "read_timeout": timeout,
+                    "write_timeout": timeout,
+                    "autocommit": False,
+                    **ssl_kwargs,
                     **db_kwarg,
-                )
+                }
+                try:
+                    conn = driver_mod.connect(**conn_kwargs)
+                except TypeError:
+                    conn_kwargs.pop("read_timeout", None)
+                    conn_kwargs.pop("write_timeout", None)
+                    conn = driver_mod.connect(**conn_kwargs)
 
             cursor = conn.cursor()
             try:
-                cursor.execute("SET SESSION TRANSACTION READ ONLY;")
-                cursor.execute("START TRANSACTION READ ONLY;")
+                self._apply_session_guards(cursor, query_timeout_ms)
             finally:
                 cursor.close()
             return conn
@@ -221,7 +311,8 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                 except Exception:
                     pass
             self.clear_cache()
-            raise ConnAuthError(f"[CONN_AUTH] MySQL 連線或認證失敗: {exc}") from exc
+            safe_err = DEFAULT_REDACTION_POLICY.redact(str(exc))
+            raise ConnAuthError(f"[CONN_AUTH] {t('mysql_mcp.conn_failed', error=safe_err)}") from exc
 
     def open_streaming_cursor(self, conn: Any) -> Any:
         """為 SELECT 建立 Unbuffered 串流游標（PyMySQL SSCursor 或 mysql-connector buffered=False）。"""
@@ -233,15 +324,12 @@ class MysqlReadOnlyAdapter(ReadOnlyDatabaseAdapter):
                 ss_cursor_cls = getattr(driver_mod, "SSCursor", None)
             if ss_cursor_cls is not None:
                 return conn.cursor(ss_cursor_cls)
-            raise RuntimeError(
-                "PyMySQL 環境缺少 SSCursor（需 pymysql.cursors.SSCursor），"
-                "無法建立串流游標。請確認 pymysql 版本 >= 1.0 或改用 mysql-connector-python。"
-            )
+            raise RuntimeError(t("mysql_mcp.missing_sscursor"))
 
         if driver_type == "mysql_connector":
             return conn.cursor(buffered=False)
 
-        raise RuntimeError(f"不支援的 MySQL 驅動類型：{driver_type}")
+        raise RuntimeError(t("mysql_mcp.unsupported_driver", driver=driver_type))
 
     def abort_connection(self, conn: Any, cursor: Any = None) -> None:
         """提前截斷或讀取異常時直接中止一次性連線，避免排空剩餘巨量結果。"""

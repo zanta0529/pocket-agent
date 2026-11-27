@@ -69,6 +69,15 @@ class McpConstants:
     browser_scroll_max_px: int = 3_000
     browser_snapshot_max_label_chars: int = 80
     browser_max_tracked_dialogs: int = 20
+    mysql_creds_cache_ttl_sec: float = 600.0
+    mysql_default_connect_timeout_sec: int = 10
+    mysql_min_connect_timeout_sec: int = 3
+    mysql_max_connect_timeout_sec: int = 60
+    mysql_default_query_timeout_ms: int = 10_000
+    mysql_min_query_timeout_ms: int = 1_000
+    mysql_max_query_timeout_ms: int = 60_000
+    mysql_processlist_max_rows: int = 50
+    mysql_processlist_info_max_chars: int = 200
 
 
 def load_constants() -> McpConstants:
@@ -117,6 +126,15 @@ def load_constants() -> McpConstants:
             browser_scroll_max_px=sys_const.BROWSER_SCROLL_MAX_PX,
             browser_snapshot_max_label_chars=sys_const.BROWSER_SNAPSHOT_MAX_LABEL_CHARS,
             browser_max_tracked_dialogs=sys_const.BROWSER_MAX_TRACKED_DIALOGS,
+            mysql_creds_cache_ttl_sec=sys_const.MYSQL_CREDS_CACHE_TTL_SEC,
+            mysql_default_connect_timeout_sec=sys_const.MYSQL_DEFAULT_CONNECT_TIMEOUT_SEC,
+            mysql_min_connect_timeout_sec=sys_const.MYSQL_MIN_CONNECT_TIMEOUT_SEC,
+            mysql_max_connect_timeout_sec=sys_const.MYSQL_MAX_CONNECT_TIMEOUT_SEC,
+            mysql_default_query_timeout_ms=sys_const.MYSQL_DEFAULT_QUERY_TIMEOUT_MS,
+            mysql_min_query_timeout_ms=sys_const.MYSQL_MIN_QUERY_TIMEOUT_MS,
+            mysql_max_query_timeout_ms=sys_const.MYSQL_MAX_QUERY_TIMEOUT_MS,
+            mysql_processlist_max_rows=sys_const.MYSQL_PROCESSLIST_MAX_ROWS,
+            mysql_processlist_info_max_chars=sys_const.MYSQL_PROCESSLIST_INFO_MAX_CHARS,
         )
     except ImportError:
         return McpConstants()
