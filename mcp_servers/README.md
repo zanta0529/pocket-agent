@@ -27,6 +27,7 @@ servers:
 ```text
 mcp_servers/
 ├── _shared/              # 跨伺服器共用基礎設施（bootstrap、constants、i18n、遮罩、稽核、TTY、憑證快取、DB 基底）
+├── browser/              # 瀏覽器自動化領域子套件（security、snapshot、prompt、session、server、tools/）
 ├── sqlite/               # SQLite 領域子套件（sql_guard、adapter、server、tools/）
 ├── mysql/                # MySQL / MariaDB 領域子套件（sql_guard、adapter、server、tools/）
 ├── mssql/                # Microsoft SQL Server 領域子套件（sql_guard、adapter、server、tools/）
@@ -34,6 +35,7 @@ mcp_servers/
 ├── rhel/                 # RHEL SSH 領域子套件（security、ssh_client、server、tools/）
 ├── win_rdp/              # Windows RDP 領域子套件（security、win32_api、session、server、tools/）
 ├── netdiag/              # 網站與網路舉證診斷領域子套件（policy、redaction、dns_adapter、tls_probe、http_probe、pipeline、report、tools/）
+├── browser_mcp.py        # 薄入口（對應 browser/）
 ├── sqlite_mcp.py         # 薄入口（對應 sqlite/）
 ├── mysql_mcp.py          # 薄入口（對應 mysql/）
 ├── mssql_mcp.py          # 薄入口（對應 mssql/）
@@ -41,7 +43,6 @@ mcp_servers/
 ├── rhel_mcp.py           # 薄入口（對應 rhel/）
 ├── win_rdp_mcp.py        # 薄入口（對應 win_rdp/）
 ├── netdiag_mcp.py        # 薄入口（對應 netdiag/）
-├── browser_mcp.py        # 輕量單檔伺服器（Playwright 瀏覽器自動化）
 └── memory_mcp.py         # 輕量單檔伺服器（本機 JSON 長期記憶）
 ```
 
@@ -59,8 +60,8 @@ mcp_servers/
 
 ### 1. 瀏覽器自動化（Browser MCP）
 
-- **入口**：`browser_mcp.py`（輕量單檔）
-- **用途**：基於 Playwright 操作本機 Edge／Chrome，支援導覽、點擊、填表、擷取內容與人工驗證暫停。
+- **入口**：`browser_mcp.py` → `mcp_servers/browser/`
+- **用途**：基於 Playwright 操作本機 Edge／Chrome（無須 `playwright install`），支援導覽、等待、CSS 區域快照、截圖（集中存於 `~/.pocket-agent/artifacts/browser_shots/`）、點擊、填表、`<select>` 下拉選取、多分頁切換／關閉、跨平台人工驗證暫停，以及協定／內網／網域白名單守衛與機密遮罩稽核。
 
 ### 2. 長期記憶管理（Memory MCP）
 

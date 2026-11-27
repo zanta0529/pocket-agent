@@ -114,6 +114,19 @@ RHEL_MAX_CMD_TIMEOUT_SEC = 120  # 遠端診斷指令最大執行逾時秒數
 RHEL_MAX_BATCH_SERVICES = 10  # rhel_service_status 單次批次查詢服務數量上限
 RHEL_MAX_CERT_FILES = 30  # rhel_cert_expiry 單次憑證到期巡檢最多掃描檔案數
 
+# 瀏覽器自動化 MCP (browser) 逾時、捲動與安全限制常數
+BROWSER_DEFAULT_TIMEOUT_MS = 15_000  # Playwright 頁面與定位器預設操作逾時 (毫秒)
+BROWSER_MIN_TIMEOUT_MS = 3_000  # 瀏覽器操作逾時最小允許值 (毫秒)
+BROWSER_MAX_TIMEOUT_MS = 60_000  # 瀏覽器操作逾時最大允許值 (毫秒)
+BROWSER_WAIT_DEFAULT_TIMEOUT_SEC = 10.0  # browser_wait 預設等待秒數
+BROWSER_WAIT_MIN_TIMEOUT_SEC = 1.0  # browser_wait 最小等待秒數
+BROWSER_WAIT_MAX_TIMEOUT_SEC = 30.0  # browser_wait 最大等待秒數
+BROWSER_SCROLL_DEFAULT_PX = 600  # browser_scroll 預設垂直捲動像素
+BROWSER_SCROLL_MIN_PX = 100  # browser_scroll 最小垂直捲動像素
+BROWSER_SCROLL_MAX_PX = 3_000  # browser_scroll 最大垂直捲動像素
+BROWSER_SNAPSHOT_MAX_LABEL_CHARS = 80  # browser_snapshot 單一互動元素標籤最大字元數
+BROWSER_MAX_TRACKED_DIALOGS = 20  # 單次工作階段最多保留的瀏覽器原生對話框紀錄數
+
 
 # ==============================================================================
 # 5. 上下文預算與溢出管理常數 (Context Budget & Spillover Defaults)

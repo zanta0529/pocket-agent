@@ -58,6 +58,17 @@ class McpConstants:
     rhel_max_cmd_timeout_sec: int = 120
     rhel_max_batch_services: int = 10
     rhel_max_cert_files: int = 30
+    browser_default_timeout_ms: int = 15_000
+    browser_min_timeout_ms: int = 3_000
+    browser_max_timeout_ms: int = 60_000
+    browser_wait_default_timeout_sec: float = 10.0
+    browser_wait_min_timeout_sec: float = 1.0
+    browser_wait_max_timeout_sec: float = 30.0
+    browser_scroll_default_px: int = 600
+    browser_scroll_min_px: int = 100
+    browser_scroll_max_px: int = 3_000
+    browser_snapshot_max_label_chars: int = 80
+    browser_max_tracked_dialogs: int = 20
 
 
 def load_constants() -> McpConstants:
@@ -95,6 +106,17 @@ def load_constants() -> McpConstants:
             rhel_max_cmd_timeout_sec=sys_const.RHEL_MAX_CMD_TIMEOUT_SEC,
             rhel_max_batch_services=sys_const.RHEL_MAX_BATCH_SERVICES,
             rhel_max_cert_files=sys_const.RHEL_MAX_CERT_FILES,
+            browser_default_timeout_ms=sys_const.BROWSER_DEFAULT_TIMEOUT_MS,
+            browser_min_timeout_ms=sys_const.BROWSER_MIN_TIMEOUT_MS,
+            browser_max_timeout_ms=sys_const.BROWSER_MAX_TIMEOUT_MS,
+            browser_wait_default_timeout_sec=sys_const.BROWSER_WAIT_DEFAULT_TIMEOUT_SEC,
+            browser_wait_min_timeout_sec=sys_const.BROWSER_WAIT_MIN_TIMEOUT_SEC,
+            browser_wait_max_timeout_sec=sys_const.BROWSER_WAIT_MAX_TIMEOUT_SEC,
+            browser_scroll_default_px=sys_const.BROWSER_SCROLL_DEFAULT_PX,
+            browser_scroll_min_px=sys_const.BROWSER_SCROLL_MIN_PX,
+            browser_scroll_max_px=sys_const.BROWSER_SCROLL_MAX_PX,
+            browser_snapshot_max_label_chars=sys_const.BROWSER_SNAPSHOT_MAX_LABEL_CHARS,
+            browser_max_tracked_dialogs=sys_const.BROWSER_MAX_TRACKED_DIALOGS,
         )
     except ImportError:
         return McpConstants()

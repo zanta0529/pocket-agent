@@ -259,12 +259,18 @@ def test_browser_fill_exception_fail_secure():
     from mcp_servers import browser_mcp
 
     mock_page = MagicMock()
+    mock_page.url = "https://example.com/"
     mock_locator = AsyncMock()
     mock_locator.get_attribute.side_effect = RuntimeError("DOM detached")
     mock_locator.fill = AsyncMock()
+    mock_page.locator.return_value.count = AsyncMock(return_value=1)
     mock_page.locator.return_value.first = mock_locator
 
-    with patch.object(browser_mcp, "_ensure_page", return_value=mock_page):
+    with patch.object(
+        browser_mcp.browser_session,
+        "ensure_allowed_page",
+        new=AsyncMock(return_value=mock_page),
+    ):
         res = asyncio.run(browser_mcp.browser_fill(1, "SuperSecretPassword123!"))
         assert "********" in res
         assert "SuperSecretPassword123!" not in res
