@@ -112,9 +112,10 @@ servers:
   #     GITHUB_ALLOWED_REPOS: ""            # 選填：允許存取之 owner/repo 白名單（逗號分隔，如 "org/repo1,org/repo2"）
   #     GITHUB_API_BASE_URL: ""             # 選填：企業自架 GitHub Enterprise Server (GHES) API 基底網址（須為 HTTPS，如 "https://github.corp.com/api/v3"）
 
-  # 本機 SQLite 資料庫檢索 (唯讀 SELECT 查詢)
+  # 本機 SQLite 資料庫唯讀檢索與維運診斷
   # 對話中可請 AI 切換資料庫，或輸入 /mcp sqlite <路徑> 直接切換
   # sqlite_switch_database 列入 safe_read_tools 時，僅工作區內路徑免確認；工作區外仍會詢問，UNC 網路路徑一律拒絕
+  # （註：sqlite_check_integrity 涉及較重磁碟 I/O 掃描，預設不列入 safe_read_tools 以保留使用者互動確認）
   # sqlite:
   #   transport: stdio
   #   command: python
@@ -122,11 +123,17 @@ servers:
   #   safe_read_tools:
   #     - sqlite_list_tables
   #     - sqlite_describe_schema
-  #     - sqlite_inspect_health
+  #     - sqlite_get_ddl
   #     - sqlite_run_select_query
+  #     - sqlite_explain_query
+  #     - sqlite_inspect_health
+  #     - sqlite_database_info
+  #     - sqlite_table_stats
   #     - sqlite_switch_database
   #   env:
-  #     DB_PATH: "dev.db" # 選填：SQLite 資料庫完整路徑與檔名（留空、null 或省略時將於執行時詢問）
+  #     DB_PATH: "dev.db"                    # 選填：SQLite 資料庫完整路徑與檔名（留空、null 或省略時將於執行時詢問）
+  #     SQLITE_QUERY_TIMEOUT_SEC: "15"       # 選填：單次查詢 progress_handler 逾時秒數（1 ~ 120）
+  #     SQLITE_BUSY_TIMEOUT_SEC: "5"         # 選填：唯讀連線鎖等待逾時秒數（1 ~ 30）
 
   # 遠端 MySQL / MariaDB 資料庫唯讀檢索與維運診斷（需安裝 pymysql 或 mysql-connector-python；未設定項將於執行時動態詢問）
   # （註：mysql_check_table 涉及索引頁讀取鎖、mysql_inspect_processlist 可能含執行中 SQL 片段，預設不列入 safe_read_tools 以保留使用者互動確認）

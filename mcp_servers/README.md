@@ -76,7 +76,7 @@ mcp_servers/
 ### 4. 本機 SQLite 資料庫（SQLite MCP）
 
 - **入口**：`sqlite_mcp.py` → `mcp_servers/sqlite/`
-- **用途**：本機 SQLite 結構探查、唯讀 `SELECT` 查詢（Authorizer + `ro` URI 雙重防護）與唯讀健康診斷（`PRAGMA quick_check` 具 500 MB 熔斷）。
+- **用途**：本機 SQLite 物件／Schema／DDL 探查（含產生欄、遮罩預設值與 Partial 索引）、雙軌狀態機防注入之唯讀 `SELECT` 與 `EXPLAIN QUERY PLAN` 計畫分析、資料庫資訊與 `dbstat` 空間統計、唯讀健康／完整性巡檢（Authorizer + `ro` URI + `progress_handler` 逾時三重防護，並受 500 MB 熔斷保護）。
 
 ### 5. 遠端 MySQL／MariaDB 資料庫（MySQL MCP）
 
