@@ -127,6 +127,17 @@ BROWSER_SCROLL_MAX_PX = 3_000  # browser_scroll 最大垂直捲動像素
 BROWSER_SNAPSHOT_MAX_LABEL_CHARS = 80  # browser_snapshot 單一互動元素標籤最大字元數
 BROWSER_MAX_TRACKED_DIALOGS = 20  # 單次工作階段最多保留的瀏覽器原生對話框紀錄數
 
+# 遠端 MySQL / MariaDB 唯讀檢索 MCP (mysql) 連線、逾時與維運診斷常數
+MYSQL_CREDS_CACHE_TTL_SEC = 600.0  # 執行期記憶體憑證快取閒置 TTL 秒數 (10 分鐘)
+MYSQL_DEFAULT_CONNECT_TIMEOUT_SEC = 10  # MySQL 連線預設逾時秒數
+MYSQL_MIN_CONNECT_TIMEOUT_SEC = 3  # MySQL 連線最小逾時秒數
+MYSQL_MAX_CONNECT_TIMEOUT_SEC = 60  # MySQL 連線最大逾時秒數
+MYSQL_DEFAULT_QUERY_TIMEOUT_MS = 10_000  # MySQL 伺服器端單次查詢最大執行毫秒數 (MAX_EXECUTION_TIME)
+MYSQL_MIN_QUERY_TIMEOUT_MS = 1_000  # MySQL 查詢逾時最小允許毫秒數
+MYSQL_MAX_QUERY_TIMEOUT_MS = 60_000  # MySQL 查詢逾時最大允許毫秒數
+MYSQL_PROCESSLIST_MAX_ROWS = 50  # mysql_inspect_processlist 單次最多回傳之連線工作列數
+MYSQL_PROCESSLIST_INFO_MAX_CHARS = 200  # mysql_inspect_processlist 單筆 SQL INFO 摘要最大字元數
+
 
 # ==============================================================================
 # 5. 上下文預算與溢出管理常數 (Context Budget & Spillover Defaults)

@@ -128,8 +128,8 @@ servers:
   #   env:
   #     DB_PATH: "dev.db" # 選填：SQLite 資料庫完整路徑與檔名（留空、null 或省略時將於執行時詢問）
 
-  # 遠端 MySQL / MariaDB 資料庫唯讀檢索（需安裝 pymysql 或 mysql-connector-python；未設定項將於執行時動態詢問）
-  # （註：mysql_check_table 涉及索引頁讀取鎖，預設不列入 safe_read_tools 以保留使用者互動確認）
+  # 遠端 MySQL / MariaDB 資料庫唯讀檢索與維運診斷（需安裝 pymysql 或 mysql-connector-python；未設定項將於執行時動態詢問）
+  # （註：mysql_check_table 涉及索引頁讀取鎖、mysql_inspect_processlist 可能含執行中 SQL 片段，預設不列入 safe_read_tools 以保留使用者互動確認）
   # mysql:
   #   transport: stdio
   #   command: python
@@ -138,15 +138,23 @@ servers:
   #     - mysql_list_databases
   #     - mysql_list_tables
   #     - mysql_describe_schema
-  #     - mysql_inspect_health
+  #     - mysql_show_create_table
   #     - mysql_run_select_query
+  #     - mysql_explain_query
+  #     - mysql_inspect_health
+  #     - mysql_server_status
+  #     - mysql_replication_status
   #   env:
-  #     MYSQL_HOST: ""            # 選填：MySQL/MariaDB 主機 IP 或位址（留空、null 或省略時將於執行時詢問）
-  #     MYSQL_PORT: "3306"        # 選填：連接埠，預設 3306（留空、null 或省略時將於執行時詢問）
-  #     MYSQL_USER: ""            # 選填：登入帳號（留空、null 或省略時將於執行時詢問）
-  #     MYSQL_PASSWORD: ""        # 選填：登入密碼（建議留空或省略，於執行時安全輸入）
-  #     MYSQL_DATABASE: ""        # 選填：預設資料庫名稱（留空時可直接查詢伺服器上所有資料庫清單或跨庫查詢）
-  #     MYSQL_CONNECT_TIMEOUT: "10"
+  #     MYSQL_HOST: ""              # 選填：MySQL/MariaDB 主機 IP 或位址（留空、null 或省略時將於執行時詢問）
+  #     MYSQL_PORT: "3306"          # 選填：連接埠，預設 3306（留空、null 或省略時將於執行時詢問）
+  #     MYSQL_USER: ""              # 選填：登入帳號（留空、null 或省略時將於執行時詢問）
+  #     MYSQL_PASSWORD: ""          # 選填：登入密碼（建議留空或省略，於執行時安全輸入）
+  #     MYSQL_DATABASE: ""          # 選填：預設資料庫名稱（留空時可直接查詢伺服器上所有資料庫清單或跨庫查詢）
+  #     MYSQL_CONNECT_TIMEOUT: "10" # 選填：TCP 連線與讀寫逾時秒數（3 ~ 60）
+  #     MYSQL_QUERY_TIMEOUT_MS: "10000" # 選填：伺服器端單次查詢逾時毫秒數（1000 ~ 60000）
+  #     MYSQL_SSL_MODE: ""          # 選填：TLS 模式（disabled / preferred / required / verify_ca / verify_identity）
+  #     MYSQL_SSL_CA: ""            # 選填：TLS CA 憑證檔案路徑
+  #     MYSQL_CHARSET: "utf8mb4"    # 選填：連線字元集，預設 utf8mb4
 
   # 遠端 Microsoft SQL Server (MSSQL) 資料庫唯讀檢索（需安裝 pymssql 或 pyodbc；未設定項將於執行時動態詢問）
   # mssql:

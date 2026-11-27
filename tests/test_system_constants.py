@@ -129,6 +129,10 @@ def test_mcp_servers_output_chars_aligned():
     assert CONSTANTS.browser_default_timeout_ms == constants.BROWSER_DEFAULT_TIMEOUT_MS == 15_000
     assert CONSTANTS.browser_wait_default_timeout_sec == constants.BROWSER_WAIT_DEFAULT_TIMEOUT_SEC == 10.0
     assert CONSTANTS.browser_scroll_default_px == constants.BROWSER_SCROLL_DEFAULT_PX == 600
+    assert CONSTANTS.mysql_creds_cache_ttl_sec == constants.MYSQL_CREDS_CACHE_TTL_SEC == 600.0
+    assert CONSTANTS.mysql_default_connect_timeout_sec == constants.MYSQL_DEFAULT_CONNECT_TIMEOUT_SEC == 10
+    assert CONSTANTS.mysql_default_query_timeout_ms == constants.MYSQL_DEFAULT_QUERY_TIMEOUT_MS == 10_000
+    assert CONSTANTS.mysql_processlist_max_rows == constants.MYSQL_PROCESSLIST_MAX_ROWS == 50
     assert sqlite_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert mysql_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
     assert mssql_mcp.MAX_OUTPUT_CHARS == constants.DEFAULT_TOOL_OUTPUT_CHARS
