@@ -17,7 +17,7 @@
 > ⚠️ **重要免責提醒（Important Disclaimer）**：本工具（含核心代理與所有內建／外掛 MCP 伺服器）具備執行本機指令、讀寫檔案及操作遠端主機與瀏覽器之能力，且 AI 模型輸出具非確定性。使用者須自行審查操作並承擔一切風險，任何非預期行為或衍生損害皆與原作者無關。使用前請務必詳閱文末完整的「免責聲明（Disclaimer）」章節。
 
 <p align="center">
-  <img src="docs/assets/02-main-1.png" alt="PocketAgent 互動式終端機主畫面與 MCP 載入狀態" width="760" />
+  <img src="docs/assets/02-main-4.png" alt="PocketAgent 實戰執行畫面：工作區 AGENTS.md 載入、即時模型切換、內建工具與外部 MCP 工具呼叫" width="760" />
 </p>
 
 ### 📑 目錄 (Table of Contents)
@@ -132,9 +132,9 @@ pocket setup
 
 啟動後，終端機將呈現互動式對話面板。底端狀態列會即時顯示當前模型、推理強度、待送附件數與累計 Token 用量；當有背景子代理執行或待取回報告時，狀態列會自動展開第二行即時顯示進度與取回提示。
 
-| 斜線指令與 Skill 自動補全 | 背景子代理（`/bg`）與雙行即時狀態列 |
+| 啟動主畫面與 MCP 狀態（`pocket`） | 斜線指令與 Skill 自動補全 |
 | :---: | :---: |
-| ![斜線指令與 Skill 自動補全選單](docs/assets/02-main-2.png) | ![背景唯讀子代理與雙行即時狀態列](docs/assets/02-main-3.png) |
+| ![PocketAgent 互動式終端機啟動畫面](docs/assets/02-main-1.png) | ![斜線指令與 Skill 自動補全選單](docs/assets/02-main-2.png) |
 
 ### 終端互動快捷鍵
 
@@ -186,6 +186,10 @@ pocket setup
 - `/jobs [list | all | show [id] | collect [id|all] | cancel <id|all> | clear]`：管理背景子代理工作；預設僅顯示執行中與待取回項目，`all` 查看完整歷史，`show`／`collect` 省略 `id` 時開啟互動選單（`show` 僅預覽不耗用主對話 Token，`collect` 將完成報告注入主對話歷史，或用 `collect all` 一次全收），`clear` 清除已結束紀錄。
 - `/skills [name]`：列出當前所有可用的全域與專案專屬技能 (Skills)，或檢視特定技能 SOP。
 - `/learn`：由 AI 分析當前對話脈絡，互動式萃取並存為可重複呼叫的新技能。
+
+<p align="center">
+  <img src="docs/assets/02-main-3.png" alt="非阻塞背景唯讀子代理（/bg）與雙行即時狀態列" width="760" />
+</p>
 
 #### 🔧 系統設定與維護
 

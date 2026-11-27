@@ -17,7 +17,7 @@ Its key advantage is **OAuth PKCE authentication directly integrated with the Ch
 > ⚠️ **Important Disclaimer**: This tool (including the core agent and all built-in/external MCP servers) can execute local shell commands, read/write files, and interact with remote hosts and browsers, while LLM outputs are non-deterministic. Users must review every operation and assume all risks; any unintended behavior or resulting damage has no relation to the original author(s). Please read the full [Disclaimer](#️-disclaimer) section before use.
 
 <p align="center">
-  <img src="docs/assets/02-main-1.png" alt="PocketAgent interactive CLI main screen with MCP servers loaded" width="760" />
+  <img src="docs/assets/02-main-4.png" alt="PocketAgent live execution with workspace AGENTS.md, model switching, built-in tools, and MCP tool calls" width="760" />
 </p>
 
 ### 📑 Table of Contents
@@ -132,9 +132,9 @@ The interactive wizard guides you through five steps (defaults to English if `lo
 
 Once started, the CLI displays an interactive conversation prompt with a live bottom toolbar showing the active model, reasoning effort, pending attachments, and cumulative token usage; when background subagents are running or ready to collect, a second highlighted status line automatically appears with live progress and collection hints.
 
-| Slash Commands & Skill Auto-Completion | Background Subagent (`/bg`) & Live Status Bar |
+| Launch & MCP Status (`pocket`) | Slash Commands & Skill Auto-Completion |
 | :---: | :---: |
-| ![Slash command and skill auto-completion](docs/assets/02-main-2.png) | ![Background read-only subagent with two-line live status bar](docs/assets/02-main-3.png) |
+| ![PocketAgent interactive CLI startup screen](docs/assets/02-main-1.png) | ![Slash command and skill auto-completion](docs/assets/02-main-2.png) |
 
 ### Terminal Shortcuts
 
@@ -186,6 +186,10 @@ Type any of the following `/` commands at the prompt:
 - `/jobs [list | all | show [id] | collect [id|all] | cancel <id|all> | clear]`: Manage background subagent jobs; defaults to active/uncollected jobs (`all` shows full history, `show`/`collect` open an interactive selector when `id` is omitted, `show` previews results without spending main-context tokens, `collect` injects completed reports into main conversation history or use `collect all`, and `clear` removes finished records).
 - `/skills [name]`: List all available global and workspace skills, or view a specific skill's SOP.
 - `/learn`: Analyze recent conversation context and interactively extract a reusable skill.
+
+<p align="center">
+  <img src="docs/assets/02-main-3.png" alt="Background read-only subagent (/bg) with two-line live status bar" width="760" />
+</p>
 
 #### 🔧 System Settings & Maintenance
 
