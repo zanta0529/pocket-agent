@@ -467,7 +467,7 @@ build.bat
 
 Select between:
 
-1. **Legacy PyInstaller** *(default)*: Compiles into a standalone executable (may trigger antivirus heuristics).
+1. **Legacy PyInstaller** (default): Compiles into a standalone executable (may trigger antivirus heuristics).
 2. **Modern Portable [Recommended]**: Packages an official Python runtime and all dependencies into `dist/PocketAgent-portable.zip`, avoiding antivirus false positives and supporting in-place `/update`.
 
 ---

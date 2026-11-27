@@ -468,7 +468,7 @@ build.bat
 
 執行後將顯示模式選擇：
 
-1. **舊版 PyInstaller (Legacy)** *（預設）*：將專案編譯為單一二進位執行檔（可能觸發防毒軟體信譽隔離警告）。
+1. **舊版 PyInstaller (Legacy)**（預設）：將專案編譯為單一二進位執行檔（可能觸發防毒軟體信譽隔離警告）。
 2. **新版 Portable (Modern) [推薦]**：免安裝的可攜式發佈包。將官方 Python 執行環境與相依套件完整打包至 `dist/PocketAgent-portable.zip`，避開防毒軟體誤判。使用者解壓後執行 `pocket.bat` 即可使用，且支援線上無縫自動更新。
 
 ---
